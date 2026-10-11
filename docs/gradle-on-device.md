@@ -320,8 +320,9 @@ generate them pointing at one pinned current Gradle, the way AndroidIDE unzips a
 wrapper. Do not download a distribution inside the APK.
 
 Every launch passes one `--init-script`. It lives in the prefix and is not written
-into the project. Its whole job is the arm64 filter in the ABI section, plus the
-CMake version fallback in the tree section when an alias is rejected.
+into the project. It narrows ABIs as the ABI section describes, applies the CMake
+version fallback when an alias is rejected, and points every `JavaExec` task at
+the `java` from `JAVA_HOME`.
 
 The server runs in a foreground service. `Binder` death, or the JVM exiting, becomes
 `BuildState` failed with the process's last stderr lines. The next build starts a
@@ -576,18 +577,38 @@ and the arm64 sysroot are data those binaries read.
 
 `sh` is one program, on `PATH` as `sh`. A BusyBox build is acceptable only when
 that single name is installed. The other applets are how a prefix turns into a
-distro: `wget` to fetch Node, `ash` scripts that assume `sed` and `awk`, and then
-Node's own list. Vivari has the same shape from the other side. Its runtime is
-Node's `lib/` plus npm plus a stub for every native addon, and a Gradle task that
-needed `node` would next need `node-gyp`, which needs Python and a compiler.
+distro.
 
-The nine apps below, an arm64 CMake or `ndk-build` assemble, and a flavored debug
-variant all run on the table above. KSP, kapt, Hilt, Compose, and prefab are jars
-in the JDK. A task that execs `node`, `npm`, `python`, `protoc`, `cargo`, or
-`hermesc` stops with that name in the error. Adding the missing ELF is a later
-decision about that one file, made when a project we intend to build actually
-fails on it. It is not a phase, and it does not come with that file's package
-manager.
+### JAR tools, in scope
+
+A dependency that arrives as a JAR is the same build system. The daemon already
+has a `java`. KSP, kapt, Hilt, Room, data binding, desugaring, Compose, SQLDelight,
+ktlint, and Square Wire run inside that process or as `JavaExec`. Prefab is the
+pattern AGP already uses for a tool that also ships native builds: the artifact
+is `com.google.prefab:cli` with classifier `all`, and the main class is
+`com.google.prefab.cli.AppKt`. Signal's current tree uses Wire this way. An older
+Signal tree exec'd `protoc`; the current one does not.
+
+The init script sets every `JavaExec` executable to `$JAVA_HOME/bin/java`. A
+plugin that resolves a tool with an `exe`, `linux-x86_64`, `osx-x86_64`, or
+`windows-x86_64` classifier, when the same module also publishes a jar, takes
+the jar. When the module publishes no jar, the build fails with that module's
+name. That is the whole extension. It does not add an interpreter.
+
+### A second layer, out of scope
+
+`node` and `python` would attach at the hook that already exists: a child of
+the daemon inherits `PATH` and `LD_PRELOAD`, so one new ELF on `$PREFIX/bin`
+is visible to every Gradle `Exec`. Vivari is the shape of that ELF for Node.
+Vendor the runtime's own `lib/`, shim only the platform binding, and leave npm
+as upstream npm. The cascade is the next line of that runtime: native addons,
+`node-gyp`, and the Python that `node-gyp` wants. A bionic CPython has the same
+shape, with wheels instead of addons. Neither runtime is in this plan. The
+attachment point is the PATH, and the work stops there.
+
+`cargo` would not come along with either runtime. It is a compiler and a
+standard library. `shadowsocks-android` is the app in the ten that needs it.
+The Python it looks up is only the linker wrapper around that compiler.
 
 ## Phase 5 — distribution
 
@@ -628,7 +649,9 @@ is not the reason to skip the copy. The reason is the frozen builder model.
   version, writes those alias directories onto one copied payload. A unit test
   can run this against a fake driver binary.
 - The init script, applied to a fixture that sets four `abiFilters` and an ABI
-  split, leaves `arm64-v8a` and records the removed names.
+  split, leaves `arm64-v8a` and records the removed names. A `JavaExec` task in
+  that fixture has its executable set to the `java` from `JAVA_HOME`. A module
+  that publishes both an `exe` classifier and a jar resolves the jar.
 - Variant choice: a model with `defaultDebug` and `tvDebug` selects
   `assembleDefaultDebug`.
 - `GradleImport` tests stay green. The static reader is still the pre-toolchain
@@ -660,6 +683,13 @@ part of the verdict. Mihon applies `org.jetbrains.kotlin.multiplatform` inside
 Android library modules; the same rule applies there. Success is the Android
 assemble task.
 
+Nine of the ten stay inside the binary table plus JAR tools. Their extra
+generators are jars: desugaring, KSP, kapt, Hilt, data binding, Compose, Wire
+(Signal; the current tree does not exec `protoc`), ktlint, SQLDelight and
+moko-resources (Mihon), atomicfu (animeko). Prebuilt `.so` files in Signal,
+Seal, v2rayNG, and animeko's `mediamp-ffmpeg` are packaged by AGP. They are not
+compiled here. The one dep outside that set is below.
+
 | App | Stars / forks | Android build | Verdict |
 | --- | --- | --- | --- |
 | `android/nowinandroid` | 21905 / 4673 | Gradle 9.7.1, AGP 9.3.2, Kotlin 2.3.0, minSdk 23, compileSdk 36, desugaring, Java 11 source. No NDK. | Yes. JDK 17, the wrapper's Gradle 9.7.1, platform 36. |
@@ -668,7 +698,7 @@ assemble task.
 | `mihonapp/mihon` | 24230 / 1600 | Gradle 9.8.1, AGP 9.4.1, Kotlin 2.4.21, `com.android.kotlin.multiplatform.library`. minSdk 26, compileSdk 37.2, targetSdk 36, Java 17. `ndkVersion` is `29.0.14206865`. No `CMakeLists.txt`. | Yes for the Android app. Publish the synthetic NDK under `29.0.14206865` so AGP does not download Google's. Nothing in-tree compiles C, so the r27c clang is only there for strip. Non-Android KMP targets are not a goal. Platform `37.2` has to be downloadable. |
 | `open-ani/animeko` | 20817 / 614 | The multiplatform project. Gradle 9.3.1, AGP 9.1.1, Kotlin 2.4.10, Compose Multiplatform. `android.compile.sdk=37`, `android.min.sdk=26`. `jvm.toolchain.version=21` and `jvm.toolchain.vendor=jetbrains`. | Yes for `:app:android`, task `assembleDefaultDebug`. See below. |
 | `shadowsocks/shadowsocks-android` | 36805 / 11426 | Gradle 8.14.3. `externalNativeBuild.ndkBuild` on `src/main/jni/Android.mk`, default ABIs armeabi-v7a, arm64-v8a, x86, x86_64. Also `org.mozilla.rust-android-gradle` on `src/main/rust/shadowsocks-rust`, which needs `cargo` and `python` or `python3`. | No. This is a hard miss. |
-| `signalapp/Signal-Android` | 29446 / 6898 | Gradle 9.6.0, AGP 9.4.0, compileSdk 37, minSdk 23, `ndkVersion` `28.0.13004108`. ABI splits for four ABIs plus a universal APK. `useLegacyPackaging`. No `CMakeLists.txt` and no `externalNativeBuild`. Native code arrives as prebuilt JNI (libsignal). | Yes. The init script narrows the splits to `arm64-v8a` and the assemble continues. The tree has to be installed at `28.0.13004108`. Platform 37. Heap is the practical risk. |
+| `signalapp/Signal-Android` | 29446 / 6898 | Gradle 9.6.0, AGP 9.4.0, compileSdk 37, minSdk 23, `ndkVersion` `28.0.13004108`. ABI splits for four ABIs plus a universal APK. `useLegacyPackaging`. No `CMakeLists.txt` and no `externalNativeBuild`. Native code arrives as prebuilt JNI (libsignal). Proto sources are compiled by Square Wire, a jar. | Yes. The init script narrows the splits to `arm64-v8a` and the assemble continues. The tree has to be installed at `28.0.13004108`. Platform 37. Heap is the practical risk. Wire needs no `protoc`. |
 | `JunkFood02/Seal` | 29646 / 1466 | Gradle 8.10.2, Kotlin 2.0.20, KSP, compileSdk 35, minSdk 24, target 35. Flavor `publishChannel` / `generic`. `gradle.properties` sets `ABI_FILTERS=arm64-v8a`. Splits can still name four ABIs. `useLegacyPackaging`. No `externalNativeBuild`. | Yes. Prebuilt JNI, already aimed at arm64. Platform 35. One debug variant from the model. |
 | `igorwojda/android-showcase` | 6807 / 908 | Gradle 9.8.1, AGP 9.4.1, Kotlin 2.4.21, KSP, convention plugins. Catalog: minSdk 28, compileSdk 36, targetSdk 35. No NDK. | Yes. Same shape as the other AGP 9.4 apps. JDK 17, platform 36. |
 | `2dust/v2rayNG` | 63803 / 8262 | Wrapper at `V2rayNG/gradle/wrapper`, Gradle 9.8.1, AGP 9.4.1, Kotlin 2.4.21, compileSdk 37, minSdk 24, target 37, Java 17. `jniLibs.srcDirs("libs")` — prebuilt `.so` in the repo. ABI splits default to four ABIs plus universal; `ABI_FILTERS` can narrow. Flavors `fdroid` and `playstore`. Desugaring, Compose. | Yes. Splits narrow to arm64. The model picks one debug flavor. Platform 37. |
@@ -699,10 +729,14 @@ real Gradle; we do not strip it.
 
 ### shadowsocks, and why it stays a no
 
-The arm64 filter would keep its `ndk-build` on `arm64-v8a`. The build still stops
-in `rust-android-gradle`, which compiles Rust with `cargo`. `cargo` is a second
-compiler, with its own standard library and targets. It is outside the binary
-list. The C objects are not a prebuilt we could package instead.
+The arm64 filter would keep its `ndk-build` on `arm64-v8a`, and that half is the
+NDK already in the binary table (`make`, clang). The build still stops in
+`rust-android-gradle`. That plugin compiles Rust with `cargo`, then looks up
+`python3` or `python` only to run `linker-wrapper.py` around the linker. The
+Python is not a general build step. It disappears if `cargo` is absent, and
+`cargo` is a compiler with its own standard library, not a JAR and not the Node
+or Python runtime described above. Room and KSP in the same project are jars
+and would run. The Rust objects are not a prebuilt we could package instead.
 
 ### What the ten forced the plan to change
 
@@ -730,10 +764,10 @@ list. The C objects are not a prebuilt we could package instead.
 - Non-Android targets of a Kotlin Multiplatform project: iOS, CocoaPods, desktop,
   and a JetBrains Runtime with JCEF. The Android application of that project is
   in scope.
-- A userspace beyond the binary table: Vivari, Node and npm, BusyBox applets
-  other than `sh`, Python, protoc, cargo (`shadowsocks/shadowsocks-android`),
-  hermesc, the Flutter SDK, and Go. Each of those is the root of its own
-  dependency list.
+- A userspace on `PATH`: Node and Vivari, Python, BusyBox applets other than
+  `sh`, a native `protoc`, cargo (`shadowsocks/shadowsocks-android`), hermesc,
+  the Flutter SDK, and Go. How a Node or Python runtime would attach is
+  described under the build-system binaries, and it is not scheduled work.
 - Further LLVM backends. The init script keeps the APK on `arm64-v8a`.
 - A CMake implementation of our own. Projects with `CMakeLists.txt` are built
   by the real CMake. Projects with an `[ndk]` facet are built by
