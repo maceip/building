@@ -1,6 +1,7 @@
 package dev.ide.core.sync
 
 import dev.ide.core.EngineContext
+import dev.ide.model.BuildSystemId
 import dev.ide.model.LanguageLevel
 import dev.ide.model.impl.ExternalModelApplier
 import dev.ide.model.sync.BUILD_FILE_WRITER_EP
@@ -128,8 +129,7 @@ internal class ProjectSyncService(private val ctx: EngineContext) {
             ExternalProjectMarker.write(
                 ctx.workspaceRoot,
                 importer.id.value,
-                "Imported from ${importer.displayName}. The build files were read statically, not executed, " +
-                    "so dependencies and versions are extracted as far as they can be read.",
+                importSummary(importer),
                 notes(messages),
             )
         }
@@ -137,6 +137,14 @@ internal class ProjectSyncService(private val ctx: EngineContext) {
             ctx.workspaceRoot, importer.id.value, SyncStamp.match(ctx.workspaceRoot, importer.syncFiles())
         )
     }
+
+    private fun importSummary(importer: ProjectImporter): String =
+        if (importer.id == BuildSystemId.GRADLE) {
+            "Imported from Gradle. The build files were executed."
+        } else {
+            "Imported from ${importer.displayName}. The build files were read statically, not executed, " +
+                "so dependencies and versions are extracted as far as they can be read."
+        }
 
     private fun notes(messages: List<SyncMessage>): List<String> =
         messages.filter { it.severity != SyncSeverity.INFO }.map { it.text }

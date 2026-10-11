@@ -1866,8 +1866,15 @@ class IdeServices private constructor(
     internal val projectSync: ProjectSyncService
         get() = store.workspaceContainer.getService(PROJECT_SYNC_SERVICE)
 
-    /** True when this project's model comes from a foreign build system's files (Gradle compatibility mode). */
-    fun isCompatibilityMode(): Boolean = projectSync.isExternal()
+    /**
+     * True while a foreign build system's files own the model and no tooling sync has bound the project
+     * to [BuildSystemId.GRADLE]. The compatibility banner is the static reader's. A project whose build
+     * files were executed is built by Gradle and does not carry that banner.
+     */
+    fun isCompatibilityMode(): Boolean {
+        if (!projectSync.isExternal()) return false
+        return store.workspace.projects.none { it.buildSystemId == BuildSystemId.GRADLE }
+    }
 
     /** The notes recorded at import/sync time (what the importer couldn't fully extract). */
     fun compatibilityNotes(): List<String> = projectSync.marker()?.notes ?: emptyList()
@@ -4950,8 +4957,12 @@ class IdeServices private constructor(
                 ExternalProjectMarker.write(
                     root,
                     importer.id.value,
-                    "Imported from ${importer.displayName}. The build files were read statically, not executed, " +
-                        "so dependencies and versions are extracted as far as they can be read.",
+                    if (importer.id == BuildSystemId.GRADLE) {
+                        "Imported from Gradle. The build files were executed."
+                    } else {
+                        "Imported from ${importer.displayName}. The build files were read statically, not executed, " +
+                            "so dependencies and versions are extracted as far as they can be read."
+                    },
                     outcome.messages.filter { it.severity != SyncSeverity.INFO }.map { it.text },
                 )
             }

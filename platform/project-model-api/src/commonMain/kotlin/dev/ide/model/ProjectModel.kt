@@ -34,6 +34,9 @@ value class BuildSystemId(val value: String) {
     companion object {
         val NATIVE = BuildSystemId("native")
         val GRADLE_COMPAT = BuildSystemId("gradle-compat")
+
+        /** A project whose build files were executed by the Gradle Tooling API. */
+        val GRADLE = BuildSystemId("gradle")
     }
 }
 

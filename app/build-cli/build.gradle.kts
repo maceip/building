@@ -3,8 +3,8 @@ plugins {
     application
 }
 
-// build-cli — the headless launcher: assemble a CodeAssist project from a terminal (or from CI) with the
-// IDE's own build system, no Gradle and no AGP. It is a third host next to :ide-desktop and :ide-android,
+// build-cli — the headless launcher: assemble a CodeAssist project from a terminal (or from CI).
+// A Gradle-bound project uses the tooling client on the host JDK. It is a third host next to :ide-desktop and :ide-android,
 // and the thinnest of the three: argument parsing, a progress transcript, and the GitHub Actions workflow
 // commands. All the work happens in :ide-core's HeadlessEngine, which is the same engine the on-device
 // `:build` daemon drives.
@@ -13,6 +13,7 @@ plugins {
 // docs/github-action.md and .github/workflows/cli.yml.
 dependencies {
     implementation(project(":ide-core")) // HeadlessEngine + the build DTOs it reports
+    implementation(project(":gradle-build")) // DesktopGradleHost: tooling client against the host JDK
 
     implementation(libs.kotlinx.coroutines.core)
 

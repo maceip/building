@@ -15,6 +15,7 @@ import dev.ide.build.TaskName
 import dev.ide.build.TaskOutputs
 import dev.ide.build.TaskOutputsImpl
 import dev.ide.build.TaskResult
+import dev.ide.model.BuildSystemId
 import dev.ide.model.Module
 import dev.ide.platform.log.Logger
 import java.nio.file.Files
@@ -38,7 +39,8 @@ class NdkBuildPlugin(
     override val id = "ndk"
 
     override fun appliesTo(config: BuildConfiguration): Boolean =
-        config.request.goal != BuildGoal.CLEAN &&
+        config.project.buildSystemId != BuildSystemId.GRADLE &&
+            config.request.goal != BuildGoal.CLEAN &&
             config.project.modules.any { it.facets.get(NdkFacet.KEY) != null }
 
     override fun apply(config: BuildConfiguration) {

@@ -545,6 +545,7 @@ android {
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("compose-drawables-asset").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("r8-dex-asset").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("applog-runtime-asset").get().asFile)
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("gradle-tooling-asset").get().asFile)
     sourceSets.getByName("androidTest").assets.srcDir(layout.buildDirectory.dir("vm-spike-asset").get().asFile)
     sourceSets.getByName("androidTest").assets.srcDir(layout.buildDirectory.dir("moshi-libs-asset").get().asFile)
     // The Kotlin-analysis parity corpus and its goldens, staged as test assets so the instrumented suite
@@ -691,6 +692,10 @@ android {
                 // to create a keystore on ART - an RSA/EC keypair and a self-signed X.509 - which touches no
                 // post-quantum scheme.
                 "org/bouncycastle/pqc/**",
+                // The tooling server is an asset the host extracts and execs. It must not also ride
+                // along as a Java resource: the fat jar is the Gradle Tooling API, and the IDE process
+                // does not load it.
+                "dev/ide/gradle/gradle-tooling.jar",
             )
             pickFirsts += setOf(
                 "META-INF/MANIFEST.MF",
@@ -783,10 +788,19 @@ val fetchAndroidBuildTools = tasks.register("fetchAndroidBuildTools") {
     }
 }
 
+// The tooling fat jar is exec'd, not loaded. Staging it as an asset (and excluding the same bytes
+// from Java resources above) keeps it out of the IDE's dex classpath.
+val stageGradleToolingAsset = tasks.register<Copy>("stageGradleToolingAsset") {
+    description = "Stage the Gradle tooling fat jar as an APK asset the host extracts and execs."
+    dependsOn(":gradle-tooling:toolingJar")
+    from(project(":gradle-tooling").layout.buildDirectory.file("tooling/gradle-tooling.jar"))
+    into(layout.buildDirectory.dir("gradle-tooling-asset/dev/ide/gradle"))
+}
+
 // Run before anything AGP does, so the freshly-fetched lib*.so are on disk when the native-lib merge runs,
 // and the staged kotlin-stdlib.jar asset is present when the asset merge runs.
 tasks.named("preBuild").configure {
-    dependsOn(fetchAndroidBuildTools, stripAndroidJarAsset, generatePrebuiltIndexAsset, bundleKotlinStdlibAsset, bundleKotlincResourcesAsset, bundleComposeRuntimeAsset, bundleComposeFontsAsset, bundleComposeStringAsset, bundleAgentUiComposeStringAsset, bundleVcsUiComposeStringAsset, bundleComposeDrawablesAsset, bundleR8DexAsset, bundleAppLogRuntimeAsset, bundleVmSpikeComposeRuntimeAsset, bundleVmSpikeMaterial3Asset, bundleVmStackAsset, bundleMoshiLibsAsset, bundleAwtFixtureAsset)
+    dependsOn(fetchAndroidBuildTools, stripAndroidJarAsset, generatePrebuiltIndexAsset, bundleKotlinStdlibAsset, bundleKotlincResourcesAsset, bundleComposeRuntimeAsset, bundleComposeFontsAsset, bundleComposeStringAsset, bundleAgentUiComposeStringAsset, bundleVcsUiComposeStringAsset, bundleComposeDrawablesAsset, bundleR8DexAsset, bundleAppLogRuntimeAsset, bundleVmSpikeComposeRuntimeAsset, bundleVmSpikeMaterial3Asset, bundleVmStackAsset, bundleMoshiLibsAsset, bundleAwtFixtureAsset, stageGradleToolingAsset)
 }
 
 // Same Android packaging gap as the fonts above, for the i18n string resources. :ide-ui-resources'
@@ -922,6 +936,7 @@ dependencies {
     // ecj is the one exception: drop the stock jar here and dex the ART-relocated copy instead (it is
     // disjoint from jdt.core, so removing it only excludes the compiler classes, which we add back
     // patched). See :art-compat's `relocateEcjForArt`.
+    implementation(project(":gradle-build"))
     implementation(project(":ide-core")) {
         exclude(group = "org.eclipse.jdt", module = "ecj")
         // Drop the stock core.runtime / equinox.common: the StackWalker-relocated copies arrive from

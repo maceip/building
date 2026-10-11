@@ -1,0 +1,433 @@
+{
+  "baseUrl": "https://packages.termux.dev/apt/termux-main/",
+  "note": "Pinned SHA-256 of the Termux aarch64 Packages index. A rebuild we control replaces the url and sha256 together. This is not a silent floating dependency on packages.termux.dev.",
+  "packages": [
+    {
+      "name": "abseil-cpp",
+      "version": "20260526.0",
+      "filename": "pool/main/a/abseil-cpp/abseil-cpp_20260526.0_aarch64.deb",
+      "sha256": "e489fac652cddc39d9436141e627285f1034a545a06fbb19c420514a419ad877",
+      "size": 1197740
+    },
+    {
+      "name": "aidl",
+      "version": "16.0.0.4-2",
+      "filename": "pool/main/a/aidl/aidl_16.0.0.4-2_aarch64.deb",
+      "sha256": "78398dc0ca29ec667c72db199da7b2e46c20eab8bbb54d43243dc9f4e63c770c",
+      "size": 490640
+    },
+    {
+      "name": "alsa-lib",
+      "version": "1.2.16.1",
+      "filename": "pool/main/a/alsa-lib/alsa-lib_1.2.16.1_aarch64.deb",
+      "sha256": "34d850de4cf6a832b638a125ac2b029a46697e7a44c66f88fb388486c93314a5",
+      "size": 453056
+    },
+    {
+      "name": "alsa-plugins",
+      "version": "1.2.12-1",
+      "filename": "pool/main/a/alsa-plugins/alsa-plugins_1.2.12-1_aarch64.deb",
+      "sha256": "98317be934cedd3006d6c5796b727a907ff4ab53465ee7582bfccc8ac934aa3b",
+      "size": 25604
+    },
+    {
+      "name": "ca-certificates",
+      "version": "1:2026.09.25",
+      "filename": "pool/main/c/ca-certificates/ca-certificates_1:2026.09.25_all.deb",
+      "sha256": "57fab24bf4561bfdd35afe71bc1929914e51c35458cfd1fca2b15e54bc8df7af",
+      "size": 105404
+    },
+    {
+      "name": "cmake",
+      "version": "4.4.4",
+      "filename": "pool/main/c/cmake/cmake_4.4.4_aarch64.deb",
+      "sha256": "52c746531acdd73a0158a59f24e506cc551d7037b2c2880cb8128b5038e926db",
+      "size": 10645092
+    },
+    {
+      "name": "dash",
+      "version": "0.5.13.5",
+      "filename": "pool/main/d/dash/dash_0.5.13.5_aarch64.deb",
+      "sha256": "02bb8b06db6616382e0baf9e63f11cb5fe82307dddf3f8880f6b39dbc808adc5",
+      "size": 70636
+    },
+    {
+      "name": "dbus",
+      "version": "1.16.2-3",
+      "filename": "pool/main/d/dbus/dbus_1.16.2-3_aarch64.deb",
+      "sha256": "1b6d5e349708414acbbb1404210e32d4e3f390890d02e162639dec1016a8657b",
+      "size": 428952
+    },
+    {
+      "name": "fmt",
+      "version": "1:11.2.0-1",
+      "filename": "pool/main/f/fmt/fmt_1:11.2.0-1_aarch64.deb",
+      "sha256": "dad595afcb3b1096d725c6772c0c5531764caa5841affba3c533c6298a32ab08",
+      "size": 168824
+    },
+    {
+      "name": "googletest",
+      "version": "1.18.0",
+      "filename": "pool/main/g/googletest/googletest_1.18.0_aarch64.deb",
+      "sha256": "98f5b032d4c992d1d9b7bc864207a6eab1c343d0e8b56b588b3d5c4e6a7e7327",
+      "size": 357096
+    },
+    {
+      "name": "jsoncpp",
+      "version": "1.9.8",
+      "filename": "pool/main/j/jsoncpp/jsoncpp_1.9.8_aarch64.deb",
+      "sha256": "872523b31f0cb92e7c7c88db946c1765ef322b7878571887a08f973a215a5d3e",
+      "size": 96112
+    },
+    {
+      "name": "libandroid-execinfo",
+      "version": "0.1-3",
+      "filename": "pool/main/liba/libandroid-execinfo/libandroid-execinfo_0.1-3_aarch64.deb",
+      "sha256": "725dd2c6da7fc96e860fcc928e18aa9fb0e85e0bdcaf4f8ce0f0654ca6860fc2",
+      "size": 14964
+    },
+    {
+      "name": "libandroid-glob",
+      "version": "0.6-3",
+      "filename": "pool/main/liba/libandroid-glob/libandroid-glob_0.6-3_aarch64.deb",
+      "sha256": "2276ae8adedf0db76c2f4ffc94cc4cceb2f4f5d78e021b54e2e046d1233e7826",
+      "size": 7032
+    },
+    {
+      "name": "libandroid-shmem",
+      "version": "0.7",
+      "filename": "pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb",
+      "sha256": "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6",
+      "size": 7216
+    },
+    {
+      "name": "libandroid-spawn",
+      "version": "0.3",
+      "filename": "pool/main/liba/libandroid-spawn/libandroid-spawn_0.3_aarch64.deb",
+      "sha256": "7988fa788ef48ab5da9660443905a2e4099ac36221739d72f5c39acc644b4d1c",
+      "size": 15216
+    },
+    {
+      "name": "libandroid-stub",
+      "version": "30-1",
+      "filename": "pool/main/liba/libandroid-stub/libandroid-stub_30-1_aarch64.deb",
+      "sha256": "5b392496146309b8454780821591dccb7e6a7050f8789f3bc97b4bb6c2b6bc67",
+      "size": 26644
+    },
+    {
+      "name": "libandroid-support",
+      "version": "29-1",
+      "filename": "pool/main/liba/libandroid-support/libandroid-support_29-1_aarch64.deb",
+      "sha256": "f2f145d6135ad4843ac9670153be3e3944dc1e6f1736d46d2306c28f2b86f517",
+      "size": 10880
+    },
+    {
+      "name": "libandroid-sysv-semaphore",
+      "version": "0.1-1",
+      "filename": "pool/main/liba/libandroid-sysv-semaphore/libandroid-sysv-semaphore_0.1-1_aarch64.deb",
+      "sha256": "c3369a92814690d56278d0455ae6df7bf2ad7678ae9543e86d1e3aa433937c69",
+      "size": 3568
+    },
+    {
+      "name": "libarchive",
+      "version": "3.8.9",
+      "filename": "pool/main/liba/libarchive/libarchive_3.8.9_aarch64.deb",
+      "sha256": "3c1d06ebcfdb6ed8b2053ef36cbe003f088e931bd022d520de80e65a50291fba",
+      "size": 394808
+    },
+    {
+      "name": "libbz2",
+      "version": "1.0.8-8",
+      "filename": "pool/main/libb/libbz2/libbz2_1.0.8-8_aarch64.deb",
+      "sha256": "4335d7f060650b0aabef545d1334c2f9f280223d5962e13c24a00ec934b794ba",
+      "size": 26116
+    },
+    {
+      "name": "libc++",
+      "version": "30",
+      "filename": "pool/main/libc/libc++/libc++_30_aarch64.deb",
+      "sha256": "53d0b84a7ba7459024257cb94d5b136fe13ef858567f65a8064b35950799f2ca",
+      "size": 341604
+    },
+    {
+      "name": "libcurl",
+      "version": "8.22.0",
+      "filename": "pool/main/libc/libcurl/libcurl_8.22.0_aarch64.deb",
+      "sha256": "e780d925d977c32a3cfe6a2c7d340f0726618786deee98b0cb8b601efb93a8c9",
+      "size": 1032924
+    },
+    {
+      "name": "libexpat",
+      "version": "2.9.0",
+      "filename": "pool/main/libe/libexpat/libexpat_2.9.0_aarch64.deb",
+      "sha256": "f8a104e8227c9c181f6818658a3ee2fa4c107fac94219b068144fc6591086cdb",
+      "size": 100256
+    },
+    {
+      "name": "libflac",
+      "version": "1.5.0-1",
+      "filename": "pool/main/libf/libflac/libflac_1.5.0-1_aarch64.deb",
+      "sha256": "d1d6fcac6fd6d15c36f34464cb01d5e2140e321d8448dfc396cd7eb1536b1f6c",
+      "size": 202828
+    },
+    {
+      "name": "libiconv",
+      "version": "1.19",
+      "filename": "pool/main/libi/libiconv/libiconv_1.19_aarch64.deb",
+      "sha256": "fe9481b1dc101c6c3552943f25435109fd522aecc615ae49594f9fbee863bb37",
+      "size": 562724
+    },
+    {
+      "name": "libjpeg-turbo",
+      "version": "3.2.0",
+      "filename": "pool/main/libj/libjpeg-turbo/libjpeg-turbo_3.2.0_aarch64.deb",
+      "sha256": "e6339075bcde28b4902d5a51f4063164834abfd2fa115e881ae637a34585e54f",
+      "size": 453600
+    },
+    {
+      "name": "libltdl",
+      "version": "2.6.2",
+      "filename": "pool/main/libl/libltdl/libltdl_2.6.2_aarch64.deb",
+      "sha256": "7b4643fe9d0ab42c0c3c8a1018640816bdb43d422f2268a5e4ea80675624f539",
+      "size": 17996
+    },
+    {
+      "name": "liblzma",
+      "version": "5.8.4",
+      "filename": "pool/main/libl/liblzma/liblzma_5.8.4_aarch64.deb",
+      "sha256": "44e95e6e60dddb3705e60a344a4f009a1085a210797342b721eaff41b44033c0",
+      "size": 194796
+    },
+    {
+      "name": "libmp3lame",
+      "version": "4.0-1",
+      "filename": "pool/main/libm/libmp3lame/libmp3lame_4.0-1_aarch64.deb",
+      "sha256": "59f70ad8885578063bcbea3b11e74fb69e2416ca036b47aa255c1fa4f074565e",
+      "size": 98588
+    },
+    {
+      "name": "libmpg123",
+      "version": "1.33.7",
+      "filename": "pool/main/libm/libmpg123/libmpg123_1.33.7_aarch64.deb",
+      "sha256": "883b104faae53820b2e758363300ccf99e28f627a263d766af61ae07b73b07b3",
+      "size": 175116
+    },
+    {
+      "name": "libnghttp2",
+      "version": "1.70.0",
+      "filename": "pool/main/libn/libnghttp2/libnghttp2_1.70.0_aarch64.deb",
+      "sha256": "ab2e0a3408fe4934ffdf774bd5049a265db2e6db62dcb651baecbecfb81e3f0b",
+      "size": 95924
+    },
+    {
+      "name": "libnghttp3",
+      "version": "1.18.0",
+      "filename": "pool/main/libn/libnghttp3/libnghttp3_1.18.0_aarch64.deb",
+      "sha256": "0be2ee96def3608afaf24eb0b4b55f3484a37c95ea21bb1d6d85c7d543467603",
+      "size": 69668
+    },
+    {
+      "name": "libngtcp2",
+      "version": "1.25.0",
+      "filename": "pool/main/libn/libngtcp2/libngtcp2_1.25.0_aarch64.deb",
+      "sha256": "f471bad7f4329b6b0b4aedf124e0a23a35f6ac99bfbae73304136f8bfd570fc3",
+      "size": 174068
+    },
+    {
+      "name": "libogg",
+      "version": "1.3.6-1",
+      "filename": "pool/main/libo/libogg/libogg_1.3.6-1_aarch64.deb",
+      "sha256": "4f1700a532f251ad3600f44f88cd764f1f6b0542d3343391117944b47a92802d",
+      "size": 188636
+    },
+    {
+      "name": "libopus",
+      "version": "1.6.1",
+      "filename": "pool/main/libo/libopus/libopus_1.6.1_aarch64.deb",
+      "sha256": "005a9335ce0ec0f510bbe6e0229c901d6f920cc375fcda56461e96cef70f8ff0",
+      "size": 191480
+    },
+    {
+      "name": "libpng",
+      "version": "1.6.59",
+      "filename": "pool/main/libp/libpng/libpng_1.6.59_aarch64.deb",
+      "sha256": "32d61f0b1a60cf7283aa3a80e288737493df2c6b84c8c749606b77c94a10f2b2",
+      "size": 195892
+    },
+    {
+      "name": "libsndfile",
+      "version": "1.2.2-3",
+      "filename": "pool/main/libs/libsndfile/libsndfile_1.2.2-3_aarch64.deb",
+      "sha256": "1e1fb77b14ec26f3ff6ded069e9ec816ab7535ae5d074122c6727b0f59d8aff3",
+      "size": 223576
+    },
+    {
+      "name": "libsoxr",
+      "version": "0.1.3-8",
+      "filename": "pool/main/libs/libsoxr/libsoxr_0.1.3-8_aarch64.deb",
+      "sha256": "a1c5f66aae3b9900e9a492b43901b2b98586870c7905feb9f3c835cc9af464be",
+      "size": 282436
+    },
+    {
+      "name": "libssh2",
+      "version": "1.11.1-2",
+      "filename": "pool/main/libs/libssh2/libssh2_1.11.1-2_aarch64.deb",
+      "sha256": "1add4e0a926b848814e7e2f1817ea28b123c54cabd5bbc4e5cfd65291cbad84e",
+      "size": 219220
+    },
+    {
+      "name": "libuv",
+      "version": "1.53.0",
+      "filename": "pool/main/libu/libuv/libuv_1.53.0_aarch64.deb",
+      "sha256": "781b74829af29e16f054de5b469ef1816b66d82d11baeb8beb98749d2f1de2dd",
+      "size": 83928
+    },
+    {
+      "name": "libvorbis",
+      "version": "1.3.7-4",
+      "filename": "pool/main/libv/libvorbis/libvorbis_1.3.7-4_aarch64.deb",
+      "sha256": "6bfd70c4b570b85594bd06116b75a6f8109ec58cbc123e938b630a6eefdedf4e",
+      "size": 261740
+    },
+    {
+      "name": "libwebrtc-audio-processing",
+      "version": "1.3-5",
+      "filename": "pool/main/libw/libwebrtc-audio-processing/libwebrtc-audio-processing_1.3-5_aarch64.deb",
+      "sha256": "136f87d3c8aec04b94392a10174851936d21402f2f28aacdefd2cfd05ced367c",
+      "size": 409056
+    },
+    {
+      "name": "libx11",
+      "version": "1.8.13-1",
+      "filename": "pool/main/libx/libx11/libx11_1.8.13-1_aarch64.deb",
+      "sha256": "a18c5cf3cfe2670bf1cb4243e3140a0b7639350a4175b5229c969402fdb12e9f",
+      "size": 1909956
+    },
+    {
+      "name": "libxau",
+      "version": "1.0.12-2",
+      "filename": "pool/main/libx/libxau/libxau_1.0.12-2_aarch64.deb",
+      "sha256": "2d86bed61ce89dd8fdb55e565aede10155f2ce3adaccb61d5f1375aec3314083",
+      "size": 9120
+    },
+    {
+      "name": "libxcb",
+      "version": "1.17.0-1",
+      "filename": "pool/main/libx/libxcb/libxcb_1.17.0-1_aarch64.deb",
+      "sha256": "191c3642b6a8c754bc75b69b94a81858ecb5f18766dc085aff55559b8087ad34",
+      "size": 913948
+    },
+    {
+      "name": "libxdmcp",
+      "version": "1.1.5-2",
+      "filename": "pool/main/libx/libxdmcp/libxdmcp_1.1.5-2_aarch64.deb",
+      "sha256": "caea0cf5c0028af0840774094b8900ef7afffd8f9bbd7b1abfbe66851f0d6077",
+      "size": 24460
+    },
+    {
+      "name": "libxml2",
+      "version": "2.15.4-1",
+      "filename": "pool/main/libx/libxml2/libxml2_2.15.4-1_aarch64.deb",
+      "sha256": "d315861bbcf716cfb088f53cddab9fb6a96430cc66769f79774cc69c2f53bcff",
+      "size": 442652
+    },
+    {
+      "name": "libzopfli",
+      "version": "1.0.3-5",
+      "filename": "pool/main/libz/libzopfli/libzopfli_1.0.3-5_aarch64.deb",
+      "sha256": "95cd7cb2209fbafb25825f5fcd4f86f021512175608e038b1c3d8d3fa0a4fe40",
+      "size": 119064
+    },
+    {
+      "name": "littlecms",
+      "version": "2.19.1",
+      "filename": "pool/main/l/littlecms/littlecms_2.19.1_aarch64.deb",
+      "sha256": "274f732a186563beca204f5d016d30cac8e5c24f7c4395b60881f9613eddf1a1",
+      "size": 143396
+    },
+    {
+      "name": "make",
+      "version": "4.4.1-1",
+      "filename": "pool/main/m/make/make_4.4.1-1_aarch64.deb",
+      "sha256": "beb7ac00ee4f9958ec8e584ac1b2e1612c549425674ab2aa197d343594bcc5a3",
+      "size": 240436
+    },
+    {
+      "name": "ninja",
+      "version": "1.13.2",
+      "filename": "pool/main/n/ninja/ninja_1.13.2_aarch64.deb",
+      "sha256": "1a5667d0725fe7b66d4c3a287e5dacd996b28fa84c893de21a3e6ab47c361934",
+      "size": 84036
+    },
+    {
+      "name": "openjdk-17",
+      "version": "17.0.20",
+      "filename": "pool/main/o/openjdk-17/openjdk-17_17.0.20_aarch64.deb",
+      "sha256": "8eb45796aa8a216ac2054847e6ed3c073c3ef44407d9212154824b270b59f7ea",
+      "size": 96306888
+    },
+    {
+      "name": "openjdk-21",
+      "version": "21.0.12",
+      "filename": "pool/main/o/openjdk-21/openjdk-21_21.0.12_aarch64.deb",
+      "sha256": "05b08dd961c30928992f87632539c3704bf082e2984aee11441c6127f9fd7884",
+      "size": 106132164
+    },
+    {
+      "name": "openssl",
+      "version": "1:3.6.5",
+      "filename": "pool/main/o/openssl/openssl_1:3.6.5_aarch64.deb",
+      "sha256": "a2fb7856875e63ef6b90442752e05974813372c3ca86d2513a78ea43c67a0f8b",
+      "size": 2482764
+    },
+    {
+      "name": "pulseaudio",
+      "version": "17.0-4",
+      "filename": "pool/main/p/pulseaudio/pulseaudio_17.0-4_aarch64.deb",
+      "sha256": "b119f3a5beb33273a6457e648a2ea501d6a507be8e99501737897c3ea07854cd",
+      "size": 848412
+    },
+    {
+      "name": "rhash",
+      "version": "1.4.6-1",
+      "filename": "pool/main/r/rhash/rhash_1.4.6-1_aarch64.deb",
+      "sha256": "e646c4c5c73a1654d503c30971213b5e2912f39b5c61b614e42702cffe8aa221",
+      "size": 163252
+    },
+    {
+      "name": "speexdsp",
+      "version": "1.2.1-1",
+      "filename": "pool/main/s/speexdsp/speexdsp_1.2.1-1_aarch64.deb",
+      "sha256": "21cd5d122a8d24dffb9b2926dff7059f8f42cde7c5a91f27ea5c9b4f40356be0",
+      "size": 37332
+    },
+    {
+      "name": "termux-exec",
+      "version": "1:2.5.0-1",
+      "filename": "pool/main/t/termux-exec/termux-exec_1:2.5.0-1_aarch64.deb",
+      "sha256": "fd6a06a6a74c6fba2d1cec56dc8b5726e6488918322b06fd19fe5cff34b28a5d",
+      "size": 287356
+    },
+    {
+      "name": "xorg-util-macros",
+      "version": "1.20.2",
+      "filename": "pool/main/x/xorg-util-macros/xorg-util-macros_1.20.2_all.deb",
+      "sha256": "11765ad1a6f181e36f807464f7b4360593d847dce245202a393eb2ca156520d0",
+      "size": 21948
+    },
+    {
+      "name": "xorgproto",
+      "version": "2026.1",
+      "filename": "pool/main/x/xorgproto/xorgproto_2026.1_all.deb",
+      "sha256": "2463651143a386eba0d7baebac87ca5d2db5239d36cf38f9b2086f3c1bfdcbce",
+      "size": 249848
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.2",
+      "filename": "pool/main/z/zlib/zlib_1.3.2_aarch64.deb",
+      "sha256": "75e7d0af17fcc3b40004309fdc00a1ddb9ae08346dce5e269902c34ac3966ac9",
+      "size": 62840
+    }
+  ]
+}

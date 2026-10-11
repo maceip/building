@@ -1,0 +1,404 @@
+/**
+ * One init script for every Tooling API launch. It is not written into the project.
+ *
+ * It keeps the APK on arm64-v8a, points every JavaExec at JAVA_HOME/bin/java, rewrites native
+ * classifier artifacts onto the jar published by the same module, and records a model JSON the
+ * client can read without putting AGP's builder model on the client classpath.
+ *
+ * Groovy, and only APIs Gradle 8.6 already has.
+ */
+import org.gradle.api.artifacts.ExternalModuleDependency
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.JavaExec
+
+def KEEP = "arm64-v8a"
+def NATIVE = ["exe", "linux-x86_64", "osx-x86_64", "windows-x86_64"] as Set
+
+def removed = Collections.synchronizedSet(new TreeSet())
+def slots = new java.util.concurrent.ConcurrentHashMap()
+
+def modelOut = {
+    def fromProp = gradle.startParameter.projectProperties["dev.ide.model.out"]
+    if (fromProp != null && !fromProp.toString().isEmpty()) return fromProp.toString()
+    return System.getenv("DEV_IDE_MODEL_OUT")
+}()
+def abiReport = {
+    def fromProp = gradle.startParameter.projectProperties["dev.ide.abi.report"]
+    if (fromProp != null && !fromProp.toString().isEmpty()) return fromProp.toString()
+    return System.getenv("DEV_IDE_ABI_REPORT")
+}()
+
+def readNames = { value ->
+    def names = []
+    if (value == null) return names
+    try {
+        if (value instanceof Property) value = value.getOrElse(null)
+    } catch (Throwable ignored) {}
+    if (value instanceof Collection) value.each { if (it != null) names << it.toString() }
+    else if (value != null) names << value.toString()
+    return names
+}
+
+def writeNames = { owner, property, value ->
+    try {
+        if (value instanceof Property) {
+            value.set([KEEP] as Set)
+            return
+        }
+    } catch (Throwable ignored) {}
+    if (value instanceof Collection) {
+        try {
+            value.clear()
+            value.add(KEEP)
+            return
+        } catch (Throwable ignored) {}
+    }
+    try { owner."$property" = [KEEP] as Set } catch (Throwable ignored) {}
+}
+
+def noteRemoved = { names ->
+    names.each { n -> if (n != KEEP && n.length() > 0) removed.add(n) }
+}
+
+def narrow = { p ->
+    def android = null
+    try { android = p.extensions.findByName("android") } catch (Throwable ignored) {}
+    if (android == null) return
+    try {
+        def ndk = android.defaultConfig.ndk
+        def names = readNames(ndk.abiFilters)
+        noteRemoved(names)
+        writeNames(ndk, "abiFilters", ndk.abiFilters)
+    } catch (Throwable ignored) {}
+    try {
+        def enb = android.defaultConfig.externalNativeBuild
+        ["cmake", "ndkBuild"].each { kind ->
+            try {
+                def block = enb."$kind"
+                if (block == null) return
+                def names = readNames(block.abiFilters)
+                noteRemoved(names)
+                writeNames(block, "abiFilters", block.abiFilters)
+            } catch (Throwable ignored) {}
+        }
+    } catch (Throwable ignored) {}
+    try {
+        def abi = android.splits.abi
+        def names = []
+        try {
+            if (abi.metaClass.respondsTo(abi, "getInclude")) names.addAll(readNames(abi.getInclude()))
+        } catch (Throwable ignored) {}
+        try {
+            def inc = abi.include
+            if (!(inc instanceof Closure)) names.addAll(readNames(inc))
+        } catch (Throwable ignored) {}
+        noteRemoved(names)
+        try { abi.reset() } catch (Throwable ignored) {}
+        try { abi.include(KEEP) } catch (Throwable ignored) {
+            try {
+                def inc = abi.include
+                if (inc instanceof Collection) { inc.clear(); inc.add(KEEP) }
+            } catch (Throwable ignored2) {}
+        }
+        try { abi.universalApk = false } catch (Throwable ignored) {}
+        try { abi.isUniversalApk = false } catch (Throwable ignored) {}
+        try { abi.setUniversalApk(false) } catch (Throwable ignored) {}
+    } catch (Throwable ignored) {}
+}
+
+def pointAtJava = { t ->
+    def home = System.getenv("JAVA_HOME")
+    if (home == null || home.isEmpty()) return
+    def bin = new File(home, "bin/java").absolutePath
+    try {
+        def exec = t.executable
+        if (exec instanceof Property) {
+            exec.set(bin)
+            return
+        }
+    } catch (Throwable ignored) {}
+    try { t.setExecutable(bin) } catch (Throwable ignored) {}
+    try { t.executable = bin } catch (Throwable ignored) {}
+}
+
+def applyCmake = { p ->
+    if (System.getenv("DEV_IDE_CMAKE_FALLBACK") != "true") return
+    def ver = System.getenv("DEV_IDE_CMAKE_VERSION")
+    if (ver == null || ver.isEmpty()) return
+    def android = null
+    try { android = p.extensions.findByName("android") } catch (Throwable ignored) {}
+    if (android == null) return
+    try {
+        def cmake = android.externalNativeBuild.cmake
+        def current = cmake.version
+        if (current instanceof Property) current.set(ver)
+        else cmake.version = ver
+    } catch (Throwable ignored) {}
+}
+
+def applyNdk = { p ->
+    if (System.getenv("DEV_IDE_NDK_REWRITE") != "true") return
+    def ver = System.getenv("DEV_IDE_NDK_VERSION")
+    if (ver == null || ver.isEmpty()) return
+    def android = null
+    try { android = p.extensions.findByName("android") } catch (Throwable ignored) {}
+    if (android == null) return
+    try { android.ndkVersion = ver } catch (Throwable ignored) {}
+}
+
+def rewriteClassifiers = { p ->
+    p.configurations.configureEach { cfg ->
+        cfg.withDependencies { deps ->
+            def doomed = []
+            deps.each { d ->
+                if (!(d instanceof ExternalModuleDependency)) return
+                def hit = false
+                d.artifacts.each { art -> if (art.classifier != null && NATIVE.contains(art.classifier)) hit = true }
+                if (hit) doomed << d
+            }
+            doomed.each { d ->
+                deps.remove(d)
+                def repl = p.dependencies.create("${d.group}:${d.name}:${d.version}")
+                if (repl instanceof ExternalModuleDependency) {
+                    repl.artifact { spec ->
+                        spec.name = d.name
+                        spec.type = "jar"
+                        spec.extension = "jar"
+                    }
+                }
+                deps.add(repl)
+            }
+        }
+    }
+}
+
+def cap = { String name ->
+    if (name == null || name.length() == 0) return ""
+    return name.substring(0, 1).toUpperCase(java.util.Locale.ROOT) + name.substring(1)
+}
+
+def registerVariants = { p, slot ->
+    try {
+        def components = p.extensions.findByName("androidComponents")
+        if (components == null) return
+        components.onVariants(components.selector().all()) { variant ->
+            def flavors = []
+            try {
+                variant.productFlavors.each { pair ->
+                    def second = null
+                    try { second = pair.second } catch (Throwable ignored) {}
+                    if (second == null) {
+                        try { second = pair.get(1) } catch (Throwable ignored) {}
+                    }
+                    if (second != null) flavors << second.toString()
+                }
+            } catch (Throwable ignored) {}
+            def name = variant.name.toString()
+            def buildType = name
+            try { if (variant.buildType != null) buildType = variant.buildType.toString() } catch (Throwable ignored) {}
+            def debuggable = buildType == "debug"
+            try {
+                def flag = variant.debuggable
+                if (flag instanceof Property) debuggable = flag.get() as boolean
+                else if (flag != null) debuggable = flag as boolean
+            } catch (Throwable ignored) {}
+            slot.variants << [
+                    name        : name,
+                    buildType   : buildType,
+                    flavors     : flavors,
+                    assembleTask: "assemble" + cap(name),
+                    debuggable  : debuggable,
+            ]
+        }
+    } catch (Throwable ignored) {}
+}
+
+def relPaths = { p, files ->
+    def base = p.projectDir.toPath()
+    def out = []
+    files.each { f ->
+        try {
+            def path = f.toPath()
+            if (path.startsWith(base)) out << base.relativize(path).toString().replace('\\' as char, '/' as char)
+            else out << f.path.replace('\\' as char, '/' as char)
+        } catch (Throwable ignored) {
+            out << f.toString()
+        }
+    }
+    return out
+}
+
+def textOf = { value ->
+    if (value == null) return null
+    try { if (value instanceof Property) value = value.getOrElse(null) } catch (Throwable ignored) {}
+    return value == null ? null : value.toString()
+}
+
+gradle.beforeProject { p ->
+    def slot = [
+            variants   : Collections.synchronizedList(new ArrayList()),
+            application: false,
+            plugins    : Collections.synchronizedSet(new LinkedHashSet()),
+    ]
+    slots.put(p.path, slot)
+    try { rewriteClassifiers(p) } catch (Throwable ignored) {}
+    try { p.tasks.withType(JavaExec).configureEach { t -> pointAtJava(t) } } catch (Throwable ignored) {}
+    p.plugins.withId("com.android.application") {
+        slot.application = true
+        slot.plugins.add("com.android.application")
+        registerVariants(p, slot)
+    }
+    p.plugins.withId("com.android.library") {
+        slot.plugins.add("com.android.library")
+        registerVariants(p, slot)
+    }
+    p.plugins.withId("com.android.dynamic-feature") {
+        slot.plugins.add("com.android.dynamic-feature")
+        registerVariants(p, slot)
+    }
+    ["java", "java-library", "application", "org.jetbrains.kotlin.jvm", "org.jetbrains.kotlin.android"].each { id ->
+        p.plugins.withId(id) { slot.plugins.add(id) }
+    }
+    p.afterEvaluate {
+        try { narrow(p) } catch (Throwable ignored) {}
+        try { applyCmake(p) } catch (Throwable ignored) {}
+        try { applyNdk(p) } catch (Throwable ignored) {}
+        try { p.tasks.withType(JavaExec).each { t -> pointAtJava(t) } } catch (Throwable ignored) {}
+    }
+}
+
+gradle.projectsEvaluated {
+    rootProject.allprojects { p ->
+        try { narrow(p) } catch (Throwable ignored) {}
+        try { applyCmake(p) } catch (Throwable ignored) {}
+        try { applyNdk(p) } catch (Throwable ignored) {}
+        try { p.tasks.withType(JavaExec).each { t -> pointAtJava(t) } } catch (Throwable ignored) {}
+    }
+
+    def modules = []
+    def buildTools = new LinkedHashSet()
+    def platforms = new LinkedHashSet()
+    def ndks = new LinkedHashSet()
+    def cmakes = new LinkedHashSet()
+    rootProject.allprojects { p ->
+        def slot = slots.get(p.path)
+        if (slot == null) return
+        def interesting = slot.application || !slot.plugins.isEmpty() || !slot.variants.isEmpty()
+        if (!interesting) return
+        def android = false
+        slot.plugins.each { id -> if (id.toString().startsWith("com.android.")) android = true }
+        def variants = new ArrayList(slot.variants)
+        if (variants.isEmpty() && !android && !slot.plugins.isEmpty()) {
+            variants << [name: "main", buildType: "main", flavors: [], assembleTask: "assemble", debuggable: true]
+        }
+        def sourceSets = []
+        try {
+            def main = p.sourceSets.findByName("main")
+            if (main != null) {
+                def kotlinDirs = []
+                try { if (main.hasProperty("kotlin")) kotlinDirs = relPaths(p, main.kotlin.srcDirs) } catch (Throwable ignored) {}
+                sourceSets << [
+                        name     : "main",
+                        java     : relPaths(p, main.java.srcDirs),
+                        kotlin   : kotlinDirs,
+                        resources: relPaths(p, main.resources.srcDirs),
+                ]
+            }
+        } catch (Throwable ignored) {}
+        def dependencies = []
+        ["api", "implementation", "compileOnly", "runtimeOnly"].each { cfgName ->
+            try {
+                def cfg = p.configurations.findByName(cfgName)
+                if (cfg == null) return
+                cfg.dependencies.each { d ->
+                    if (d instanceof org.gradle.api.artifacts.ProjectDependency) {
+                        dependencies << [configuration: cfgName, coordinate: null, project: d.dependencyProject.path]
+                    } else if (d instanceof ExternalModuleDependency && d.group != null && d.name != null) {
+                        def ver = d.version == null ? "" : d.version
+                        dependencies << [configuration: cfgName, coordinate: "${d.group}:${d.name}:${ver}", project: null]
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        def namespace = null
+        def compileSdk = null
+        def minSdk = null
+        def targetSdk = null
+        def buildToolsVersion = null
+        def ndkVersion = null
+        def cmakeVersion = null
+        def aidl = false
+        try {
+            def ext = p.extensions.findByName("android")
+            if (ext != null) {
+                namespace = textOf(ext.namespace)
+                try { compileSdk = textOf(ext.compileSdk) } catch (Throwable ignored) {}
+                if (compileSdk == null) try { compileSdk = textOf(ext.compileSdkVersion) } catch (Throwable ignored) {}
+                try { minSdk = textOf(ext.defaultConfig.minSdk) } catch (Throwable ignored) {
+                    try { minSdk = textOf(ext.defaultConfig.minSdkVersion) } catch (Throwable ignored2) {}
+                }
+                try { targetSdk = textOf(ext.defaultConfig.targetSdk) } catch (Throwable ignored) {
+                    try { targetSdk = textOf(ext.defaultConfig.targetSdkVersion) } catch (Throwable ignored2) {}
+                }
+                try { buildToolsVersion = textOf(ext.buildToolsVersion) } catch (Throwable ignored) {}
+                try { ndkVersion = textOf(ext.ndkVersion) } catch (Throwable ignored) {}
+                try { cmakeVersion = textOf(ext.externalNativeBuild.cmake.version) } catch (Throwable ignored) {}
+                try {
+                    def flag = ext.buildFeatures.aidl
+                    aidl = flag instanceof Property ? (flag.get() as boolean) : (flag as boolean)
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
+        if (buildToolsVersion != null) buildTools.add(buildToolsVersion)
+        if (ndkVersion != null) ndks.add(ndkVersion)
+        if (cmakeVersion != null) cmakes.add(cmakeVersion)
+        if (compileSdk != null) platforms.add(compileSdk)
+        def rootDir = rootProject.projectDir.toPath()
+        def rel = ""
+        try { rel = rootDir.relativize(p.projectDir.toPath()).toString().replace('\\' as char, '/' as char) } catch (Throwable ignored) {}
+        modules << [
+                name              : p.name,
+                path              : p.path,
+                dir               : rel,
+                plugins           : new ArrayList(slot.plugins),
+                application       : slot.application,
+                variants          : variants,
+                sourceSets        : sourceSets,
+                dependencies      : dependencies,
+                namespace         : namespace,
+                compileSdk        : compileSdk,
+                minSdk            : minSdk,
+                targetSdk         : targetSdk,
+                buildToolsVersion : buildToolsVersion,
+                ndkVersion        : ndkVersion,
+                cmakeVersion      : cmakeVersion,
+                aidl              : aidl,
+        ]
+    }
+    def issues = []
+    removed.each { abi ->
+        issues << [severity: "warning", message: "ABI ${abi} skipped; the APK is arm64-v8a only"]
+    }
+    def model = [
+            name               : rootProject.name,
+            gradleVersion      : gradle.gradleVersion,
+            modules            : modules,
+            issues             : issues,
+            buildToolsVersions : new ArrayList(buildTools),
+            platforms          : new ArrayList(platforms),
+            ndkVersions        : new ArrayList(ndks),
+            cmakeVersions      : new ArrayList(cmakes),
+    ]
+    if (modelOut != null) {
+        def file = new File(modelOut)
+        if (file.parentFile != null) file.parentFile.mkdirs()
+        file.setText(groovy.json.JsonOutput.toJson(model), "UTF-8")
+    }
+    if (abiReport != null) {
+        def file = new File(abiReport)
+        if (file.parentFile != null) file.parentFile.mkdirs()
+        def lines = new ArrayList(removed)
+        Collections.sort(lines)
+        file.setText(lines.join("\n") + (lines.isEmpty() ? "" : "\n"), "UTF-8")
+    }
+}

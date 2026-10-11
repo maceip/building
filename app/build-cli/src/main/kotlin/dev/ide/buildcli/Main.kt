@@ -2,6 +2,8 @@ package dev.ide.buildcli
 
 import dev.ide.core.headless.HeadlessBuildResult
 import dev.ide.core.headless.HeadlessEngine
+import dev.ide.gradle.DesktopGradleHost
+import dev.ide.gradle.GradleEnvironment
 import dev.ide.ui.backend.UiLogLevel
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
@@ -14,11 +16,14 @@ import kotlin.system.exitProcess
  *     codeassist assemble --project . --variant debug
  *     codeassist tasks --project .
  *
- * The build runs exactly as it does on a phone (resolve → aapt2 → javac/K2 → D8 → sign); this is only the
- * host around it. Inside GitHub Actions it additionally emits workflow commands, so compiler and resource
+ * A native project builds with the IDE's own pipeline (resolve → aapt2 → javac/K2 → D8 → sign). A project
+ * bound to Gradle is built by the same tooling client the desktop IDE uses, against the host JDK.
+ * Inside GitHub Actions the CLI additionally emits workflow commands, so compiler and resource
  * errors land on the pull request's diff instead of only in the log. See docs/github-action.md.
  */
 fun main(args: Array<String>) {
+    GradleEnvironment.enabled = true
+    GradleEnvironment.host = DesktopGradleHost()
     val code = try {
         dispatch(args)
     } catch (e: UsageError) {
