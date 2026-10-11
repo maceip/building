@@ -37,7 +37,10 @@ is a stub, and the package's wasm fallback is what loads.
 
 The transferable rule: the binding layer is the platform (filesystem, process spawn, network).
 Everything above it is upstream code, pinned and regenerated, not rewritten when a tool
-misbehaves.
+misbehaves. Applied here, that upstream program is Gradle. Vivari itself is a Node port,
+with its own `lib/`, a vendored npm, and stubs where native addons would be. Putting that
+port on the phone so a Gradle task can exec `node` starts a second build system. We do
+not ship it.
 
 ### Termux (`termux/termux-packages`)
 
@@ -187,15 +190,13 @@ Gradle daemon (same JDK, children inherit the preload)
 ```
 
 `GRADLE_USER_HOME` lives under the app's files directory. The wrapper downloads the
-distribution the project named. We do not unpack Termux's `gradle` package into the
-prefix except as an optional terminal convenience that the IDE never invokes.
+distribution the project named. The prefix has no `gradle` binary of its own.
 
 ## Phase 0 — prefix and exec
 
-A small bootstrap, not a distro. Contents: a shell that can run `gradlew` (`bash`),
-`ca-certificates`, the shared libraries the JDK closure needs, `libtermux-exec.so`,
-and the PATH tools in [the coverage layer](#coverage-layer). No `apt`, no package
-database, no PRoot, no second libc.
+A small bootstrap. Contents are the [build-system binaries](#build-system-binaries):
+one `sh` that can run `gradlew`, `ca-certificates`, the shared libraries the JDK
+needs, and `libtermux-exec.so`. The list is closed there.
 
 Packaging follows AndroidIDE's bootstrap and this repo's own NDK rule
 (`samples/ndk-plugin/README.md`):
@@ -211,12 +212,13 @@ Packaging follows AndroidIDE's bootstrap and this repo's own NDK rule
 First process, every time, is literally:
 
 ```
-/system/bin/linker64 $PREFIX/opt/bin/bash -lc 'java -version'
+/system/bin/linker64 $JAVA_HOME/bin/java -version
+/system/bin/linker64 $PREFIX/bin/sh -c 'java -version'
 ```
 
-with `LD_PRELOAD` and `LD_LIBRARY_PATH` set. `java -version` must print the image we
-installed before any Gradle work is attempted. That is the rootfs integrity check:
-the binary exists, `--version` works, and one real command ran.
+with `LD_PRELOAD` and `LD_LIBRARY_PATH` set, once per installed image. Both must
+print that image before any Gradle work is attempted. The first proves the JDK.
+The second is how `gradlew` starts it.
 
 The IDE process does not set `LD_PRELOAD` on itself. The preload intercepts `execve`
 inside the build process tree only.
@@ -317,9 +319,9 @@ Distribution type defaults to the wrapper. If `gradlew`,
 generate them pointing at one pinned current Gradle, the way AndroidIDE unzips a
 wrapper. Do not download a distribution inside the APK.
 
-Every launch passes one `--init-script`, the file described in the
-[coverage layer](#coverage-layer). It is ours, it lives in the prefix, and it is
-not written into the project.
+Every launch passes one `--init-script`. It lives in the prefix and is not written
+into the project. Its whole job is the arm64 filter in the ABI section, plus the
+CMake version fallback in the tree section when an alias is rejected.
 
 The server runs in a foreground service. `Binder` death, or the JVM exiting, becomes
 `BuildState` failed with the process's last stderr lines. The next build starts a
@@ -550,72 +552,50 @@ On a device, after Phase 0's `java -version` already passed:
 6. Opening a `.cpp` in that project still underlines an error via
    `NdkToolchain.syntaxCheck` without a Gradle sync.
 
-## Coverage layer
+## Build-system binaries
 
-<a id="coverage-layer"></a>
+<a id="build-system-binaries"></a>
 
-The builds that still fail after Phases 0–4 fail for a missing directory name, an
-ABI list, or a single host program on `PATH`. Each of those is closed without a
-new compiler. Rust, a Flutter SDK, Go, and a Hermes compiler are the cases this
-layer leaves alone; they are named in [out of scope](#out-of-scope).
+A host binary on `PATH` is part of this build system when Gradle, AGP, or the NDK
+execs it by name while assembling the Android app. The binary and the shared
+libraries it needs in order to start are what we ship. The package that built it,
+and anything that binary would itself download, are not.
 
-### One init script
+| Binary | Who execs it |
+| --- | --- |
+| `java` (17 and 21), with the JDK `.so` closure | Gradle, AGP, Kotlin, D8, R8, prefab |
+| `sh` | `gradlew` |
+| `aapt2`, `zipalign` | AGP. Already in `jniLibs` |
+| `aidl` | AGP, only when the module turns AIDL on. One ELF in the build-tools directory |
+| `clang` and the `clang++` / `ld.lld` / `llvm-*` names | CMake, ndk-build, AGP's strip |
+| `cmake`, `ninja`, `make` | AGP, for `externalNativeBuild` |
 
-`--init-script` on every Tooling API launch. One file.
+`ca-certificates` and `libtermux-exec.so` are on that list because `java` cannot
+fetch a wrapper or fork a child without them. `android.jar`, the license hash,
+and the arm64 sysroot are data those binaries read.
 
-- Narrow native ABIs and splits to `arm64-v8a`, as the ABI section describes.
-  Report the removed ABIs. Do not fail the assemble.
-- When `com.google.protobuf` is applied, set its protoc executable to
-  `$PREFIX/bin/protoc`. The plugin's osdetector would otherwise download a
-  glibc `protoc`.
-- When a React Native build would exec `hermesc` and that file is not an
-  aarch64 ELF we can run, set the project's `hermesEnabled` property to false.
-  Metro still bundles JavaScript. The runtime for that APK is JSC. We do not
-  build `hermesc`.
-- The CMake version fallback from the alias section, only if the alias is
-  rejected.
+`sh` is one program, on `PATH` as `sh`. A BusyBox build is acceptable only when
+that single name is installed. The other applets are how a prefix turns into a
+distro: `wget` to fetch Node, `ash` scripts that assume `sed` and `awk`, and then
+Node's own list. Vivari has the same shape from the other side. Its runtime is
+Node's `lib/` plus npm plus a stub for every native addon, and a Gradle task that
+needed `node` would next need `node-gyp`, which needs Python and a compiler.
 
-The script does not enable iOS, CocoaPods, or a desktop target, and it does not
-put `cargo` on `PATH`.
-
-### PATH packages
-
-Same download channel as the JDK. Same `LD_PRELOAD`. `$PREFIX/bin` is on the
-Gradle daemon's `PATH`.
-
-| Binary | Package | What it unlocks |
-| --- | --- | --- |
-| `node`, `corepack` | Termux `nodejs`, one current LTS | React Native and other Gradle tasks whose `Exec` is `node`. `corepack` runs Yarn or pnpm when the lockfile asks |
-| `python3`, `python` | Termux `python` | Tasks that shell out to Python. This is not a Rust toolchain |
-| `protoc` | Termux `protobuf` | The protobuf plugin, via the init script |
-| `aidl` | Termux `aidl` | Modules that turn AIDL on. The binary also sits in the build-tools alias |
-
-Before Gradle, if `package.json` is present and the install it describes is
-absent, run one package-manager install (`npm ci`, or corepack's Yarn or pnpm
-matching the lockfile). The install's stderr is the build error when it fails.
-Node is invoked by the project's bundle task. We do not start Metro as a
-server, and we do not write a bundler.
-
-### What this adds, and what it does not
-
-A CMake or `ndk-build` app that lists four ABIs, at a `minSdk` the r27c sysroot
-contains, assembles an arm64 APK. A flavored app assembles one debug variant. A
-React Native app bundles its JavaScript. A protobuf module uses our `protoc`.
-Prefab, KSP, kapt, Hilt, and Compose were already in scope, because they are
-jars on the JDK.
-
-`shadowsocks-android` stays a no. The init script would narrow its `ndk-build`
-to arm64 and Python would be present, and the build would still stop in
-`rust-android-gradle` because there is no `cargo`. That missing compiler is the
-boundary of this layer.
+The nine apps below, an arm64 CMake or `ndk-build` assemble, and a flavored debug
+variant all run on the table above. KSP, kapt, Hilt, Compose, and prefab are jars
+in the JDK. A task that execs `node`, `npm`, `python`, `protoc`, `cargo`, or
+`hermesc` stops with that name in the error. Adding the missing ELF is a later
+decision about that one file, made when a project we intend to build actually
+fails on it. It is not a phase, and it does not come with that file's package
+manager.
 
 ## Phase 5 — distribution
 
-The JDK, cmake, ninja, make, Node, Python, protoc, aidl, and the NDK sysroot are
-first-run downloads with pinned checksums, unpacked into app storage. They are
-not assets in the APK. Pojav's split between a runtime APK and a no-runtime APK is
-the size argument; AndroidIDE's `idesetup` is the installation shape, minus
-`apt`.
+The JDK, `sh`, cmake, ninja, make, aidl, and the NDK sysroot are first-run
+downloads with pinned checksums, unpacked into app storage. They are not assets
+in the APK. Pojav's split between a runtime APK and a no-runtime APK is the size
+argument; AndroidIDE's `idesetup` is the installation shape, minus `apt` and
+minus a package database.
 
 The clang executables the editor runs stay inside `:samples:ndk-plugin`'s
 `jniLibs`, as they do now. The Gradle-facing NDK tree is a second install of
@@ -658,14 +638,13 @@ is not the reason to skip the copy. The reason is the frozen builder model.
 
 Phase 0 and the `java -version` check come before any Gradle code is trusted.
 Phase 1 and 2 land together as the first user-visible Gradle build (Java or
-Kotlin, no native code), including the init script, the license file, and the
-version aliases. Node and Python are part of that same prefix, so a React
-Native bundle is the same phase, not a later architecture. Phase 3 deletes the
-native pipeline's registration only after that build installs an APK. Phase 4
-is the NDK, and it is blocked on Phase 0's linker exec, not on a new sandbox.
-The compiler, the sysroot, and the editor integration already exist. The ABI
-narrowing and the full arm64 sysroot are what make Phase 4 cover the CMake and
-`ndk-build` apps that list more than one ABI.
+Kotlin, no native code): the two JDKs, the init script, the license file, and
+the version aliases. Phase 3 deletes the native pipeline's registration only
+after that build installs an APK. Phase 4 is the NDK, and it is blocked on
+Phase 0's linker exec, not on a new sandbox. The compiler, the sysroot, and the
+editor integration already exist. The arm64 filter and the full arm64 sysroot
+are what make Phase 4 cover a CMake or `ndk-build` app that lists more than one
+ABI.
 
 ## Ten Kotlin apps
 
@@ -720,12 +699,10 @@ real Gradle; we do not strip it.
 
 ### shadowsocks, and why it stays a no
 
-Its `ndk-build` would be narrowed to arm64, and Python is on `PATH` for the
-coverage layer, and the build still stops in `rust-android-gradle`. That plugin
-compiles Rust with `cargo` for `aarch64-linux-android`. There is no `cargo` in
-the prefix. The arm64 objects are produced by that plugin, not copied from a
-prebuilt. A Rust toolchain is a second compiler, which is the line the coverage
-layer does not cross.
+The arm64 filter would keep its `ndk-build` on `arm64-v8a`. The build still stops
+in `rust-android-gradle`, which compiles Rust with `cargo`. `cargo` is a second
+compiler, with its own standard library and targets. It is outside the binary
+list. The C objects are not a prebuilt we could package instead.
 
 ### What the ten forced the plan to change
 
@@ -743,11 +720,9 @@ layer does not cross.
 
 ## Out of scope
 
-<a id="out-of-scope"></a>
-
 - PRoot, a guest Ubuntu or Alpine, qemu-user, and Nix-on-Droid's bootstrap.
 - `dlopen` of `libjvm.so` into the IDE process.
-- Baking a JDK, a Gradle distribution, or Node into the APK.
+- Baking a JDK or a Gradle distribution into the APK.
 - Installing Termux's `gradle` package as the build entrypoint.
 - Vendoring AndroidIDE's `tooling/builder-model-impl`.
 - Finishing the ART `:build` daemon in `docs/build-process-isolation.md` for
@@ -755,13 +730,11 @@ layer does not cross.
 - Non-Android targets of a Kotlin Multiplatform project: iOS, CocoaPods, desktop,
   and a JetBrains Runtime with JCEF. The Android application of that project is
   in scope.
-- A second compiler or an SDK that is not a PATH binary: Rust and cargo
-  (`shadowsocks/shadowsocks-android`), a Hermes `hermesc`, the Flutter SDK, and
-  Go/`gomobile`. Python on `PATH` does not change the Rust answer.
-- Further LLVM backends. The init script already keeps the APK on `arm64-v8a`,
-  so those backends would build splits this phone does not install.
+- A userspace beyond the binary table: Vivari, Node and npm, BusyBox applets
+  other than `sh`, Python, protoc, cargo (`shadowsocks/shadowsocks-android`),
+  hermesc, the Flutter SDK, and Go. Each of those is the root of its own
+  dependency list.
+- Further LLVM backends. The init script keeps the APK on `arm64-v8a`.
 - A CMake implementation of our own. Projects with `CMakeLists.txt` are built
   by the real CMake. Projects with an `[ndk]` facet are built by
   `NdkBuildPlugin`.
-- A Metro server, or a JavaScript bundler of our own. The project's Gradle task
-  runs `node`.
