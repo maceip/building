@@ -18,13 +18,15 @@ public final class FrameChannel {
 
     private final InputStream in;
     private final OutputStream out;
+    /** Writes only. The reader must not take this lock: it blocks in {@link #read()} until the next frame. */
+    private final Object writeLock = new Object();
 
     public FrameChannel(FileDescriptor inFd, FileDescriptor outFd) {
         this.in = new FileInputStream(inFd);
         this.out = new FileOutputStream(outFd);
     }
 
-    public synchronized Object read() throws IOException {
+    public Object read() throws IOException {
         byte[] header = readFully(4);
         int n = ((header[0] & 0xff) << 24)
                 | ((header[1] & 0xff) << 16)
@@ -35,7 +37,7 @@ public final class FrameChannel {
         return Json.parse(new String(body, StandardCharsets.UTF_8));
     }
 
-    public synchronized void writeJson(String json) throws IOException {
+    public void writeJson(String json) throws IOException {
         byte[] body = json.getBytes(StandardCharsets.UTF_8);
         if (body.length > MAX_FRAME) throw new IOException("frame length " + body.length);
         byte[] header = new byte[] {
@@ -44,9 +46,11 @@ public final class FrameChannel {
                 (byte) (body.length >>> 8),
                 (byte) body.length
         };
-        out.write(header);
-        out.write(body);
-        out.flush();
+        synchronized (writeLock) {
+            out.write(header);
+            out.write(body);
+            out.flush();
+        }
     }
 
     public void respond(long id, Object result) throws IOException {

@@ -35,7 +35,8 @@ tasks.named<Test>("test") {
     dependsOn(":gradle-tooling:toolingJar")
     val toolingJar = project(":gradle-tooling").layout.buildDirectory.file("tooling/gradle-tooling.jar")
     systemProperty("dev.ide.tooling.jar", toolingJar.get().asFile.absolutePath)
-    systemProperty("dev.ide.gradle.home", gradle.gradleHomeDir.absolutePath)
+    val gradleHome = gradle.gradleHomeDir ?: error("this test needs the Gradle installation that is running the build")
+    systemProperty("dev.ide.gradle.home", gradleHome.absolutePath)
     systemProperty(
         "dev.ide.init.script",
         project(":gradle-tooling").file("src/main/resources/dev/ide/gradle/on-device.init.gradle").absolutePath,

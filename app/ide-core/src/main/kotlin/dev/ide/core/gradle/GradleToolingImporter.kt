@@ -117,9 +117,11 @@ class GradleToolingImporter : ProjectImporter {
 
     private fun dependencies(spec: GradleProjectSnapshot.Module): List<ExternalDependency> = spec.dependencies.mapNotNull { dep ->
         val scope = scope(dep.configuration)
+        val projectPath = dep.project
+        val coordinate = dep.coordinate
         when {
-            dep.project != null -> ExternalModuleRef(dep.project.substringAfterLast(':').ifBlank { dep.project }, scope)
-            dep.coordinate != null -> ExternalLibrary(dep.coordinate, scope)
+            projectPath != null -> ExternalModuleRef(projectPath.substringAfterLast(':').ifBlank { projectPath }, scope)
+            coordinate != null -> ExternalLibrary(coordinate, scope)
             else -> null
         }
     }

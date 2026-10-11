@@ -35,6 +35,9 @@ class ToolingModelTest {
         )
         val userHome = Files.createTempDirectory("gradle-user-home")
         val javaHome = System.getProperty("java.home")
+        val env = HashMap<String, String>()
+        System.getenv().forEach { (key, value) -> env[key] = value }
+        env["JAVA_HOME"] = javaHome
         val process = ProcessBuilder(Path.of(javaHome, "bin", "java").toString(), "-jar", jar)
             .redirectError(ProcessBuilder.Redirect.PIPE)
             .start()
@@ -47,9 +50,9 @@ class ToolingModelTest {
                 javaHome = javaHome,
                 androidHome = null,
                 gradleUserHome = userHome.toAbsolutePath().toString(),
-                args = listOf("--offline", "--no-daemon", "--init-script", init),
+                args = listOf("--offline", "--init-script", init),
                 jvmArgs = listOf("-Xmx512m"),
-                env = mapOf("JAVA_HOME" to javaHome),
+                env = env,
             )
             val call = client.fetchModel()
             val snapshot = runCatching { GradleProjectSnapshot.parse(call.rawResult) }.getOrElse {

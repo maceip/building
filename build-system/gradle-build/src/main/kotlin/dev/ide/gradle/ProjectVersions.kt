@@ -110,7 +110,7 @@ object ProjectVersions {
             val name = path.fileName.toString()
             if (name == "build.gradle" || name == "build.gradle.kts" || name == "settings.gradle" ||
                 name == "settings.gradle.kts" || name == "gradle.properties"
-            ) files += path
+            ) files.add(path)
         }
         consider(root.resolve("settings.gradle"))
         consider(root.resolve("settings.gradle.kts"))

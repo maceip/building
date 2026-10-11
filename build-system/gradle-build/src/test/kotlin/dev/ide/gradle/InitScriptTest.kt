@@ -56,8 +56,15 @@ class InitScriptTest {
         env["DEV_IDE_ABI_REPORT"] = report.toAbsolutePath().toString()
         return GradleRunner.create()
             .withProjectDir(root.toFile())
-            .withArguments("--offline", "--no-daemon", "--init-script", init, task)
+            .withArguments(
+                "--offline",
+                "--init-script",
+                init,
+                "-Pdev.ide.abi.report=${report.toAbsolutePath()}",
+                task,
+            )
             .withEnvironment(env)
+            .forwardOutput()
     }
 
     private fun publish(repo: java.nio.file.Path, group: String, name: String, version: String, jar: ByteArray?, exe: ByteArray?) {
@@ -110,7 +117,7 @@ class InitScriptTest {
         }
         tasks.register('dump') {
             doLast {
-                def android = extensions.getByName('android')
+                def android = project.extensions.getByName('android')
                 println 'NDK ' + android.defaultConfig.ndk.abiFilters
                 println 'CMAKE ' + android.defaultConfig.externalNativeBuild.cmake.abiFilters
                 println 'NDKBUILD ' + android.defaultConfig.externalNativeBuild.ndkBuild.abiFilters

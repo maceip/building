@@ -193,7 +193,7 @@ public final class ToolingServer {
                 all.addAll(extra);
                 launcher.withArguments(all);
             }
-            launcher.forTasks(tasks);
+            launcher.forTasks(tasks.toArray(String[]::new));
             launcher.setStandardOutput(stdout);
             launcher.setStandardError(stderr);
             launcher.withCancellationToken(cts.token());

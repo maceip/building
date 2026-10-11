@@ -172,7 +172,7 @@ class GradleSessionTask(
         } catch (e: GradleToolchain.UnsupportedWrapper) {
             TaskResult.Failed(e.message ?: "This project stays on the static Gradle reader.")
         } catch (e: ToolingClient.ToolingException) {
-            val tail = e.stderr.lineSequence().filter { it.isNotBlank() }.takeLast(40).joinToString("\n")
+            val tail = e.stderr.lineSequence().filter { it.isNotBlank() }.toList().takeLast(40).joinToString("\n")
             TaskResult.Failed(listOfNotNull(e.message, tail.takeIf { it.isNotBlank() }).joinToString("\n"))
         } catch (e: Exception) {
             TaskResult.Failed(e.message ?: e.toString())

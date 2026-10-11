@@ -20,6 +20,11 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
         google() // Compose Multiplatform / AndroidX artifacts
+        // org.gradle:gradle-tooling-api is published to Gradle's repo, not Maven Central.
+        // Scoped to that one module so the rest of resolution never consults it.
+        maven("https://repo.gradle.org/gradle/libs-releases") {
+            content { includeModule("org.gradle", "gradle-tooling-api") }
+        }
         // :kotlin-compiler-deps only: the unshaded `-for-ide` compiler and the un-relocated IntelliJ platform
         // it needs. Not on Maven Central; JetBrains-only repos. Scoped so normal resolution never consults them.
         maven("https://redirector.kotlinlang.org/maven/kotlin-ide-plugin-dependencies") {

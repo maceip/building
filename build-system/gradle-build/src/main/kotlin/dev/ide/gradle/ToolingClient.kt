@@ -49,7 +49,7 @@ class ToolingClient(private val process: Process) : AutoCloseable {
     ): Map<String, Any?> {
         val distribution = linkedMapOf<String, Any?>("type" to distributionType)
         if (distributionValue != null) distribution["value"] = distributionValue
-        return call(
+        val result = call(
             "initialize",
             mapOf(
                 "projectDir" to projectDir,
@@ -62,6 +62,11 @@ class ToolingClient(private val process: Process) : AutoCloseable {
                 "env" to env,
             ),
         ).result
+        return if (result is Map<*, *>) {
+            result.entries.associate { (key, value) -> key.toString() to value }
+        } else {
+            emptyMap()
+        }
     }
 
     fun fetchModel(): Call = call("fetchModel", emptyMap())
