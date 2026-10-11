@@ -45,6 +45,8 @@ and follow the links into each subsystem.
   round-trips block edits back to byte-for-byte source.
 - [build-system.md](build-system.md) — the `BuildSystem` SPI, the incremental task engine, the native
   Java and Android pipelines, and the Gradle compatibility layer.
+- [gradle-on-device.md](gradle-on-device.md) — the plan for executing real Gradle on device, and for
+  pointing `externalNativeBuild` at the Android-host clang.
 - [github-action.md](github-action.md) — building CodeAssist projects in CI: the `codeassist` headless
   launcher and the `codeassist-build` GitHub Action over it.
 - [custom-build-plugins.md](custom-build-plugins.md): the step-by-step guide to extending the build.

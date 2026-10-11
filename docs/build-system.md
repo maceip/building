@@ -485,8 +485,9 @@ imports any folder an importer claims (not just the legacy-recovery path) into a
 workspace.
 
 The project is bound to `BuildSystemId.GRADLE_COMPAT`, so a build system contributed for that id would take its
-builds over; with none registered the native Java/Android pipelines build it as before. Still out of scope: a
-live file-watch sync (the stamp is compared on demand), and executing Gradle itself.
+builds over; with none registered the native Java/Android pipelines build it as before. A live file-watch sync
+(the stamp is compared on demand) is still out of scope. Executing Gradle, and building `externalNativeBuild`
+with the on-device clang, is the plan in [gradle-on-device.md](gradle-on-device.md).
 
 ## Exporting a project to Gradle
 
