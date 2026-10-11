@@ -173,6 +173,17 @@
         <!-- Phase-2 build-process-isolation skeleton (docs/build-process-isolation.md): the build/run daemon
              runs in its own ":build" OS process so a build OOM or a user-program crash kills only it, not
              the IDE. A plain bound service for now; the foreground service + notification is Phase 5. -->
+        <!-- The Gradle tooling JVM. Same process as the IDE: the child is linker64 + java, and
+             LD_PRELOAD is set on that child only. Idle timeout stops the JVM. -->
+        <service
+                android:name=".gradle.GradleBuildService"
+                android:exported="false"
+                android:foregroundServiceType="specialUse">
+            <property
+                    android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                    android:value="Running the user's Gradle build in a separate JDK so the project compiles with the Android Gradle Plugin while the editor stays open." />
+        </service>
+
         <service
                 android:name=".daemon.BuildDaemonService"
                 android:process=":build"

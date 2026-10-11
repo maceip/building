@@ -42,6 +42,7 @@ dependencies {
     implementation(project(":build-api"))
     implementation(project(":build-engine"))
     implementation(project(":jvm-build")) // JavaBuildSystem: composes lang-jdt/lang-kotlin compile tasks over build-engine
+    implementation(project(":gradle-build")) // GradleBuildSystem: tooling JVM, JDK selection, NDK layout. Off until a shell sets GradleEnvironment.enabled
     implementation(project(":android-support")) // android-app/-lib module types + AndroidFacet codec
     api(project(":layout-preview-api")) // owned XML-layout preview contracts; `api` because IdeServicesBackend implements LayoutPreviewBackend (public supertype, must be on consumers' classpath)
     implementation(project(":layout-preview-impl")) // the preview engine (inflater + resolver + chrome)

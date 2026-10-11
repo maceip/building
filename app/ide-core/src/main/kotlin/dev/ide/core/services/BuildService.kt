@@ -45,6 +45,8 @@ import dev.ide.build.engine.TaskStatus
 import dev.ide.build.engine.jarPath
 import dev.ide.build.jvm.JavaBuildSystem
 import dev.ide.core.applog.AppLogEntry
+import dev.ide.gradle.GradleBuildSystem
+import dev.ide.model.BuildSystemId
 import dev.ide.core.applog.AppLogLevel
 import dev.ide.core.applog.AppLogSnapshot
 import dev.ide.core.build.BuildFailureKind
@@ -671,7 +673,7 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
             )
             add(RunTaskOption("build:${m.name}", "Build ${m.name}", "build"))
         }
-        for (m in ctx.modules().filter { it.type.id == "android-app" }) {
+        for (m in ctx.modules().filter { it.type.id == "android-app" && !gradleBound(it) }) {
             for (v in AndroidVariants.compute(m)) {
                 val cap = v.name.replaceFirstChar { it.uppercase() }
                 // On device, the android Run builds + installs + launches; on desktop it stops at assemble.
@@ -697,7 +699,7 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
             }
         }
         // Android libraries package an .aar (per variant) — visible from Run like any other module's task.
-        for (m in ctx.modules().filter { it.type.id == "android-lib" }) {
+        for (m in ctx.modules().filter { it.type.id == "android-lib" && !gradleBound(it) }) {
             for (v in AndroidVariants.compute(m)) {
                 val cap = v.name.replaceFirstChar { it.uppercase() }
                 add(
@@ -758,6 +760,7 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                     val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return fail(
                         "No module '$moduleName'."
                     )
+                    if (delegateToGradle(module)) return
                     val target = runnableMainFor(module)
                         ?: return fail("No runnable main() found for ${module.name}. Set one in Module Settings ▸ Run.")
                     val mainClass = target.mainClass
@@ -788,6 +791,7 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                     val parts = id.removePrefix("assemble:").split(":")
                     val module = ctx.modules().firstOrNull { it.name == parts[0] }
                         ?: return fail("No module '${parts[0]}'.")
+                    if (delegateToGradle(module)) return
                     val variant = parts.getOrNull(1) ?: ctx.activeVariant(module)
                     unresolvedBlocker(module)?.let { return fail(it) }
                     val android = androidBuild
@@ -813,6 +817,7 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                     val parts = id.removePrefix("bundle:").split(":")
                     val module = ctx.modules().firstOrNull { it.name == parts[0] }
                         ?: return fail("No module '${parts[0]}'.")
+                    if (delegateToGradle(module)) return
                     val variant = parts.getOrNull(1) ?: ctx.activeVariant(module)
                     unresolvedBlocker(module)?.let { return fail(it) }
                     val android = androidBuild
@@ -839,6 +844,7 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                     val parts = id.removePrefix("assembleAar:").split(":")
                     val module = ctx.modules().firstOrNull { it.name == parts[0] }
                         ?: return fail("No module '${parts[0]}'.")
+                    if (delegateToGradle(module)) return
                     val variant = parts.getOrNull(1) ?: ctx.activeVariant(module)
                     unresolvedBlocker(module)?.let { return fail(it) }
                     val android = androidBuild
@@ -920,6 +926,7 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                     val parts = id.removePrefix("androidRun:").split(":")
                     val module = ctx.modules().firstOrNull { it.name == parts[0] }
                         ?: return fail("No module '${parts[0]}'.")
+                    if (delegateToGradle(module)) return
                     val variant = parts.getOrNull(1) ?: ctx.activeVariant(module)
                     unresolvedBlocker(module)?.let { return fail(it) }
                     val installer =
@@ -1157,6 +1164,15 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
         val ctx = SimpleTaskContext(
             onLog = { e -> _buildState.update { it.copy(log = it.log + e.toUi()) } },
             onDiagnostic = { d -> _buildState.update { it.copy(diagnostics = it.diagnostics + d.toUi()) } },
+            onStep = { name, status ->
+                val mapped = mapGradleStep(status)
+                _buildState.update { st ->
+                    val index = st.steps.indexOfFirst { it.name == name }
+                    val steps = if (index < 0) st.steps + BuildStepUi(name, mapped)
+                    else st.steps.mapIndexed { i, step -> if (i == index) step.copy(status = mapped) else step }
+                    st.copy(steps = steps)
+                }
+            },
         )
         buildCtx = ctx
         // Anything a build plugin did wrong while this graph was being assembled, now that there is a console.
@@ -1414,6 +1430,40 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
         java.time.Instant.ofEpochMilli(ms).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
             .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss.SSS"))
     }.getOrDefault("")
+
+    /**
+     * A project bound to [BuildSystemId.GRADLE] is assembled by [GradleBuildSystem]. The host's
+     * per-variant android rows and the native Java run are not a second builder for that id.
+     * `prepareDex` stays on the native pipeline: layout preview still dexes through it.
+     * Returns true when this call owned the request, including when delegation itself failed.
+     */
+    private fun delegateToGradle(module: Module): Boolean {
+        val project = ctx.projectOf(module) ?: return false
+        if (project.buildSystemId != BuildSystemId.GRADLE) return false
+        val system = buildSystemFor(project)
+        val action = system?.runTasks(project)?.firstOrNull { it.id == GradleBuildSystem.TASK_ID }
+            ?.let { system.actionFor(it, project, buildContext()) }
+        if (action == null) {
+            fail("This project builds with Gradle. Sync it once the JDK is installed.")
+            return true
+        }
+        launch(module.name, action.graph, action.header, action.banner, onSuccess = action.onSuccess)
+        return true
+    }
+
+    private fun gradleBound(module: Module): Boolean =
+        ctx.projectOf(module)?.buildSystemId == BuildSystemId.GRADLE
+
+    /** Gradle task-progress tokens from the tooling server, mapped onto the Steps list. */
+    private fun mapGradleStep(status: String): StepStatus = when (status.lowercase()) {
+        "started", "running" -> StepStatus.Running
+        "succeeded", "success", "done" -> StepStatus.Done
+        "up-to-date" -> StepStatus.UpToDate
+        "no-source" -> StepStatus.NoSource
+        "skipped" -> StepStatus.Skipped
+        "failed" -> StepStatus.Failed
+        else -> StepStatus.Running
+    }
 
     private fun mapStatus(status: TaskStatus): StepStatus = when (status) {
         TaskStatus.Running -> StepStatus.Running

@@ -8,6 +8,10 @@ kotlinForIde = "2.4.20-dev-6138"
 intellijPlatform = "251.27812.49"
 coroutines = "1.11.0"
 junit = "5.11.4"
+commonsCompress = "1.27.1"
+xz = "1.10"
+gradleTooling = "9.5.1"
+slf4j = "2.0.16"
 jdt = "3.40.0"
 compose = "1.11.1"
 # The skia binding Compose Multiplatform 1.11.1 is built against (its ui-desktop/ui-uikit dependency).
@@ -156,6 +160,11 @@ androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "a
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commonsCompress" }
+xz = { module = "org.tukaani:xz", version.ref = "xz" }
+gradle-tooling-api = { module = "org.gradle:gradle-tooling-api", version.ref = "gradleTooling" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+slf4j-nop = { module = "org.slf4j:slf4j-nop", version.ref = "slf4j" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 android-r8 = { module = "com.android.tools:r8", version.ref = "r8" }
 android-apksig = { module = "com.android.tools.build:apksig", version.ref = "apksig" }

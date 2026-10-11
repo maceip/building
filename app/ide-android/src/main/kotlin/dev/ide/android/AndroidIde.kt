@@ -9,6 +9,8 @@ import dev.ide.analytics.DeviceInfo
 import dev.ide.analytics.EventCategory
 import dev.ide.analytics.Events
 import dev.ide.android.fork.ForkedKotlinCompiler
+import dev.ide.android.gradle.AndroidGradleHost
+import dev.ide.gradle.GradleEnvironment
 import dev.ide.android.plugins.ApkPluginSource
 import dev.ide.android.plugins.PluginPackageWatcher
 import dev.ide.android.preview.SwingAwareProgramInterpreter
@@ -238,6 +240,16 @@ object AndroidIde {
         )
         // Installs + launches a built APK (the android Run) via the system package installer.
         val apkInstaller = ApkInstallerImpl(context)
+        // Gradle builds opt in here. The prefix download runs beside startup; until the JDK 17
+        // image is present, Gradle projects stay on the static reader.
+        val gradleHost = AndroidGradleHost(context)
+        GradleEnvironment.enabled = true
+        GradleEnvironment.installAndLaunch = { apk, pkg, log -> apkInstaller.installAndLaunch(apk, pkg, log) }
+        GradleEnvironment.host = gradleHost
+        kotlin.concurrent.thread(isDaemon = true, name = "gradle-prefix") {
+            runCatching { gradleHost.installIfNeeded { line -> Log.logger("ide.gradle").info(line) } }
+                .onFailure { Log.logger("ide.gradle").warn("prefix install failed: ${it.message}") }
+        }
         // The debug-only in-app log bridge: extract the bundled runtime jar (woven into debug builds); the
         // bridge inside the built app binds the IDE's exported AppLogSinkService over Binder and pushes its
         // logs to the IDE's Logcat tab. Best-effort — a missing/failed asset must NEVER stop the IDE from

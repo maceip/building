@@ -393,6 +393,7 @@ class TaskExecutorImpl(
         override val buildLog = BuildLogSink { e ->
             ctx.buildLog.log(if (e.task == null) e.copy(task = t.name) else e)
         }
+        override fun reportStep(name: String, status: String) = ctx.reportStep(name, status)
     }
 }
 
@@ -410,6 +411,7 @@ class SimpleTaskContext(
     private val onDiagnostic: (BuildDiagnostic) -> Unit = {},
     @Volatile var canceled: Boolean = false,
     private val onLog: (BuildLogEntry) -> Unit = {},
+    private val onStep: (String, String) -> Unit = { _, _ -> },
 ) : TaskContext {
     override val progress: ProgressReporter = object : ProgressReporter {
         override fun report(fraction: Double, message: String?) { if (message != null) buildLog.log(BuildLogEntry(message)) }
@@ -420,6 +422,7 @@ class SimpleTaskContext(
     // logger() inherits the interface default → BuildLogEntry(INFO) → buildLog → both callbacks below.
     override val buildLog = BuildLogSink { e -> log(e.message); onLog(e) }
     override val diagnostics = DiagnosticSink { onDiagnostic(it) }
+    override fun reportStep(name: String, status: String) { onStep(name, status) }
 }
 
 /** How much of a crashed task's trace is kept on the DEBUG channel for a bug report. */

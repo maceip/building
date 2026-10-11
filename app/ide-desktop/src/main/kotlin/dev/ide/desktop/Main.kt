@@ -11,6 +11,8 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import dev.ide.core.IdeServicesBackend
 import dev.ide.core.project.ProjectManager
+import dev.ide.gradle.DesktopGradleHost
+import dev.ide.gradle.GradleEnvironment
 import dev.ide.ui.CodeAssistApp
 import dev.ide.ui.editor.preview.ImageSceneComposer
 import dev.ide.ui.editor.preview.OffscreenPreviewRenderer
@@ -25,6 +27,8 @@ import java.nio.file.Path
  * there (or via the onboarding tour's final step).
  */
 fun main(args: Array<String>) {
+    GradleEnvironment.enabled = true
+    GradleEnvironment.host = DesktopGradleHost()
     System.setProperty("apple.awt.application.appearance", "system")
     System.setProperty("apple.awt.application.name", "CodeAssist")
     // Survive an unexpected exception on the AWT event thread (e.g. the live-preview interpreter crashing deep

@@ -17,6 +17,7 @@ import dev.ide.block.BLOCK_MAPPING_EP
 import dev.ide.block.impl.JavaBlockMapping
 import dev.ide.block.impl.KotlinBlockMapping
 import dev.ide.build.BUILD_CONTROL
+import dev.ide.build.BUILD_SYSTEM_EP
 import dev.ide.build.KOTLIN_COMPILER_PLUGIN_EP
 import dev.ide.build.BUILD_PLUGIN_EP
 import dev.ide.build.SOURCE_GENERATOR_EP
@@ -60,6 +61,9 @@ import dev.ide.core.completion.UserLiveTemplateContributor
 import dev.ide.core.gradle.GradleBuildFileWriter
 import dev.ide.core.gradle.GradleModelImporter
 import dev.ide.core.gradle.GradleProjectImporter
+import dev.ide.core.gradle.GradleToolingImporter
+import dev.ide.gradle.GradleBuildSystem
+import dev.ide.model.BuildSystemId
 import dev.ide.core.services.AndroidResourceService
 import dev.ide.core.services.BlockService
 import dev.ide.core.services.BuildService
@@ -361,7 +365,8 @@ private class JavaSupportPlugin : Plugin {
 private class GradleSupportPlugin : Plugin {
     override val manifest = PluginManifest(
         id = "gradle-support", name = "Gradle Support",
-        description = "Opens Gradle projects by reading their build scripts statically, and writes dependency declarations back to them.",
+        description = "Opens Gradle projects. The static reader is the project until a JDK is installed; " +
+            "the tooling importer then executes the build files, and GradleBuildSystem assembles them.",
     )
 
     override fun register(reg: PluginRegistration) {
@@ -371,7 +376,12 @@ private class GradleSupportPlugin : Plugin {
         // rather than declared can be read at all. It detects with a higher confidence, so it wins wherever
         // both apply.
         reg.register(PROJECT_IMPORTER_EP, GradleModelImporter())
+        // Confidence 50, and only when a shell has opted in and a JDK is installed. A failure leaves the
+        // static model in place.
+        reg.register(PROJECT_IMPORTER_EP, GradleToolingImporter())
         reg.register(BUILD_FILE_WRITER_EP, GradleBuildFileWriter())
+        reg.register(BUILD_FILE_WRITER_EP, GradleBuildFileWriter(BuildSystemId.GRADLE))
+        reg.register(BUILD_SYSTEM_EP, GradleBuildSystem())
     }
 }
 

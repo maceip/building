@@ -1,6 +1,6 @@
 # Build/run process isolation
 
-Status: design + Phase 0 (instrumentation) landed. Phases 1+ not started.
+Status: design + Phase 0 (instrumentation) landed. Phases 1+ are not the user-build path. User builds run in a Gradle Tooling API JVM; see [gradle-on-device.md](gradle-on-device.md). Do not finish the ART `:build` daemon for user builds.
 
 ## Motivation
 

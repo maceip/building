@@ -258,6 +258,15 @@ interface TaskContext {
      * running task. A task can call this directly to log at a non-INFO level.
      */
     val buildLog: BuildLogSink get() = BuildLogSink.NOOP
+
+    /**
+     * A Gradle task (or any other nested tool) changed state inside this one session task.
+     *
+     * [status] is a short token: `started`, `succeeded`, `up-to-date`, `skipped`, `no-source`, `failed`.
+     * The default ignores it, so a context that only knows the engine's own tasks stays source-compatible.
+     * The host appends a row to the Steps list. [dev.ide.build] does not depend on the UI's step enum.
+     */
+    fun reportStep(name: String, status: String) {}
 }
 
 sealed interface TaskResult {

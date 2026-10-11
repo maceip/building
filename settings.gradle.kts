@@ -104,6 +104,8 @@ include(
 
     ":decompiler", // navigate-into-library: read a classpath class → attached source, else decompile (Vineflower for Java, @Metadata stub for Kotlin)
     ":jvm-build", // JVM-language build system: JavaBuildSystem/JavaPlugin compose lang-jdt+lang-kotlin compile tasks over build-engine
+    ":gradle-tooling", // plain-Java Gradle Tooling API server, launched as java -jar (never on the IDE classpath)
+    ":gradle-build", // on-device/desktop Gradle host: JDK selection, prefix, NDK layout, GradleBuildSystem
     ":interp-core", // on-device Kotlin interpreter: tree-walks lang-kotlin's ResolvedTree (Compose interpreter, step 3)
     ":interp-api",  // published SPI: the narrowed interpreter surface a plugin runs project code through
     ":interp-impl", // the engine behind it: source sessions over :interp-core, bytecode sessions over :jvm-interp
@@ -231,7 +233,7 @@ val layers = mapOf(
     ),
     // The build system. Named `build-system` rather than `build` because `build/` is the root
     // project's own Gradle output directory.
-    "build-system" to listOf("build-api", "build-engine", "jvm-build"),
+    "build-system" to listOf("build-api", "build-engine", "jvm-build", "gradle-tooling", "gradle-build"),
     // Executing project code on device: the source interpreter, the bytecode VM, and the AWT/Swing
     // surface an interpreted program draws into.
     "run" to listOf("interp-api", "interp-core", "interp-impl", "interp-compose", "jvm-interp", "jvm-vm", "jvm-vm-fixtures", "awt-toolkit"),

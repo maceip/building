@@ -18,9 +18,9 @@ import kotlin.io.path.writeText
  * textually (creating it when the script has none) and leaves the rest of the file untouched: the scripts are
  * the user's, and reformatting them would be a surprise.
  */
-class GradleBuildFileWriter : BuildFileWriter {
-
-    override val id: BuildSystemId = BuildSystemId.GRADLE_COMPAT
+class GradleBuildFileWriter(
+    override val id: BuildSystemId = BuildSystemId.GRADLE_COMPAT,
+) : BuildFileWriter {
 
     override fun addDependency(module: Module, coordinate: Coordinate, scope: DependencyScope): WriteOutcome {
         val file = buildFileFor(module)
@@ -38,6 +38,7 @@ class GradleBuildFileWriter : BuildFileWriter {
             if (scope.offClasspath) GradleDependencyEdits.ensureConfiguration(added, kts, configuration) else added
         return runCatching {
             file.writeText(updated)
+            markStale(module)
             WriteOutcome.ok(file, "Declared $entry in ${file.fileName}.")
         }.getOrElse { WriteOutcome.failed("Couldn't write ${file.fileName}: ${it.message}") }
     }
@@ -53,8 +54,33 @@ class GradleBuildFileWriter : BuildFileWriter {
             )
         return runCatching {
             file.writeText(updated)
+            markStale(module)
             WriteOutcome.ok(file, "Removed ${coordinate.group}:${coordinate.name} from ${file.fileName}.")
         }.getOrElse { WriteOutcome.failed("Couldn't write ${file.fileName}: ${it.message}") }
+    }
+
+    /**
+     * A Gradle-id edit makes the tooling snapshot stale. The stamp the sync service records for the
+     * `gradle` importer, and the model JSON the build reads without starting a daemon, are both removed
+     * so the next sync executes the build files again.
+     */
+    private fun markStale(module: Module) {
+        if (id != BuildSystemId.GRADLE) return
+        val root = projectRoot(Paths.get(module.dir.path)) ?: return
+        Files.deleteIfExists(root.resolve(".platform/sync/gradle.stamp"))
+        Files.deleteIfExists(root.resolve(".platform/gradle-tooling.json"))
+    }
+
+    private fun projectRoot(start: Path): Path? {
+        var dir: Path? = start
+        repeat(8) {
+            val current = dir ?: return null
+            if (Files.isRegularFile(current.resolve("settings.gradle")) ||
+                Files.isRegularFile(current.resolve("settings.gradle.kts"))
+            ) return current
+            dir = current.parent
+        }
+        return null
     }
 
     /** The module's own build script (Kotlin DSL first, as a modern project uses it), or null. */
