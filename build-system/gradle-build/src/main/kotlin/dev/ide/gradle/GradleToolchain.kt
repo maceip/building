@@ -18,21 +18,25 @@ object GradleToolchain {
         if (!decision.supported || decision.image == null) throw UnsupportedWrapper(decision.reason)
         val javaHome = host.javaHome(decision.image)
             ?: throw IllegalStateException("No JDK ${decision.image} image is installed.")
-        prepare(projectDir, host, scan, javaHome, decision)
+        val cmakeVersion = readCmakeVersion(host, javaHome)
+        prepare(projectDir, host, scan, javaHome, decision, cmakeVersion)
         if (host.android) probe(host, javaHome)
-        val client = host.openClient(javaHome)
-        try {
-            initialize(client, projectDir, host, javaHome)
-            val first = fetch(client)
-            val known = scan.ndk + scan.buildTools + scan.cmake + scan.platforms
-            val discovered = first.ndkVersions + first.buildToolsVersions + first.cmakeVersions + first.platforms
-            if (discovered.any { it !in known }) {
-                materialize(host, scan, first)
-                return fetch(client)
+        return withCmakeRetry(cmakeVersion) { fallback ->
+            val client = host.openClient(javaHome)
+            try {
+                initialize(client, projectDir, host, javaHome, fallback, cmakeVersion)
+                val first = fetch(client)
+                val known = scan.ndk + scan.buildTools + scan.cmake + scan.platforms
+                val discovered = first.ndkVersions + first.buildToolsVersions + first.cmakeVersions + first.platforms
+                if (discovered.any { it !in known }) {
+                    materialize(host, scan, first, cmakeVersion)
+                    fetch(client)
+                } else {
+                    first
+                }
+            } finally {
+                client.close()
             }
-            return first
-        } finally {
-            client.close()
         }
     }
 
@@ -48,26 +52,48 @@ object GradleToolchain {
         if (!decision.supported || decision.image == null) throw UnsupportedWrapper(decision.reason)
         val javaHome = host.javaHome(decision.image)
             ?: throw IllegalStateException("No JDK ${decision.image} image is installed.")
-        prepare(projectDir, host, scan, javaHome, decision)
+        val cmakeVersion = readCmakeVersion(host, javaHome)
+        prepare(projectDir, host, scan, javaHome, decision, cmakeVersion)
         if (host.android) probe(host, javaHome)
-        val client = host.openClient(javaHome)
-        try {
-            initialize(client, projectDir, host, javaHome)
-            val cached = GradleProjectSnapshot.load(projectDir)
-            val snapshot = cached ?: syncWith(client, scan, host)
-            client.execute(tasks, isCanceled = isCanceled, onEvent = onEvent)
-            return snapshot
-        } finally {
-            client.close()
+        return withCmakeRetry(cmakeVersion) { fallback ->
+            val client = host.openClient(javaHome)
+            try {
+                initialize(client, projectDir, host, javaHome, fallback, cmakeVersion)
+                val cached = GradleProjectSnapshot.load(projectDir)
+                val snapshot = cached ?: syncWith(client, scan, host, cmakeVersion)
+                client.execute(tasks, isCanceled = isCanceled, onEvent = onEvent)
+                snapshot
+            } finally {
+                client.close()
+            }
         }
     }
 
-    private fun syncWith(client: ToolingClient, scan: ProjectVersions.Scan, host: GradleHost): GradleProjectSnapshot {
+    /**
+     * The alias CMake directory is the first configure. When AGP rejects it because `cmake --version`
+     * disagrees with that directory, the init script is told the binary's real version and configure
+     * runs once more.
+     */
+    private fun <T> withCmakeRetry(cmakeVersion: String?, block: (fallback: Boolean) -> T): T {
+        try {
+            return block(false)
+        } catch (e: ToolingClient.ToolingException) {
+            if (cmakeVersion.isNullOrBlank() || !CmakeFallback.rejected(e.message, e.stderr)) throw e
+            return block(true)
+        }
+    }
+
+    private fun syncWith(
+        client: ToolingClient,
+        scan: ProjectVersions.Scan,
+        host: GradleHost,
+        cmakeVersion: String?,
+    ): GradleProjectSnapshot {
         val first = fetch(client)
         val known = scan.ndk + scan.buildTools + scan.cmake + scan.platforms
         val discovered = first.ndkVersions + first.buildToolsVersions + first.cmakeVersions + first.platforms
         if (discovered.any { it !in known }) {
-            materialize(host, scan, first)
+            materialize(host, scan, first, cmakeVersion)
             return fetch(client)
         }
         return first
@@ -82,7 +108,14 @@ object GradleToolchain {
         return parsed
     }
 
-    private fun initialize(client: ToolingClient, projectDir: Path, host: GradleHost, javaHome: Path) {
+    private fun initialize(
+        client: ToolingClient,
+        projectDir: Path,
+        host: GradleHost,
+        javaHome: Path,
+        cmakeFallback: Boolean,
+        cmakeVersion: String?,
+    ) {
         val homes = listOfNotNull(
             host.javaHome(JdkSelection.Image.JDK_17),
             host.javaHome(JdkSelection.Image.JDK_21),
@@ -100,7 +133,7 @@ object GradleToolchain {
                 host.gradleUserHome().resolve("abi-report.txt"),
             ),
             jvmArgs = GradleUserProperties.jvmArgs(host.ramBytes()).split(' '),
-            env = childEnv(host, javaHome),
+            env = childEnv(host, javaHome, cmakeFallback, cmakeVersion),
         )
     }
 
@@ -110,13 +143,14 @@ object GradleToolchain {
         scan: ProjectVersions.Scan,
         javaHome: Path,
         decision: JdkSelection.Decision,
+        cmakeVersion: String?,
     ) {
         WrapperRepair.ensure(projectDir)
         Files.createDirectories(host.androidHome())
         Files.createDirectories(host.gradleUserHome())
         SdkLayout.ensureLicense(host.androidHome())
         SdkLayout.ensureSdkDir(projectDir, host.androidHome())
-        materialize(host, scan, null)
+        materialize(host, scan, null, cmakeVersion)
         val homes = listOfNotNull(
             host.javaHome(JdkSelection.Image.JDK_17),
             host.javaHome(JdkSelection.Image.JDK_21),
@@ -131,7 +165,12 @@ object GradleToolchain {
         check(!decision.autoDownload || !decision.supported)
     }
 
-    private fun materialize(host: GradleHost, scan: ProjectVersions.Scan, reported: GradleProjectSnapshot?) {
+    private fun materialize(
+        host: GradleHost,
+        scan: ProjectVersions.Scan,
+        reported: GradleProjectSnapshot?,
+        cmakeVersion: String?,
+    ) {
         val ndks = LinkedHashSet<String>()
         ndks += scan.ndk
         ndks += reported?.ndkVersions.orEmpty()
@@ -143,11 +182,15 @@ object GradleToolchain {
         val cmakes = LinkedHashSet<String>()
         cmakes += scan.cmake
         cmakes += reported?.cmakeVersions.orEmpty()
+        if (cmakeVersion != null) cmakes += cmakeVersion
         if (cmakes.isEmpty()) cmakes += ProjectVersions.defaultCmake(scan.agpVersion)
         val home = host.androidHome()
+        val minSdk = minSdk(scan, reported)
         for (revision in ndks) {
-            ToolchainLayout.installNdk(home, revision, host.clangDriver(), host.toolchainOut())
+            val root = home.resolve("ndk").resolve(revision)
+            ToolchainLayout.installNdk(home, revision, host.clangDriver(), host.toolchainOut(), host.lld())
             ToolchainLayout.installMake(home, revision, host.make())
+            host.installSysrootExtras(root, minSdk)
         }
         for (version in cmakes) ToolchainLayout.installCmake(home, version, host.cmake(), host.ninja())
         for (version in tools) ToolchainLayout.installBuildTools(home, version, host.aapt2(), host.zipalign(), host.aidl())
@@ -188,7 +231,30 @@ object GradleToolchain {
         return text
     }
 
-    private fun childEnv(host: GradleHost, javaHome: Path): Map<String, String> {
+    private fun readCmakeVersion(host: GradleHost, javaHome: Path): String? {
+        if (!host.android) return null
+        val cmake = host.cmake() ?: return null
+        val prefix = host.prefix() ?: return null
+        val linker = host.linker() ?: return null
+        val text = runCatching {
+            runProbe(PrefixProbe.execVersion(linker, cmake, prefix, javaHome))
+        }.getOrNull() ?: return null
+        return CmakeFallback.parseVersion(text)
+    }
+
+    private fun minSdk(scan: ProjectVersions.Scan, reported: GradleProjectSnapshot?): Int? {
+        val fromModel = reported?.modules?.mapNotNull { module ->
+            module.minSdk?.substringBefore('.')?.toIntOrNull()
+        }?.minOrNull()
+        return listOfNotNull(scan.minSdk, fromModel).minOrNull()
+    }
+
+    private fun childEnv(
+        host: GradleHost,
+        javaHome: Path,
+        cmakeFallback: Boolean,
+        cmakeVersion: String?,
+    ): Map<String, String> {
         val base = if (host.android) {
             val prefix = host.prefix() ?: error("the Android Gradle host has no prefix")
             PrefixProbe.environment(prefix, javaHome, host.libraryPath())
@@ -200,6 +266,8 @@ object GradleToolchain {
         env["ANDROID_HOME"] = host.androidHome().toString()
         env["ANDROID_SDK_ROOT"] = host.androidHome().toString()
         env["GRADLE_USER_HOME"] = host.gradleUserHome().toString()
+        if (!cmakeVersion.isNullOrBlank()) env["DEV_IDE_CMAKE_VERSION"] = cmakeVersion
+        if (cmakeFallback) env["DEV_IDE_CMAKE_FALLBACK"] = "true"
         return env
     }
 }

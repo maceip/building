@@ -1,0 +1,7 @@
+{
+  "url": "https://dl.google.com/android/repository/android-ndk-r27c-linux.zip",
+  "size": 663987688,
+  "algorithm": "SHA-1",
+  "checksum": "090e8083a715fdb1a3e402d0763c388abb03fb4e",
+  "note": "SHA-1 published for android-ndk-r27c-linux.zip in Google's repository2-1.xml (ndk;27.2.12479018). Only linux-x86_64/sysroot/usr/lib/aarch64-linux-android/ is kept."
+}

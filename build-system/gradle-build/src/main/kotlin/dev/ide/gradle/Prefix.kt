@@ -190,4 +190,10 @@ object PrefixProbe {
         argv = listOf(linker, prefix.resolve("bin/sh").toString(), "-c", "java -version"),
         env = environment(prefix, javaHome),
     )
+
+    /** `linker64 <binary> --version`. Used for cmake, whose directory name and `--version` can disagree. */
+    fun execVersion(linker: String, binary: Path, prefix: Path, javaHome: Path): Command = Command(
+        argv = listOf(linker, binary.toString(), "--version"),
+        env = environment(prefix, javaHome),
+    )
 }

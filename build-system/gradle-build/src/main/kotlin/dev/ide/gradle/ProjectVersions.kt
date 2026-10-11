@@ -23,6 +23,7 @@ object ProjectVersions {
         val ndk: Set<String>,
         val platforms: Set<String>,
         val cmake: Set<String>,
+        val minSdk: Int?,
     )
 
     fun scan(root: Path): Scan {
@@ -48,6 +49,8 @@ object ProjectVersions {
             val v = match.groupValues[1]
             if (v.startsWith("3.") || v.startsWith("4.")) cmake += v
         }
+        val minSdks = Regex("""minSdk(?:Version)?\s*(?:=)?\s*(\d+)""").findAll(texts)
+            .mapNotNull { it.groupValues[1].toIntOrNull() }
         return Scan(
             gradleVersion = wrapper,
             agpVersion = agpVersion(texts, catalog),
@@ -57,6 +60,7 @@ object ProjectVersions {
             ndk = ndk,
             platforms = platforms,
             cmake = cmake,
+            minSdk = minSdks.minOrNull(),
         )
     }
 

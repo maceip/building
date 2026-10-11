@@ -17,12 +17,13 @@ import kotlin.io.path.writeText
  */
 object ToolchainLayout {
 
+    /** `ld.lld` is not in this list. It is a copy of the linker binary; the clang driver does not become lld. */
     private val CLANG_LINKS = listOf(
-        "clang++", "clang-cl", "ld.lld", "llvm-ar", "llvm-nm", "llvm-strip",
+        "clang++", "clang-cl", "llvm-ar", "llvm-nm", "llvm-strip",
         "llvm-objcopy", "llvm-ranlib", "llvm-readelf",
     )
 
-    fun installNdk(androidHome: Path, revision: String, driver: Path?, toolchainOut: Path?) {
+    fun installNdk(androidHome: Path, revision: String, driver: Path?, toolchainOut: Path?, linker: Path? = null) {
         val root = androidHome.resolve("ndk").resolve(revision)
         val bin = root.resolve("toolchains/llvm/prebuilt/linux-x86_64/bin")
         Files.createDirectories(bin)
@@ -40,6 +41,12 @@ object ToolchainLayout {
                 Files.deleteIfExists(link)
                 Files.createSymbolicLink(link, Path.of("clang"))
             }
+        }
+        if (linker != null && Files.isRegularFile(linker)) {
+            val lld = bin.resolve("ld.lld")
+            Files.deleteIfExists(lld)
+            Files.copy(linker, lld, StandardCopyOption.REPLACE_EXISTING)
+            lld.toFile().setExecutable(true)
         }
         if (toolchainOut != null && Files.isDirectory(toolchainOut)) {
             val sysroot = firstExisting(

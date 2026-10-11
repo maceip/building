@@ -22,7 +22,14 @@ interface GradleHost {
     fun zipalign(): Path?
     fun aidl(): Path?
     fun clangDriver(): Path?
+    /** The GNU linker binary (`libld-gnu-lld.so`). Installed as `ld.lld`, because that filename selects the flavor. */
+    fun lld(): Path? = null
     fun toolchainOut(): Path?
+    /**
+     * Copy any missing arm64 API-level libraries into this NDK tree. The editor zip ships one
+     * API level; a project whose minSdk is another level needs the rest. The default does nothing.
+     */
+    fun installSysrootExtras(ndkRoot: Path, minSdk: Int?) {}
     fun cmake(): Path?
     fun ninja(): Path?
     fun make(): Path?

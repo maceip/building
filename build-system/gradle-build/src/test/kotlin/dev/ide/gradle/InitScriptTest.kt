@@ -33,6 +33,36 @@ class InitScriptTest {
     }
 
     @Test
+    fun anNdkBuildComponentKeepsArm64AndTheAndroidMk() {
+        val root = Files.createTempDirectory("ndk-build-fixture")
+        val report = root.resolve("abi-report.txt")
+        root.resolve("settings.gradle").writeText("rootProject.name = 'ndkbuild'\n")
+        root.resolve("build.gradle").writeText(ndkBuildComponent())
+        val result = runner(root, report, "dump").build()
+        val output = result.output
+        assertTrue(output.contains("NDKBUILD [arm64-v8a]"), output)
+        assertTrue(output.contains("MK src/main/jni/Android.mk"), output)
+        val removed = report.readText().trim().lines().filter { it.isNotBlank() }
+        assertEquals(listOf("armeabi-v7a", "x86", "x86_64"), removed)
+    }
+
+    @Test
+    fun cmakeVersionFallsBackToTheBinaryWhenAsked() {
+        val root = Files.createTempDirectory("cmake-fixture")
+        val report = root.resolve("abi-report.txt")
+        root.resolve("settings.gradle").writeText("rootProject.name = 'cmake'\n")
+        root.resolve("build.gradle").writeText(cmakeVersionBuild())
+        val result = runner(
+            root,
+            report,
+            "dump",
+            mapOf("DEV_IDE_CMAKE_FALLBACK" to "true", "DEV_IDE_CMAKE_VERSION" to "4.4.4"),
+            listOf("-Pdev.ide.cmake.fallback=true", "-Pdev.ide.cmake.version=4.4.4"),
+        ).build()
+        assertTrue(result.output.contains("CMAKEVER 4.4.4"), result.output)
+    }
+
+    @Test
     fun anExeClassifierResolvesTheJarAndAJarlessModuleFailsByName() {
         val root = Files.createTempDirectory("classifier-fixture")
         val repo = root.resolve("repo")
@@ -47,13 +77,20 @@ class InitScriptTest {
         assertTrue(failed.output.contains("only-exe"), failed.output)
     }
 
-    private fun runner(root: java.nio.file.Path, report: java.nio.file.Path, task: String): GradleRunner {
+    private fun runner(
+        root: java.nio.file.Path,
+        report: java.nio.file.Path,
+        task: String,
+        extraEnv: Map<String, String> = emptyMap(),
+        extraArgs: List<String> = emptyList(),
+    ): GradleRunner {
         val init = System.getProperty("dev.ide.init.script")
             ?: error("dev.ide.init.script is not set")
         val env = HashMap<String, String>()
         System.getenv().forEach { (key, value) -> env[key] = value }
         env["JAVA_HOME"] = System.getProperty("java.home")
         env["DEV_IDE_ABI_REPORT"] = report.toAbsolutePath().toString()
+        extraEnv.forEach { (key, value) -> env[key] = value }
         return GradleRunner.create()
             .withProjectDir(root.toFile())
             .withArguments(
@@ -61,6 +98,7 @@ class InitScriptTest {
                 "--init-script",
                 init,
                 "-Pdev.ide.abi.report=${report.toAbsolutePath()}",
+                *extraArgs.toTypedArray(),
                 task,
             )
             .withEnvironment(env)
@@ -124,6 +162,47 @@ class InitScriptTest {
                 println 'SPLIT ' + android.splits.abi.include
                 println 'UNIVERSAL ' + android.splits.abi.universalApk
                 println 'JAVA ' + tasks.getByName('tool').executable
+            }
+        }
+    """.trimIndent()
+
+    private fun ndkBuildComponent(): String = """
+        class NdkBuildBlock {
+            def path = 'src/main/jni/Android.mk'
+            def abiFilters = ['armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'] as LinkedHashSet
+        }
+        class DefaultConfig {
+            def externalNativeBuild = [ndkBuild: new NdkBuildBlock()]
+        }
+        class AndroidStub {
+            def defaultConfig = new DefaultConfig()
+        }
+        extensions.add('android', new AndroidStub())
+        tasks.register('dump') {
+            doLast {
+                def android = project.extensions.getByName('android')
+                def ndkBuild = android.defaultConfig.externalNativeBuild.ndkBuild
+                println 'NDKBUILD ' + ndkBuild.abiFilters
+                println 'MK ' + ndkBuild.path
+            }
+        }
+    """.trimIndent()
+
+    private fun cmakeVersionBuild(): String = """
+        class CmakeBlock {
+            def version = '3.22.1'
+        }
+        class NativeBuild {
+            def cmake = new CmakeBlock()
+        }
+        class AndroidStub {
+            def externalNativeBuild = new NativeBuild()
+        }
+        extensions.add('android', new AndroidStub())
+        tasks.register('dump') {
+            doLast {
+                def android = project.extensions.getByName('android')
+                println 'CMAKEVER ' + android.externalNativeBuild.cmake.version
             }
         }
     """.trimIndent()

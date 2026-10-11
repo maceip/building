@@ -27,6 +27,16 @@ def abiReport = {
     if (fromProp != null && !fromProp.toString().isEmpty()) return fromProp.toString()
     return System.getenv("DEV_IDE_ABI_REPORT")
 }()
+def useCmakeFallback = {
+    def fromProp = gradle.startParameter.projectProperties["dev.ide.cmake.fallback"]
+    if (fromProp != null && fromProp.toString() == "true") return true
+    return System.getenv("DEV_IDE_CMAKE_FALLBACK") == "true"
+}()
+def pinnedCmakeVersion = {
+    def fromProp = gradle.startParameter.projectProperties["dev.ide.cmake.version"]
+    if (fromProp != null && !fromProp.toString().isEmpty()) return fromProp.toString()
+    return System.getenv("DEV_IDE_CMAKE_VERSION")
+}()
 
 def readNames = { value ->
     def names = []
@@ -122,8 +132,8 @@ def pointAtJava = { t ->
 }
 
 def applyCmake = { p ->
-    if (System.getenv("DEV_IDE_CMAKE_FALLBACK") != "true") return
-    def ver = System.getenv("DEV_IDE_CMAKE_VERSION")
+    if (!useCmakeFallback) return
+    def ver = pinnedCmakeVersion
     if (ver == null || ver.isEmpty()) return
     def android = null
     try { android = p.extensions.findByName("android") } catch (Throwable ignored) {}
