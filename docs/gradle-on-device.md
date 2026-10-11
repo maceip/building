@@ -193,8 +193,9 @@ prefix except as an optional terminal convenience that the IDE never invokes.
 ## Phase 0 — prefix and exec
 
 A small bootstrap, not a distro. Contents: a shell that can run `gradlew` (`bash`),
-`ca-certificates`, the shared libraries the JDK closure needs, and `libtermux-exec.so`.
-No `apt`, no package database, no PRoot, no second libc.
+`ca-certificates`, the shared libraries the JDK closure needs, `libtermux-exec.so`,
+and the PATH tools in [the coverage layer](#coverage-layer). No `apt`, no package
+database, no PRoot, no second libc.
 
 Packaging follows AndroidIDE's bootstrap and this repo's own NDK rule
 (`samples/ndk-plugin/README.md`):
@@ -262,14 +263,25 @@ SDK layout under `$ANDROID_HOME`:
   names (`compileSdk = 37`, and AGP's `compileSdk { version = release("37.2") }`).
   The jar is data, not code. The bundled jar is not enough for this cohort: the
   apps below ask for 34, 35, 36, 37, and 37.2.
-- `build-tools/<ver>/aapt2` and `zipalign` — copies or stable paths to the jniLibs
-  binaries. `aapt2` is already executable there; a path inside `$ANDROID_HOME` is a
-  script or a second name that the preload can exec. The property AGP actually
-  honors is `android.aapt2FromMavenOverride`, passed on every Tooling API launch the
-  way `GradleBuildService.getBuildArguments` does. Do not rely on build-tools being
-  on `PATH` alone.
+- `build-tools/<ver>/` — `aapt2` and `zipalign` (the jniLibs binaries; a path under
+  `$ANDROID_HOME` is exec'd through the preload) and a bionic `aidl` (Termux's
+  `aidl` package). AGP 8 leaves AIDL off unless the module turns it on; a module
+  that turns it on execs this binary. `android.aapt2FromMavenOverride` is still
+  passed on every Tooling API launch, the way `GradleBuildService.getBuildArguments`
+  does. Signing uses AGP's in-process apksig library. Google's `apksigner` ELF is
+  not part of this directory.
+- `licenses/android-sdk-license` — the standard SDK license hash, so configuration
+  does not stop to prompt.
 - `cmdline-tools` is optional. We do not need Google's sdkmanager to fetch an NDK
   or a cmake that we will then be unable to exec.
+
+`<ver>` is every `buildToolsVersion` the project names, plus the default for its
+AGP. The directories are aliases: one payload, `source.properties` `Pkg.Revision`
+equal to the directory name. The same alias is how CMake and the NDK avoid a
+Google download. `GradleImport` already reads these version strings; the setup
+step materializes the directories before the first real configure. A version that
+only appears from a convention plugin is created when the tooling model reports
+it, and the configure is retried once.
 
 Global `gradle.properties` in `GRADLE_USER_HOME`, written by us, not by the project:
 
@@ -305,6 +317,10 @@ Distribution type defaults to the wrapper. If `gradlew`,
 generate them pointing at one pinned current Gradle, the way AndroidIDE unzips a
 wrapper. Do not download a distribution inside the APK.
 
+Every launch passes one `--init-script`, the file described in the
+[coverage layer](#coverage-layer). It is ours, it lives in the prefix, and it is
+not written into the project.
+
 The server runs in a foreground service. `Binder` death, or the JVM exiting, becomes
 `BuildState` failed with the process's last stderr lines. The next build starts a
 new JVM. Idle timeout destroys it.
@@ -331,11 +347,18 @@ A project whose root contains `settings.gradle` or `settings.gradle.kts` binds t
 the banner already implemented in `GradleCompatBanner` stays honest.
 
 `IdeServices` stops calling `AndroidBuildSystem` / `JavaBuildSystem` for that id.
-Run becomes: tooling `execute` of the Android application task (for a
-single-module app, `:app:assembleDebug`; for animeko, `assembleDefaultDebug` on
-`:app:android`), then the existing `ApkInstallerImpl`. Install and launch are
-already solved. The execute request does not include an iOS or desktop task, and
-it does not turn on a local property that would configure one.
+Run becomes: tooling `execute` of one Android application task, then the existing
+`ApkInstallerImpl`. Install and launch are already solved.
+
+The task comes from the tooling model, not from a hardcoded name. Take the
+modules that apply `com.android.application`. Keep variants whose build type is
+debug. If several remain, pick the one with the shortest flavor list, preferring
+a variant named `debug`, then `defaultDebug`, then the model's default. The task
+is `assemble<Variant>` on that module (`assembleDebug`, animeko's
+`assembleDefaultDebug` on `:app:android`). Building every flavor combination is
+how a missing signing key or a TV flavor fails an otherwise good phone build.
+The execute request does not include an iOS or desktop task, and it does not
+turn on a local property that would configure one.
 
 Delete only after a device has assembled the same fixture the native pipeline
 assembles today (a single-module app with a resource, a Kotlin source, and a
@@ -437,7 +460,7 @@ Binaries, all bionic aarch64:
 | `clang++`, `clang-cl` | symlinks to `clang`. App-private ext4 supports symlinks; the APK does not, and this tree is not in the APK |
 | `ld.lld` | the same binary under the name lld's progname parser accepts. The jniLibs name `libld-gnu-lld.so` exists only because an APK forced a `lib*.so` name. It is not used here |
 | `llvm-ar`, `llvm-nm`, `llvm-strip`, `llvm-objcopy`, `llvm-ranlib`, `llvm-readelf` | symlinks. The driver dispatches on the stem |
-| `toolchains/llvm/prebuilt/linux-x86_64/sysroot` | the r27c sysroot slice the script already packages: headers, arm64 CRT and libs for the one API level we ship, `libc++_shared.so`, `libc++_static.a` |
+| `toolchains/llvm/prebuilt/linux-x86_64/sysroot` | the r27c unified headers, plus every `usr/lib/aarch64-linux-android/<api>` directory that sysroot already contains, `libc++_shared.so`, `libc++_static.a`. One API level is what the editor zip ships today; the Gradle tree takes the full arm64 set, which is data, not a new clang |
 | `toolchains/llvm/prebuilt/linux-x86_64/lib/clang/18` | clang's resource headers, in the relative place stock clang computes from `bin/clang`. This removes the need for the plugin's explicit `-resource-dir` on the Gradle path |
 | `prebuilt/linux-x86_64/bin/make` | Termux `make`, or a rebuild of GNU make for bionic |
 
@@ -445,10 +468,13 @@ Binaries, all bionic aarch64:
 for the build, the same requirement `NdkToolchain.run` already has. The Gradle
 daemon's environment includes that directory.
 
-CMake and ninja are Termux's bionic packages (or a rebuild of the same versions),
-installed at `$ANDROID_HOME/cmake/<version>/bin/{cmake,ninja}` with a
-`source.properties` whose `Pkg.Revision` AGP 8 accepts. They are not the SDK
-manager's linux-x86_64 binaries renamed.
+CMake and ninja are Termux's bionic packages (or a rebuild of the same versions).
+One pair of binaries is installed under every `$ANDROID_HOME/cmake/<version>/`
+the project or its AGP default names, with `source.properties` `Pkg.Revision`
+set to that version. They are not the SDK manager's linux-x86_64 binaries
+renamed. If AGP then rejects the binary because `cmake --version` disagrees with
+`Pkg.Revision`, the init script sets the CMake version to the binary's real
+version at `projectsEvaluated`. The alias is the first try.
 
 The tree is unpacked into app storage. Those files are noexec. They run because
 the Gradle process has `termux-exec` loaded, so CMake's `exec` of `bin/clang`
@@ -467,28 +493,23 @@ defaults; the Gradle path gets the defaults from the toolchain file instead.
 ### ABI
 
 `LLVM_TARGETS_TO_BUILD=AArch64` is a size decision in `build-llvm-android.sh`
-(each extra backend is on the order of 8–15 MB). v1 compiles C and C++ for
-`arm64-v8a` only. The failure is a native compile (CMake, `ndk-build`,
-`externalNativeBuild`) whose target ABI is not `arm64-v8a`. The diagnostic names
-the ABI and says this device's compiler does not produce it. It must not surface
-as an `exec format error` or a missing `prebuilt` directory.
+(each extra backend is on the order of 8–15 MB). The on-device APK is
+`arm64-v8a`. The init script writes that into `ndk.abiFilters`, into
+`externalNativeBuild` cmake and ndk-build filters, and into `splits.abi`, and it
+turns `isUniversalApk` off. ABIs that were listed and then removed are a
+diagnostic on the build. The assemble continues. A project that compiles C++ for
+four ABIs produces the arm64 library and an installable APK. A project that only
+packages prebuilt `.so` files does the same: `llvm-strip` runs on the arm64 ELF,
+and the other slices are omitted from this APK. An `abiFilters` list is not a
+failed build.
 
-Packaging is a different operation. A prebuilt `.so`, `splits.abi.include` of
-`x86_64`, and `ndk.abiFilters` that only choose which already-built libraries to
-copy must succeed. `llvm-strip` runs on the ELF the project already has, for any
-ABI. An `abiFilters` list that mentions `x86` is not, by itself, a failed build.
-Several of the apps below ship four ABIs of prebuilt JNI and would be rejected by
-a rule that treated every ABI list as a compile.
+Prefab is already covered. AGP runs it as `java` on `com.google.prefab.cli.AppKt`
+once per ABI. After the filter there is one ABI, and the CLI is a jar.
 
-Expanding `LLVM_TARGETS_TO_BUILD` to `ARM;X86;X86_64` is a later, measured change
-to the same script, not a new design.
-
-One API level of sysroot libraries is what the script already ships. CMake passes
-`--target=aarch64-linux-android<minSdk>`. The acceptance test uses `minSdk` 26,
-which is the app's own floor. A **compile** whose `minSdk` is below the API level
-we packed gets a diagnostic that names that level, until more levels are packed.
-A Java or Kotlin assemble does not link the NDK sysroot, so the cohort's
-`minSdk` values (23 through 28) do not hit this limit.
+CMake passes `--target=aarch64-linux-android<minSdk>`. The sysroot libraries for
+every arm64 API level in the r27c tree are what that triple links against. The
+acceptance fixture uses `minSdk` 26. A Java or Kotlin assemble does not link
+this sysroot.
 
 ### What happens to `NdkBuildPlugin`
 
@@ -519,19 +540,82 @@ On a device, after Phase 0's `java -version` already passed:
    `.cpp`, `abiFilters += "arm64-v8a"`, and `ndkVersion` equal to our
    `Pkg.Revision` runs `assembleDebug`. The APK contains
    `lib/arm64-v8a/lib*.so`, page-aligned to 16 KB.
-4. The same compiling project with `abiFilters` including `x86_64` fails in the
-   Problems list with the ABI diagnostic, and produces no APK. A second fixture
-   that only packages a prebuilt `x86_64` `.so`, with no `externalNativeBuild`,
-   still assembles.
-5. Opening a `.cpp` in that project still underlines an error via
+4. The same compiling project with `abiFilters` including `x86_64` still
+   assembles. The APK contains `lib/arm64-v8a/` and no `lib/x86_64/`. The
+   Problems list names `x86_64` as skipped. A fixture that only packages prebuilt
+   `.so` files, with no `externalNativeBuild`, also assembles an arm64 APK.
+5. A flavored fixture has no task literally named `assembleDebug` for the variant
+   we want. The model picks one debug variant and that assemble task is what
+   runs.
+6. Opening a `.cpp` in that project still underlines an error via
    `NdkToolchain.syntaxCheck` without a Gradle sync.
+
+## Coverage layer
+
+<a id="coverage-layer"></a>
+
+The builds that still fail after Phases 0–4 fail for a missing directory name, an
+ABI list, or a single host program on `PATH`. Each of those is closed without a
+new compiler. Rust, a Flutter SDK, Go, and a Hermes compiler are the cases this
+layer leaves alone; they are named in [out of scope](#out-of-scope).
+
+### One init script
+
+`--init-script` on every Tooling API launch. One file.
+
+- Narrow native ABIs and splits to `arm64-v8a`, as the ABI section describes.
+  Report the removed ABIs. Do not fail the assemble.
+- When `com.google.protobuf` is applied, set its protoc executable to
+  `$PREFIX/bin/protoc`. The plugin's osdetector would otherwise download a
+  glibc `protoc`.
+- When a React Native build would exec `hermesc` and that file is not an
+  aarch64 ELF we can run, set the project's `hermesEnabled` property to false.
+  Metro still bundles JavaScript. The runtime for that APK is JSC. We do not
+  build `hermesc`.
+- The CMake version fallback from the alias section, only if the alias is
+  rejected.
+
+The script does not enable iOS, CocoaPods, or a desktop target, and it does not
+put `cargo` on `PATH`.
+
+### PATH packages
+
+Same download channel as the JDK. Same `LD_PRELOAD`. `$PREFIX/bin` is on the
+Gradle daemon's `PATH`.
+
+| Binary | Package | What it unlocks |
+| --- | --- | --- |
+| `node`, `corepack` | Termux `nodejs`, one current LTS | React Native and other Gradle tasks whose `Exec` is `node`. `corepack` runs Yarn or pnpm when the lockfile asks |
+| `python3`, `python` | Termux `python` | Tasks that shell out to Python. This is not a Rust toolchain |
+| `protoc` | Termux `protobuf` | The protobuf plugin, via the init script |
+| `aidl` | Termux `aidl` | Modules that turn AIDL on. The binary also sits in the build-tools alias |
+
+Before Gradle, if `package.json` is present and the install it describes is
+absent, run one package-manager install (`npm ci`, or corepack's Yarn or pnpm
+matching the lockfile). The install's stderr is the build error when it fails.
+Node is invoked by the project's bundle task. We do not start Metro as a
+server, and we do not write a bundler.
+
+### What this adds, and what it does not
+
+A CMake or `ndk-build` app that lists four ABIs, at a `minSdk` the r27c sysroot
+contains, assembles an arm64 APK. A flavored app assembles one debug variant. A
+React Native app bundles its JavaScript. A protobuf module uses our `protoc`.
+Prefab, KSP, kapt, Hilt, and Compose were already in scope, because they are
+jars on the JDK.
+
+`shadowsocks-android` stays a no. The init script would narrow its `ndk-build`
+to arm64 and Python would be present, and the build would still stop in
+`rust-android-gradle` because there is no `cargo`. That missing compiler is the
+boundary of this layer.
 
 ## Phase 5 — distribution
 
-The JDK, cmake, ninja, make, and the NDK sysroot are first-run downloads with
-pinned checksums, unpacked into app storage. They are not assets in the APK.
-Pojav's split between a runtime APK and a no-runtime APK is the size argument;
-AndroidIDE's `idesetup` is the installation shape, minus `apt`.
+The JDK, cmake, ninja, make, Node, Python, protoc, aidl, and the NDK sysroot are
+first-run downloads with pinned checksums, unpacked into app storage. They are
+not assets in the APK. Pojav's split between a runtime APK and a no-runtime APK is
+the size argument; AndroidIDE's `idesetup` is the installation shape, minus
+`apt`.
 
 The clang executables the editor runs stay inside `:samples:ndk-plugin`'s
 `jniLibs`, as they do now. The Gradle-facing NDK tree is a second install of
@@ -560,7 +644,13 @@ is not the reason to skip the copy. The reason is the frozen builder model.
 - NDK layout assembler: given the toolchain `out/` directory and a revision
   string, the function writes `ndk/<revision>/source.properties` with that
   `Pkg.Revision`, plus `toolchains/llvm/prebuilt/linux-x86_64/...`, `clang`, and
-  the `clang++` symlink. A unit test can run this against a fake driver binary.
+  the `clang++` symlink. The same helper, given a cmake version and a build-tools
+  version, writes those alias directories onto one copied payload. A unit test
+  can run this against a fake driver binary.
+- The init script, applied to a fixture that sets four `abiFilters` and an ABI
+  split, leaves `arm64-v8a` and records the removed names.
+- Variant choice: a model with `defaultDebug` and `tvDebug` selects
+  `assembleDefaultDebug`.
 - `GradleImport` tests stay green. The static reader is still the pre-toolchain
   path.
 
@@ -568,10 +658,14 @@ is not the reason to skip the copy. The reason is the frozen builder model.
 
 Phase 0 and the `java -version` check come before any Gradle code is trusted.
 Phase 1 and 2 land together as the first user-visible Gradle build (Java or
-Kotlin, no native code). Phase 3 deletes the native pipeline's registration
-only after that build installs an APK. Phase 4 is the NDK, and it is blocked
-on Phase 0's linker exec, not on a new sandbox. The compiler, the sysroot, and
-the editor integration already exist.
+Kotlin, no native code), including the init script, the license file, and the
+version aliases. Node and Python are part of that same prefix, so a React
+Native bundle is the same phase, not a later architecture. Phase 3 deletes the
+native pipeline's registration only after that build installs an APK. Phase 4
+is the NDK, and it is blocked on Phase 0's linker exec, not on a new sandbox.
+The compiler, the sysroot, and the editor integration already exist. The ABI
+narrowing and the full arm64 sysroot are what make Phase 4 cover the CMake and
+`ndk-build` apps that list more than one ABI.
 
 ## Ten Kotlin apps
 
@@ -595,10 +689,10 @@ assemble task.
 | `mihonapp/mihon` | 24230 / 1600 | Gradle 9.8.1, AGP 9.4.1, Kotlin 2.4.21, `com.android.kotlin.multiplatform.library`. minSdk 26, compileSdk 37.2, targetSdk 36, Java 17. `ndkVersion` is `29.0.14206865`. No `CMakeLists.txt`. | Yes for the Android app. Publish the synthetic NDK under `29.0.14206865` so AGP does not download Google's. Nothing in-tree compiles C, so the r27c clang is only there for strip. Non-Android KMP targets are not a goal. Platform `37.2` has to be downloadable. |
 | `open-ani/animeko` | 20817 / 614 | The multiplatform project. Gradle 9.3.1, AGP 9.1.1, Kotlin 2.4.10, Compose Multiplatform. `android.compile.sdk=37`, `android.min.sdk=26`. `jvm.toolchain.version=21` and `jvm.toolchain.vendor=jetbrains`. | Yes for `:app:android`, task `assembleDefaultDebug`. See below. |
 | `shadowsocks/shadowsocks-android` | 36805 / 11426 | Gradle 8.14.3. `externalNativeBuild.ndkBuild` on `src/main/jni/Android.mk`, default ABIs armeabi-v7a, arm64-v8a, x86, x86_64. Also `org.mozilla.rust-android-gradle` on `src/main/rust/shadowsocks-rust`, which needs `cargo` and `python` or `python3`. | No. This is a hard miss. |
-| `signalapp/Signal-Android` | 29446 / 6898 | Gradle 9.6.0, AGP 9.4.0, compileSdk 37, minSdk 23, `ndkVersion` `28.0.13004108`. ABI splits for four ABIs plus a universal APK. `useLegacyPackaging`. No `CMakeLists.txt` and no `externalNativeBuild`. Native code arrives as prebuilt JNI (libsignal). | Yes, including the non-arm64 splits, because nothing is compiled. The tree has to be installed at `28.0.13004108`. Platform 37. Heap is the practical risk, not the ABI list. |
-| `JunkFood02/Seal` | 29646 / 1466 | Gradle 8.10.2, Kotlin 2.0.20, KSP, compileSdk 35, minSdk 24, target 35. Flavor `publishChannel` / `generic`. `gradle.properties` sets `ABI_FILTERS=arm64-v8a`. Splits can still name four ABIs. `useLegacyPackaging`. No `externalNativeBuild`. | Yes. Prebuilt JNI. Platform 35. Do not fail the build because a split lists another ABI. |
+| `signalapp/Signal-Android` | 29446 / 6898 | Gradle 9.6.0, AGP 9.4.0, compileSdk 37, minSdk 23, `ndkVersion` `28.0.13004108`. ABI splits for four ABIs plus a universal APK. `useLegacyPackaging`. No `CMakeLists.txt` and no `externalNativeBuild`. Native code arrives as prebuilt JNI (libsignal). | Yes. The init script narrows the splits to `arm64-v8a` and the assemble continues. The tree has to be installed at `28.0.13004108`. Platform 37. Heap is the practical risk. |
+| `JunkFood02/Seal` | 29646 / 1466 | Gradle 8.10.2, Kotlin 2.0.20, KSP, compileSdk 35, minSdk 24, target 35. Flavor `publishChannel` / `generic`. `gradle.properties` sets `ABI_FILTERS=arm64-v8a`. Splits can still name four ABIs. `useLegacyPackaging`. No `externalNativeBuild`. | Yes. Prebuilt JNI, already aimed at arm64. Platform 35. One debug variant from the model. |
 | `igorwojda/android-showcase` | 6807 / 908 | Gradle 9.8.1, AGP 9.4.1, Kotlin 2.4.21, KSP, convention plugins. Catalog: minSdk 28, compileSdk 36, targetSdk 35. No NDK. | Yes. Same shape as the other AGP 9.4 apps. JDK 17, platform 36. |
-| `2dust/v2rayNG` | 63803 / 8262 | Wrapper at `V2rayNG/gradle/wrapper`, Gradle 9.8.1, AGP 9.4.1, Kotlin 2.4.21, compileSdk 37, minSdk 24, target 37, Java 17. `jniLibs.srcDirs("libs")` — prebuilt `.so` in the repo. ABI splits default to four ABIs plus universal; `ABI_FILTERS` can narrow. Flavors `fdroid` and `playstore`. Desugaring, Compose. | Yes, including a split that packages a non-arm64 `.so`. Platform 37. |
+| `2dust/v2rayNG` | 63803 / 8262 | Wrapper at `V2rayNG/gradle/wrapper`, Gradle 9.8.1, AGP 9.4.1, Kotlin 2.4.21, compileSdk 37, minSdk 24, target 37, Java 17. `jniLibs.srcDirs("libs")` — prebuilt `.so` in the repo. ABI splits default to four ABIs plus universal; `ABI_FILTERS` can narrow. Flavors `fdroid` and `playstore`. Desugaring, Compose. | Yes. Splits narrow to arm64. The model picks one debug flavor. Platform 37. |
 
 ### animeko, Android only
 
@@ -609,11 +703,13 @@ iOS is off unless `local.properties` sets `ani.enable.ios=true` and
 
 The default ABI list is `arm64-v8a`. `ani.android.abis=all` adds `armeabi-v7a`
 and `x86_64`. Those filters package `libs.mediamp.ffmpeg`, a Maven prebuilt, with
-`useLegacyPackaging` because FFmpeg is executed as a process. There is no
-`CMakeLists.txt` in the repo. The default flavor raises `minSdk` to at least 27.
-Signing configs are optional (`runCatching`). `google-services` is
-`MissingGoogleServicesStrategy.IGNORE` unless `ani.enable.firebase=true`; leave
-that unset. The TV flavor disables its Google Services tasks.
+`useLegacyPackaging` because FFmpeg is executed as a process. The init script
+keeps `arm64-v8a` and drops the others, so an `all` checkout still assembles the
+phone APK. There is no `CMakeLists.txt` in the repo. The variant rule picks
+`defaultDebug` and does not also build the TV flavor. The default flavor raises
+`minSdk` to at least 27. Signing configs are optional (`runCatching`).
+`google-services` is `MissingGoogleServicesStrategy.IGNORE` unless
+`ani.enable.firebase=true`; leave that unset.
 
 `jvm.toolchain.vendor=jetbrains` and `jvm.toolchain.version=21` are satisfied by
 our bionic JDK 21, with toolchain auto-download off. The "JBR must have JCEF"
@@ -624,11 +720,12 @@ real Gradle; we do not strip it.
 
 ### shadowsocks, and why it stays a no
 
-Even `-PTARGET_ABI=arm64` still compiles C through `ndk-build` and Rust through
-cargo, for `aarch64-linux-android`, and the plugin looks for Python on `PATH`.
-The plan has no Rust toolchain, no cargo, and no Python. Adding them is a
-different project. The ABI rule does not rescue this app: the arm64 objects are
-compiled here, not packaged from a prebuilt.
+Its `ndk-build` would be narrowed to arm64, and Python is on `PATH` for the
+coverage layer, and the build still stops in `rust-android-gradle`. That plugin
+compiles Rust with `cargo` for `aarch64-linux-android`. There is no `cargo` in
+the prefix. The arm64 objects are produced by that plugin, not copied from a
+prebuilt. A Rust toolchain is a second compiler, which is the line the coverage
+layer does not cross.
 
 ### What the ten forced the plan to change
 
@@ -637,14 +734,20 @@ compiled here, not packaged from a prebuilt.
 - Platforms 34, 35, 36, 37, and 37.2 are downloaded on demand.
 - The NDK directory name follows `ndkVersion` (Signal `28.0.13004108`, Mihon
   `29.0.14206865`, otherwise AGP 9's default r28c). The compiler inside a compile
-  is still r27c.
-- A non-arm64 ABI fails the build only when we would have to compile it.
+  is still r27c. CMake and build-tools use the same alias.
+- The APK we produce is arm64. A longer ABI list is narrowed, and the assemble
+  continues. That is what makes a four-ABI CMake app buildable without a second
+  LLVM backend.
+- One debug variant is chosen from the model, so flavors do not multiply into a
+  failing task.
 
 ## Out of scope
 
+<a id="out-of-scope"></a>
+
 - PRoot, a guest Ubuntu or Alpine, qemu-user, and Nix-on-Droid's bootstrap.
 - `dlopen` of `libjvm.so` into the IDE process.
-- Baking a JDK or a Gradle distribution into the APK.
+- Baking a JDK, a Gradle distribution, or Node into the APK.
 - Installing Termux's `gradle` package as the build entrypoint.
 - Vendoring AndroidIDE's `tooling/builder-model-impl`.
 - Finishing the ART `:build` daemon in `docs/build-process-isolation.md` for
@@ -652,11 +755,13 @@ compiled here, not packaged from a prebuilt.
 - Non-Android targets of a Kotlin Multiplatform project: iOS, CocoaPods, desktop,
   and a JetBrains Runtime with JCEF. The Android application of that project is
   in scope.
-- A Rust toolchain, cargo, Python, and `rust-android-gradle`.
-  `shadowsocks/shadowsocks-android` is the app that needs them.
-- Compiling C or C++ for an ABI other than `arm64-v8a`, until
-  `LLVM_TARGETS_TO_BUILD` is widened on purpose. Packaging a prebuilt `.so` of
-  another ABI is in scope.
+- A second compiler or an SDK that is not a PATH binary: Rust and cargo
+  (`shadowsocks/shadowsocks-android`), a Hermes `hermesc`, the Flutter SDK, and
+  Go/`gomobile`. Python on `PATH` does not change the Rust answer.
+- Further LLVM backends. The init script already keeps the APK on `arm64-v8a`,
+  so those backends would build splits this phone does not install.
 - A CMake implementation of our own. Projects with `CMakeLists.txt` are built
   by the real CMake. Projects with an `[ndk]` facet are built by
   `NdkBuildPlugin`.
+- A Metro server, or a JavaScript bundler of our own. The project's Gradle task
+  runs `node`.
