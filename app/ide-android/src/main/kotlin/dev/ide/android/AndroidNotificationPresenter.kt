@@ -44,7 +44,7 @@ internal class AndroidNotificationPresenter(private val context: Context) : Noti
             }
             val built = Notification.Builder(context, CHANNEL_ID)
                 .setContentTitle(notification.title)
-                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setSmallIcon(dev.ide.android.R.drawable.ic_stat_building)
                 .setAutoCancel(true)
                 .apply {
                     notification.body?.let {

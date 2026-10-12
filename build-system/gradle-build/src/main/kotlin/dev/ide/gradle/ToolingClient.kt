@@ -2,6 +2,7 @@ package dev.ide.gradle
 
 import dev.ide.platform.JsonReader
 import java.io.EOFException
+import java.io.IOException
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.util.ArrayDeque
@@ -25,12 +26,20 @@ class ToolingClient(private val process: Process) : AutoCloseable {
     init {
         Thread({ pump(process.inputStream) }, "gradle-tooling-stdout").apply { isDaemon = true; start() }
         Thread({
-            process.errorStream.bufferedReader().useLines { lines ->
-                lines.forEach { line ->
-                    synchronized(stderr) {
-                        stderr.addLast(line)
-                        while (stderr.size > STDERR_RING) stderr.removeFirst()
+            try {
+                process.errorStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        synchronized(stderr) {
+                            stderr.addLast(line)
+                            while (stderr.size > STDERR_RING) stderr.removeFirst()
+                        }
                     }
+                }
+            } catch (error: IOException) {
+                // Android interrupts pipe reads when close() destroys the child process.
+                if (open) synchronized(stderr) {
+                    stderr.addLast("stderr read failed: ${error.message}")
+                    while (stderr.size > STDERR_RING) stderr.removeFirst()
                 }
             }
         }, "gradle-tooling-stderr").apply { isDaemon = true; start() }

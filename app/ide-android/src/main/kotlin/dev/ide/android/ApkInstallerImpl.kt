@@ -73,10 +73,10 @@ class ApkInstallerImpl(context: Context) : ApkInstaller {
         // A Settings screen opened while the IDE is in the background is dropped by the OS, so wait for the
         // user to return first (the build may have finished while they were in another app).
         if (!awaitUi { isUiInForeground() }) {
-            log("Allow CodeAssist to install apps (Settings → Install unknown apps), then Run again.")
+            log("Allow building to install apps (Settings → Install unknown apps), then Run again.")
             return false
         }
-        log("Allow CodeAssist to install apps (Settings → Install unknown apps). The install continues when you come back.")
+        log("Allow building to install apps (Settings → Install unknown apps). The install continues when you come back.")
         val opened = runCatching {
             context.startActivity(
                 Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))

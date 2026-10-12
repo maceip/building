@@ -254,6 +254,10 @@ private fun AppRoute(
             onCancel = { app.navigateTo(Screen.Projects) },
             onCreated = { app.navigateTo(Screen.Editor) },
             initialTemplateId = app.createTemplateId,
+            onCloneRepository = if (backend.vcs.supported()) {
+                { app.openPluginScreen(VcsService.SCREEN_CLONE) }
+            } else null,
+            onImportProject = if (fileActions.canPickDirectory || fileActions.canPickFile) app::requestProjectImport else null,
         )
 
         Screen.ImportProject -> {

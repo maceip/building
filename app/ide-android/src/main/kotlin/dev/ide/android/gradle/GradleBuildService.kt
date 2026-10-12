@@ -105,7 +105,7 @@ class GradleBuildService : Service() {
         if (nm != null && nm.getNotificationChannel(CHANNEL_ID) == null) {
             nm.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "Gradle", NotificationManager.IMPORTANCE_LOW).apply {
-                    description = "Shown while CodeAssist is running a Gradle build"
+                    description = "Shown while building is running a Gradle build"
                 },
             )
         }
@@ -115,7 +115,7 @@ class GradleBuildService : Service() {
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Gradle")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(dev.ide.android.R.drawable.ic_stat_building)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .apply { open?.let { setContentIntent(it) } }

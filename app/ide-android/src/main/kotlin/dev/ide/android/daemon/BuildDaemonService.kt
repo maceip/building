@@ -465,7 +465,7 @@ class BuildDaemonService : Service() {
         if (nm != null && nm.getNotificationChannel(CHANNEL_ID) == null) {
             nm.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "Builds", NotificationManager.IMPORTANCE_LOW).apply {
-                    description = "Shown while CodeAssist is building or running your project"
+                    description = "Shown while building is building or running your project"
                 },
             )
         }
@@ -475,7 +475,7 @@ class BuildDaemonService : Service() {
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(content.title)
             .setContentText(content.text)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(dev.ide.android.R.drawable.ic_stat_building)
             .setOngoing(true)
             .setOnlyAlertOnce(true) // progress updates re-post often; never buzz/peek after the first
             .apply {
@@ -543,7 +543,7 @@ class BuildDaemonService : Service() {
         val indeterminate: Boolean,
     ) {
         companion object {
-            val PREPARING = NotifContent("CodeAssist", "Preparing…", 0, 0, true)
+            val PREPARING = NotifContent("building", "Preparing…", 0, 0, true)
         }
     }
 

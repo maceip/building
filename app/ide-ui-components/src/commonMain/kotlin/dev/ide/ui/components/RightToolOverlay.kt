@@ -78,7 +78,7 @@ fun RightToolOverlay(state: IdeUiState) {
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
-        val panelWidth = if (maxWidth < 480.dp) maxWidth - 48.dp else 420.dp
+        val panelWidth = if (maxWidth < 480.dp) maxWidth else 420.dp
         val openPx = with(density) { panelWidth.toPx() }
         val flingPx = with(density) { FlingCommit.toPx() }
         val touchSlop = LocalViewConfiguration.current.touchSlop

@@ -38,6 +38,7 @@ import dev.ide.ui.backend.TreeNode
  * no WebView — ads are optional, so a failed init must never take down the IDE.
  */
 internal fun initAds(context: Context) {
+    if (!BuildConfig.ADS_ENABLED) return
     runCatching {
         com.google.android.gms.ads.MobileAds.initialize(context) { status ->
             val adapters = status.adapterStatusMap.entries.joinToString { (name, s) ->

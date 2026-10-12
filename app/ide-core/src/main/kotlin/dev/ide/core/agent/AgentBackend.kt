@@ -273,7 +273,7 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
             clientProviderId = selected,
             apiKey = pref(keyField(selected)),
             model = chosenModel(selected) ?: preferredModels[selected] ?: provider?.defaultModel.orEmpty(),
-            baseUrl = null,
+            baseUrl = pref(baseUrlField(selected)),
         )
     }
 
@@ -290,9 +290,12 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
     }
 
     private fun modelBelongsTo(model: String, providerId: String): Boolean = when (providerId) {
+        "antigravity" -> model.startsWith("gemini") || model.startsWith("claude") || model.startsWith("gpt-oss")
         "anthropic" -> model.startsWith("claude")
         "gemini" -> model.startsWith("gemini") || model.startsWith("gemma") || model.startsWith("models/")
-        "openai" -> !model.startsWith("claude") && !model.startsWith("gemini") && '/' !in model
+        "muse" -> model.startsWith("muse-")
+        "mimo" -> model.startsWith("mimo-")
+        "openai" -> !model.startsWith("claude") && !model.startsWith("gemini") && !model.startsWith("muse-") && !model.startsWith("mimo-") && '/' !in model
         "openrouter" -> '/' in model
         else -> true
     }
@@ -326,11 +329,19 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
     }
 
     private fun keyField(providerId: String): String = when (providerId) {
+        "antigravity" -> "antigravityKey"
         "openai" -> "openaiKey"
+        "muse" -> "museKey"
+        "mimo" -> "mimoKey"
         "gemini" -> "geminiKey"
         "openrouter" -> "openrouterKey"
         GATEWAY -> "gatewayKey"
         else -> "anthropicKey"
+    }
+
+    private fun baseUrlField(providerId: String): String = when (providerId) {
+        GATEWAY -> "gatewayBaseUrl"
+        else -> "${providerId}BaseUrl"
     }
 
     /**
@@ -349,10 +360,18 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
                 p.models.map { UiAgentModel(it.id, it.displayName) },
                 p.defaultModel,
                 apiKey = pref(keyField(p.id)).orEmpty(),
+                baseUrl = pref(baseUrlField(p.id)).orEmpty(),
             )
         }
         // A synthetic "Custom gateway" entry (OpenAI-compatible endpoint); its client is the OpenAI provider.
-        val gateway = UiAgentProvider(GATEWAY, "Custom gateway", emptyList(), "", apiKey = pref("gatewayKey").orEmpty())
+        val gateway = UiAgentProvider(
+            GATEWAY,
+            "Custom gateway",
+            emptyList(),
+            "",
+            apiKey = pref("gatewayKey").orEmpty(),
+            baseUrl = pref("gatewayBaseUrl").orEmpty(),
+        )
         val configured = cfg.ready
         return UiAgentConfig(
             providers = builtins + gateway,
@@ -360,6 +379,7 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
             model = cfg.model,
             configured = configured,
             mode = modePref().toUi(),
+            effort = pref("reasoningEffort") ?: REASONING_EFFORT_DEFAULT,
             gatewayBaseUrl = pref("gatewayBaseUrl").orEmpty(),
             gatewayModel = pref("gatewayModel").orEmpty(),
             gatewayCaCert = pref("gatewayCaCert").orEmpty(),
@@ -368,6 +388,12 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
 
     override fun setPermissionMode(mode: UiAgentPermissionMode) {
         ctx.manager?.setPreference(MODE_PREF, mode.toDomain().name)
+    }
+
+    override fun setEffort(effort: String) {
+        val normalized = effort.ifBlank { REASONING_EFFORT_DEFAULT }
+        ctx.manager?.setPreference("settings.$AI_PAGE.reasoningEffort", normalized)
+        resetLoop()
     }
 
     override fun setModel(model: String) {
@@ -384,6 +410,11 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
 
     override fun setProviderKey(providerId: String, key: String) {
         ctx.manager?.setPreference("settings.$AI_PAGE.${keyField(providerId)}", key)
+        resetLoop()
+    }
+
+    override fun setProviderBaseUrl(providerId: String, baseUrl: String) {
+        ctx.manager?.setPreference("settings.$AI_PAGE.${baseUrlField(providerId)}", baseUrl.trim())
         resetLoop()
     }
 
@@ -1060,7 +1091,7 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
 
         private const val INIT_PROMPT = "Explore this project and write an AGENTS.md file at the project root " +
             "for future AI sessions. Cover: what the project is, its modules and layout, how to build and run " +
-            "it in CodeAssist, the coding conventions you observe (language, style, architecture), and anything " +
+            "it in building, the coding conventions you observe (language, style, architecture), and anything " +
             "non-obvious a newcomer would trip over. Keep it concise and factual; if an AGENTS.md already " +
             "exists, improve it rather than replacing what is still accurate."
 

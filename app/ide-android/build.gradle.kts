@@ -446,6 +446,9 @@ val realAdmobNativeUnitId = (findProperty("ADMOB_NATIVE_UNIT_ID") as String?) ?:
 val realAdmobInterstitialUnitId = (findProperty("ADMOB_INTERSTITIAL_UNIT_ID") as String?)
     ?: System.getenv("ADMOB_INTERSTITIAL_UNIT_ID")
     ?: "ca-app-pub-7523005242346905/6735189457"
+val releaseAdsEnabled = providers.gradleProperty("ANDROID_ADS_ENABLED")
+    .orElse(providers.environmentVariable("ANDROID_ADS_ENABLED"))
+    .getOrElse("true").toBooleanStrict()
 // Per-placement native units, keyed by AdPlacement name, so the AdMob report splits native earnings by screen.
 // A placement left blank falls back to the shared native unit above, and several placements may share one
 // unit. Each is overridable via -PADMOB_NATIVE_UNIT_<PLACEMENT> (or the env var of the same name). Reaches
@@ -473,14 +476,21 @@ android {
     defaultConfig {
         // The Play Store identity (immutable once published). The Kotlin source package (namespace,
         // above) stays dev.ide.android — that's an internal build detail, independent of applicationId.
-        applicationId = "com.tyron.code"
+        // A fork supplies its own identity/version through the production environment.
+        applicationId = providers.gradleProperty("ANDROID_APPLICATION_ID")
+            .orElse(providers.environmentVariable("ANDROID_APPLICATION_ID"))
+            .getOrElse("com.tyron.code")
         // The real engine (project-model-impl/lang-jdt/...) leans on java.nio.file (Path/Files/walk),
         // which is API 26+. Targeting 26 keeps it native and avoids core-library desugaring complexity.
         minSdk = 26
         targetSdk = 36
         // versionCode must exceed the last published release (the previous-codebase app reached ~29).
-        versionCode = 106
-        versionName = "3.27.0"
+        versionCode = providers.gradleProperty("ANDROID_VERSION_CODE")
+            .orElse(providers.environmentVariable("ANDROID_VERSION_CODE"))
+            .getOrElse("106").toInt().also { require(it > 0) { "ANDROID_VERSION_CODE must be positive" } }
+        versionName = providers.gradleProperty("ANDROID_VERSION_NAME")
+            .orElse(providers.environmentVariable("ANDROID_VERSION_NAME"))
+            .getOrElse("3.27.0")
         // connectedAndroidTest harness (the on-device Kotlin-compiler discovery spike).
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -519,6 +529,7 @@ android {
         buildConfigField("String", "AD_NATIVE_UNIT_ID", "\"$testAdmobNativeUnitId\"")
         buildConfigField("String", "AD_INTERSTITIAL_UNIT_ID", "\"$testAdmobInterstitialUnitId\"")
         buildConfigField("String", "AD_NATIVE_UNIT_IDS", "\"\"")
+        buildConfigField("boolean", "ADS_ENABLED", "true")
     }
 
     buildFeatures {
@@ -530,6 +541,8 @@ android {
     // on-device compiler can load them. AGP 9 disallows a Provider here, so register the static dirs the
     // tasks write to; ordering is carried by the `preBuild.dependsOn(...)` below (same pattern as aapt2).
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("android-jar-asset").get().asFile)
+    sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("native-sdk-tools/jniLibs").get().asFile)
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("native-sdk-tools/assets").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("prebuilt-index-asset").get().asFile)
     // DEBUG ONLY. The shipping app reads the stdlib as the `/kotlin-stdlib.jar` classpath resource that
     // :lang-kotlin bundles (BundledKotlinStdlib), and the forked compiler puts the APK itself on its -cp for
@@ -589,10 +602,11 @@ android {
             isMinifyEnabled = false
             signingConfig = signingConfigs.findByName("release")
             // The shipped build serves real AdMob ads (falls back to test ids if none were configured).
-            manifestPlaceholders["admobAppId"] = realAdmobAppId
-            buildConfigField("String", "AD_NATIVE_UNIT_ID", "\"$realAdmobNativeUnitId\"")
-            buildConfigField("String", "AD_INTERSTITIAL_UNIT_ID", "\"$realAdmobInterstitialUnitId\"")
-            buildConfigField("String", "AD_NATIVE_UNIT_IDS", "\"$realAdmobNativeUnitsByPlacement\"")
+            buildConfigField("boolean", "ADS_ENABLED", releaseAdsEnabled.toString())
+            manifestPlaceholders["admobAppId"] = if (releaseAdsEnabled) realAdmobAppId else ""
+            buildConfigField("String", "AD_NATIVE_UNIT_ID", "\"${if (releaseAdsEnabled) realAdmobNativeUnitId else ""}\"")
+            buildConfigField("String", "AD_INTERSTITIAL_UNIT_ID", "\"${if (releaseAdsEnabled) realAdmobInterstitialUnitId else ""}\"")
+            buildConfigField("String", "AD_NATIVE_UNIT_IDS", "\"${if (releaseAdsEnabled) realAdmobNativeUnitsByPlacement else ""}\"")
         }
         // A release-like, non-debuggable build that's still installable locally (signed with the debug key).
         // Use this — never `debug` — to judge runtime/typing/recomposition performance: a `debuggable` app
@@ -641,6 +655,12 @@ android {
             buildConfigField("String", "AD_NATIVE_UNIT_ID", "\"$testAdmobNativeUnitId\"")
             buildConfigField("String", "AD_INTERSTITIAL_UNIT_ID", "\"$testAdmobInterstitialUnitId\"")
             buildConfigField("String", "AD_NATIVE_UNIT_IDS", "\"\"")
+        }
+    }
+
+    if (!releaseAdsEnabled) {
+        for (type in listOf("release", "profile", "minified")) {
+            sourceSets.getByName(type).manifest.srcFile("src/noAds/AndroidManifest.xml")
         }
     }
 
@@ -712,7 +732,7 @@ android {
         // (when an NDK is present) would corrupt it.
         jniLibs {
             useLegacyPackaging = true
-            keepDebugSymbols += setOf("**/libaapt2.so")
+            keepDebugSymbols += setOf("**/libaapt2.so", "**/libsdk-*.so")
         }
     }
 
@@ -797,9 +817,20 @@ val stageGradleToolingAsset = tasks.register<Copy>("stageGradleToolingAsset") {
     into(layout.buildDirectory.dir("gradle-tooling-asset/dev/ide/gradle"))
 }
 
+val buildNativeSdkTools = tasks.register<Exec>("buildNativeSdkTools") {
+    description = "Build the Android-host SDK helpers from pinned AOSP sources with 16 KB page support."
+    group = "build setup"
+    val builder = rootProject.file("tools/android-sdk")
+    val output = layout.buildDirectory.dir("native-sdk-tools")
+    inputs.files(File(builder, "build.py"), File(builder, "CMakeLists.txt"), File(builder, "sources.lock.json"), File(builder, "exec-prefix.c"))
+    outputs.dir(output)
+    commandLine("python3", File(builder, "build.py"), "--output", output.get().asFile)
+}
+
 // Run before anything AGP does, so the freshly-fetched lib*.so are on disk when the native-lib merge runs,
 // and the staged kotlin-stdlib.jar asset is present when the asset merge runs.
 tasks.named("preBuild").configure {
+    dependsOn(buildNativeSdkTools)
     dependsOn(fetchAndroidBuildTools, stripAndroidJarAsset, generatePrebuiltIndexAsset, bundleKotlinStdlibAsset, bundleKotlincResourcesAsset, bundleComposeRuntimeAsset, bundleComposeFontsAsset, bundleComposeStringAsset, bundleAgentUiComposeStringAsset, bundleVcsUiComposeStringAsset, bundleComposeDrawablesAsset, bundleR8DexAsset, bundleAppLogRuntimeAsset, bundleVmSpikeComposeRuntimeAsset, bundleVmSpikeMaterial3Asset, bundleVmStackAsset, bundleMoshiLibsAsset, bundleAwtFixtureAsset, stageGradleToolingAsset)
 }
 

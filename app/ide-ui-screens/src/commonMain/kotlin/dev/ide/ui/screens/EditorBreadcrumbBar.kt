@@ -102,7 +102,7 @@ internal fun BreadcrumbBar(
 }
 
 /** Shared height for the editor view-mode toggle pill. */
-private val EditorToolbarHeight = 34.dp
+private val EditorToolbarHeight = 26.dp
 
 /**
  * The `Code / Blocks / Preview / Split` segmented control switching the active tab between editor surfaces.

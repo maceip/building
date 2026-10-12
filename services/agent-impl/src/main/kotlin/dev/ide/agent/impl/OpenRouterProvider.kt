@@ -24,7 +24,10 @@ class OpenRouterProvider(private val transport: LlmTransport) : LlmProvider {
     override val models: List<LlmModelInfo> = listOf(
         LlmModelInfo("anthropic/claude-opus-5", "Claude Opus 5"),
         LlmModelInfo("anthropic/claude-sonnet-5", "Claude Sonnet 5"),
+        LlmModelInfo("openai/gpt-6.1-sol", "GPT-6.1 Sol"),
         LlmModelInfo("openai/gpt-5", "GPT-5"),
+        LlmModelInfo("meta-llama/muse-spark-1.3", "Meta Muse Spark 1.3"),
+        LlmModelInfo("xiaomi/mimo-v2.6-pro", "Xiaomi MiMo V2.6 Pro"),
         LlmModelInfo("google/gemini-2.5-flash", "Gemini 2.5 Flash"),
     )
     override val defaultModel: String = "anthropic/claude-opus-5"

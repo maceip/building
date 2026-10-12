@@ -130,7 +130,12 @@ object DebUnpacker {
                         entry.isSymbolicLink -> {
                             Files.createDirectories(out.parent)
                             Files.deleteIfExists(out)
-                            Files.createSymbolicLink(out, Path.of(entry.linkName))
+                            val original = entry.linkName
+                            val packageRoot = "/" + strip.trim('/') + "/"
+                            val target = if (original.startsWith(packageRoot)) {
+                                dest.toAbsolutePath().resolve(original.removePrefix(packageRoot))
+                            } else Path.of(original)
+                            Files.createSymbolicLink(out, target)
                         }
                         entry.isDirectory -> Files.createDirectories(out)
                         else -> {
@@ -166,15 +171,27 @@ object PrefixProbe {
 
     fun environment(prefix: Path, javaHome: Path, libraryPath: List<Path> = emptyList()): Map<String, String> {
         val libs = (listOf(prefix.resolve("lib")) + libraryPath).joinToString(":") { it.toString() }
+        val relocator = libraryPath.map { it.resolve("libsdk-exec-prefix.so") }.firstOrNull { Files.isRegularFile(it) }
+        val preload = listOfNotNull(relocator, prefix.resolve("lib/libtermux-exec.so")).joinToString(":")
         val path = listOf(prefix.resolve("bin"), javaHome.resolve("bin")).joinToString(":") + ":/system/bin:/system/xbin"
         val env = linkedMapOf(
             "JAVA_HOME" to javaHome.toString(),
-            "LD_PRELOAD" to prefix.resolve("lib/libtermux-exec.so").toString(),
+            "LD_PRELOAD" to preload,
             "LD_LIBRARY_PATH" to libs,
             "PATH" to path,
             "HOME" to prefix.parent.toString(),
+            // Android-host CMake also uses PREFIX to locate native-host headers in sub-builds.
+            "PREFIX" to prefix.toString(),
             "TMPDIR" to prefix.parent.resolve("tmp").toString(),
+            // The packaged JDK otherwise uses its compiled-in Termux home and temp paths.
+            "JAVA_TOOL_OPTIONS" to "-Djava.io.tmpdir=${prefix.parent.resolve("tmp")} -Duser.home=${prefix.parent}",
             "LANG" to "C.UTF-8",
+            // Child execs also need the linker on apps targeting Android 10 or newer.
+            "TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE" to "force",
+            "TERMUX__PREFIX" to prefix.toString(),
+            "TERMUX_APP__DATA_DIR" to prefix.parent.parent.toString(),
+            "TERMUX_APP__LEGACY_DATA_DIR" to prefix.parent.parent.toString()
+                .replaceFirst(Regex("^/data/user/0/"), "/data/data/"),
         )
         val cert = prefix.resolve("etc/tls/cert.pem")
         if (Files.isRegularFile(cert)) env["SSL_CERT_FILE"] = cert.toString()

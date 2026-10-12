@@ -50,6 +50,8 @@ import dev.ide.ui.generated.resources.toggle_on
 import dev.ide.ui.generated.resources.choose_start_point
 import dev.ide.ui.generated.resources.create_project
 import dev.ide.ui.generated.resources.creating
+import dev.ide.ui.generated.resources.home_clone_repository
+import dev.ide.ui.generated.resources.home_import_project
 import dev.ide.ui.generated.resources.new_project
 import dev.ide.ui.generated.resources.no_templates_available
 import dev.ide.ui.generated.resources.package_name
@@ -74,6 +76,8 @@ fun CreateProjectScreen(
     onCreated: () -> Unit,
     /** Pre-select a template (e.g. opened from a Projects Store item) and jump straight to its configure step. */
     initialTemplateId: String? = null,
+    onCloneRepository: (() -> Unit)? = null,
+    onImportProject: (() -> Unit)? = null,
 ) {
     val templates = remember { backend.projects.projectTemplates() }
     // Sample projects (weather, notes, the Compose games…) belong to the Explore page only; the
@@ -86,7 +90,7 @@ fun CreateProjectScreen(
     }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.TopCenter) {
         Column(
-            Modifier.widthIn(max = 640.dp).fillMaxSize().padding(horizontal = 24.dp, vertical = 32.dp),
+            Modifier.widthIn(max = 640.dp).fillMaxSize().padding(horizontal = 20.dp, vertical = 18.dp),
         ) {
             val sel = selected
             if (sel == null) {
@@ -94,6 +98,8 @@ fun CreateProjectScreen(
                     templates = galleryTemplates,
                     onBack = onCancel,
                     onPick = { selected = it },
+                    onCloneRepository = onCloneRepository,
+                    onImportProject = onImportProject,
                 )
             } else {
                 Configure(
@@ -110,16 +116,71 @@ fun CreateProjectScreen(
 // ---- step 1: gallery ----
 
 @Composable
-private fun ColumnScope.Gallery(templates: List<UiProjectTemplate>, onBack: () -> Unit, onPick: (UiProjectTemplate) -> Unit) {
+private fun ColumnScope.Gallery(
+    templates: List<UiProjectTemplate>,
+    onBack: () -> Unit,
+    onPick: (UiProjectTemplate) -> Unit,
+    onCloneRepository: (() -> Unit)? = null,
+    onImportProject: (() -> Unit)? = null,
+) {
     Header(title = stringResource(Res.string.new_project), subtitle = stringResource(Res.string.choose_start_point), onBack = onBack)
-    Spacer(Modifier.height(20.dp))
-    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+    if (onCloneRepository != null || onImportProject != null) {
+        Spacer(Modifier.height(12.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (onCloneRepository != null) {
+                Row(
+                    Modifier
+                        .weight(1f)
+                        .background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(Ca.radius.md))
+                        .clickable(onClick = onCloneRepository)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(CaIcons.gitBranch, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                    Text(
+                        stringResource(Res.string.home_clone_repository),
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (onImportProject != null) {
+                Row(
+                    Modifier
+                        .weight(1f)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(Ca.radius.md))
+                        .clickable(onClick = onImportProject)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(CaIcons.folder, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        stringResource(Res.string.home_import_project),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+    Spacer(Modifier.height(14.dp))
+    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (templates.isEmpty()) {
             Text(stringResource(Res.string.no_templates_available), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
         }
         var index = 0
         templates.groupBy { it.category }.forEach { (category, group) ->
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(category.uppercase(), color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
                 group.forEach { t ->
                     TemplateCard(t, delayMillis = (index++) * 50, onClick = { onPick(t) })
@@ -137,19 +198,19 @@ private fun TemplateCard(template: UiProjectTemplate, delayMillis: Int, onClick:
             .entranceSlideUp(delayMillis)
             .fillMaxWidth()
             .pressScale(interaction)
-            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(Ca.radius.lg))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.lg))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, RoundedCornerShape(Ca.radius.md))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.md))
             .clickable(interaction, indication = null, onClick = onClick)
-            .padding(16.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         TemplateGlyph(template.iconId)
         Column(Modifier.weight(1f)) {
-            Text(template.displayName, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium)
-            Text(template.description, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            Text(template.displayName, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
+            Text(template.description, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
-        Icon(CaIcons.chevronRight, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.outline)
+        Icon(CaIcons.chevronRight, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.outline)
     }
 }
 

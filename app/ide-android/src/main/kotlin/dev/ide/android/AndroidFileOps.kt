@@ -183,7 +183,7 @@ internal class AndroidFileOps(private val activity: ComponentActivity) {
         if (runCatching { activity.startActivity(viewRoot); true }.getOrDefault(false)) return
         val browse = Intent("android.provider.action.BROWSE", rootUri)
         runCatching { activity.startActivity(browse) }.getOrElse {
-            Toast.makeText(activity, "Open the Files app → CodeAssist to browse your projects", Toast.LENGTH_LONG).show()
+            Toast.makeText(activity, "Open the Files app → building to browse your projects", Toast.LENGTH_LONG).show()
         }
     }
 

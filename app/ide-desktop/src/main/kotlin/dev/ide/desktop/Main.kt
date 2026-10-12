@@ -30,7 +30,7 @@ fun main(args: Array<String>) {
     GradleEnvironment.enabled = true
     GradleEnvironment.host = DesktopGradleHost()
     System.setProperty("apple.awt.application.appearance", "system")
-    System.setProperty("apple.awt.application.name", "CodeAssist")
+    System.setProperty("apple.awt.application.name", "building")
     // Survive an unexpected exception on the AWT event thread (e.g. the live-preview interpreter crashing deep
     // in Compose's measure/semantics pass on a half-typed buffer) instead of taking the whole IDE down.
     AwtThreadGuard.install()
@@ -55,7 +55,7 @@ fun main(args: Array<String>) {
         Window(
             onCloseRequest = ::exitApplication,
             state = state,
-            title = "CodeAssist",
+            title = "building",
             // An app shortcut pressed while nothing in the window has focus (the root listener inside the app
             // only hears keys that reach a focused node). Runs only for a key the content did not consume.
             onKeyEvent = { AppKeys.onKey(it) },

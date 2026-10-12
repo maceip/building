@@ -1,5 +1,6 @@
 package dev.ide.gradle
 
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
@@ -9,14 +10,14 @@ import java.util.concurrent.TimeUnit
 import kotlin.io.path.writeText
 
 /**
- * The fat jar, on the host JDK, initializes a fixture and returns its module and variant.
+ * The fat jar, on the host JDK, returns the configured model written by the init script.
  * No prefix and no linker: this is the desktop shape of the same server the phone execs.
  */
 @Timeout(value = 4, unit = TimeUnit.MINUTES)
 class ToolingModelTest {
 
     @Test
-    fun initializeReturnsTheAppModuleAndMainVariant() {
+    fun fetchModelReturnsConfiguredPluginsSourcesAndDependencies() {
         val jar = System.getProperty("dev.ide.tooling.jar") ?: error("dev.ide.tooling.jar is not set")
         val gradleHome = System.getProperty("dev.ide.gradle.home") ?: error("dev.ide.gradle.home is not set")
         val init = System.getProperty("dev.ide.init.script") ?: error("dev.ide.init.script is not set")
@@ -31,6 +32,8 @@ class ToolingModelTest {
         root.resolve("app/build.gradle").writeText(
             """
             plugins { id 'java-library' }
+            sourceSets.main.java.setSrcDirs(['src/generated/java'])
+            dependencies { implementation 'com.example:fixture-api:1.2.3' }
             """.trimIndent() + "\n",
         )
         val userHome = Files.createTempDirectory("gradle-user-home")
@@ -61,6 +64,12 @@ class ToolingModelTest {
             val app = snapshot.modules.firstOrNull { it.name == "app" }
                 ?: error("modules=${snapshot.modules.map { it.name }} raw=${call.rawResult.take(500)}")
             assertTrue(app.variants.any { it.name == "main" }, app.variants.toString())
+            assertTrue("java-library" in app.plugins, app.plugins.toString())
+            assertEquals("app", app.dir)
+            assertEquals(listOf("src/generated/java"), app.sourceSets.single { it.name == "main" }.java)
+            assertTrue(app.dependencies.any {
+                it.configuration == "implementation" && it.coordinate == "com.example:fixture-api:1.2.3"
+            }, app.dependencies.toString())
         } catch (e: ToolingClient.ToolingException) {
             throw AssertionError(e.message + "\n" + e.stderr, e)
         } finally {

@@ -17,6 +17,7 @@ data class GradleProjectSnapshot(
     val ndkVersions: List<String>,
     val cmakeVersions: List<String>,
     val raw: String,
+    val schemaVersion: Int = 0,
 ) {
     data class Module(
         val name: String,
@@ -43,6 +44,7 @@ data class GradleProjectSnapshot(
         val flavors: List<String>,
         val assembleTask: String,
         val debuggable: Boolean,
+        val applicationId: String? = null,
     )
 
     data class SourceSet(val name: String, val java: List<String>, val kotlin: List<String>, val resources: List<String>)
@@ -64,6 +66,7 @@ data class GradleProjectSnapshot(
                 debuggable = variant.debuggable,
                 order = moduleIndex * 1000 + index,
                 namespace = module.namespace,
+                applicationId = variant.applicationId,
             )
         }
     }
@@ -72,13 +75,14 @@ data class GradleProjectSnapshot(
 
     companion object {
         const val FILE = ".platform/gradle-tooling.json"
+        const val SCHEMA_VERSION = 2
 
         fun file(projectDir: Path): Path = projectDir.resolve(FILE)
 
         fun load(projectDir: Path): GradleProjectSnapshot? {
             val path = file(projectDir)
             if (!Files.isRegularFile(path)) return null
-            return runCatching { parse(path.readText()) }.getOrNull()
+            return runCatching { parse(path.readText()) }.getOrNull()?.takeIf { it.schemaVersion == SCHEMA_VERSION }
         }
 
         fun store(projectDir: Path, raw: String) {
@@ -91,6 +95,7 @@ data class GradleProjectSnapshot(
             val root = JsonReader.obj(JsonReader.parse(text)) ?: error("gradle model is not an object")
             return GradleProjectSnapshot(
                 name = JsonReader.str(root, "name") ?: "gradle-project",
+                schemaVersion = JsonReader.long(root, "schemaVersion").toInt(),
                 gradleVersion = JsonReader.str(root, "gradleVersion"),
                 modules = JsonReader.arr(root["modules"]).mapNotNull { parseModule(it) },
                 issues = JsonReader.arr(root["issues"]).mapNotNull { item ->
@@ -151,6 +156,7 @@ data class GradleProjectSnapshot(
                 flavors = JsonReader.strings(obj, "flavors"),
                 assembleTask = JsonReader.str(obj, "assembleTask") ?: "assemble",
                 debuggable = JsonReader.bool(obj, "debuggable", default = name == "debug" || name == "main"),
+                applicationId = JsonReader.str(obj, "applicationId"),
             )
         }
 

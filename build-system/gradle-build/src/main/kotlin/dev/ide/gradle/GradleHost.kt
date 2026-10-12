@@ -21,9 +21,14 @@ interface GradleHost {
     fun aapt2(): Path?
     fun zipalign(): Path?
     fun aidl(): Path?
+    /** Additional SDK files, including installed native executables and Java stubs. */
+    fun buildToolsExtras(): Map<String, Path> = emptyMap()
     fun clangDriver(): Path?
     fun toolchainOut(): Path?
+    /** Return true when the host installs a complete native SDK instead of a legacy alias. */
+    fun installNdk(revision: String): Boolean = false
     fun cmake(): Path?
+    fun cmakeVersion(): String? = null
     fun ninja(): Path?
     fun make(): Path?
     fun ramBytes(): Long

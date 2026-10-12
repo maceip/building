@@ -283,10 +283,9 @@ private fun lightColors(accent: Color, accentStrong: Color) = CodeAssistColors(
 )
 
 fun caColors(dark: Boolean, accent: CaAccent): CodeAssistColors = when {
-    // Lime: the editor takes the scheme's primary, which reads as a bright chartreuse caret/selection on
-    // dark and a deep olive on light.
-    dark && accent == CaAccent.Lime -> darkColors(Color(0xFFCDF14A), Color(0xFFB4D93A))
-    !dark && accent == CaAccent.Lime -> lightColors(Color(0xFF465700), Color(0xFF354200))
+    // Default (Lime enum id retained for settings compatibility): restrained IDE steel-blue accent.
+    dark && accent == CaAccent.Lime -> darkColors(Color(0xFF7AA2F7), Color(0xFF5A8DEE))
+    !dark && accent == CaAccent.Lime -> lightColors(Color(0xFF2563EB), Color(0xFF1D4ED8))
     dark && accent == CaAccent.Violet -> darkColors(Color(0xFFB487F7), Color(0xFFA06BFF))
     dark && accent == CaAccent.Teal -> darkColors(Color(0xFF5CCFE6), Color(0xFF3FBDD9))
     // Legacy CodeAssist orange (the Darcula `#CC7832` from the classic `<>` logo).
@@ -305,8 +304,8 @@ object Spacing {
 
 @Immutable
 object Radius {
-    val xs = 6.dp; val sm = 9.dp; val control = 12.dp; val md = 14.dp
-    val lg = 18.dp; val xl = 24.dp; val sheet = 26.dp; val pill = 999.dp
+    val xs = 4.dp; val sm = 6.dp; val control = 8.dp; val md = 10.dp
+    val lg = 12.dp; val xl = 16.dp; val sheet = 18.dp; val pill = 999.dp
 }
 
 // ---- Typography ----

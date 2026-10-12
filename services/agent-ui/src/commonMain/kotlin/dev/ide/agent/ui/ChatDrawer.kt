@@ -243,6 +243,7 @@ fun ChatDrawer(
         Column(Modifier.fillMaxSize()) {
             val headerModels = models.ifEmpty { cfg.providers.firstOrNull { it.id == cfg.selectedProvider }?.models ?: emptyList() }
             val onPickModel: (String) -> Unit = { backend.agent.setModel(it); cfg = backend.agent.config() }
+            val onPickEffort: (String) -> Unit = { backend.agent.setEffort(it); cfg = backend.agent.config() }
             val onCycleMode = {
                 backend.agent.setPermissionMode(nextMode(cfg.mode))
                 cfg = backend.agent.config()
@@ -251,9 +252,17 @@ fun ChatDrawer(
             // chip and the menu go into it rather than a second header row.
             val hosted = ToolWindowHeaderActions(
                 leading = {
-                    ModelPicker(cfg = cfg, models = headerModels, open = modelMenuOpen, onOpen = { modelMenuOpen = it }, onPick = onPickModel)
+                    ModelPicker(
+                        cfg = cfg,
+                        models = headerModels,
+                        open = modelMenuOpen,
+                        onOpen = { modelMenuOpen = it },
+                        onPick = onPickModel,
+                        onManageProviders = { showProviders = true },
+                    )
                 },
                 actions = {
+                    EffortChip(cfg.effort, onPickEffort)
                     ModeChip(cfg.mode, onCycleMode)
                     ChatMenu(
                         onNew = { backend.agent.newSession() },
@@ -270,6 +279,7 @@ fun ChatDrawer(
                         modelMenuOpen = modelMenuOpen,
                         onModelMenu = { modelMenuOpen = it },
                         onPickModel = onPickModel,
+                        onPickEffort = onPickEffort,
                         onManage = { showProviders = true },
                         onHistory = { showHistory = true },
                         onCycleMode = onCycleMode,
@@ -453,6 +463,7 @@ private fun ChatHeader(
     modelMenuOpen: Boolean,
     onModelMenu: (Boolean) -> Unit,
     onPickModel: (String) -> Unit,
+    onPickEffort: (String) -> Unit,
     onManage: () -> Unit,
     onHistory: () -> Unit,
     onCycleMode: () -> Unit,
@@ -460,27 +471,76 @@ private fun ChatHeader(
     onClose: (() -> Unit)?,
 ) {
     Row(
-        Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 12.dp),
+        Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        SparkleBadge(size = 26)
+        SparkleBadge(size = 24)
         Column(Modifier.weight(1f)) {
             Text(
                 stringResource(Res.string.chat_title),
                 color = MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
-                // One line: the bar is 52dp, and a title that wraps (a longer translation in a narrow drawer)
-                // splits mid-word and pushes the model picker under it out of view.
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            ModelPicker(cfg = cfg, models = models, open = modelMenuOpen, onOpen = onModelMenu, onPick = onPickModel)
+            ModelPicker(
+                cfg = cfg,
+                models = models,
+                open = modelMenuOpen,
+                onOpen = onModelMenu,
+                onPick = onPickModel,
+                onManageProviders = onManage,
+            )
         }
+        EffortChip(cfg.effort, onPickEffort)
         ModeChip(cfg.mode, onCycleMode)
         ChatMenu(onNew = onNew, onHistory = onHistory, onManage = onManage)
         if (onClose != null) HideToolWindowButton(onClose)
+    }
+}
+
+private val EFFORT_OPTIONS = listOf(
+    "default" to "Auto",
+    "minimal" to "Min",
+    "low" to "Low",
+    "medium" to "Med",
+    "high" to "High",
+    "xhigh" to "X-High",
+    "max" to "Max",
+    "none" to "None",
+)
+
+@Composable
+private fun EffortChip(effort: String, onPick: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val scheme = MaterialTheme.colorScheme
+    val normalized = effort.ifBlank { "default" }
+    val shortLabel = EFFORT_OPTIONS.firstOrNull { it.first == normalized }?.second ?: normalized
+    val active = normalized != "default" && normalized != "none"
+    Box {
+        Chip(
+            text = "Think: $shortLabel",
+            modifier = Modifier.clip(RoundedCornerShape(Ca.radius.pill)).clickable { open = true },
+            fill = if (active) scheme.secondaryContainer else scheme.surfaceContainerHighest,
+            textColor = if (active) scheme.onSecondaryContainer else scheme.onSurfaceVariant,
+        )
+        CaDropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            EFFORT_OPTIONS.forEach { (id, label) ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = if (id == "default") "Default (Auto)" else label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (id == normalized) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (id == normalized) scheme.primary else scheme.onSurface,
+                        )
+                    },
+                    onClick = { onPick(id); open = false },
+                )
+            }
+        }
     }
 }
 
@@ -516,7 +576,7 @@ private fun ModeChip(mode: UiAgentPermissionMode, onCycleMode: () -> Unit) {
 private fun ChatMenu(onNew: () -> Unit, onHistory: () -> Unit, onManage: () -> Unit) {
     var menuOpen by remember { mutableStateOf(false) }
     Box {
-        IconButtonCa(CaIcons.ellipsis, stringResource(Res.string.chat_more), { menuOpen = true }, iconSize = 16, boxSize = 28)
+        IconButtonCa(CaIcons.ellipsis, stringResource(Res.string.chat_more), { menuOpen = true }, iconSize = 16, boxSize = 36)
         CaDropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             HeaderMenuItem(CaIcons.plus, stringResource(Res.string.chat_new)) { menuOpen = false; onNew() }
             HeaderMenuItem(CaIcons.clock, stringResource(Res.string.chat_history)) { menuOpen = false; onHistory() }
@@ -541,11 +601,17 @@ private fun ModelPicker(
     open: Boolean,
     onOpen: (Boolean) -> Unit,
     onPick: (String) -> Unit,
+    onManageProviders: (() -> Unit)? = null,
 ) {
     val provider = cfg.providers.firstOrNull { it.id == cfg.selectedProvider }
     val current = cfg.model.ifBlank { provider?.defaultModel ?: "" }
-    val label = models.firstOrNull { it.id == current }?.displayName
+    val modelName = models.firstOrNull { it.id == current }?.displayName
         ?: current.ifBlank { provider?.displayName ?: "" }
+    val label = if (provider != null && !modelName.equals(provider.displayName, ignoreCase = true)) {
+        "${provider.displayName} · $modelName"
+    } else {
+        modelName
+    }
     Box {
         Row(
             Modifier.clip(RoundedCornerShape(Ca.radius.pill)).clickable { onOpen(true) },
@@ -559,8 +625,22 @@ private fun ModelPicker(
         CaDropdownMenu(expanded = open, onDismissRequest = { onOpen(false) }) {
             models.forEach { model ->
                 DropdownMenuItem(
-                    text = { Text(model.displayName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface) },
+                    text = {
+                        Text(
+                            model.displayName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (model.id == current) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (model.id == current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        )
+                    },
                     onClick = { onPick(model.id); onOpen(false) },
+                )
+            }
+            if (onManageProviders != null) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(Res.string.chat_manage_keys), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) },
+                    leadingIcon = { Icon(CaIcons.key, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) },
+                    onClick = { onOpen(false); onManageProviders() },
                 )
             }
         }
@@ -859,10 +939,17 @@ private fun AssistantMessage(msg: UiAgentMessage) {
         val idle = lastStep == null ||
             (lastStep is Step.Tools && lastStep.calls.none { it.status == UiAgentToolStatus.RUNNING })
         if (msg.streaming && msg.waitUntilMs == null && idle) ThinkingStep(thinking = "", live = true)
-        // Copy the finished answer.
+        // Copy the finished answer + secondary usage summary on a single row.
         DisableSelection {
-            if (!msg.streaming && msg.text.isNotBlank()) CopyButton(msg.text)
-            if (!msg.streaming) msg.usage?.let { UsageFooter(it) }
+            if (!msg.streaming && (msg.text.isNotBlank() || msg.usage != null)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (msg.text.isNotBlank()) CopyButton(msg.text)
+                    msg.usage?.let { UsageFooter(it) }
+                }
+            }
         }
     }
 }

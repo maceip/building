@@ -23,14 +23,17 @@ object ProjectVersions {
         val ndk: Set<String>,
         val platforms: Set<String>,
         val cmake: Set<String>,
+        val nativeBuild: Boolean = false,
     )
 
     fun scan(root: Path): Scan {
         val texts = buildTexts(root)
         val properties = readIfExists(root.resolve("gradle.properties"))
+        val daemonJvm = readIfExists(root.resolve("gradle/gradle-daemon-jvm.properties"))
         val catalog = readIfExists(root.resolve("gradle/libs.versions.toml"))
         val wrapper = wrapperVersion(root)
         val majors = mutableListOf<Int>()
+        property(daemonJvm, "toolchainVersion")?.toIntOrNull()?.let { majors += it }
         property(properties, "jvm.toolchain.version")?.toIntOrNull()?.let { majors += it }
         Regex("""jvmToolchain\s*\(\s*(\d+)\s*\)""").findAll(texts).forEach { majors += it.groupValues[1].toInt() }
         Regex("""JavaLanguageVersion\.of\s*\(\s*(\d+)\s*\)""").findAll(texts).forEach { majors += it.groupValues[1].toInt() }
@@ -39,24 +42,24 @@ object ProjectVersions {
             buildTools += it.groupValues[1]
         }
         val ndk = linkedSetOf<String>()
-        Regex("""ndkVersion(?:\s*=|\s+)\"([0-9][0-9.]*)\"""").findAll(texts).forEach { ndk += it.groupValues[1] }
+        Regex("""ndkVersion\s*(?:=\s*|\(\s*)?["']([0-9][0-9.]*)["']""").findAll(texts).forEach { ndk += it.groupValues[1] }
         val platforms = linkedSetOf<String>()
         Regex("""compileSdk(?:Version)?(?:\s*=|\s+)\s*(\d{2})""").findAll(texts).forEach { platforms += it.groupValues[1] }
         Regex("""release\(\s*\"(\d+(?:\.\d+)?)\"\s*\)""").findAll(texts).forEach { platforms += it.groupValues[1] }
         val cmake = linkedSetOf<String>()
-        Regex("""version\s*=\s*\"(\d+\.\d+\.\d+)\"""").findAll(texts).forEach { match ->
-            val v = match.groupValues[1]
-            if (v.startsWith("3.") || v.startsWith("4.")) cmake += v
+        Regex("""cmake\s*\{[^{}]*?\bversion\s*(?:=\s*|\(\s*)?["'](\d+\.\d+\.\d+)["']""").findAll(texts).forEach { match ->
+            cmake += match.groupValues[1]
         }
         return Scan(
             gradleVersion = wrapper,
             agpVersion = agpVersion(texts, catalog),
             toolchainMajor = majors.maxOrNull(),
-            toolchainVendor = property(properties, "jvm.toolchain.vendor"),
+            toolchainVendor = property(daemonJvm, "toolchainVendor") ?: property(properties, "jvm.toolchain.vendor"),
             buildTools = buildTools,
             ndk = ndk,
             platforms = platforms,
             cmake = cmake,
+            nativeBuild = Regex("""(?:externalNativeBuild|ndkBuild)\s*[({]""").containsMatchIn(texts),
         )
     }
 

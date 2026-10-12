@@ -528,7 +528,7 @@ class ProjectManager private constructor(
         runCatching {
             Files.createDirectories(prefsFile.parent)
             val tmp = prefsFile.resolveSibling("${prefsFile.fileName}.tmp")
-            Files.newOutputStream(tmp).use { props.store(it, "CodeAssist preferences") }
+            Files.newOutputStream(tmp).use { props.store(it, "building preferences") }
             try {
                 Files.move(tmp, prefsFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
             } catch (_: AtomicMoveNotSupportedException) {

@@ -82,22 +82,35 @@ object ToolchainLayout {
         )
         copyTool(cmake, bin.resolve("cmake"))
         copyTool(ninja, bin.resolve("ninja"))
+        // CMake resolves its modules relative to its executable, even when installed in an SDK alias.
+        val share = cmake?.parent?.parent?.resolve("share")
+        if (share != null && Files.isDirectory(share)) {
+            val link = bin.parent.resolve("share")
+            Files.deleteIfExists(link)
+            Files.createSymbolicLink(link, share.toAbsolutePath())
+        }
     }
 
     /**
      * One build-tools payload under every version the project or its AGP names.
      * `aapt2` is a file whose name is `aapt2`. AGP's `Aapt2MavenUtils` rejects
      * `android.aapt2FromMavenOverride` unless the path's filename is `aapt2`, so the
-     * jniLibs `libaapt2.so` is copied here rather than passed under its packaged name.
+     * jniLibs `libaapt2.so` is linked here rather than passed under its packaged name.
      * `zipalign` is copied only when a binary was actually supplied.
      */
-    fun installBuildTools(androidHome: Path, version: String, aapt2: Path?, zipalign: Path?, aidl: Path?) {
+    fun installBuildTools(
+        androidHome: Path, version: String, aapt2: Path?, zipalign: Path?, aidl: Path?,
+        extras: Map<String, Path> = emptyMap(),
+    ) {
         val dir = androidHome.resolve("build-tools").resolve(version)
         Files.createDirectories(dir)
         dir.resolve("source.properties").writeText("Pkg.Revision = $version\n")
-        copyTool(aapt2, dir.resolve("aapt2"))
-        if (zipalign != null && Files.isRegularFile(zipalign)) copyTool(zipalign, dir.resolve("zipalign"))
+        if (aapt2 != null && Files.isRegularFile(aapt2)) linkTool(aapt2, dir.resolve("aapt2"))
+        // Static executables must run from the APK's installer-owned native library directory.
+        // A symlink preserves that location when the child exec interceptor resolves the path.
+        if (zipalign != null && Files.isRegularFile(zipalign)) linkTool(zipalign, dir.resolve("zipalign"))
         if (aidl != null && Files.isRegularFile(aidl)) copyTool(aidl, dir.resolve("aidl"))
+        for ((name, source) in extras) linkTool(source, dir.resolve(name))
     }
 
     fun aapt2Override(androidHome: Path, version: String): Path =
@@ -108,6 +121,13 @@ object ToolchainLayout {
         Files.createDirectories(dest.parent)
         Files.copy(source, dest, StandardCopyOption.REPLACE_EXISTING)
         dest.toFile().setExecutable(true)
+    }
+
+    private fun linkTool(source: Path, dest: Path) {
+        require(Files.isRegularFile(source)) { "Missing SDK file: $source" }
+        Files.createDirectories(dest.parent)
+        Files.deleteIfExists(dest)
+        Files.createSymbolicLink(dest, source.toAbsolutePath())
     }
 
     private fun firstExisting(vararg paths: Path): Path? = paths.firstOrNull { Files.exists(it) }

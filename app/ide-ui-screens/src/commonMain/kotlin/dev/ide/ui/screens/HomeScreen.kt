@@ -145,7 +145,7 @@ private fun HomeSidebar(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
-                "CodeAssist",
+                "building",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = c.onSurface,

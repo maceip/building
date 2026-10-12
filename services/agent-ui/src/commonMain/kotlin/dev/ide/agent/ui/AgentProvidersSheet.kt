@@ -79,34 +79,37 @@ internal fun AgentProvidersSheet(backend: IdeBackend, onClose: () -> Unit) {
                 // Opaque: a key field is the last thing that should be legible-depending-on-what-is-behind-it.
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.xl))
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(CaIcons.key, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(8.dp))
                 Text(
                     stringResource(Res.string.chat_providers_title),
-                    color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
                 )
-                IconButtonCa(CaIcons.close, stringResource(Res.string.chat_close), onClose, iconSize = 16, boxSize = 30)
+                IconButtonCa(CaIcons.close, stringResource(Res.string.chat_close), onClose, iconSize = 16, boxSize = 36)
             }
             Text(stringResource(Res.string.chat_providers_subtitle), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             Column(
                 Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 cfg.providers.forEach { provider ->
                     ProviderCard(
                         provider = provider,
                         selected = provider.id == cfg.selectedProvider,
+                        activeModel = cfg.model.ifBlank { provider.defaultModel },
                         gatewayBaseUrl = cfg.gatewayBaseUrl,
                         gatewayModel = cfg.gatewayModel,
                         gatewayCaCert = cfg.gatewayCaCert,
                         onSelect = { backend.agent.selectProvider(provider.id); cfg = backend.agent.config() },
-                        onSetKey = { backend.agent.setProviderKey(provider.id, it) },
-                        onSetGateway = { url, model, ca -> backend.agent.setGateway(url, model, ca) },
+                        onSetKey = { backend.agent.setProviderKey(provider.id, it); cfg = backend.agent.config() },
+                        onSetBaseUrl = { backend.agent.setProviderBaseUrl(provider.id, it); cfg = backend.agent.config() },
+                        onPickModel = { backend.agent.setModel(it); cfg = backend.agent.config() },
+                        onSetGateway = { url, model, ca -> backend.agent.setGateway(url, model, ca); cfg = backend.agent.config() },
                     )
                 }
             }
@@ -115,19 +118,54 @@ internal fun AgentProvidersSheet(backend: IdeBackend, onClose: () -> Unit) {
     }
 }
 
+private fun providerSubtitle(id: String): String = when (id) {
+    "antigravity" -> "Code Assist / Gemini SSE · Gemini 3.1 Pro, Claude 4.6, GPT-OSS"
+    "anthropic" -> "Messages API (/v1/messages) · Claude Opus 5, Sonnet 5, Haiku 4.5"
+    "openai" -> "Responses API (/v1/responses) · GPT-6.1 Sol, GPT-6 Astra, GPT-5"
+    "muse" -> "Responses & Messages API · Muse Spark 1.3, Wonder, Glimmer"
+    "mimo" -> "Chat & Anthropic Messages API · MiMo V2.6 Pro, Flash, UltraSpeed"
+    "gemini" -> "GenerateContent SSE · Gemini 3.8 Flash, 3.1 Pro"
+    "openrouter" -> "Unified Gateway · Claude, GPT-6.1 Sol, Muse, MiMo"
+    "gateway" -> "Custom OpenAI / Responses (/v1/responses) / Messages (/v1/messages)"
+    else -> ""
+}
+
+private fun providerKeyPlaceholder(id: String, defaultPlaceholder: String): String = when (id) {
+    "antigravity" -> "OAuth token (ya29... or 1//...) or AIza... key"
+    "anthropic" -> "sk-ant-..."
+    "openai" -> "sk-..."
+    "muse" -> "Meta AI key (muse-...)"
+    "mimo" -> "Xiaomi MiMo API key"
+    "openrouter" -> "sk-or-..."
+    else -> defaultPlaceholder
+}
+
+private fun providerBaseUrlHint(id: String): String = when (id) {
+    "antigravity" -> "Endpoint override (optional, default: https://cloudcode-pa.googleapis.com)"
+    "anthropic" -> "Endpoint override (optional, default: https://api.anthropic.com)"
+    "openai" -> "Endpoint override (optional, e.g. https://api.openai.com or .../v1/responses)"
+    "muse" -> "Endpoint override (optional, default: https://api.meta.ai)"
+    "mimo" -> "Endpoint override (optional, e.g. https://api.xiaomimimo.com/anthropic)"
+    else -> "Endpoint override (optional)"
+}
+
 @Composable
 private fun ProviderCard(
     provider: UiAgentProvider,
     selected: Boolean,
+    activeModel: String,
     gatewayBaseUrl: String,
     gatewayModel: String,
     gatewayCaCert: String,
     onSelect: () -> Unit,
     onSetKey: (String) -> Unit,
+    onSetBaseUrl: (String) -> Unit,
+    onPickModel: (String) -> Unit,
     onSetGateway: (String, String, String) -> Unit,
 ) {
     val isGateway = provider.id == "gateway"
     var key by remember(provider.id) { mutableStateOf(provider.apiKey) }
+    var customBaseUrl by remember(provider.id) { mutableStateOf(oneLine(provider.baseUrl)) }
     var baseUrl by remember(provider.id) { mutableStateOf(oneLine(gatewayBaseUrl)) }
     var model by remember(provider.id) { mutableStateOf(gatewayModel) }
     var caCert by remember(provider.id) { mutableStateOf(gatewayCaCert) }
@@ -139,6 +177,7 @@ private fun ProviderCard(
     // colour. Leaving them on onSurface is the classic pairing slip: legible in one theme, muddy in the other.
     val container = if (selected) scheme.secondaryContainer else scheme.surfaceContainerHigh
     val onContainer = if (selected) scheme.onSecondaryContainer else scheme.onSurface
+    val subtitle = providerSubtitle(provider.id)
     Column(
         Modifier.fillMaxWidth()
             .clip(shape)
@@ -146,18 +185,27 @@ private fun ProviderCard(
             .border(1.dp, if (selected) scheme.primary else scheme.outlineVariant, shape)
             .clickable(onClick = onSelect)
             .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             RadioDot(selected, onContainer)
-            Text(
-                provider.displayName,
-                color = onContainer, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
-            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    provider.displayName,
+                    color = onContainer, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                if (subtitle.isNotEmpty()) {
+                    Text(
+                        subtitle,
+                        color = if (selected) onContainer.copy(alpha = 0.8f) else scheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
             if (hasKey) {
-                // A solid tonal pair rather than a tinted wash of the status green: Material has no success
-                // container, and tertiary is the role that reads as a positive state at full opacity.
                 Chip(
                     stringResource(Res.string.chat_connected),
                     fill = scheme.tertiaryContainer,
@@ -166,7 +214,29 @@ private fun ProviderCard(
             }
         }
         if (selected) {
-            SecretField(key, stringResource(if (isGateway) Res.string.chat_api_key_optional else Res.string.chat_api_key)) { key = it; onSetKey(it) }
+            val defaultKeyPlaceholder = stringResource(if (isGateway) Res.string.chat_api_key_optional else Res.string.chat_api_key)
+            SecretField(key, providerKeyPlaceholder(provider.id, defaultKeyPlaceholder)) { key = it; onSetKey(it) }
+            if (!isGateway && provider.models.isNotEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    provider.models.take(4).forEach { m ->
+                        val isChosen = m.id == activeModel
+                        Chip(
+                            text = m.displayName,
+                            modifier = Modifier.clip(RoundedCornerShape(Ca.radius.pill)).clickable { onPickModel(m.id) },
+                            fill = if (isChosen) scheme.primary else scheme.surfaceContainerHighest,
+                            textColor = if (isChosen) scheme.onPrimary else scheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                PlainField(customBaseUrl, providerBaseUrlHint(provider.id)) {
+                    customBaseUrl = oneLine(it)
+                    onSetBaseUrl(customBaseUrl)
+                }
+            }
             if (isGateway) {
                 // A single-line field shows only the first line of a multi-line paste, so a pasted "URL + key" block
                 // looked like a clean URL while the rest still went into requests. Flatten it so all of it is visible.

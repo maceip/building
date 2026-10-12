@@ -261,6 +261,7 @@ fun ProjectsHomeScreen(
             showLegacyRecovery = showLegacyRecovery,
             onDismissLegacyRecovery = onDismissLegacyRecovery,
             bell = bell,
+            onOpenHub = onOpenHub,
             onOpenAccount = { sheet = HomeSheet.Account },
             onJoinDiscord = onJoinDiscord,
         )
@@ -296,23 +297,22 @@ fun ProjectsHomeScreen(
       ) {
         LazyColumn(
             Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 24.dp),
+            contentPadding = PaddingValues(bottom = 20.dp),
         ) {
-            item("header") { HomeHeader(onOpenAccount = { sheet = HomeSheet.Account }, bell = bell) }
+            item("header") {
+                HomeHeader(
+                    onOpenAccount = { sheet = HomeSheet.Account },
+                    onOpenHub = onOpenHub,
+                    bell = bell,
+                )
+            }
             item("actions") {
                 HomeActions(
                     onNewProject = onNewProject,
                     onClone = onCloneRepository,
-                    // Null on a host with no picker: the overflow then offers cloning alone rather than a
-                    // row that cannot do anything.
                     onImportProject = onImportProject ?: {},
                     canImport = onImportProject != null,
                 )
-            }
-            if (onJoinDiscord != null) {
-                item("community") {
-                    CommunityCard(onJoinDiscord, Modifier.padding(horizontal = 20.dp).padding(top = 16.dp))
-                }
             }
             item("segments") {
                 SegmentRow(
@@ -354,12 +354,8 @@ fun ProjectsHomeScreen(
 
             // A native ad below the project list — an idle "between tasks" spot, never over the actions.
             // Renders nothing unless ads are active (host available, enabled, not a supporter). Padded to
-            // the same 20 dp gutter as the cards, so it sits in the list rather than bleeding past it.
-            item("ad") { AdSlot(AdPlacement.PROJECTS, Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) }
-
-            if (mostRecent != null) {
-                item("resume") { ResumeCard(mostRecent, now) { onOpen(mostRecent) } }
-            }
+            // the same 16 dp gutter as the cards, so it sits in the list rather than bleeding past it.
+            item("ad") { AdSlot(AdPlacement.PROJECTS, Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) }
         }
       }
     }
@@ -414,46 +410,45 @@ private enum class HomeSheet { Account }
 @Composable
 private fun HomeHeader(
     onOpenAccount: () -> Unit,
+    onOpenHub: (() -> Unit)? = null,
     /** The notification bell, supplied by the host so this screen needs no backend of its own. */
     bell: (@Composable () -> Unit)? = null,
 ) {
     val c = MaterialTheme.colorScheme
     Row(
-        Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // No greeting eyebrow. "GOOD MORNING" above the largest text in the app spent the top of the
-        // first screen on something that says nothing about the user's projects.
         Text(
             stringResource(Res.string.home_your_projects),
             style = MaterialTheme.typography.titleLarge,
             color = c.onSurface,
-            modifier = Modifier.weight(1f).padding(top = 6.dp),
+            modifier = Modifier.weight(1f),
         )
         bell?.invoke()
-        // No account exists yet, so this is a glyph rather than a letter tile: initials would have to be
-        // invented. It becomes the real avatar once store sign-in lands.
-        // A neutral circle, the same account affordance the store header carries. It used to be a purple
-        // squircle, which made it the one saturated shape on an otherwise neutral page and did not match
-        // the equivalent control one tab away.
+        if (onOpenHub != null) {
+            SquareToneButton(
+                glyph = CaSymbols.settings,
+                contentDescription = stringResource(Res.string.home_settings_tools),
+                onClick = onOpenHub,
+                shape = CircleShape,
+                size = 40.dp,
+            )
+        }
         SquareToneButton(
             glyph = CaSymbols.accountCircle,
-            contentDescription = stringResource(Res.string.home_seg_projects),
+            contentDescription = stringResource(Res.string.home_account),
             onClick = onOpenAccount,
             shape = CircleShape,
-            size = 44.dp,
-            modifier = Modifier.padding(top = 2.dp),
+            size = 40.dp,
         )
     }
 }
 
 /**
- * The one way to start.
- *
- * There used to be three side by side: this button, an unlabelled cloud-download square, and a separate
- * import card carrying a two-line description. Three affordances for one intention, and two of them
- * unreadable at a glance. Cloning and importing are now the overflow beside it, so the primary action is
- * unambiguous and the other two are named rather than guessed at from a glyph.
+ * Primary project creation actions: New Project alongside direct 1-tap Clone (Git / GitHub) and Import
+ * affordances so users never have to hunt inside a hidden overflow menu to clone from GitHub.
  */
 @Composable
 private fun HomeActions(
@@ -462,10 +457,10 @@ private fun HomeActions(
     onImportProject: () -> Unit,
     canImport: Boolean,
 ) {
-    var menuOpen by remember { mutableStateOf(false) }
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         PrimaryActionButton(
             label = stringResource(Res.string.home_new_project),
@@ -473,26 +468,21 @@ private fun HomeActions(
             onClick = onNewProject,
             modifier = Modifier.weight(1f),
         )
-        Box {
-            SquareToneButton(
-                glyph = CaSymbols.moreVert,
-                contentDescription = stringResource(Res.string.home_more_actions),
-                onClick = { menuOpen = true },
+        if (onClone != null) {
+            HeaderButton(
+                glyph = CaSymbols.forkRight,
+                label = stringResource(Res.string.home_clone_repository),
+                primary = false,
+                onClick = onClone,
             )
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                if (canImport) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(Res.string.home_import_project)) },
-                        onClick = { menuOpen = false; onImportProject() },
-                    )
-                }
-                if (onClone != null) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(Res.string.home_clone_repository)) },
-                        onClick = { menuOpen = false; onClone() },
-                    )
-                }
-            }
+        }
+        if (canImport) {
+            SquareToneButton(
+                glyph = CaSymbols.folderOpen,
+                contentDescription = stringResource(Res.string.home_import_project),
+                onClick = onImportProject,
+                size = 40.dp,
+            )
         }
     }
 }
@@ -505,10 +495,15 @@ private fun SegmentRow(
     savedCount: Int,
     onSelect: (HomeSegment) -> Unit,
 ) {
+    // When Updates and Saved are empty and the user is on Projects, skip the redundant single-chip filter bar.
+    if (updateCount == 0 && savedCount == 0 && segment == HomeSegment.Projects) {
+        Spacer(Modifier.height(6.dp))
+        return
+    }
     LazyRow(
-        Modifier.fillMaxWidth().padding(top = 20.dp),
-        contentPadding = PaddingValues(horizontal = 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        Modifier.fillMaxWidth().padding(top = 12.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item("projects") {
             CountFilterChip(
@@ -518,9 +513,6 @@ private fun SegmentRow(
                 onClick = { onSelect(HomeSegment.Projects) },
             )
         }
-        // A filter with nothing behind it is not a filter. Both used to render as chips reading "0", which
-        // is three controls where one of them works. They come back the moment they have something in them,
-        // and stay while selected so the row cannot vanish under the user's own tap.
         if (updateCount > 0 || segment == HomeSegment.Updates) {
             item("updates") {
                 CountFilterChip(
@@ -620,11 +612,7 @@ private fun projectIconImage(
 private const val TILE_ICON_PIXELS = 192
 
 /**
- * One local project.
- *
- * The card's tint comes from its icon tile, not its background — the background stays a neutral container
- * so a long list does not turn into a colour chart, and the rotation shows up in the tiles and the faint
- * watermark instead.
+ * One local project row — flatter, uniform card shape, compact vertical padding so more projects fit on screen.
  */
 @Composable
 private fun LocalProjectCard(
@@ -654,37 +642,32 @@ private fun LocalProjectCard(
         color = c.surfaceContainerLow,
         contentColor = c.onSurface,
         interactionSource = interaction,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 10.dp)
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 6.dp)
             .pressScale(interaction),
     ) {
         Row(
-            Modifier.padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+            Modifier.padding(start = 12.dp, end = 6.dp, top = 9.dp, bottom = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (icon != null) {
-                // On the tonal tile rather than bare: a launcher icon is very often transparent outside
-                // its shape, and the tile is what gives the row its edge either way.
                 Box(
-                    Modifier.size(46.dp).clip(tileShape(index)).background(pair.container),
+                    Modifier.size(38.dp).clip(tileShape(index)).background(pair.container),
                     contentAlignment = Alignment.Center,
                 ) {
                     Image(icon, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 }
             } else {
-                TonalTile(glyph, pair, tileShape(index), size = 46.dp)
+                TonalTile(glyph, pair, tileShape(index), size = 38.dp)
             }
             Column(Modifier.weight(1f)) {
                 Text(
                     project.name,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     color = c.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                // One line, not three rows. The card used to carry the path, two chips, the opened-ago
-                // text, a chevron AND two buttons; the chevron and the Open button did the same thing,
-                // which is the "which do I tap" problem users reported.
                 Text(
                     listOfNotNull(
                         moduleLabel(project.moduleCount),
@@ -705,8 +688,8 @@ private fun LocalProjectCard(
                         CaIcons.ellipsis,
                         stringResource(Res.string.home_more_actions),
                         onClick = { menuOpen = true },
-                        iconSize = 20,
-                        boxSize = 40,
+                        iconSize = 18,
+                        boxSize = 36,
                     )
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         if (onSecondary != null) {
@@ -1047,7 +1030,7 @@ private fun kindLabel(project: ProjectInfo): String = when {
     // A cloned folder nothing recognized is listed so the user can reach it, but calling it a CodeAssist
     // project would be the same claim that made a clone confusing in the first place.
     project.unrecognized -> "Files"
-    else -> "CodeAssist"
+    else -> "building"
 }
 
 private fun moduleLabel(count: Int): String = if (count == 1) "1 module" else "$count modules"
@@ -1133,6 +1116,7 @@ private fun WideProjectsHome(
     showLegacyRecovery: Boolean,
     onDismissLegacyRecovery: () -> Unit,
     bell: (@Composable () -> Unit)?,
+    onOpenHub: (() -> Unit)?,
     onOpenAccount: () -> Unit,
     onJoinDiscord: (() -> Unit)?,
 ) {
@@ -1150,9 +1134,9 @@ private fun WideProjectsHome(
         val showKind = maxWidth >= ProjectsKindColumnBreakpoint
         Column(Modifier.widthIn(max = ProjectsWideMaxWidth).fillMaxSize().padding(horizontal = 28.dp)) {
             Row(
-                Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 16.dp),
+                Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
                     stringResource(Res.string.home_your_projects),
@@ -1169,6 +1153,15 @@ private fun WideProjectsHome(
                     HeaderButton(CaSymbols.forkRight, stringResource(Res.string.home_clone_repository), primary = false, onClick = onCloneRepository)
                 }
                 HeaderButton(CaSymbols.add, stringResource(Res.string.home_new_project), primary = true, onClick = onNewProject)
+                if (onOpenHub != null) {
+                    SquareToneButton(
+                        glyph = CaSymbols.settings,
+                        contentDescription = stringResource(Res.string.home_settings_tools),
+                        onClick = onOpenHub,
+                        shape = CircleShape,
+                        size = 40.dp,
+                    )
+                }
                 if (!sidebarShown) {
                     bell?.invoke()
                     SquareToneButton(
@@ -1176,11 +1169,10 @@ private fun WideProjectsHome(
                         contentDescription = stringResource(Res.string.home_account),
                         onClick = onOpenAccount,
                         shape = CircleShape,
-                        size = 44.dp,
+                        size = 40.dp,
                     )
                 }
             }
-            if (onJoinDiscord != null) CommunityCard(onJoinDiscord, Modifier.padding(bottom = 16.dp))
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,

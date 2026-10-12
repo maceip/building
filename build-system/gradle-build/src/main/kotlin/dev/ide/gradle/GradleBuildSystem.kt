@@ -163,7 +163,7 @@ class GradleSessionTask(
             val variant = chosen?.variant
             if (variant != null) {
                 apk = findApk(projectDir, variant.moduleDir, variant.name)
-                applicationId = variant.namespace
+                applicationId = variant.applicationId
             }
             if (canceled.get()) throw java.util.concurrent.CancellationException("canceled")
             TaskResult.Success

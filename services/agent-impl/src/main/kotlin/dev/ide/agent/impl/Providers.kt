@@ -8,8 +8,11 @@ import dev.ide.agent.SimpleLlmProviderRegistry
 object AgentProviders {
     fun defaults(transport: LlmTransport = OkHttpLlmTransport()): List<LlmProvider> =
         listOf(
+            AntigravityProvider(transport),
             AnthropicProvider(transport),
             OpenAiProvider(transport),
+            MetaMuseProvider(transport),
+            XiaomiMimoProvider(transport),
             GeminiProvider(transport),
             OpenRouterProvider(transport),
         )

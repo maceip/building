@@ -93,7 +93,8 @@ class MainActivity : ComponentActivity() {
         // Gather UMP consent BEFORE initializing the Ads SDK (mediation + EEA/UK requirement). Failure resolves
         // too, so a consent hiccup never blocks the IDE. The SDK itself starts later, once launch has settled
         // (see the LaunchedEffect below the ad host).
-        adConsent.gather(this) { adConsentResolved.value = true }
+        if (BuildConfig.ADS_ENABLED) adConsent.gather(this) { adConsentResolved.value = true }
+        else adConsentResolved.value = true
 
         setContent {
             var backend by remember { mutableStateOf<IdeBackend?>(null) }
@@ -268,7 +269,7 @@ class MainActivity : ComponentActivity() {
             // wait (see AndroidAdHost.start); one that is gone by then never requests.
             val engineUp = backend != null
             LaunchedEffect(engineUp, adConsentResolved.value) {
-                if (!engineUp || !adConsentResolved.value) return@LaunchedEffect
+                if (!BuildConfig.ADS_ENABLED || !engineUp || !adConsentResolved.value) return@LaunchedEffect
                 delay(ADS_STARTUP_DELAY_MS)
                 if (adConsent.canRequestAds) initAds(applicationContext)
                 adHost.start()
@@ -322,7 +323,7 @@ class MainActivity : ComponentActivity() {
                 )
 
                 error != null -> Splash("Failed to start: $error")
-                else -> Splash("Starting CodeAssist…")
+                else -> Splash("Starting building…")
             }
         }
     }

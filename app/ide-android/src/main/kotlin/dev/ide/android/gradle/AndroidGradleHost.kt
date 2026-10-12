@@ -8,6 +8,7 @@ import dev.ide.gradle.GradleHost
 import dev.ide.gradle.JdkSelection
 import dev.ide.gradle.Prefix
 import dev.ide.gradle.PrefixProbe
+import dev.ide.gradle.NdkPackages
 import dev.ide.gradle.ToolingClient
 import java.io.File
 import java.net.URL
@@ -31,6 +32,10 @@ class AndroidGradleHost(private val context: Context) : GradleHost {
 
     private val app = context.applicationContext
     private val files = app.filesDir.toPath()
+
+    init {
+        Files.createDirectories(files.resolve("tmp"))
+    }
 
     override val android: Boolean = true
 
@@ -66,11 +71,27 @@ class AndroidGradleHost(private val context: Context) : GradleHost {
 
     override fun prefix(): Path = files.resolve("usr")
 
-    override fun aapt2(): Path? = native("libaapt2.so")
+    // Gradle's child launcher uses the system linker; it requires a dynamic PIE executable.
+    // The static APK executable remains available to the separate ART build pipeline.
+    override fun aapt2(): Path? = prefixBin("aapt2")
 
-    override fun zipalign(): Path? = native("libzipalign.so")
+    override fun zipalign(): Path? = native("libsdk-zipalign.so")
 
     override fun aidl(): Path? = prefixBin("aidl")
+
+    override fun buildToolsExtras(): Map<String, Path> {
+        val stubs = files.resolve("tooling/core-lambda-stubs.jar")
+        Files.createDirectories(stubs.parent)
+        app.assets.open("core-lambda-stubs.jar").use {
+            Files.copy(it, stubs, StandardCopyOption.REPLACE_EXISTING)
+        }
+        return linkedMapOf(
+            "aapt" to checkNotNull(native("libsdk-aapt.so")) { "SDK aapt is missing from the APK" },
+            "dexdump" to checkNotNull(native("libsdk-dexdump.so")) { "SDK dexdump is missing from the APK" },
+            "split-select" to checkNotNull(native("libsdk-split-select.so")) { "SDK split-select is missing from the APK" },
+            "core-lambda-stubs.jar" to stubs,
+        )
+    }
 
     override fun clangDriver(): Path? = native("libllvmtools.so")
 
@@ -79,7 +100,14 @@ class AndroidGradleHost(private val context: Context) : GradleHost {
         return if (Files.isDirectory(out)) out else null
     }
 
+    override fun installNdk(revision: String): Boolean {
+        NdkPackages.install(androidHome(), revision, prefix())
+        return true
+    }
+
     override fun cmake(): Path? = prefixBin("cmake")
+
+    override fun cmakeVersion(): String = Prefix.catalog().packages.first { it.name == "cmake" }.version
 
     override fun ninja(): Path? = prefixBin("ninja")
 

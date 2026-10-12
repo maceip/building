@@ -84,7 +84,7 @@ class GradleModelImporter : ProjectImporter {
         if (version > DUMP_VERSION) {
             return SyncOutcome.failed(
                 "$DUMP_PATH is version $version, newer than this build understands ($DUMP_VERSION). " +
-                    "Update CodeAssist, or re-run generateNativeModel with a matching version."
+                    "Update building, or re-run generateNativeModel with a matching version."
             )
         }
 

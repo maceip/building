@@ -169,7 +169,7 @@ fun IconButtonCa(
     modifier: Modifier = Modifier,
     active: Boolean = false,
     iconSize: Int = 20,
-    boxSize: Int = 34,
+    boxSize: Int = 38,
     tint: Color? = null,
 ) {
     val scheme = MaterialTheme.colorScheme

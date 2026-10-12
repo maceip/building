@@ -170,12 +170,17 @@ internal fun MoreSheetContent(
 ) {
     UiPluginHost.ensureLoaded()
     val actions = UiActionRegistry.forPlace(UiActionPlaces.MORE_MENU, host)
+    val closeAction = UiActionRegistry.forPlace(UiActionPlaces.COMMAND_PALETTE, host)
+        .firstOrNull { it.id == "ui.closeProject" }
     // Scrollable so every row is reachable when the sheet is short, e.g. the soft keyboard is up and the sheet
     // has been lifted above it (issue #994).
     Column(modifier.verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp)) {
         Text(stringResource(Res.string.more), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(start = 6.dp, top = 4.dp, bottom = 10.dp))
         actions.forEach { a ->
+            MoreRow(actionIcon(a.iconId), localizedUiActionText(a), localizedUiActionDescription(a) ?: "") { a.perform(host) }
+        }
+        closeAction?.let { a ->
             MoreRow(actionIcon(a.iconId), localizedUiActionText(a), localizedUiActionDescription(a) ?: "") { a.perform(host) }
         }
     }

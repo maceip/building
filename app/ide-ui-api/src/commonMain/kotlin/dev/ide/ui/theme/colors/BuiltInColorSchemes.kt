@@ -19,7 +19,7 @@ object BuiltInColorSchemes {
 
     val DEFAULT = EditorColorScheme(
         id = DEFAULT_ID,
-        name = "CodeAssist",
+        name = "building",
         builtIn = true,
     )
 

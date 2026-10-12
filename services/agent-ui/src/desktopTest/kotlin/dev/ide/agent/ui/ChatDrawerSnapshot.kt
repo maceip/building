@@ -180,14 +180,49 @@ class ChatDrawerSnapshot {
             override fun config(): UiAgentConfig = UiAgentConfig(
                 providers = listOf(
                     UiAgentProvider(
+                        "antigravity", "Antigravity (Google)",
+                        listOf(
+                            UiAgentModel("gemini-3.1-pro", "Gemini 3.1 Pro"),
+                            UiAgentModel("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+                        ),
+                        "gemini-3.1-pro", "ag-live", "https://cloudcode-pa.googleapis.com",
+                    ),
+                    UiAgentProvider(
+                        "muse", "Facebook / Meta Muse",
+                        listOf(
+                            UiAgentModel("muse-spark-1.3", "Muse Spark 1.3"),
+                            UiAgentModel("muse-wonder-1.2", "Muse Wonder 1.2"),
+                        ),
+                        "muse-spark-1.3", "", "",
+                    ),
+                    UiAgentProvider(
                         "anthropic", "Anthropic (Claude)",
-                        listOf(UiAgentModel("claude-opus-5", "Claude Opus 5")), "claude-opus-5", "sk-live",
+                        listOf(UiAgentModel("claude-opus-5", "Claude Opus 5")),
+                        "claude-opus-5", "sk-live", "",
+                    ),
+                    UiAgentProvider(
+                        "openai", "OpenAI (GPT-6.1 Sol / GPT-5)",
+                        listOf(
+                            UiAgentModel("gpt-6.1-sol", "GPT-6.1 Sol"),
+                            UiAgentModel("gpt-6-astra", "GPT-6 Astra"),
+                            UiAgentModel("gpt-5.4", "GPT-5.4"),
+                        ),
+                        "gpt-6.1-sol", "sk-openai", "",
+                    ),
+                    UiAgentProvider(
+                        "mimo", "Xiaomi MiMo",
+                        listOf(
+                            UiAgentModel("mimo-v2.6-pro", "MiMo V2.6 Pro"),
+                            UiAgentModel("mimo-v2.6-flash", "MiMo V2.6 Flash"),
+                        ),
+                        "mimo-v2.6-pro", "", "",
                     ),
                 ),
-                selectedProvider = "anthropic",
-                model = "claude-opus-5",
+                selectedProvider = "openai",
+                model = "gpt-6.1-sol",
                 configured = true,
                 mode = UiAgentPermissionMode.AUTO_ACCEPT,
+                effort = "high",
             )
 
             override fun refreshModels() {}

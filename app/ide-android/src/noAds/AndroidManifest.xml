@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_AD_ID" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_ATTRIBUTION" tools:node="remove" />
+    <uses-permission android:name="android.permission.ACCESS_ADSERVICES_TOPICS" tools:node="remove" />
+    <application>
+        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" tools:node="remove" />
+        <provider android:name="com.google.android.gms.ads.MobileAdsInitProvider" tools:node="remove" />
+        <provider android:name="com.mbridge.msdk.config.component.status.MBComponentLifecycleProvider" tools:node="remove" />
+    </application>
+</manifest>

@@ -705,14 +705,6 @@ private fun ProblemsTab(diagnostics: List<BuildDiagnosticUi>, onOpen: (BuildDiag
                 filter == ProblemFilter.Warnings
             ) { filter = ProblemFilter.Warnings }
             Spacer(Modifier.weight(1f))
-            // In-tab copy-all so Problems can be copied without hunting the header control (#1599).
-            if (diagnostics.isNotEmpty()) {
-                CopyButton(
-                    stringResource(BuildTab.Problems.label),
-                    provide = { renderProblemsForCopy(diagnostics) },
-                    boxSize = 30,
-                )
-            }
         }
         if (shown.isEmpty()) {
             EmptyState(
@@ -888,23 +880,20 @@ private fun LogTab(log: List<BuildLogLine>, running: Boolean) {
         // Wide: one row, filters on the left and a capped search field with the actions on the right. Phone: the
         // search row above the filter row.
         Row(
-            Modifier.fillMaxWidth().chromePadding().padding(vertical = 6.dp),
+            Modifier.fillMaxWidth().chromePadding().padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(if (wide) 6.dp else 8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             if (wide) {
                 levelChips()
                 Spacer(Modifier.weight(1f))
                 SearchField(query, { query = it }, Modifier.width(WideSearchWidth))
             } else {
+                val entries = LogLevelFilter.entries
+                ConsoleChip(stringResource(level.label), level != LogLevelFilter.All) {
+                    level = entries[(entries.indexOf(level) + 1) % entries.size]
+                }
                 SearchField(query, { query = it }, Modifier.weight(1f))
-            }
-            if (log.isNotEmpty()) {
-                CopyButton(
-                    stringResource(BuildTab.Log.label),
-                    provide = { log.joinToString("\n", transform = ::renderLogForCopy) },
-                    boxSize = 30,
-                )
             }
             IconButtonCa(
                 CaIcons.layers, if (grouped) stringResource(Res.string.buildc_ungroup) else stringResource(Res.string.buildc_group_by_task),
@@ -917,13 +906,6 @@ private fun LogTab(log: List<BuildLogLine>, running: Boolean) {
                 onClick = { verbose = !verbose }, boxSize = 30, iconSize = 16,
                 tint = if (verbose) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-        if (!wide) {
-            Row(
-                Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) { levelChips() }
         }
         Box(Modifier.weight(1f).fillMaxWidth().consoleListSurface()) {
             if (filtered.isEmpty()) {
@@ -1196,11 +1178,11 @@ private fun LogcatBody(
 
     val wide = LocalWideConsole.current && !fullScreen
     Column(Modifier.fillMaxSize()) {
-        // Wide: status and level filters on the left, a capped search field with the actions on the right.
+        // Single toolbar row on both wide and phone layouts.
         Row(
-            Modifier.fillMaxWidth().then(if (wide) Modifier.chromePadding() else Modifier).padding(vertical = 6.dp),
+            Modifier.fillMaxWidth().then(if (wide) Modifier.chromePadding() else Modifier).padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             LogcatStatus(appLog)
             if (wide) {
@@ -1208,6 +1190,10 @@ private fun LogcatBody(
                 Spacer(Modifier.weight(1f))
                 SearchField(query, onQuery, Modifier.width(WideSearchWidth))
             } else {
+                val entries = LogLevelFilter.entries
+                ConsoleChip(stringResource(level.label), level != LogLevelFilter.All) {
+                    onLevel(entries[(entries.indexOf(level) + 1) % entries.size])
+                }
                 SearchField(query, onQuery, Modifier.weight(1f))
             }
             // Copy-all: the WHOLE buffer, not the filtered view (same rule as the other tabs' copy — the
@@ -1230,14 +1216,6 @@ private fun LogcatBody(
                 CaIcons.close, stringResource(Res.string.clear), onClick = onClear,
                 boxSize = 30, iconSize = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-        if (!wide) {
-            Row(
-                Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                LogLevelFilter.entries.forEach { f -> ConsoleChip(stringResource(f.label), f == level) { onLevel(f) } }
-            }
         }
         Box(
             if (wide) Modifier.weight(1f).fillMaxWidth().consoleListSurface()

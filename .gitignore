@@ -20,6 +20,14 @@ local.properties
 # Release signing — never commit
 keystore/
 keystore.properties
+*.jks
+*.keystore
+*.p12
+*.pfx
+.env
+.env.*
+!.env.production.example
+__pycache__/
 
 # Local agent secrets — never commit
 agent.properties

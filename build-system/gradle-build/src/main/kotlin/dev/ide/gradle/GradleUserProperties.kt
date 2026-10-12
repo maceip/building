@@ -20,7 +20,12 @@ object GradleUserProperties {
         return quarterMb.coerceIn(256L, 2048L).toInt()
     }
 
-    fun jvmArgs(ramBytes: Long): String = "-Xmx${heapMb(ramBytes)}m -XX:MaxMetaspaceSize=256m -Dfile.encoding=UTF-8"
+    fun jvmArgs(ramBytes: Long): String {
+        val heap = heapMb(ramBytes)
+        // Kotlin convention builds load AGP and compiler classes into this same JVM.
+        val metaspace = (heap / 2).coerceIn(256, 1024)
+        return "-Xmx${heap}m -XX:MaxMetaspaceSize=${metaspace}m -Dfile.encoding=UTF-8"
+    }
 
     fun write(
         gradleUserHome: Path,

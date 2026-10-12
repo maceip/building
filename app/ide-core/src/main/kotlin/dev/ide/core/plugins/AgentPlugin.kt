@@ -114,12 +114,21 @@ internal object AgentSettingsPage : SettingsPage {
             description = "Which AI provider the agent uses.",
             default = "anthropic",
             options = listOf(
+                SettingControl.Choice.Option("antigravity", "Antigravity"),
                 SettingControl.Choice.Option("anthropic", "Anthropic (Claude)"),
-                SettingControl.Choice.Option("openai", "OpenAI"),
+                SettingControl.Choice.Option("openai", "OpenAI (GPT-6.1 Sol)"),
+                SettingControl.Choice.Option("muse", "Meta Muse"),
+                SettingControl.Choice.Option("mimo", "Xiaomi MiMo"),
                 SettingControl.Choice.Option("gemini", "Google Gemini"),
                 SettingControl.Choice.Option("openrouter", "OpenRouter"),
                 SettingControl.Choice.Option("gateway", "Custom gateway"),
             ),
+        ),
+        SettingControl.Text(
+            key = "antigravityKey",
+            title = "Antigravity token / key",
+            description = "OAuth token (<token> or <token>|<projectId>) or Google AI key for Antigravity.",
+            placeholder = "ya29... or 1//...",
         ),
         SettingControl.Text(
             key = "anthropicKey",
@@ -130,8 +139,20 @@ internal object AgentSettingsPage : SettingsPage {
         SettingControl.Text(
             key = "openaiKey",
             title = "OpenAI API key",
-            description = "Used when the provider is OpenAI (or an OpenAI-compatible gateway).",
+            description = "Used when the provider is OpenAI (GPT-6.1 Sol, GPT-5, etc.).",
             placeholder = "sk-...",
+        ),
+        SettingControl.Text(
+            key = "museKey",
+            title = "Meta Muse API key",
+            description = "Used when the provider is Meta Muse (Muse Spark 1.3, Muse Wonder, Muse Glimmer).",
+            placeholder = "muse-...",
+        ),
+        SettingControl.Text(
+            key = "mimoKey",
+            title = "Xiaomi MiMo API key",
+            description = "Used when the provider is Xiaomi MiMo (MiMo V2.6 Pro, Flash, UltraSpeed).",
+            placeholder = "mimo-...",
         ),
         SettingControl.Text(
             key = "geminiKey",
@@ -156,9 +177,9 @@ internal object AgentSettingsPage : SettingsPage {
             title = "Reasoning effort",
             description = "How hard the model thinks, and the main cost lever after caching: routine work is " +
                 "much cheaper at Low or Medium and rarely worse, while High and above earn their cost on real " +
-                "coding tasks. Every provider honours it. Pick None for a newer OpenAI reasoning model, which " +
-                "rejects function tools combined with reasoning and so cannot use the agent's tools otherwise. " +
-                "Default sends nothing and leaves each provider's own default in place.",
+                "coding tasks. Mandatory-reasoning models (GPT-6.1 Sol, Meta Muse Spark) automatically clamp " +
+                "None/Minimal to their lowest supported effort and route over /v1/responses or /v1/messages when " +
+                "combined with tools.",
             default = AgentBackend.REASONING_EFFORT_DEFAULT,
             options = listOf(
                 SettingControl.Choice.Option(AgentBackend.REASONING_EFFORT_DEFAULT, "Default"),

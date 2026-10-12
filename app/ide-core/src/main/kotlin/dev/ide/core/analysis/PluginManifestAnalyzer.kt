@@ -44,7 +44,7 @@ class PluginManifestAnalyzer(
 ) : FileAnalyzer {
 
     override val id = AnalyzerId("codeassistPluginManifest")
-    override val displayName = "CodeAssist plugin manifest problems"
+    override val displayName = "building plugin manifest problems"
     override val languages = setOf(LanguageId("text"))
     override val defaultSeverity = Severity.ERROR
 
@@ -84,7 +84,7 @@ class PluginManifestAnalyzer(
             sink.report(
                 ranges.value("minHostVersion"),
                 Severity.ERROR,
-                "Requires CodeAssist $min or newer; this IDE is $host, so it would not load here.",
+                "Requires building $min or newer; this IDE is $host, so it would not load here.",
                 CODE,
             )
         }

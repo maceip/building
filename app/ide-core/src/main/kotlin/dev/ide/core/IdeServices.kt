@@ -1719,7 +1719,7 @@ class IdeServices private constructor(
     /** Write a per-project generic-settings value. */
     fun setProjectPref(key: String, value: String) {
         val props = loadProps(projectSettingsFile).apply { setProperty(key, value) }
-        storeProps(projectSettingsFile, props, "CodeAssist project settings")
+        storeProps(projectSettingsFile, props, "building project settings")
     }
 
     // --- active build variant (per module) -----------------------------------------------------
@@ -1775,7 +1775,7 @@ class IdeServices private constructor(
         for ((id, sev) in profile.severityOverrides) if (id !in profile.disabled) props.setProperty(
             id.value, sev.name
         )
-        storeProps(inspectionsFile, props, "CodeAssist inspection profile")
+        storeProps(inspectionsFile, props, "building inspection profile")
     }
 
     private fun loadInspectionProfile(): AnalysisProfile {

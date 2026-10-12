@@ -170,7 +170,7 @@ fun CodeAssistApp(
                 ) {
                     Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                         // Desktop with a custom title bar: the title strip for screens that draw none of their own.
-                        WindowTitleStrip(title = "CodeAssist")
+                        WindowTitleStrip(title = "building")
                         Box(Modifier.weight(1f).fillMaxWidth()) {
                             AppNavGraph(
                                 app = app,

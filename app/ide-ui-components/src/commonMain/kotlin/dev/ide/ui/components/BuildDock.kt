@@ -64,7 +64,7 @@ import kotlin.math.abs
 import kotlin.time.Duration.Companion.milliseconds
 
 /** The dock's collapsed (bottom-nav) height. */
-val DockBarHeight = 60.dp
+val DockBarHeight = 48.dp
 
 /** Fraction of the available height the half (console) detent rests at. */
 private const val HalfDetentFraction = 0.6f

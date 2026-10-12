@@ -40,26 +40,36 @@ class AnthropicProvider(private val transport: LlmTransport) : LlmProvider {
     override val managesContext: Boolean = true
 
     override fun client(config: ProviderConfig): LlmClient = LlmClient { request ->
-        val base = config.baseUrl?.trimEnd('/') ?: DEFAULT_BASE
+        val base = normalizeBase(config.baseUrl) ?: DEFAULT_BASE
+        val official = base == DEFAULT_BASE || base.contains("anthropic.com", ignoreCase = true)
         val sse = SseRequest(
             url = "$base/v1/messages",
             headers = buildMap {
                 put("x-api-key", config.apiKey)
+                if (!official && config.apiKey.isNotBlank()) {
+                    put("Authorization", "Bearer ${config.apiKey.trim()}")
+                }
                 put("anthropic-version", ANTHROPIC_VERSION)
                 put("content-type", "application/json")
-                betaHeader(request)?.let { put("anthropic-beta", it) }
+                betaHeader(request, official)?.let { put("anthropic-beta", it) }
             },
-            jsonBody = buildBody(request),
+            jsonBody = buildBody(request, official),
             caCertificatePem = config.caCertificatePem,
         )
         stream(sse)
     }
 
     override suspend fun listModels(config: ProviderConfig): List<LlmModelInfo> = runCatching {
-        val base = config.baseUrl?.trimEnd('/') ?: DEFAULT_BASE
+        val base = normalizeBase(config.baseUrl) ?: DEFAULT_BASE
+        val official = base == DEFAULT_BASE || base.contains("anthropic.com", ignoreCase = true)
+        val headers = buildMap {
+            put("x-api-key", config.apiKey)
+            if (!official && config.apiKey.isNotBlank()) put("Authorization", "Bearer ${config.apiKey.trim()}")
+            put("anthropic-version", ANTHROPIC_VERSION)
+        }
         val body = transport.get(
             "$base/v1/models?limit=1000",
-            mapOf("x-api-key" to config.apiKey, "anthropic-version" to ANTHROPIC_VERSION),
+            headers,
             config.caCertificatePem,
         )
         val data = AgentJson.parseToJsonElement(body).asObj()?.get("data").asArr() ?: return@runCatching models
@@ -69,7 +79,7 @@ class AnthropicProvider(private val transport: LlmTransport) : LlmProvider {
                 LlmModelInfo(
                     modelId,
                     m["display_name"].asStr() ?: modelId,
-                    supportsThinking = modelId.contains("opus") || modelId.contains("sonnet"),
+                    supportsThinking = modelId.contains("opus") || modelId.contains("sonnet") || modelId.contains("pro") || modelId.contains("sol"),
                 )
             }
             .ifEmpty { models }
@@ -87,26 +97,49 @@ class AnthropicProvider(private val transport: LlmTransport) : LlmProvider {
     private fun modelSupportsThinking(model: String): Boolean =
         models.firstOrNull { it.id == model }?.supportsThinking ?: true
 
-    private fun buildBody(request: LlmRequest): String = buildJsonObject {
+    private fun buildBody(request: LlmRequest, official: Boolean = true): String = buildJsonObject {
         put("model", request.model)
-        put("max_tokens", request.maxTokens)
+        val thinkingOn = request.thinking && modelSupportsThinking(request.model) && request.effort != LlmEffort.NONE
+        val budget = if (!official && thinkingOn) thinkingBudget(request) else null
+        val maxTokens = if (budget != null) maxOf(request.maxTokens, budget + 4_096) else request.maxTokens
+        put("max_tokens", maxTokens)
         put("stream", true)
         // Prompt caching: the system prompt, the tool set, and the conversation prefix are re-sent verbatim
         // on every step of a turn, so a cache breakpoint on each lets the API bill them once and reuse them
         // (big token + latency win over a long agentic loop). Breakpoints on a prefix below the provider
         // minimum are simply ignored, so this never hurts.
-        request.system?.takeIf { it.isNotBlank() }?.let { put("system", systemBlocks(it)) }
-        if (request.thinking && modelSupportsThinking(request.model)) {
-            put("thinking", buildJsonObject { put("type", "adaptive") })
+        request.system?.takeIf { it.isNotBlank() }?.let { put("system", systemBlocks(it, official)) }
+        if (thinkingOn) {
+            if (official) {
+                put("thinking", buildJsonObject { put("type", "adaptive") })
+            } else {
+                put("thinking", buildJsonObject {
+                    put("type", "enabled")
+                    put("budget_tokens", budget ?: 8_192)
+                })
+            }
         }
-        effortLevel(request.effort)?.let { level ->
-            put("output_config", buildJsonObject { put("effort", level) })
+        if (official) {
+            effortLevel(request.effort, request.model)?.let { level ->
+                put("output_config", buildJsonObject { put("effort", level) })
+            }
         }
-        val toolsArray = toolBlocks(request.tools, request.webSearch)
+        val toolsArray = toolBlocks(request.tools, request.webSearch && official, official)
         if (toolsArray.isNotEmpty()) put("tools", toolsArray)
-        put("context_management", contextManagement(request.webSearch))
+        if (official) {
+            put("context_management", contextManagement(request.webSearch))
+        }
         put("messages", cacheLastBlock(messages(request.messages, request.model)))
     }.toString()
+
+    private fun thinkingBudget(request: LlmRequest): Int = request.thinkingBudget ?: when (request.effort) {
+        LlmEffort.NONE, LlmEffort.MINIMAL -> 1_024
+        LlmEffort.LOW -> 2_048
+        LlmEffort.MEDIUM -> 8_192
+        LlmEffort.HIGH -> 16_384
+        LlmEffort.XHIGH, LlmEffort.MAX -> 24_576
+        else -> 8_192
+    }
 
     /**
      * Server-side trimming of a long conversation: once the prompt passes [CLEAR_TRIGGER_TOKENS], the oldest
@@ -135,19 +168,22 @@ class AnthropicProvider(private val transport: LlmTransport) : LlmProvider {
      * dialect's tool-use constraint and have no counterpart here, so they become `low` rather than switching
      * thinking off — disabled thinking on this family has documented failure modes in a tool loop, where the
      * model can write a tool call into its visible text and the call simply never runs.
+     * `xhigh` is an OpenAI-only level and is mapped to `high` (`max` is valid on Opus).
      */
-    private fun effortLevel(effort: String?): String? = when (effort?.takeIf { it.isNotBlank() }) {
+    private fun effortLevel(effort: String?, model: String = ""): String? = when (effort?.takeIf { it.isNotBlank() }) {
         null -> null
         LlmEffort.NONE, LlmEffort.MINIMAL -> LlmEffort.LOW
+        LlmEffort.XHIGH -> LlmEffort.HIGH
+        LlmEffort.MAX -> if (model.contains("opus", ignoreCase = true) || model.contains("sol", ignoreCase = true)) LlmEffort.MAX else LlmEffort.HIGH
         else -> effort
     }
 
     /** The system prompt as a single cached text block, on the long TTL (see [ephemeral]). */
-    private fun systemBlocks(text: String): JsonArray = buildJsonArray {
+    private fun systemBlocks(text: String, official: Boolean = true): JsonArray = buildJsonArray {
         add(buildJsonObject {
             put("type", "text")
             put("text", text)
-            put("cache_control", ephemeral(LONG_TTL))
+            put("cache_control", ephemeral(if (official) LONG_TTL else null))
         })
     }
 
@@ -157,7 +193,7 @@ class AnthropicProvider(private val transport: LlmTransport) : LlmProvider {
      * never sees it as a client tool call, and the stream decoder simply ignores its `server_tool_use` /
      * `web_search_tool_result` blocks). A cache breakpoint on the last entry caches the whole tool block.
      */
-    private fun toolBlocks(tools: List<dev.ide.agent.ToolSpec>, webSearch: Boolean): JsonArray {
+    private fun toolBlocks(tools: List<dev.ide.agent.ToolSpec>, webSearch: Boolean, official: Boolean = true): JsonArray {
         val blocks = ArrayList<JsonObject>(tools.size + 1)
         tools.forEach { spec ->
             blocks += buildJsonObject {
@@ -167,7 +203,7 @@ class AnthropicProvider(private val transport: LlmTransport) : LlmProvider {
                 // ToolSchemaBuilder already emits additionalProperties:false plus a required list, which is
                 // what strict mode needs. It guarantees the arguments validate, so a malformed call can no
                 // longer cost a whole extra round trip to discover and correct.
-                put("strict", true)
+                if (official) put("strict", true)
             }
         }
         if (webSearch) {
@@ -178,7 +214,7 @@ class AnthropicProvider(private val transport: LlmTransport) : LlmProvider {
             }
         }
         if (blocks.isEmpty()) return JsonArray(emptyList())
-        val last = JsonObject(blocks.last() + ("cache_control" to ephemeral(LONG_TTL)))
+        val last = JsonObject(blocks.last() + ("cache_control" to ephemeral(if (official) LONG_TTL else null)))
         return JsonArray(blocks.dropLast(1) + last)
     }
 
@@ -217,9 +253,9 @@ class AnthropicProvider(private val transport: LlmTransport) : LlmProvider {
      * available and deliberately NOT listed here — it is a plain `cache_control` field, and naming a retired
      * beta would fail the request outright.
      */
-    private fun betaHeader(request: LlmRequest): String? {
+    private fun betaHeader(request: LlmRequest, official: Boolean = true): String? {
         val betas = ArrayList<String>(2)
-        betas += CONTEXT_MANAGEMENT_BETA
+        if (official) betas += CONTEXT_MANAGEMENT_BETA
         // Let the model keep reasoning across tool calls within a turn (reasons about tool results, not only
         // up front) — the agentic-loop quality lever.
         if (request.thinking && modelSupportsThinking(request.model)) betas += INTERLEAVED_THINKING_BETA
@@ -387,6 +423,16 @@ class AnthropicProvider(private val transport: LlmTransport) : LlmProvider {
         /** Anthropic's server-side web-search tool (GA; no beta header required). */
         const val WEB_SEARCH_TOOL = "web_search_20250305"
         const val WEB_SEARCH_MAX_USES = 5
+
+        private val ENDPOINT_SUFFIXES = listOf("/v1/messages", "/messages", "/v1/models", "/models", "/v1")
+
+        fun normalizeBase(raw: String?): String? {
+            var base = raw?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() } ?: return null
+            ENDPOINT_SUFFIXES.firstOrNull { base.endsWith(it, ignoreCase = true) }?.let {
+                base = base.dropLast(it.length).trimEnd('/')
+            }
+            return base.takeIf { it.isNotEmpty() }
+        }
     }
 }
 

@@ -86,11 +86,11 @@ class AndroidAdHost(
     /** Identity of the installed build (the package's `lastUpdateTime`) — see [AdHost.installStamp]. */
     override val installStamp: String? = null,
 ) : AdHost {
-    override val available: Boolean = true
+    override val available: Boolean = BuildConfig.ADS_ENABLED
 
-    override val privacyOptionsRequired: Boolean get() = privacyOptionsRequiredProvider()
+    override val privacyOptionsRequired: Boolean get() = available && privacyOptionsRequiredProvider()
 
-    override fun showPrivacyOptions() = onShowPrivacyOptions()
+    override fun showPrivacyOptions() { if (available) onShowPrivacyOptions() }
 
     // Full-screen interstitial, shared across trigger points (long build, finished lesson). Preloaded just
     // before a possible show and shown if the caller's gate allows. Single-use: cleared once shown/dismissed
@@ -174,7 +174,7 @@ class AndroidAdHost(
      * fetches an ad nobody sees. Idempotent; main thread.
      */
     fun start() {
-        if (started) return
+        if (!available || started) return
         started = true
         val queued = held.toList()
         held.clear()
@@ -233,6 +233,7 @@ class AndroidAdHost(
 
     @Composable
     override fun NativeAd(placement: AdPlacement, modifier: Modifier) {
+        if (!available) return
         val lease = remember(placement) { nativeAds.lease(placement) }
         var ad by remember(lease) { mutableStateOf(lease.ad) }
         // Only a slot that is actually on screen asks for an ad. A lazy list composes (prefetches) the next item

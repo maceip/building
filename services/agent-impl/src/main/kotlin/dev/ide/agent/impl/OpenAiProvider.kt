@@ -33,43 +33,70 @@ import kotlinx.serialization.json.put
 class OpenAiProvider(
     private val transport: LlmTransport,
     private val explicitPromptCaching: Boolean = false,
+    private val includeEncryptedReasoning: Boolean = true,
+    private val extraThinkingField: Boolean = false,
 ) : LlmProvider {
     override val id: String = "openai"
     override val displayName: String = "OpenAI"
     override val models: List<LlmModelInfo> = listOf(
-        LlmModelInfo("gpt-5", "GPT-5"),
-        LlmModelInfo("gpt-5-mini", "GPT-5 mini"),
+        LlmModelInfo("gpt-6.1-sol", "GPT-6.1 Sol", supportsThinking = true),
+        LlmModelInfo("gpt-6-astra", "GPT-6 Astra", supportsThinking = true),
+        LlmModelInfo("gpt-5", "GPT-5", supportsThinking = true),
+        LlmModelInfo("gpt-5-mini", "GPT-5 mini", supportsThinking = true),
         LlmModelInfo("gpt-4.1", "GPT-4.1"),
         LlmModelInfo("gpt-4o", "GPT-4o"),
     )
-    override val defaultModel: String = "gpt-5"
+    override val defaultModel: String = "gpt-6.1-sol"
 
     override fun client(config: ProviderConfig): LlmClient {
         // One key per client, i.e. per conversation. OpenAI routes same-key requests to the same cache, which
         // is what lifts the automatic prefix cache's hit rate; it is a routing hint only, never an identifier.
         val cacheKey = "codeassist-" + java.util.UUID.randomUUID().toString()
         return LlmClient { request ->
+            val rawBase = config.baseUrl?.trim().orEmpty()
             val base = normalizeBase(config.baseUrl) ?: DEFAULT_BASE
             val official = base == DEFAULT_BASE
             val headers = authHeaders(config.apiKey) + ("content-type" to "application/json")
-            if (official) {
-                // OpenAI itself speaks the Responses API, which takes reasoning and function tools together.
-                val sse = SseRequest(
-                    url = base + OpenAiResponses.PATH,
-                    headers = headers,
-                    jsonBody = OpenAiResponses.body(request, cacheKey),
-                    caCertificatePem = config.caCertificatePem,
-                )
-                streamResponses(sse)
-            } else {
-                // Compatible gateways implement Chat Completions, not the Responses API.
-                val sse = SseRequest(
-                    url = "$base/v1/chat/completions",
-                    headers = headers,
-                    jsonBody = buildBody(request),
-                    caCertificatePem = config.caCertificatePem,
-                )
-                stream(sse)
+            val explicitMessages = rawBase.endsWith("/messages", ignoreCase = true) ||
+                rawBase.endsWith("/anthropic", ignoreCase = true) ||
+                rawBase.contains("/anthropic/", ignoreCase = true)
+            val explicitResponses = rawBase.endsWith("/responses", ignoreCase = true)
+            when {
+                explicitMessages -> {
+                    val anthropicBase = if (rawBase.endsWith("/anthropic", ignoreCase = true)) rawBase.trimEnd('/') else base
+                    AnthropicProvider(transport).client(config.copy(baseUrl = anthropicBase)).chat(request)
+                }
+                official || explicitResponses -> {
+                    // OpenAI itself (or an explicit /v1/responses endpoint) speaks the Responses API, which
+                    // takes reasoning and function tools together.
+                    val sse = SseRequest(
+                        url = base + OpenAiResponses.PATH,
+                        headers = headers,
+                        jsonBody = OpenAiResponses.body(request, cacheKey, includeEncryptedReasoning),
+                        caCertificatePem = config.caCertificatePem,
+                    )
+                    val fallbackSse = if (includeEncryptedReasoning) {
+                        SseRequest(
+                            url = base + OpenAiResponses.PATH,
+                            headers = headers,
+                            jsonBody = OpenAiResponses.body(request, cacheKey, includeEncryptedReasoning = false),
+                            caCertificatePem = config.caCertificatePem,
+                        )
+                    } else null
+                    streamResponses(sse, fallbackSse)
+                }
+                else -> {
+                    // Compatible gateways default to Chat Completions, but if the gateway rejects function tools
+                    // + high reasoning on /v1/chat/completions saying /v1/responses or /v1/messages is required,
+                    // fall back automatically before any token is emitted.
+                    val sse = SseRequest(
+                        url = "$base/v1/chat/completions",
+                        headers = headers,
+                        jsonBody = buildBody(request),
+                        caCertificatePem = config.caCertificatePem,
+                    )
+                    streamWithGatewayFallback(sse, base, headers, cacheKey, config, request)
+                }
             }
         }
     }
@@ -87,17 +114,80 @@ class OpenAiProvider(
             .ifEmpty { models }
     }.getOrDefault(models)
 
-    private fun stream(sse: SseRequest): Flow<LlmStreamEvent> = flow {
+    private fun streamWithGatewayFallback(
+        sse: SseRequest,
+        base: String,
+        headers: Map<String, String>,
+        cacheKey: String,
+        config: ProviderConfig,
+        request: LlmRequest,
+    ): Flow<LlmStreamEvent> = flow {
         val decoder = OpenAiStreamDecoder()
-        transport.sse(sse).collect { data -> decoder.decode(data).forEach { emit(it) } }
-        if (!decoder.completed) decoder.finish().forEach { emit(it) }
-    }.catch { e -> emit(LlmStreamEvent.Failed(e.message ?: "OpenAI stream error", e)) }
+        var emittedAny = false
+        try {
+            transport.sse(sse).collect { data ->
+                decoder.decode(data).forEach {
+                    emittedAny = true
+                    emit(it)
+                }
+            }
+            if (!decoder.completed) decoder.finish().forEach { emit(it) }
+        } catch (e: Throwable) {
+            val msg = (e.message ?: "").lowercase()
+            val needsMessages = !emittedAny && (msg.contains("/v1/messages") || msg.contains("use messages"))
+            val needsResponses = !emittedAny && (
+                msg.contains("/v1/responses") ||
+                    msg.contains("responses api") ||
+                    (msg.contains("reasoning_effort") && msg.contains("chat completions"))
+                )
+            when {
+                needsMessages -> {
+                    AnthropicProvider(transport).client(config.copy(baseUrl = base)).chat(request).collect { emit(it) }
+                }
+                needsResponses -> {
+                    val respSse = SseRequest(
+                        url = base + OpenAiResponses.PATH,
+                        headers = headers,
+                        jsonBody = OpenAiResponses.body(request, cacheKey, includeEncryptedReasoning = false),
+                        caCertificatePem = config.caCertificatePem,
+                    )
+                    streamResponses(respSse, null).collect { emit(it) }
+                }
+                else -> emit(LlmStreamEvent.Failed(e.message ?: "OpenAI stream error", e))
+            }
+        }
+    }
 
-    private fun streamResponses(sse: SseRequest): Flow<LlmStreamEvent> = flow {
+    private fun streamResponses(sse: SseRequest, fallbackWithoutEncrypted: SseRequest? = null): Flow<LlmStreamEvent> = flow {
         val decoder = OpenAiResponsesDecoder()
-        transport.sse(sse).collect { data -> decoder.decode(data).forEach { emit(it) } }
-        if (!decoder.completed) decoder.finish(null, null).forEach { emit(it) }
-    }.catch { e -> emit(LlmStreamEvent.Failed(e.message ?: "OpenAI stream error", e)) }
+        var emittedAny = false
+        try {
+            transport.sse(sse).collect { data ->
+                decoder.decode(data).forEach {
+                    emittedAny = true
+                    emit(it)
+                }
+            }
+            if (!decoder.completed) decoder.finish(null, null).forEach { emit(it) }
+        } catch (e: Throwable) {
+            val msg = (e.message ?: "").lowercase()
+            if (!emittedAny && fallbackWithoutEncrypted != null &&
+                (msg.contains("encrypted_content") || msg.contains("include"))
+            ) {
+                val retryDecoder = OpenAiResponsesDecoder()
+                try {
+                    transport.sse(fallbackWithoutEncrypted).collect { data ->
+                        retryDecoder.decode(data).forEach { emit(it) }
+                    }
+                    if (!retryDecoder.completed) retryDecoder.finish(null, null).forEach { emit(it) }
+                } catch (e2: Throwable) {
+                    emit(LlmStreamEvent.Failed(e2.message ?: "OpenAI stream error", e2))
+                }
+            } else {
+                emit(LlmStreamEvent.Failed(e.message ?: "OpenAI stream error", e))
+            }
+        }
+    }
 
     private fun buildBody(request: LlmRequest): String = buildJsonObject {
         put("model", request.model)
@@ -106,7 +196,11 @@ class OpenAiProvider(
         // A reasoning model applies a default reasoning effort even when none is sent; on chat completions
         // that default plus function tools is rejected, so forwarding "none" is how a tool-using agent runs
         // against such a model. Non-reasoning models ignore the field. Sent only when explicitly requested.
-        reasoningEffort(request.effort)?.let { put("reasoning_effort", it) }
+        reasoningEffort(request.effort, request.model)?.let { put("reasoning_effort", it) }
+        if (extraThinkingField) {
+            val enabled = request.thinking && request.effort != LlmEffort.NONE && request.effort != LlmEffort.MINIMAL
+            put("thinking", buildJsonObject { put("type", if (enabled) "enabled" else "disabled") })
+        }
         put("stream_options", buildJsonObject { put("include_usage", true) })
         if (request.tools.isNotEmpty()) {
             put("tools", buildJsonArray {
@@ -125,11 +219,17 @@ class OpenAiProvider(
         put("messages", messages(request.system, request.messages, cacheable(request.model)))
     }.toString()
 
-    /** Chat completions tops out at "high"; the levels above it are clamped rather than rejected. */
-    private fun reasoningEffort(effort: String?): String? = when (effort?.takeIf { it.isNotBlank() }) {
-        null -> null
-        LlmEffort.XHIGH, LlmEffort.MAX -> LlmEffort.HIGH
-        else -> effort
+    /** Chat completions tops out at "high"; the levels above it are clamped rather than rejected. Mandatory
+     *  reasoning models (GPT-6.1 Sol, GPT-6 Astra, o-series) also clamp "none"/"minimal" up to "low". */
+    private fun reasoningEffort(effort: String?, model: String = ""): String? {
+        val raw = effort?.takeIf { it.isNotBlank() } ?: return null
+        if (OpenAiResponses.requiresReasoning(model) && (raw == LlmEffort.NONE || raw == LlmEffort.MINIMAL)) {
+            return LlmEffort.LOW
+        }
+        return when (raw) {
+            LlmEffort.XHIGH, LlmEffort.MAX -> LlmEffort.HIGH
+            else -> raw
+        }
     }
 
     /** Whether to emit explicit cache breakpoints for this model (a gateway fronting an Anthropic model). */
@@ -197,8 +297,12 @@ class OpenAiProvider(
 
     private fun assistantMessage(parts: List<ContentPart>) = buildJsonObject {
         put("role", "assistant")
+        val thinking = parts.filterIsInstance<ContentPart.Thinking>().joinToString("") { it.text }
         val text = parts.filterIsInstance<ContentPart.Text>().joinToString("") { it.text }
         val toolUses = parts.filterIsInstance<ContentPart.ToolUse>()
+        // Reasoning-capable Chat Completions providers (Xiaomi MiMo, DeepSeek, OpenRouter) require
+        // `reasoning_content` to be echoed back on assistant turns that invoke tools.
+        if (thinking.isNotEmpty()) put("reasoning_content", thinking)
         if (text.isNotEmpty()) put("content", text)
         if (toolUses.isNotEmpty()) {
             put("tool_calls", buildJsonArray {
@@ -233,7 +337,7 @@ class OpenAiProvider(
         const val DEFAULT_BASE = "https://api.openai.com"
 
         private val URL_TOKEN = Regex("""https?://\S+""", RegexOption.IGNORE_CASE)
-        private val ENDPOINT_SUFFIXES = listOf("/chat/completions", "/completions", "/responses", "/models")
+        private val ENDPOINT_SUFFIXES = listOf("/chat/completions", "/completions", "/responses", "/messages", "/models")
 
         /**
          * The server root that `/v1/...` paths are appended to, from what a user typed or pasted. Gateways document
@@ -270,6 +374,7 @@ internal class OpenAiStreamDecoder {
     }
 
     private val calls = LinkedHashMap<Int, Call>()
+    private val reasoning = StringBuilder()
     private var inputTokens = 0
     private var outputTokens = 0
     private var cacheReadTokens = 0
@@ -294,6 +399,13 @@ internal class OpenAiStreamDecoder {
         choice["finish_reason"].asStr()?.let { stopReason = mapStop(it) }
 
         val delta = choice["delta"].asObj() ?: return out
+        val thought = delta["reasoning_content"].asStr() ?: delta["reasoning"].asStr()
+        thought?.let {
+            if (it.isNotEmpty()) {
+                reasoning.append(it)
+                out += LlmStreamEvent.ThinkingDelta(it)
+            }
+        }
         delta["content"].asStr()?.let { if (it.isNotEmpty()) out += LlmStreamEvent.TextDelta(it) }
 
         delta["tool_calls"].asArr()?.forEach { tcElement ->
@@ -320,6 +432,9 @@ internal class OpenAiStreamDecoder {
         if (completed) return emptyList()
         completed = true
         val out = ArrayList<LlmStreamEvent>()
+        if (reasoning.isNotEmpty()) {
+            out += LlmStreamEvent.ThinkingCompleted(reasoning.toString(), null)
+        }
         calls.values.forEach { c ->
             if (c.id.isNotEmpty()) out += LlmStreamEvent.ToolCallCompleted(c.id, c.name, c.args.toString())
         }

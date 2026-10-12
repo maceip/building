@@ -130,7 +130,7 @@ class PluginManifestCompletion(
             "uiEntryPoints" to "fully-qualified classes implementing UiPlugin (Compose UI)",
             "dependsOn" to "plugin ids that must load first",
             "capabilities" to "what the plugin declares it does",
-            "minHostVersion" to "oldest CodeAssist this plugin runs on",
+            "minHostVersion" to "oldest building this plugin runs on",
         )
 
         /**

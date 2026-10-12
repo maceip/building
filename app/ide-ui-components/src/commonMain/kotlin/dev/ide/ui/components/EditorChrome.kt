@@ -246,6 +246,7 @@ fun EditorTopBar(
             // IntelliJ's project widget: the project's tile beside its name. The phone's bar has no room for it.
             if (!compact) ProjectTile(projectName, size = 24.dp, radius = 6.dp)
             // The name takes the flexible middle and truncates — the right-hand cluster keeps its size.
+            // Tapping the project name when [onBack] is available also triggers switching/closing the project.
             Text(
                 projectName,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -253,7 +254,9 @@ fun EditorTopBar(
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .then(if (onBack != null) Modifier.clip(RoundedCornerShape(Ca.radius.sm)).clickable(onClick = onBack) else Modifier),
             )
             if (compatibilityMode) CompatModeChip(compact = compact, onClick = onCompatClick)
             IndexStatusChip(indexStatus, compact = compact, onClick = onIndexClick)
@@ -291,6 +294,7 @@ fun EditorTopBar(
                     activeVariant = activeVariant,
                     variants = variants,
                     onPickVariant = onPickVariant,
+                    onCloseProject = onBack,
                 )
             } else {
                 // IntelliJ-lean: the bar keeps what has no other home. Undo/redo stay inline only on touch (no
@@ -306,10 +310,10 @@ fun EditorTopBar(
                 if (rightToolInBar && rightToolIconId != null) {
                     IconButtonCa(actionIcon(rightToolIconId), rightToolTitle, onToggleRightTool, active = rightToolOpen)
                 }
-                if (hasActiveFile) {
+                if (hasActiveFile || onBack != null) {
                     EditorOverflowMenu(
                         onOpenPalette = onOpenPalette,
-                        hasActiveFile = true,
+                        hasActiveFile = hasActiveFile,
                         onFind = onFind,
                         onReformat = onReformat,
                         onOptimizeImports = onOptimizeImports,
@@ -327,6 +331,7 @@ fun EditorTopBar(
                         variants = variants,
                         onPickVariant = onPickVariant,
                         editOnly = true,
+                        onCloseProject = onBack,
                     )
                 }
             }
@@ -335,7 +340,7 @@ fun EditorTopBar(
 }
 
 /** Height of the editor's top bar (and, on a desktop window with a custom title bar, of the title bar). */
-private val TopBarHeight = 52.dp
+private val TopBarHeight = 46.dp
 
 /** The top bar's back arrow: leaves the project for the project list (the host confirms first). */
 @Composable
@@ -357,7 +362,7 @@ fun SidebarToggleButton(fraction: () -> Float, onClick: () -> Unit, modifier: Mo
     val toggleNavLabel = stringResource(Res.string.edchrome_toggle_navigator)
     Box(
         modifier
-            .size(34.dp)
+            .size(38.dp)
             .pressScale(interaction)
             .clickable(interaction, indication = null, onClick = onClick)
             .semantics { contentDescription = toggleNavLabel },
@@ -451,6 +456,7 @@ private fun EditorOverflowMenu(
     /** The wide bar's menu: only the file's edit actions and inlay hints, since everything else is inline there
      *  or has its own place (the stripe's console toggle, the breadcrumb row's view switch). */
     editOnly: Boolean = false,
+    onCloseProject: (() -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
     // The variant list scans the module, so it's fetched only when its submenu opens. Both the menu and the
@@ -504,6 +510,12 @@ private fun EditorOverflowMenu(
                             trailing = if (v == activeVariant) ({ CaMenuCheck() }) else null,
                         )
                     }
+                }
+            }
+            if (onCloseProject != null) {
+                OverflowMenuDivider()
+                OverflowItem(CaIcons.arrowLeft, stringResource(Res.string.action_close_project)) {
+                    open = false; onCloseProject()
                 }
             }
         }
@@ -1087,8 +1099,8 @@ fun TabsStrip(
     Row(
         Modifier
             .fillMaxWidth()
-            .height(40.dp)
-            .padding(vertical = 4.dp)
+            .height(34.dp)
+            .padding(vertical = 2.dp)
             .background(Ide.colors.editorBg),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1431,7 +1443,7 @@ fun Breadcrumb(segments: List<String>) {
     Row(
         Modifier
             .fillMaxWidth()
-            .height(32.dp)
+            .height(26.dp)
             .background(Ide.colors.editorBg)
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 14.dp),

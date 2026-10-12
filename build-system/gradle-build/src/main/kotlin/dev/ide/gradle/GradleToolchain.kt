@@ -54,7 +54,7 @@ object GradleToolchain {
         try {
             initialize(client, projectDir, host, javaHome)
             val cached = GradleProjectSnapshot.load(projectDir)
-            val snapshot = cached ?: syncWith(client, scan, host)
+            val snapshot = cached?.also { materialize(host, scan, it) } ?: syncWith(client, scan, host)
             client.execute(tasks, isCanceled = isCanceled, onEvent = onEvent)
             return snapshot
         } finally {
@@ -88,6 +88,10 @@ object GradleToolchain {
             host.javaHome(JdkSelection.Image.JDK_21),
         ).distinct()
         val aapt2 = newestAapt2(host)
+        val scan = ProjectVersions.scan(projectDir)
+        val nativeBuild = scan.nativeBuild || scan.ndk.isNotEmpty() || scan.cmake.isNotEmpty()
+        val cmakeArgs = host.cmakeVersion()?.takeIf { host.android && nativeBuild }
+            ?.let { listOf("-Pdev.ide.cmake.version=$it") }.orEmpty()
         client.initialize(
             projectDir = projectDir.toAbsolutePath().toString(),
             distributionType = "WRAPPER",
@@ -98,7 +102,7 @@ object GradleToolchain {
             args = GradleUserProperties.launchArgs(
                 host.ramBytes(), homes, aapt2, host.initScript(),
                 host.gradleUserHome().resolve("abi-report.txt"),
-            ),
+            ) + cmakeArgs,
             jvmArgs = GradleUserProperties.jvmArgs(host.ramBytes()).split(' '),
             env = childEnv(host, javaHome),
         )
@@ -133,9 +137,15 @@ object GradleToolchain {
 
     private fun materialize(host: GradleHost, scan: ProjectVersions.Scan, reported: GradleProjectSnapshot?) {
         val ndks = LinkedHashSet<String>()
-        ndks += scan.ndk
-        ndks += reported?.ndkVersions.orEmpty()
-        if (ndks.isEmpty()) ndks += ProjectVersions.defaultNdk(scan.agpVersion)
+        val nativeBuild = scan.nativeBuild || scan.ndk.isNotEmpty() || scan.cmake.isNotEmpty() ||
+            reported?.cmakeVersions.orEmpty().isNotEmpty()
+        val packagingNdks = reported?.modules.orEmpty().filter { it.application }.mapNotNull { it.ndkVersion }
+        if (nativeBuild || reported?.ndkVersions.orEmpty().isNotEmpty() || packagingNdks.isNotEmpty()) {
+            ndks += scan.ndk
+            ndks += reported?.ndkVersions.orEmpty()
+            ndks += packagingNdks
+            if (ndks.isEmpty()) ndks += ProjectVersions.defaultNdk(scan.agpVersion)
+        }
         val tools = LinkedHashSet<String>()
         tools += scan.buildTools
         tools += reported?.buildToolsVersions.orEmpty()
@@ -143,14 +153,21 @@ object GradleToolchain {
         val cmakes = LinkedHashSet<String>()
         cmakes += scan.cmake
         cmakes += reported?.cmakeVersions.orEmpty()
-        if (cmakes.isEmpty()) cmakes += ProjectVersions.defaultCmake(scan.agpVersion)
+        if (cmakes.isEmpty() && nativeBuild) cmakes += ProjectVersions.defaultCmake(scan.agpVersion)
+        if (cmakes.isNotEmpty()) host.cmakeVersion()?.let { version ->
+            cmakes.clear()
+            cmakes.add(version)
+        }
         val home = host.androidHome()
         for (revision in ndks) {
-            ToolchainLayout.installNdk(home, revision, host.clangDriver(), host.toolchainOut())
+            if (!host.installNdk(revision)) {
+                ToolchainLayout.installNdk(home, revision, host.clangDriver(), host.toolchainOut())
+            }
             ToolchainLayout.installMake(home, revision, host.make())
         }
         for (version in cmakes) ToolchainLayout.installCmake(home, version, host.cmake(), host.ninja())
-        for (version in tools) ToolchainLayout.installBuildTools(home, version, host.aapt2(), host.zipalign(), host.aidl())
+        val extras = host.buildToolsExtras()
+        for (version in tools) ToolchainLayout.installBuildTools(home, version, host.aapt2(), host.zipalign(), host.aidl(), extras)
     }
 
     private fun newestAapt2(host: GradleHost): Path? {
@@ -159,6 +176,13 @@ object GradleToolchain {
         return Files.list(root).use { stream ->
             stream.map { it.resolve("aapt2") }
                 .filter { Files.isRegularFile(it) }
+                .filter { !host.android || Files.isSymbolicLink(it) }
+                .sorted { left, right ->
+                    val a = left.parent.fileName.toString().split('.').map { it.toIntOrNull() ?: 0 }
+                    val b = right.parent.fileName.toString().split('.').map { it.toIntOrNull() ?: 0 }
+                    (0 until maxOf(a.size, b.size)).map { (b.getOrElse(it) { 0 }).compareTo(a.getOrElse(it) { 0 }) }
+                        .firstOrNull { it != 0 } ?: 0
+                }
                 .findFirst()
                 .orElse(null)
         }

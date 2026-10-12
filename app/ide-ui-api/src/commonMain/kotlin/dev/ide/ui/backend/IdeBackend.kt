@@ -865,6 +865,8 @@ data class UiAgentProvider(
     val defaultModel: String,
     /** The user's stored API key for this provider (shown masked + editable in the key manager). */
     val apiKey: String = "",
+    /** Optional endpoint/base URL override for this provider (blank = use the provider's default endpoint). */
+    val baseUrl: String = "",
 )
 
 /** Provider/model selection and permission mode, for the chat drawer header, key manager, and settings. */
@@ -874,6 +876,7 @@ data class UiAgentConfig(
     val model: String = "",
     val configured: Boolean = false,
     val mode: UiAgentPermissionMode = UiAgentPermissionMode.ASK_EACH,
+    val effort: String = "default",
     /** For the "Custom gateway" (OpenAI-compatible) entry: its base URL and model name. */
     val gatewayBaseUrl: String = "",
     val gatewayModel: String = "",

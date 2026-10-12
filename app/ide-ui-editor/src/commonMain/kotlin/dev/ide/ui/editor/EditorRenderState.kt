@@ -284,11 +284,11 @@ internal fun rememberEditorRenderState(
     }
     state.gutterNumberCache = remember(measurer, state.gutterStyle) { HashMap() }
 
-    val foldStripPx = with(density) { 14.dp.toPx() }
+    val foldStripPx = with(density) { 12.dp.toPx() }
     state.foldStripPx = foldStripPx
     state.gutterWidthPx = remember(session.doc.lineCount, density, foldStripPx) {
         with(density) {
-            (session.doc.lineCount.toString().length * 9 + 22).coerceAtLeast(44).dp.toPx() + foldStripPx
+            (session.doc.lineCount.toString().length * 8 + 14).coerceAtLeast(34).dp.toPx() + foldStripPx
         }
     }
     return state

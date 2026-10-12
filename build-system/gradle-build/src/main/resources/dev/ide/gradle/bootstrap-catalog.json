@@ -3,6 +3,13 @@
   "note": "Pinned SHA-256 of the Termux aarch64 Packages index. A rebuild we control replaces the url and sha256 together. This is not a silent floating dependency on packages.termux.dev.",
   "packages": [
     {
+      "name": "aapt2",
+      "version": "16.0.0.4-2",
+      "filename": "pool/main/a/aapt2/aapt2_16.0.0.4-2_aarch64.deb",
+      "sha256": "ae91c1c1cf743098a4d847e6d44e37a8fd8b83e00548ad7e50e8fbdc4ef0741e",
+      "size": 962720
+    },
+    {
       "name": "abseil-cpp",
       "version": "20260526.0",
       "filename": "pool/main/a/abseil-cpp/abseil-cpp_20260526.0_aarch64.deb",
@@ -31,11 +38,25 @@
       "size": 25604
     },
     {
+      "name": "c-ares",
+      "version": "1.34.8",
+      "filename": "pool/main/c/c-ares/c-ares_1.34.8_aarch64.deb",
+      "sha256": "7681fc23e822d7988ba8b2adf3468f93ae68f724dda365cff1385096a9fa87e6",
+      "size": 194924
+    },
+    {
       "name": "ca-certificates",
       "version": "1:2026.09.25",
       "filename": "pool/main/c/ca-certificates/ca-certificates_1:2026.09.25_all.deb",
       "sha256": "57fab24bf4561bfdd35afe71bc1929914e51c35458cfd1fca2b15e54bc8df7af",
       "size": 105404
+    },
+    {
+      "name": "clang",
+      "version": "21.1.8-3",
+      "filename": "pool/main/c/clang/clang_21.1.8-3_aarch64.deb",
+      "sha256": "9fb565013b96ce10abd8f8f217aaebb48f72873f53acbf8886329bcea841a21c",
+      "size": 30740228
     },
     {
       "name": "cmake",
@@ -150,6 +171,13 @@
       "size": 341604
     },
     {
+      "name": "libcompiler-rt",
+      "version": "21.1.8-3",
+      "filename": "pool/main/libc/libcompiler-rt/libcompiler-rt_21.1.8-3_aarch64.deb",
+      "sha256": "89de02f642e34fa6494ad16105bd08510bd1dbdbe4fdb2b297aaa4f4e8e534b6",
+      "size": 3024604
+    },
+    {
       "name": "libcurl",
       "version": "8.22.0",
       "filename": "pool/main/libc/libcurl/libcurl_8.22.0_aarch64.deb",
@@ -162,6 +190,13 @@
       "filename": "pool/main/libe/libexpat/libexpat_2.9.0_aarch64.deb",
       "sha256": "f8a104e8227c9c181f6818658a3ee2fa4c107fac94219b068144fc6591086cdb",
       "size": 100256
+    },
+    {
+      "name": "libffi",
+      "version": "3.8.0",
+      "filename": "pool/main/libf/libffi/libffi_3.8.0_aarch64.deb",
+      "sha256": "4f255badf74cd31f6a2801c17fa1444199c84c834b517b7c843e2fe9ebe91d77",
+      "size": 37592
     },
     {
       "name": "libflac",
@@ -178,11 +213,25 @@
       "size": 562724
     },
     {
+      "name": "libicu",
+      "version": "78.3",
+      "filename": "pool/main/libi/libicu/libicu_78.3_aarch64.deb",
+      "sha256": "f536403f65a08fe0df6e7304184e902d54def77d5c3bd5edfd9109d57601d276",
+      "size": 10210396
+    },
+    {
       "name": "libjpeg-turbo",
       "version": "3.2.0",
       "filename": "pool/main/libj/libjpeg-turbo/libjpeg-turbo_3.2.0_aarch64.deb",
       "sha256": "e6339075bcde28b4902d5a51f4063164834abfd2fa115e881ae637a34585e54f",
       "size": 453600
+    },
+    {
+      "name": "libllvm",
+      "version": "21.1.8-3",
+      "filename": "pool/main/libl/libllvm/libllvm_21.1.8-3_aarch64.deb",
+      "sha256": "5056a73f2645fc9c0759e6f94a1bd6edcf36305acaef58dc685211ced9cc2a02",
+      "size": 30733892
     },
     {
       "name": "libltdl",
@@ -255,6 +304,13 @@
       "size": 195892
     },
     {
+      "name": "libprotobuf",
+      "version": "2:35.1",
+      "filename": "pool/main/libp/libprotobuf/libprotobuf_2:35.1_aarch64.deb",
+      "sha256": "a1ba7c7f0e5903a2134662653d3e7b9ffceaa78bdd00e07ac985e2d313ebc738",
+      "size": 1387016
+    },
+    {
       "name": "libsndfile",
       "version": "1.2.2-3",
       "filename": "pool/main/libs/libsndfile/libsndfile_1.2.2-3_aarch64.deb",
@@ -267,6 +323,13 @@
       "filename": "pool/main/libs/libsoxr/libsoxr_0.1.3-8_aarch64.deb",
       "sha256": "a1c5f66aae3b9900e9a492b43901b2b98586870c7905feb9f3c835cc9af464be",
       "size": 282436
+    },
+    {
+      "name": "libsqlite",
+      "version": "3.54.0",
+      "filename": "pool/main/libs/libsqlite/libsqlite_3.54.0_aarch64.deb",
+      "sha256": "9adf91e118fcf4d449f0fb9668485d895916c4f76c2407da17ba114406f43a58",
+      "size": 768760
     },
     {
       "name": "libssh2",
@@ -346,6 +409,20 @@
       "size": 143396
     },
     {
+      "name": "lld",
+      "version": "21.1.8-3",
+      "filename": "pool/main/l/lld/lld_21.1.8-3_aarch64.deb",
+      "sha256": "6299c8fdff59dcff972f6b444805bcdb211c2bd797a64d2ddb3875e699f30630",
+      "size": 2812212
+    },
+    {
+      "name": "llvm",
+      "version": "21.1.8-3",
+      "filename": "pool/main/l/llvm/llvm_21.1.8-3_aarch64.deb",
+      "sha256": "2d17e4dde485cae71e6872d19ce1d44555789208708b4e0fd15ebf6818a146d3",
+      "size": 14911960
+    },
+    {
       "name": "make",
       "version": "4.4.1-1",
       "filename": "pool/main/m/make/make_4.4.1-1_aarch64.deb",
@@ -353,11 +430,32 @@
       "size": 240436
     },
     {
+      "name": "ncurses",
+      "version": "6.6.20260307+really6.5.20250830",
+      "filename": "pool/main/n/ncurses/ncurses_6.6.20260307+really6.5.20250830_aarch64.deb",
+      "sha256": "f44bbfdc3d42ec0217bffa978309390e59cea5a48a9a83226d4a496c42ad0b99",
+      "size": 557792
+    },
+    {
+      "name": "ndk-sysroot",
+      "version": "30",
+      "filename": "pool/main/n/ndk-sysroot/ndk-sysroot_30_aarch64.deb",
+      "sha256": "73502f9b04fce210c430c83bf9ae2b8e332ba5c319f3eb94a61ba5cef090f787",
+      "size": 1996888
+    },
+    {
       "name": "ninja",
       "version": "1.13.2",
       "filename": "pool/main/n/ninja/ninja_1.13.2_aarch64.deb",
       "sha256": "1a5667d0725fe7b66d4c3a287e5dacd996b28fa84c893de21a3e6ab47c361934",
       "size": 84036
+    },
+    {
+      "name": "nodejs-lts",
+      "version": "24.18.0-1",
+      "filename": "pool/main/n/nodejs-lts/nodejs-lts_24.18.0-1_aarch64.deb",
+      "sha256": "490f4d08c45b25a7ea7db6ee466ebb3ee61f07083260b85332704ed018f59a87",
+      "size": 9743764
     },
     {
       "name": "openjdk-17",
@@ -386,6 +484,13 @@
       "filename": "pool/main/p/pulseaudio/pulseaudio_17.0-4_aarch64.deb",
       "sha256": "b119f3a5beb33273a6457e648a2ea501d6a507be8e99501737897c3ea07854cd",
       "size": 848412
+    },
+    {
+      "name": "resolv-conf",
+      "version": "1.3",
+      "filename": "pool/main/r/resolv-conf/resolv-conf_1.3_aarch64.deb",
+      "sha256": "ab541abac8e0c81709cd7ca4a02bcfa0d60ba1f4bfe7fd6dce4a694a4a9dfffa",
+      "size": 976
     },
     {
       "name": "rhash",
@@ -428,6 +533,13 @@
       "filename": "pool/main/z/zlib/zlib_1.3.2_aarch64.deb",
       "sha256": "75e7d0af17fcc3b40004309fdc00a1ddb9ae08346dce5e269902c34ac3966ac9",
       "size": 62840
+    },
+    {
+      "name": "zstd",
+      "version": "1.5.7-1",
+      "filename": "pool/main/z/zstd/zstd_1.5.7-1_aarch64.deb",
+      "sha256": "e1b4a5113648da8de189620ba1fce74c48b2d0833d9043391b9a1c91fb606fd3",
+      "size": 360488
     }
   ]
 }

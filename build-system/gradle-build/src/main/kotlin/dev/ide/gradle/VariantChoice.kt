@@ -21,6 +21,7 @@ object VariantChoice {
         val debuggable: Boolean,
         val order: Int,
         val namespace: String? = null,
+        val applicationId: String? = null,
     )
 
     data class Chosen(val variant: Variant, val taskPath: String)

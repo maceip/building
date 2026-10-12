@@ -122,15 +122,20 @@ def pointAtJava = { t ->
 }
 
 def applyCmake = { p ->
-    if (System.getenv("DEV_IDE_CMAKE_FALLBACK") != "true") return
-    def ver = System.getenv("DEV_IDE_CMAKE_VERSION")
+    def ver = gradle.startParameter.projectProperties["dev.ide.cmake.version"]
+    if (ver == null && System.getenv("DEV_IDE_CMAKE_FALLBACK") != "true") return
+    if (ver == null) ver = System.getenv("DEV_IDE_CMAKE_VERSION")
     if (ver == null || ver.isEmpty()) return
     def android = null
     try { android = p.extensions.findByName("android") } catch (Throwable ignored) {}
     if (android == null) return
     try {
         def cmake = android.externalNativeBuild.cmake
+        if (cmake.path == null) return
         def current = cmake.version
+        if (current != null && current.toString() != ver) {
+            p.logger.lifecycle("Building: using Android-host CMake ${ver} (project requested ${current})")
+        }
         if (current instanceof Property) current.set(ver)
         else cmake.version = ver
     } catch (Throwable ignored) {}
@@ -202,12 +207,20 @@ def registerVariants = { p, slot ->
                 if (flag instanceof Property) debuggable = flag.get() as boolean
                 else if (flag != null) debuggable = flag as boolean
             } catch (Throwable ignored) {}
+            def applicationId = null
+            if (slot.application) {
+                try {
+                    def value = variant.applicationId
+                    applicationId = value instanceof org.gradle.api.provider.Provider ? value.getOrNull() : value?.toString()
+                } catch (Throwable ignored) {}
+            }
             slot.variants << [
                     name        : name,
                     buildType   : buildType,
                     flavors     : flavors,
                     assembleTask: "assemble" + cap(name),
                     debuggable  : debuggable,
+                    applicationId: applicationId,
             ]
         }
     } catch (Throwable ignored) {}
@@ -327,6 +340,7 @@ gradle.projectsEvaluated {
         def buildToolsVersion = null
         def ndkVersion = null
         def cmakeVersion = null
+        def nativeBuild = false
         def aidl = false
         try {
             def ext = p.extensions.findByName("android")
@@ -343,6 +357,7 @@ gradle.projectsEvaluated {
                 try { buildToolsVersion = textOf(ext.buildToolsVersion) } catch (Throwable ignored) {}
                 try { ndkVersion = textOf(ext.ndkVersion) } catch (Throwable ignored) {}
                 try { cmakeVersion = textOf(ext.externalNativeBuild.cmake.version) } catch (Throwable ignored) {}
+                try { nativeBuild = ext.externalNativeBuild.cmake.path != null || ext.externalNativeBuild.ndkBuild.path != null } catch (Throwable ignored) {}
                 try {
                     def flag = ext.buildFeatures.aidl
                     aidl = flag instanceof Property ? (flag.get() as boolean) : (flag as boolean)
@@ -350,8 +365,9 @@ gradle.projectsEvaluated {
             }
         } catch (Throwable ignored) {}
         if (buildToolsVersion != null) buildTools.add(buildToolsVersion)
-        if (ndkVersion != null) ndks.add(ndkVersion)
-        if (cmakeVersion != null) cmakes.add(cmakeVersion)
+        // Application packaging also needs llvm-strip for JNI libraries in dependencies.
+        if (ndkVersion != null && (nativeBuild || slot.application)) ndks.add(ndkVersion)
+        if (cmakeVersion != null && nativeBuild) cmakes.add(cmakeVersion)
         if (compileSdk != null) platforms.add(compileSdk)
         def rootDir = rootProject.projectDir.toPath()
         def rel = ""
@@ -380,6 +396,7 @@ gradle.projectsEvaluated {
         issues << [severity: "warning", message: "ABI ${abi} skipped; the APK is arm64-v8a only"]
     }
     def model = [
+            schemaVersion      : 2,
             name               : rootProject.name,
             gradleVersion      : gradle.gradleVersion,
             modules            : modules,

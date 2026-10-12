@@ -157,18 +157,18 @@ fun CountFilterChip(
         color = bg,
         contentColor = fg,
         border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, c.outline),
-        modifier = modifier.height(38.dp),
+        modifier = modifier.height(32.dp),
     ) {
         Row(
-            Modifier.padding(horizontal = 18.dp),
+            Modifier.padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text(label, style = MaterialTheme.typography.labelLarge)
+            Text(label, style = MaterialTheme.typography.labelMedium)
             Box(
-                Modifier.defaultMinSize(minWidth = 20.dp).height(20.dp)
+                Modifier.defaultMinSize(minWidth = 18.dp).height(18.dp)
                     .clip(CircleShape).background(badgeBg)
-                    .padding(horizontal = 5.dp),
+                    .padding(horizontal = 4.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -189,7 +189,7 @@ fun PillChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     leadingGlyph: Char? = null,
-    height: Dp = 36.dp,
+    height: Dp = 30.dp,
 ) {
     val c = MaterialTheme.colorScheme
     Surface(
@@ -202,14 +202,14 @@ fun PillChip(
         modifier = modifier.height(height),
     ) {
         Row(
-            Modifier.padding(horizontal = 16.dp),
+            Modifier.padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (leadingGlyph != null && selected) {
-                Symbol(leadingGlyph, contentDescription = null, size = 16.dp)
+                Symbol(leadingGlyph, contentDescription = null, size = 14.dp)
             }
-            Text(label, style = MaterialTheme.typography.labelLarge)
+            Text(label, style = MaterialTheme.typography.labelMedium)
         }
     }
 }
@@ -223,13 +223,13 @@ fun MonoChip(
     content: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     glyph: Char? = null,
 ) {
-    Surface(shape = RoundedCornerShape(8.dp), color = container, contentColor = content, modifier = modifier.height(26.dp)) {
+    Surface(shape = RoundedCornerShape(6.dp), color = container, contentColor = content, modifier = modifier.height(24.dp)) {
         Row(
-            Modifier.padding(horizontal = 10.dp),
+            Modifier.padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            if (glyph != null) Symbol(glyph, contentDescription = null, size = 14.dp)
+            if (glyph != null) Symbol(glyph, contentDescription = null, size = 13.dp)
             Text(
                 text,
                 style = MaterialTheme.typography.labelMedium.copy(
@@ -243,7 +243,7 @@ fun MonoChip(
 }
 
 /**
- * Home's 64 dp primary call to action, and the mirrored square button beside it.
+ * Home's compact primary call to action, and the mirrored square button beside it.
  *
  * The two shapes are deliberate opposites ([CaShapes.PrimaryAction] and [CaShapes.SquareAction]): placed
  * side by side they read as one cut piece rather than two unrelated buttons.
@@ -261,22 +261,22 @@ fun PrimaryActionButton(
         shape = CaShapes.PrimaryAction,
         color = MaterialTheme.colorScheme.primary,
         contentColor = MaterialTheme.colorScheme.onPrimary,
-        shadowElevation = 6.dp,
+        shadowElevation = 0.dp,
         interactionSource = interaction,
-        modifier = modifier.height(64.dp).pressScale(interaction),
+        modifier = modifier.height(42.dp).pressScale(interaction),
     ) {
         Row(
-            Modifier.padding(horizontal = 18.dp),
+            Modifier.padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Symbol(glyph, contentDescription = null, size = 26.dp)
-            Text(label, style = MaterialTheme.typography.titleSmall)
+            Symbol(glyph, contentDescription = null, size = 20.dp)
+            Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
         }
     }
 }
 
-/** The 64 dp square tonal button that pairs with [PrimaryActionButton]. */
+/** The compact square tonal button that pairs with [PrimaryActionButton]. */
 @Composable
 fun SquareToneButton(
     glyph: Char,
@@ -286,7 +286,7 @@ fun SquareToneButton(
     shape: Shape = CaShapes.SquareAction,
     container: Color = MaterialTheme.colorScheme.secondaryContainer,
     content: Color = MaterialTheme.colorScheme.onSecondaryContainer,
-    size: Dp = 64.dp,
+    size: Dp = 42.dp,
 ) {
     val interaction = remember { MutableInteractionSource() }
     Surface(
@@ -298,7 +298,7 @@ fun SquareToneButton(
         modifier = modifier.size(size).pressScale(interaction, pressed = 0.96f),
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Symbol(glyph, contentDescription = contentDescription, size = (size.value * 0.375f).dp)
+            Symbol(glyph, contentDescription = contentDescription, size = (size.value * 0.44f).dp)
         }
     }
 }
@@ -307,10 +307,10 @@ fun SquareToneButton(
 data class NavDestination(val id: String, val label: String, val glyph: Char)
 
 /**
- * The 82 dp bottom navigation.
+ * The compact 60 dp bottom navigation.
  *
  * Hand-built rather than an M3 [androidx.compose.material3.NavigationBar] for one reason: the selected
- * indicator **animates its width** from 52 to 76 dp, and the stock indicator is a fixed size with no hook
+ * indicator **animates its width** from 48 to 64 dp, and the stock indicator is a fixed size with no hook
  * to drive it. Everything else follows the component's contract — a `selectableGroup` of `Tab`-role
  * items, labels always visible, the filled glyph variant for the selected state.
  */
@@ -324,13 +324,13 @@ fun AppNavBar(
     val c = MaterialTheme.colorScheme
     Surface(color = c.surfaceContainerLow, modifier = modifier.fillMaxWidth()) {
         Row(
-            Modifier.height(82.dp).padding(horizontal = 8.dp).selectableGroup(),
+            Modifier.height(60.dp).padding(horizontal = 8.dp).selectableGroup(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             destinations.forEach { d ->
                 val selected = d.id == selectedId
                 val pillWidth by animateDpAsState(
-                    targetValue = if (selected) 76.dp else 52.dp,
+                    targetValue = if (selected) 64.dp else 48.dp,
                     animationSpec = CaMotion.defaultSpatial(),
                     label = "navPill",
                 )
@@ -341,12 +341,12 @@ fun AppNavBar(
                             onClick = { onSelect(d.id) },
                             role = Role.Tab,
                         )
-                        .padding(top = 12.dp),
+                        .padding(top = 6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
                     Box(
-                        Modifier.width(pillWidth).height(34.dp)
+                        Modifier.width(pillWidth).height(28.dp)
                             .clip(CircleShape)
                             .background(if (selected) c.primaryContainer else Color.Transparent),
                         contentAlignment = Alignment.Center,
@@ -354,14 +354,14 @@ fun AppNavBar(
                         Symbol(
                             glyph = d.glyph,
                             contentDescription = null,
-                            size = 24.dp,
+                            size = 20.dp,
                             filled = selected,
                             tint = if (selected) c.onPrimaryContainer else c.onSurfaceVariant,
                         )
                     }
                     Text(
                         text = d.label,
-                        style = MaterialTheme.typography.labelMedium.copy(
+                        style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                         ),
                         color = if (selected) c.onSurface else c.onSurfaceVariant,
@@ -379,7 +379,7 @@ fun TonalTile(
     pair: TonalPair,
     shape: Shape,
     modifier: Modifier = Modifier,
-    size: Dp = 46.dp,
+    size: Dp = 38.dp,
     contentDescription: String? = null,
 ) = Box(
     modifier.size(size).clip(shape).background(pair.container),

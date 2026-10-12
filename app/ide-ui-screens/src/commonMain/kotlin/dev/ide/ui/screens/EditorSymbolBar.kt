@@ -70,7 +70,7 @@ internal fun EditorSymbolBar(
     Row(
         modifier
             .fillMaxWidth()
-            .height(38.dp)
+            .height(32.dp)
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .drawBehind { // hairline separating the bar from the editor above
                 drawLine(separator, Offset(0f, 0f), Offset(size.width, 0f), strokeWidth = 1f)

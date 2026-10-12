@@ -105,7 +105,7 @@ fun PluginConsent(
             ) {
                 Icon(CaIcons.info, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
-                    "A plugin runs inside CodeAssist, with the same access to your projects and account as the " +
+                    "A plugin runs inside building, with the same access to your projects and account as the " +
                         "IDE itself. It is not sandboxed, and the list above is not enforced. Allow it only if " +
                         "you trust whoever published it.",
                     style = MaterialTheme.typography.bodyMedium,

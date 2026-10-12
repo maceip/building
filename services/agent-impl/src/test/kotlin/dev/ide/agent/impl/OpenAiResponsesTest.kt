@@ -147,4 +147,106 @@ class OpenAiResponsesTest {
         )
         assertEquals(StopReason.MAX_TOKENS, cut.filterIsInstance<LlmStreamEvent.Completed>().single().stopReason)
     }
+
+    @Test
+    fun gpt61SolClampsNoneAndMinimalEffortAndSupportsMax() {
+        val t = Recording()
+        // GPT-6.1 Sol rejects "none" and "minimal" on /v1/responses; both are clamped up to "low".
+        send(t, LlmRequest("gpt-6.1-sol", null, listOf(LlmMessage.user("hi")), tools = listOf(tool), effort = "none"))
+        assertTrue(t.body!!.contains(""""reasoning":{"effort":"low"}"""), t.body)
+
+        send(t, LlmRequest("gpt-6.1-sol", null, listOf(LlmMessage.user("hi")), tools = listOf(tool), effort = "minimal"))
+        assertTrue(t.body!!.contains(""""reasoning":{"effort":"low"}"""), t.body)
+
+        // GPT-6.1 Sol supports "max" effort natively.
+        send(t, LlmRequest("gpt-6.1-sol", null, listOf(LlmMessage.user("hi")), tools = listOf(tool), effort = "max"))
+        assertTrue(t.body!!.contains(""""reasoning":{"effort":"max"}"""), t.body)
+    }
+
+    @Test
+    fun metaMuseSparkClampsNoneAndStreamsResponses() {
+        val t = Recording(
+            listOf(
+                """{"type":"response.reasoning_summary_text.delta","delta":"Thinking about Spark"}""",
+                """{"type":"response.output_text.delta","delta":"Hello from Muse"}""",
+                """{"type":"response.completed","response":{"status":"completed"}}""",
+            ),
+        )
+        val events = runBlocking {
+            MetaMuseProvider(t).client(ProviderConfig("muse-key"))
+                .chat(LlmRequest("muse-spark-1.3", "sys", listOf(LlmMessage.user("hi")), tools = listOf(tool), effort = "none"))
+                .toList()
+        }
+        assertEquals("https://api.meta.ai/v1/responses", t.url)
+        // "none" is clamped to "minimal" on Muse Spark, and encrypted_content include is omitted.
+        assertTrue(t.body!!.contains(""""reasoning":{"effort":"minimal"}"""), t.body)
+        assertFalse(t.body!!.contains("encrypted_content"), t.body)
+        assertEquals("Thinking about Spark", events.filterIsInstance<LlmStreamEvent.ThinkingDelta>().joinToString("") { it.text })
+        assertEquals("Hello from Muse", events.filterIsInstance<LlmStreamEvent.TextDelta>().joinToString("") { it.text })
+    }
+
+    @Test
+    fun xiaomiMimoRoundTripsReasoningContentAndSupportsAnthropicDialect() {
+        val t = Recording(
+            listOf(
+                """{"choices":[{"delta":{"reasoning_content":"step 1"}}]}""",
+                """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"A.kt\"}"}}]},"finish_reason":"tool_calls"}]}""",
+                "[DONE]",
+            ),
+        )
+        val events = runBlocking {
+            XiaomiMimoProvider(t).client(ProviderConfig("mimo-key"))
+                .chat(LlmRequest("mimo-v2.6-pro", "sys", listOf(LlmMessage.user("hi")), tools = listOf(tool), effort = "high"))
+                .toList()
+        }
+        assertEquals("https://api.xiaomimimo.com/v1/chat/completions", t.url)
+        assertTrue(t.body!!.contains(""""thinking":{"type":"enabled"}"""), t.body)
+        val thought = events.filterIsInstance<LlmStreamEvent.ThinkingCompleted>().single()
+        assertEquals("step 1", thought.text)
+
+        // Second turn: the assistant message echoes reasoning_content alongside tool_calls.
+        val history = listOf(
+            LlmMessage.user("hi"),
+            LlmMessage.assistant(
+                listOf(
+                    ContentPart.Thinking("step 1", null),
+                    ContentPart.ToolUse("c1", "read_file", """{"path":"A.kt"}"""),
+                ),
+            ),
+            LlmMessage.toolResult("c1", "contents"),
+        )
+        runBlocking {
+            XiaomiMimoProvider(t).client(ProviderConfig("mimo-key"))
+                .chat(LlmRequest("mimo-v2.6-pro", "sys", history, tools = listOf(tool), effort = "high"))
+                .toList()
+        }
+        assertTrue(t.body!!.contains(""""reasoning_content":"step 1""""), t.body)
+
+        // When configured with /anthropic, Xiaomi MiMo routes over /anthropic/v1/messages with enabled thinking.
+        runBlocking {
+            XiaomiMimoProvider(t).client(ProviderConfig("mimo-key", baseUrl = "https://api.xiaomimimo.com/anthropic"))
+                .chat(LlmRequest("mimo-v2.6-pro", "sys", listOf(LlmMessage.user("hi")), tools = listOf(tool), effort = "high"))
+                .toList()
+        }
+        assertEquals("https://api.xiaomimimo.com/anthropic/v1/messages", t.url)
+        assertTrue(t.body!!.contains(""""thinking":{"type":"enabled","budget_tokens":16384}"""), t.body)
+    }
+
+    @Test
+    fun antigravityProviderWrapsGatewayEnvelopeAndUnwrapsStream() {
+        val t = Recording(
+            listOf(
+                """{"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"Hi from Antigravity"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":4}}}""",
+            ),
+        )
+        val events = runBlocking {
+            AntigravityProvider(t).client(ProviderConfig("ya29-token|proj-42"))
+                .chat(LlmRequest("gemini-3-pro-high", "sys", listOf(LlmMessage.user("hi")), tools = listOf(tool)))
+                .toList()
+        }
+        assertTrue(t.url!!.contains("v1internal:streamGenerateContent"), t.url)
+        assertTrue(t.body!!.contains(""""project":"proj-42""""), t.body)
+        assertEquals("Hi from Antigravity", events.filterIsInstance<LlmStreamEvent.TextDelta>().joinToString("") { it.text })
+    }
 }
+

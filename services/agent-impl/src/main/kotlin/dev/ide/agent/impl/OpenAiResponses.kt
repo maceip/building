@@ -32,17 +32,19 @@ internal object OpenAiResponses {
 
     const val PATH = "/v1/responses"
 
-    fun body(request: LlmRequest, cacheKey: String): String = buildJsonObject {
+    fun body(request: LlmRequest, cacheKey: String? = null, includeEncryptedReasoning: Boolean = true): String = buildJsonObject {
         put("model", request.model)
         put("stream", true)
         put("store", false)
-        put("prompt_cache_key", cacheKey)
+        cacheKey?.takeIf { it.isNotBlank() }?.let { put("prompt_cache_key", it) }
         put("max_output_tokens", request.maxTokens)
         request.system?.takeIf { it.isNotBlank() }?.let { put("instructions", it) }
         if (isReasoningModel(request.model)) {
-            effort(request.effort)?.let { e -> put("reasoning", buildJsonObject { put("effort", e) }) }
+            effort(request.effort, request.model)?.let { e -> put("reasoning", buildJsonObject { put("effort", e) }) }
             // With store=false the reasoning is only reusable on the next request in its encrypted form.
-            put("include", buildJsonArray { add("reasoning.encrypted_content") })
+            if (includeEncryptedReasoning) {
+                put("include", buildJsonArray { add("reasoning.encrypted_content") })
+            }
         }
         if (request.tools.isNotEmpty()) {
             put("tools", buildJsonArray {
@@ -60,20 +62,41 @@ internal object OpenAiResponses {
         put("input", input(request.messages))
     }.toString()
 
-    /** The neutral effort as a Responses `reasoning.effort`; the levels above `high` map to `xhigh`. */
-    private fun effort(effort: String?): String? = when (effort?.takeIf { it.isNotBlank() }) {
-        null -> null
-        LlmEffort.XHIGH, LlmEffort.MAX -> "xhigh"
-        else -> effort
+    /**
+     * Maps the neutral effort onto a Responses `reasoning.effort`. Models that must reason (`gpt-6.1-sol`,
+     * `gpt-6-astra`, `o1`/`o3`/`o4`, `muse-spark`) reject `none` (and `gpt-6.1-sol` also rejects `minimal`),
+     * so those are clamped up to the lowest effort the model accepts rather than failing with HTTP 400.
+     */
+    internal fun effort(effort: String?, model: String = ""): String? {
+        val raw = effort?.takeIf { it.isNotBlank() } ?: return null
+        val m = model.lowercase().substringAfterLast('/')
+        val solOrMandatoryLow = m.contains("sol") || m.contains("astra") || m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4")
+        val museMandatory = m.startsWith("muse-spark") || m.startsWith("muse-wonder")
+        return when (raw) {
+            LlmEffort.NONE -> when {
+                solOrMandatoryLow -> LlmEffort.LOW
+                museMandatory -> LlmEffort.MINIMAL
+                else -> LlmEffort.NONE
+            }
+            LlmEffort.MINIMAL -> if (solOrMandatoryLow) LlmEffort.LOW else LlmEffort.MINIMAL
+            LlmEffort.MAX -> if (m.contains("sol") || m.contains("astra")) LlmEffort.MAX else "xhigh"
+            LlmEffort.XHIGH -> "xhigh"
+            else -> raw
+        }
     }
 
     /**
      * Whether [model] is a reasoning model, which the `reasoning` parameter and the encrypted-reasoning include are
-     * only valid for. The GPT-4 and GPT-3.5 families are not; every newer OpenAI model is.
+     * only valid for. The GPT-4, GPT-3.5, and Muse Glimmer families are not; every newer OpenAI/Muse model is.
      */
     fun isReasoningModel(model: String): Boolean {
         val m = model.lowercase().substringAfterLast('/')
-        return !(m.startsWith("gpt-4") || m.startsWith("gpt-3") || m.startsWith("chatgpt-4"))
+        return !(m.startsWith("gpt-4") || m.startsWith("gpt-3") || m.startsWith("chatgpt-4") || m.startsWith("muse-glimmer"))
+    }
+
+    internal fun requiresReasoning(model: String): Boolean {
+        val m = model.lowercase().substringAfterLast('/')
+        return m.contains("sol") || m.contains("astra") || m.startsWith("o1") || m.startsWith("o3") || m.startsWith("o4")
     }
 
     private fun input(messages: List<LlmMessage>): JsonArray = buildJsonArray {
@@ -192,7 +215,7 @@ internal class OpenAiResponsesDecoder {
         return when (json["type"].asStr()) {
             "response.output_text.delta" ->
                 json["delta"].asStr()?.takeIf { it.isNotEmpty() }?.let { listOf(LlmStreamEvent.TextDelta(it)) } ?: emptyList()
-            "response.reasoning_summary_text.delta" ->
+            "response.reasoning_summary_text.delta", "response.reasoning_text.delta" ->
                 json["delta"].asStr()?.takeIf { it.isNotEmpty() }?.let { listOf(LlmStreamEvent.ThinkingDelta(it)) } ?: emptyList()
             "response.output_item.added" -> itemAdded(json["item"].asObj())
             "response.function_call_arguments.delta" -> {
@@ -233,9 +256,15 @@ internal class OpenAiResponsesDecoder {
             }
             "reasoning" -> {
                 val id = item["id"].asStr() ?: return emptyList()
-                val encrypted = item["encrypted_content"].asStr() ?: return emptyList()
+                val encrypted = item["encrypted_content"].asStr()
                 val summary = item["summary"].asArr()?.mapNotNull { it.asObj()?.get("text").asStr() }?.joinToString("\n\n").orEmpty()
-                listOf(LlmStreamEvent.ThinkingCompleted(summary, ReasoningItem(id, encrypted).encode()))
+                if (encrypted != null) {
+                    listOf(LlmStreamEvent.ThinkingCompleted(summary, ReasoningItem(id, encrypted).encode()))
+                } else if (summary.isNotEmpty()) {
+                    listOf(LlmStreamEvent.ThinkingCompleted(summary, null))
+                } else {
+                    emptyList()
+                }
             }
             else -> emptyList()
         }

@@ -565,7 +565,7 @@ private class SamplesPlugin : Plugin {
 private class PluginDevPlugin(private val env: ApplicationEnvironment) : Plugin {
     override val manifest = PluginManifest(
         id = "plugin-development", name = "Plugin Development",
-        description = "Author CodeAssist plugins: the Create-Project template for a plugin packaged as its " +
+        description = "Author building plugins: the Create-Project template for a plugin packaged as its " +
             "own app, and editor checks for its packaged manifest.",
         dependsOn = listOf("android-support"),
     )

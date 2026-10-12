@@ -449,6 +449,7 @@ class IdeUiState(
     /** The bottom-nav slot that reflects the current state (or null when none of its slots is active). */
     fun bottomNavSelection(): RailDestination? = when {
         moreOpen -> RailDestination.More
+        selectedLeftPanel == LeftPanelId.FILES -> RailDestination.Files
         selectedLeftPanel == LeftPanelId.SEARCH -> RailDestination.Search
         selectedLeftPanel == LeftPanelId.SOURCE -> RailDestination.Source
         else -> null

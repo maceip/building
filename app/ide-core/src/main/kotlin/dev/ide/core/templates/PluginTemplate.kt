@@ -38,7 +38,7 @@ import dev.ide.plugin.PLUGIN_SPI_VERSION
 object CodeAssistPluginTemplate : ProjectTemplate {
 
     override val id = TemplateId("codeassist-plugin")
-    override val displayName = "CodeAssist Plugin"
+    override val displayName = "building Plugin"
     override val description =
         "A plugin for this IDE, packaged as its own app. Adds a command, a settings page, or a UI panel."
     override val category = TemplateCategory.PLUGIN
@@ -187,7 +187,7 @@ object CodeAssistPluginTemplate : ProjectTemplate {
             version = "1.0.0"
             # Must equal the IDE's PLUGIN_API_VERSION, or the plugin is rejected with that reason.
             apiVersion = $PLUGIN_API_VERSION
-            description = "${args.name}, a CodeAssist plugin."
+            description = "${args.name}, a building plugin."
             $entryPoints
             capabilities = [$capabilities]
         """.trimIndent() + "\n"
@@ -460,8 +460,8 @@ private fun PanelPreview() {
                 body.addView(text(getString(R.string.app_name), 28f))
                 body.addView(
                     text(
-                        "A CodeAssist plugin.\n\n" +
-                            "Install this app, then open CodeAssist and look under " +
+                        "A building plugin.\n\n" +
+                            "Install this app, then open building and look under " +
                             "Settings > Plugins > Installed. It loads on the IDE's next launch.\n\n" +
                             "Entry point: $entryClass",
                         15f,

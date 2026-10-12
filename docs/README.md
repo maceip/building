@@ -49,6 +49,8 @@ and follow the links into each subsystem.
   pointing `externalNativeBuild` at the Android-host clang.
 - [github-action.md](github-action.md) — building CodeAssist projects in CI: the `codeassist` headless
   launcher and the `codeassist-build` GitHub Action over it.
+- [android-production.md](android-production.md) — production environment variables, signing identity,
+  and local verification of signed Android APK and AAB releases.
 - [custom-build-plugins.md](custom-build-plugins.md): the step-by-step guide to extending the build.
   Writing a task, contributing it to an existing pipeline, generating source, Kotlin compiler plugins,
   Run-picker rows, and bringing your own build system and project model.

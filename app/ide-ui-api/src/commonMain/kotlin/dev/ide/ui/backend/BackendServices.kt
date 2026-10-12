@@ -1746,11 +1746,17 @@ interface AgentService {
     /** Set the active model (persisted). */
     fun setModel(model: String)
 
+    /** Set the reasoning effort level ("default", "none", "minimal", "low", "medium", "high", "xhigh", "max"). */
+    fun setEffort(effort: String) {}
+
     /** Choose the active provider (a built-in id, or "gateway" for the custom OpenAI-compatible entry). */
     fun selectProvider(id: String)
 
     /** Store the API key for [providerId] (a built-in id or "gateway"). Blank clears it. */
     fun setProviderKey(providerId: String, key: String)
+
+    /** Store an optional endpoint/base URL override for [providerId]. Blank resets to default. */
+    fun setProviderBaseUrl(providerId: String, baseUrl: String) {}
 
     /** Configure the custom OpenAI-compatible gateway (base URL + model name, and an optional extra CA
      *  certificate PEM to trust for an endpoint behind a private/regional CA — blank = system trust only). */

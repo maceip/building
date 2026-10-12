@@ -73,8 +73,8 @@ fun tonalPair(index: Int): TonalPair {
  */
 val LocalExpressiveShapeCycling = staticCompositionLocalOf { false }
 
-private val UniformCard = RoundedCornerShape(20.dp)
-private val UniformTile = RoundedCornerShape(16.dp)
+private val UniformCard = RoundedCornerShape(10.dp)
+private val UniformTile = RoundedCornerShape(8.dp)
 
 /**
  * The card silhouette for position [index] in a repeated run.
@@ -113,22 +113,22 @@ fun tileShape(index: Int): Shape {
 
 /** Fixed silhouettes the design pins by role rather than by list position. */
 object CaShapes {
-    /** Home's primary CTA ("New project"), 64 dp tall. */
-    val PrimaryAction = RoundedCornerShape(topStart = 26.dp, topEnd = 12.dp, bottomEnd = 26.dp, bottomStart = 12.dp)
-    /** The square button beside it (clone from Git) — deliberately the mirror of [PrimaryAction]. */
-    val SquareAction = RoundedCornerShape(topStart = 12.dp, topEnd = 26.dp, bottomEnd = 12.dp, bottomStart = 26.dp)
+    /** Home's primary CTA ("New project"). */
+    val PrimaryAction = RoundedCornerShape(10.dp)
+    /** The secondary action button beside it (clone from Git / Import). */
+    val SquareAction = RoundedCornerShape(10.dp)
     /** Detail install button, idle. Morphs to [InstallBusy] then [InstallDone] as the state machine runs. */
-    val InstallIdle = RoundedCornerShape(topStart = 18.dp, topEnd = 28.dp, bottomEnd = 18.dp, bottomStart = 28.dp)
-    val InstallBusy = RoundedCornerShape(28.dp)
-    val InstallDone = RoundedCornerShape(topStart = 28.dp, topEnd = 18.dp, bottomEnd = 28.dp, bottomStart = 18.dp)
+    val InstallIdle = RoundedCornerShape(10.dp)
+    val InstallBusy = RoundedCornerShape(10.dp)
+    val InstallDone = RoundedCornerShape(10.dp)
     /** Bottom sheets. */
-    val Sheet = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp)
+    val Sheet = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
     /** Learn's "Continue" card. */
-    val Continue = RoundedCornerShape(topStart = 32.dp, topEnd = 12.dp, bottomEnd = 32.dp, bottomStart = 32.dp)
+    val Continue = RoundedCornerShape(12.dp)
     /** A developer's reply under a review: the notched corner points back at the review above it. */
-    val Reply = RoundedCornerShape(topStart = 8.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 20.dp)
+    val Reply = RoundedCornerShape(topStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp, bottomStart = 10.dp)
     /** Explore's featured hero card. */
-    val Hero = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp, bottomEnd = 32.dp, bottomStart = 12.dp)
+    val Hero = RoundedCornerShape(12.dp)
     /** The snackbar. */
-    val Snackbar = RoundedCornerShape(16.dp)
+    val Snackbar = RoundedCornerShape(10.dp)
 }

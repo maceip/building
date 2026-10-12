@@ -32,6 +32,18 @@ class PrefixTest {
     }
 
     @Test
+    fun relocatesPackageAbsoluteSymlinksIntoThisAppsPrivatePrefix() {
+        val deb = deb(
+            files = listOf("data/data/com.termux/files/usr/lib/librhash.so" to byteArrayOf(1, 2)),
+            links = listOf("data/data/com.termux/files/usr/lib/librhash.so.1" to "/data/data/com.termux/files/usr/lib/librhash.so"),
+        )
+        val dest = Files.createTempDirectory("prefix-relocation")
+        DebUnpacker.unpack(deb, dest)
+        assertEquals(dest.resolve("lib/librhash.so"), Files.readSymbolicLink(dest.resolve("lib/librhash.so.1")))
+        assertEquals(listOf<Byte>(1, 2), Files.readAllBytes(dest.resolve("lib/librhash.so.1")).toList())
+    }
+
+    @Test
     fun aChecksumMismatchFailsAndIsNotRetried() {
         val deb = deb(files = listOf("data/data/com.termux/files/usr/bin/dash" to byteArrayOf(1)))
         val catalog = Prefix.Catalog(

@@ -159,6 +159,9 @@ public final class ToolingServer {
         }
         BuildEnvironment envModel = operation(connection.model(BuildEnvironment.class)).get();
         String version = envModel.getGradle().getGradleVersion();
+        // BuildEnvironment can be served without configuring the projects. The init script writes
+        // modelOut from projectsEvaluated, so request a configured model before reading that file.
+        GradleProject project = operation(connection.model(GradleProject.class)).get();
         if (modelOut.isFile()) {
             String text = Files.readString(modelOut.toPath(), StandardCharsets.UTF_8);
             Object parsed = Json.parse(text);
@@ -167,7 +170,6 @@ public final class ToolingServer {
             model.put("gradleVersion", version);
             return model;
         }
-        GradleProject project = operation(connection.model(GradleProject.class)).get();
         Map<String, Object> fallback = fallback(project);
         fallback.put("gradleVersion", version);
         return fallback;

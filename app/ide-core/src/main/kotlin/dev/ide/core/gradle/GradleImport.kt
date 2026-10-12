@@ -893,7 +893,7 @@ object GradleImport {
             return ConvertOutcome(false, "Conversion failed and was rolled back: ${e.message ?: e.javaClass.simpleName}")
         }
         ExternalProjectMarker.clear(root)
-        return ConvertOutcome(true, "Converted to a CodeAssist project.", canRevert = moved.isNotEmpty())
+        return ConvertOutcome(true, "Converted to a building project.", canRevert = moved.isNotEmpty())
     }
 
     /** Restore a converted project: move the backed-up Gradle files back and re-enter compatibility mode. */

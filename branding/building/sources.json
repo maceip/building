@@ -1,0 +1,10 @@
+{
+  "sourceArchive": "/Users/mac/Downloads/animation-blocks/Archive.zip",
+  "archiveSha256": "0f0b9364e0b27ba0ed2353ebd20ad99d251c893a98d2291b1a307bfc4e9b9fc0",
+  "selectedArtwork": "Icon-iOS-Dark-1024@1x.png",
+  "monochromeArtwork": "Icon-iOS-ClearDark-1024@1x.png",
+  "sourceSha256": {
+    "icon-clear-dark.png": "4d52e93848d761538fbc1df879bd12fcc32b4f954a2c3f10469b6dbfe1d67dad",
+    "icon-dark.png": "23d4543f3499e5b789e3ef347bb4aaa73840b61fc5466d52ef09dc919ad6b33e"
+  }
+}
