@@ -240,16 +240,12 @@ object AndroidIde {
         )
         // Installs + launches a built APK (the android Run) via the system package installer.
         val apkInstaller = ApkInstallerImpl(context)
-        // Gradle builds opt in here. The prefix download runs beside startup; until the JDK 17
-        // image is present, Gradle projects stay on the static reader.
+        // Native Gradle provisioning is an explicit developer-build action in the workbench;
+        // opening the IDE must not download executable toolchains or a large prefix.
         val gradleHost = AndroidGradleHost(context)
         GradleEnvironment.enabled = true
         GradleEnvironment.installAndLaunch = { apk, pkg, log -> apkInstaller.installAndLaunch(apk, pkg, log) }
         GradleEnvironment.host = gradleHost
-        kotlin.concurrent.thread(isDaemon = true, name = "gradle-prefix") {
-            runCatching { gradleHost.installIfNeeded { line -> Log.logger("ide.gradle").info(line) } }
-                .onFailure { Log.logger("ide.gradle").warn("prefix install failed: ${it.message}") }
-        }
         // The debug-only in-app log bridge: extract the bundled runtime jar (woven into debug builds); the
         // bridge inside the built app binds the IDE's exported AppLogSinkService over Binder and pushes its
         // logs to the IDE's Logcat tab. Best-effort — a missing/failed asset must NEVER stop the IDE from
@@ -257,6 +253,32 @@ object AndroidIde {
         val appLogRuntimeJar = runCatching {
             copyAsset(context, "applog-runtime.jar", File(home, "applog-runtime.jar"))
         }.getOrNull()
+        val reliabilityCache = context.noBackupFilesDir.toPath().resolve("reliability-build")
+        dev.ide.android.support.ReliabilityBuildEnvironment.runtimeJar = appLogRuntimeJar?.toPath()
+        dev.ide.android.support.ReliabilityBuildEnvironment.privateCacheRoot = reliabilityCache
+        dev.ide.android.support.ReliabilityBuildEnvironment.provider =
+            dev.ide.android.support.ReliabilityConfigurationProvider { request ->
+                val host = dev.ide.android.reliability.ReliabilityHostProvider.get(context)
+                if (!host.debugCaptureAllowed()) null else {
+                    dev.ide.android.reliability.repair.AndroidIncidentRepairHost.get(context).registerBuild(
+                        request.projectPath, request.packageName, request.buildId, request.variant,
+                        request.sourceRevision, request.debuggable,
+                    )
+                    host.createPendingDebugPairing(request.packageName, request.buildId, request.sourceRevision).assetJson()
+                }
+            }
+        GradleEnvironment.reliabilityRuntimeJar = appLogRuntimeJar?.toPath()
+        GradleEnvironment.reliabilityPrivateCacheRoot = reliabilityCache
+        GradleEnvironment.reliabilityProvider = dev.ide.gradle.GradleReliabilityConfigurationProvider { request ->
+            val host = dev.ide.android.reliability.ReliabilityHostProvider.get(context)
+            if (!host.debugCaptureAllowed()) null else {
+                dev.ide.android.reliability.repair.AndroidIncidentRepairHost.get(context).registerBuild(
+                    request.projectPath, request.packageName, request.buildId, request.variant,
+                    request.sourceRevision, request.debuggable,
+                )
+                host.createPendingDebugPairing(request.packageName, request.buildId, request.sourceRevision).assetJson()
+            }
+        }
         val appLogChannel = AppLogChannelImpl()
         // The legacy dex-based custom-view seam is gone (it D8-dexed the user's classes onto a DexClassLoader,
         // which Google Play's Device-and-Network-Abuse "DDL" scorer flags). Custom library AND project views are

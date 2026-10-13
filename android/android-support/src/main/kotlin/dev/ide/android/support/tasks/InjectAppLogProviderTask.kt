@@ -30,15 +30,21 @@ internal class InjectAppLogProviderTask(
     private val mergedManifest: Path,
     private val providerClass: String,
     private val authority: String,
-    private val sinkAction: String,
+    private val sinkAction: String?,
     private val outManifest: Path,
+    /** Non-null only for explicitly consented reliability collection. Legacy injection has no consent. */
+    private val configAsset: String? = null,
+    /** Contains ONLY the explicit recipient package, not the pairing nonce. Generated in a private cache. */
+    private val recipientPackageFile: Path? = null,
 ) : Task {
     override val inputs: TaskInputs
         get() = TaskInputsImpl().apply {
             filePaths("manifest", listOf(mergedManifest).filter { Files.exists(it) })
             property("provider", providerClass)
             property("authority", authority)
-            property("sinkAction", sinkAction)
+            property("sinkAction", sinkAction.orEmpty())
+            property("configAsset", configAsset.orEmpty())
+            filePaths("recipient", listOfNotNull(recipientPackageFile))
         }
     override val outputs: TaskOutputs get() = TaskOutputsImpl().apply { filePath("manifest", outManifest) }
 
@@ -49,9 +55,10 @@ internal class InjectAppLogProviderTask(
 
         val doc = try {
             DocumentBuilderFactory.newInstance().apply {
-                isNamespaceAware = false
+                isNamespaceAware = true
                 runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
                 runCatching { setFeature("http://xml.org/sax/features/external-general-entities", false) }
+                runCatching { setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
                 isExpandEntityReferences = false
             }.newDocumentBuilder().parse(mergedManifest.toFile())
         } catch (t: Throwable) {
@@ -60,6 +67,7 @@ internal class InjectAppLogProviderTask(
 
         val application = firstChildTag(doc.documentElement, "application")
         if (application == null) {
+            if (configAsset != null) return TaskResult.Failed("Reliability: opted-in app manifest has no <application> element.")
             // No <application> — nothing to instrument; pass the manifest through untouched.
             outManifest.parent?.let { Files.createDirectories(it) }
             Files.copy(mergedManifest, outManifest, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
@@ -75,40 +83,64 @@ internal class InjectAppLogProviderTask(
         // code; saying so is what lets the platform load the bridge. NativeActivity itself is a framework
         // class and runs the same either way. Release builds are never instrumented and keep the attribute.
         if (application.androidAttr("hasCode") == "false") {
-            if (application.hasAttribute("android:hasCode")) application.setAttribute("android:hasCode", "true")
+            application.setAttributeNS(ANDROID_NS, "android:hasCode", "true")
             if (application.hasAttribute("hasCode")) application.setAttribute("hasCode", "true")
             ctx.debug("injectAppLogProvider: android:hasCode=\"false\" set to true, the bridge's dex is packaged")
         }
 
-        // Idempotent: don't add a second provider if one is already present (e.g. a hand-edited manifest).
-        val alreadyPresent = childElements(application).any {
+        val manifest = doc.documentElement
+        manifest.setAttribute("xmlns:android", "http://schemas.android.com/apk/res/android")
+        val providers = childElements(application).filter {
             it.tagName == "provider" && it.androidAttr("name") == providerClass
         }
-        if (!alreadyPresent) {
-            val provider = doc.createElement("provider")
-            provider.setAttribute("android:name", providerClass)
-            provider.setAttribute("android:authorities", authority)
-            provider.setAttribute("android:exported", "false")
-            // A high initOrder boots the bridge before lower-order providers, so early startup logs are captured.
-            provider.setAttribute("android:initOrder", "2147483646")
-            application.appendChild(provider)
-        }
+        if (providers.size > 1) return TaskResult.Failed("Reliability: duplicate SDK providers in the merged manifest.")
+        val provider = providers.firstOrNull() ?: doc.createElement("provider").also { application.appendChild(it) }
+        provider.setAttributeNS(ANDROID_NS, "android:name", providerClass)
+        provider.setAttributeNS(ANDROID_NS, "android:authorities", authority)
+        provider.setAttributeNS(ANDROID_NS, "android:exported", "false")
+        provider.setAttributeNS(ANDROID_NS, "android:initOrder", if (configAsset != null) "100" else "2147483646")
+        provider.removeAttributeNS(ANDROID_NS, "process") // SDK startup belongs to the application's main process.
+        provider.removeAttributeNS(ANDROID_NS, "multiprocess")
+        provider.removeAttributeNS(ANDROID_NS, "grantUriPermissions")
 
-        // Package visibility (Android 11+): the built app must be able to SEE + bind the IDE's exported log-sink
-        // service, which the bridge resolves by [sinkAction]. Add a `<queries><intent>` for it (a sibling of
-        // `<application>`, directly under `<manifest>`), idempotently. Without it, `resolveService` returns null
-        // on API 30+ and the bridge silently stays dark.
-        val manifest = doc.documentElement
-        val queries = firstChildTag(manifest, "queries") ?: doc.createElement("queries").also { manifest.appendChild(it) }
-        val hasSinkIntent = childElements(queries).any { q ->
-            q.tagName == "intent" && childElements(q).any { it.tagName == "action" && it.androidAttr("name") == sinkAction }
+        if (configAsset != null) {
+            val key = dev.ide.android.support.ReliabilityProjectOptions.CONFIG_METADATA
+            childElements(application).filter { it.tagName == "meta-data" && it.androidAttr("name") == key }
+                .forEach { application.removeChild(it) }
+            val metadata = doc.createElement("meta-data")
+            metadata.setAttributeNS(ANDROID_NS, "android:name", key)
+            metadata.setAttributeNS(ANDROID_NS, "android:value", configAsset)
+            application.appendChild(metadata)
         }
-        if (!hasSinkIntent) {
-            val intent = doc.createElement("intent")
-            val action = doc.createElement("action")
-            action.setAttribute("android:name", sinkAction)
-            intent.appendChild(action)
-            queries.appendChild(intent)
+        // Reliability NEVER discovers an arbitrary action handler. Visibility names the explicit, paired
+        // debug IDE package only. A production config has no recipient and therefore no generated query.
+        val recipient = recipientPackageFile?.let {
+            if (!Files.isRegularFile(it)) return TaskResult.Failed("Reliability: generated recipient is missing.")
+            String(Files.readAllBytes(it), Charsets.UTF_8).trim()
+        }.orEmpty()
+        if (recipient.isNotEmpty()) {
+            if (!recipient.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")))
+                return TaskResult.Failed("Reliability: invalid explicit recipient package.")
+            val queries = firstChildTag(manifest, "queries") ?: doc.createElement("queries").also { manifest.appendChild(it) }
+            if (childElements(queries).none { it.tagName == "package" && it.androidAttr("name") == recipient }) {
+                val pkg = doc.createElement("package")
+                pkg.setAttributeNS(ANDROID_NS, "android:name", recipient)
+                queries.appendChild(pkg)
+            }
+        }
+        // Compatibility for explicit legacy callers only; this does not add reliability consent metadata.
+        if (configAsset == null && sinkAction != null) {
+            val queries = firstChildTag(manifest, "queries") ?: doc.createElement("queries").also { manifest.appendChild(it) }
+            val hasSinkIntent = childElements(queries).any { q ->
+                q.tagName == "intent" && childElements(q).any { it.tagName == "action" && it.androidAttr("name") == sinkAction }
+            }
+            if (!hasSinkIntent) {
+                val intent = doc.createElement("intent")
+                val action = doc.createElement("action")
+                action.setAttributeNS(ANDROID_NS, "android:name", sinkAction)
+                intent.appendChild(action)
+                queries.appendChild(intent)
+            }
         }
 
         outManifest.parent?.let { Files.createDirectories(it) }
@@ -130,5 +162,10 @@ internal class InjectAppLogProviderTask(
     }
 
     private fun Element.androidAttr(local: String): String? =
-        (getAttribute("android:$local").ifEmpty { getAttribute(local) }).ifEmpty { null }
+        getAttributeNS(ANDROID_NS, local).ifEmpty { getAttribute("android:$local") }
+            .ifEmpty { getAttribute(local) }.ifEmpty { null }
+
+    private companion object {
+        const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
+    }
 }

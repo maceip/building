@@ -55,7 +55,12 @@ object GradleToolchain {
             initialize(client, projectDir, host, javaHome)
             val cached = GradleProjectSnapshot.load(projectDir)
             val snapshot = cached?.also { materialize(host, scan, it) } ?: syncWith(client, scan, host)
-            client.execute(tasks, isCanceled = isCanceled, onEvent = onEvent)
+            val reliabilityArgs = GradleReliabilityInjection.launchArgs(
+                projectDir, GradleEnvironment.reliabilityPrivateCacheRoot ?: host.gradleUserHome(), snapshot, tasks,
+            )
+            // Execute-only args: model fetch/sync never registers pairings or instruments variants.
+            client.execute(tasks, args = reliabilityArgs, isCanceled = isCanceled, onEvent = onEvent)
+            GradleReliabilityInjection.verifySources(projectDir, reliabilityArgs)
             return snapshot
         } finally {
             client.close()

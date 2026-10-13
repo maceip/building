@@ -51,6 +51,14 @@ and follow the links into each subsystem.
   launcher and the `codeassist-build` GitHub Action over it.
 - [android-production.md](android-production.md) — production environment variables, signing identity,
   and local verification of signed Android APK and AAB releases.
+- [three-pillar-execution-plan.md](three-pillar-execution-plan.md) — approved execution scope, independent pass/fail gates, current acceptance, and remaining blockers.
+- [developer-workbench.md](developer-workbench.md) — the initial three-area workbench implementation and historical acceptance results.
+- [play-publishing-research.md](play-publishing-research.md) — supported Google Play automation, authorization, and unavoidable Console/account gates.
+- [runtime-platform.md](runtime-platform.md) — APK-delivered Node/npm/Python/dash, distribution modes, workspace copies, and runtime boundaries.
+- [third-pillar-evidence.md](third-pillar-evidence.md) — the GitHub archive analysis behind App Quality & Reliability, including sampling corrections.
+- [quality-lab.md](quality-lab.md) — offline evidence import/grouping, log redaction, project checks, and measured classifier limitations.
+- [regression-scenarios.md](regression-scenarios.md) — reviewed executable local scenarios with assertions and persisted evidence.
+- [web-to-android.md](web-to-android.md) — package reviewed static web assets into a native Android project without Gradle downloads.
 - [custom-build-plugins.md](custom-build-plugins.md): the step-by-step guide to extending the build.
   Writing a task, contributing it to an existing pipeline, generating source, Kotlin compiler plugins,
   Run-picker rows, and bringing your own build system and project model.

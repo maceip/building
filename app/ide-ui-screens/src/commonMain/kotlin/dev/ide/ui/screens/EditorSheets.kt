@@ -57,6 +57,7 @@ internal fun PaletteOverlay(
     val paletteHost = editorActionHost(
         state, onToggleTheme, onOpenHub, onOpenIconManager, onOpenDependencies, onOpenModuleConfig, onCloseProject,
         onDone = { state.paletteOpen = false },
+        onOpenPlugin = pluginNavigator,
     )
     // A scope set by a go-to shortcut lasts for that opening only; the toolbar button opens on All.
     LaunchedEffect(state.paletteOpen) { if (!state.paletteOpen) state.paletteFilter = null }
@@ -100,6 +101,7 @@ internal fun editorActionHost(
     onOpenModuleConfig: (String?) -> Unit,
     onCloseProject: () -> Unit,
     onDone: () -> Unit,
+    onOpenPlugin: (String) -> Unit = {},
 ): UiActionHost = object : UiActionHost {
     override val backend: IdeBackend = state.backend
     override fun navigate(destination: String) {
@@ -111,6 +113,7 @@ internal fun editorActionHost(
             UiDestinations.ICONS -> onOpenIconManager()
             UiDestinations.LOGS -> state.logsOpen = true
             UiDestinations.PROJECTS -> onCloseProject()
+            else -> onOpenPlugin(destination)
         }
     }
     override fun toggleTheme() { onDone(); onToggleTheme() }
@@ -134,13 +137,15 @@ internal fun DestinationSheets(
     /** The phone shows the Logs viewer as a sheet; the wide layout docks it in the bottom pane instead. */
     logsAsSheet: Boolean,
 ) {
+    val pluginNavigator = LocalPluginNavigator.current
     BottomSheet(visible = state.moreOpen, onDismiss = { state.moreOpen = false }, heightFraction = 0.45f) {
         // The rows are UI-side actions resolved from the registry; the host bridges them to the app's
         // navigation callbacks. Adding a row is a registration (see BuiltInUiActions), not an edit here.
-        val moreHost = remember(state) {
+        val moreHost = remember(state, pluginNavigator) {
             editorActionHost(
                 state, onToggleTheme, onOpenHub, onOpenIconManager, onOpenDependencies, onOpenModuleConfig, onCloseProject,
                 onDone = { state.moreOpen = false },
+                onOpenPlugin = pluginNavigator,
             )
         }
         MoreSheetContent(host = moreHost, modifier = Modifier.fillMaxWidth().weight(1f))

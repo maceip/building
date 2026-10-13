@@ -1,0 +1,3 @@
+<resources>
+    <!-- dist:title must resolve to the base app's resValue, not a feature-local ID. -->
+</resources>

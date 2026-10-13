@@ -324,6 +324,7 @@ internal fun ExpandedLayout(
     val stripeHost = editorActionHost(
         state, onToggleTheme, onOpenHub, onOpenIconManager, onOpenDependencies, onOpenModuleConfig, onCloseProject,
         onDone = {},
+        onOpenPlugin = dev.ide.ui.LocalPluginNavigator.current,
     )
     UiPluginHost.ensureLoaded()
     val stripeActions = UiActionRegistry.forPlace(UiActionPlaces.TOOL_STRIPE, stripeHost)

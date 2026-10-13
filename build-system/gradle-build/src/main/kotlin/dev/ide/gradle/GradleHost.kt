@@ -46,6 +46,13 @@ object GradleEnvironment {
     @Volatile var enabled: Boolean = false
     @Volatile var host: GradleHost? = null
 
+    /** Production-only Java-8 JAR (or AAR). Installing it does not opt any project into collection. */
+    @Volatile var reliabilityRuntimeJar: Path? = null
+    /** Optional override; otherwise the Gradle host's private user-home cache is used. */
+    @Volatile var reliabilityPrivateCacheRoot: Path? = null
+    /** Called only for explicitly consented debug app variants, never sync/library/test/release. */
+    @Volatile var reliabilityProvider: GradleReliabilityConfigurationProvider? = null
+
     /** Set by the Android shell once [dev.ide] has an installer. Desktop leaves it null. */
     @Volatile var installAndLaunch: (suspend (apk: Path, packageName: String, log: (String) -> Unit) -> Unit)? = null
 }

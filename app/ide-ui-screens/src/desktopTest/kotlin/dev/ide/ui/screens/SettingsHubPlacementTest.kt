@@ -12,6 +12,7 @@ class SettingsHubPlacementTest {
             when (t) {
                 is HubTarget.Page -> t.id
                 is HubTarget.Tool -> t.tool.name
+                is HubTarget.ContributedScreen -> t.id
             }
         }
     }

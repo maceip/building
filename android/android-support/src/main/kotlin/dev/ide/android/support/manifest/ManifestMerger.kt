@@ -74,6 +74,7 @@ object ManifestMerger {
         appMinSdk: Int? = null,
         stripVersionCode: Boolean = false,
         stripVersionName: Boolean = false,
+        appDebuggable: Boolean? = null,
     ): Result {
         val primaryXml = Files.readAllBytes(primary).toString(Charsets.UTF_8)
         val libXmls = libraries.mapNotNull { lib ->
@@ -81,7 +82,7 @@ object ManifestMerger {
         }
         return mergeXml(
             primaryXml, libXmls.map { it.second }, placeholders, libXmls.map { it.first.toString() },
-            appMinSdk, stripVersionCode, stripVersionName,
+            appMinSdk, stripVersionCode, stripVersionName, appDebuggable,
         )
     }
 
@@ -93,6 +94,10 @@ object ManifestMerger {
      * from the output so the build config's value (fed to `aapt2 link --version-code/--version-name`, which
      * only injects when the manifest declares none) wins — AGP's DSL-overrides-manifest rule. The caller
      * passes true only when the facet value is authoritative (see `AndroidBuildSystem`).
+     *
+     * [appDebuggable], when supplied by an app build, is the selected build type's authoritative flag.
+     * It overrides source/dependency declarations after all merge markers are applied. Null leaves this
+     * generic merger's caller-owned manifest unchanged; native app builds always supply true or false.
      */
     fun mergeXml(
         primary: String,
@@ -102,6 +107,7 @@ object ManifestMerger {
         appMinSdk: Int? = null,
         stripVersionCode: Boolean = false,
         stripVersionName: Boolean = false,
+        appDebuggable: Boolean? = null,
     ): Result {
         val messages = ArrayList<Message>()
         val mergedDoc = runCatching { parse(primary) }.getOrElse {
@@ -150,6 +156,17 @@ object ManifestMerger {
         // attribute so aapt2's --version-code/--version-name (inject-if-absent) supplies the facet value.
         if (stripVersionCode) mergedDoc.documentElement.removeAttributeNS(ANDROID_NS, "versionCode")
         if (stripVersionName) mergedDoc.documentElement.removeAttributeNS(ANDROID_NS, "versionName")
+        // Variant ownership is independent of SDK injection. A missing flag is false to PackageManager;
+        // merely naming the variant "debug" (or passing debug mode to D8) never sets FLAG_DEBUGGABLE.
+        // Set false explicitly for release too, so a stale source/library true cannot enable debugging.
+        if (appDebuggable != null) {
+            val root = mergedDoc.documentElement
+            val applications = childElements(root).filter { it.tagName == "application" }
+            if (applications.isNotEmpty()) {
+                root.setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:android", ANDROID_NS)
+                applications.forEach { it.setAttributeNS(ANDROID_NS, "android:debuggable", appDebuggable.toString()) }
+            }
+        }
         return Result(serialize(mergedDoc), messages)
     }
 

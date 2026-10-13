@@ -5,6 +5,7 @@
 /build/
 /*/build/
 /*/*/build/
+/android/runtime-engine/*/build/
 !gradle/wrapper/gradle-wrapper.jar
 
 # IDE-derived / OS

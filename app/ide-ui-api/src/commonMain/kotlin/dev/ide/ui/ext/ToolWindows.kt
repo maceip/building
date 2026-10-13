@@ -168,7 +168,11 @@ class ScreenContribution(
     val id: String,
     val title: String,
     val content: @Composable (ScreenContext) -> Unit,
-)
+) {
+    var showInTools: Boolean = false
+    var toolDescription: String? = null
+    var toolIconId: String? = null
+}
 
 object ScreenRegistry {
     private val items = mutableStateListOf<ScreenContribution>()

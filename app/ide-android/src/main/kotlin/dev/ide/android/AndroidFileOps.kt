@@ -11,7 +11,11 @@ import androidx.activity.ComponentActivity
 import androidx.core.content.FileProvider
 import dev.ide.core.project.CaprojFormat
 import dev.ide.ui.backend.IdeBackend
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
+import java.util.UUID
 
 /**
  * The Android host's file/SAF/FileProvider plumbing, split out of [MainActivity]: content-URI import/copy,
@@ -35,88 +39,158 @@ internal class AndroidFileOps(private val activity: ComponentActivity) {
         Toast.makeText(activity, "Couldn't open the installer for ${File(path).name}", Toast.LENGTH_SHORT).show()
     }
 
-    /** Copy [uri]'s bytes into a new file under [targetDir]; returns the new path or null. */
-    fun importUri(uri: Uri, targetDir: String, backend: IdeBackend): String? = runCatching {
-        val name = queryDisplayName(uri) ?: "imported-${System.currentTimeMillis()}"
-        val bytes = activity.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
-        backend.files.createFileBytes(targetDir, name, bytes)
-    }.getOrNull()
-
-    /** Copy an inbound (`Open with`) file into a uniquely-named cache path so each hand-off is a distinct
-     *  path (the import preview re-opens on each new path). Returns the real path or null. */
-    fun copyInboundToCache(uri: Uri, name: String): String? = runCatching {
-        val dest = File(activity.cacheDir, "import-${System.currentTimeMillis()}-$name")
-        activity.contentResolver.openInputStream(uri)
-            ?.use { input -> dest.outputStream().use { input.copyTo(it) } } ?: return null
-        dest.absolutePath
-    }.getOrNull()
-
     /**
-     * Copy the SAF tree at [treeUri] into a fresh cache directory (skipping regenerable build outputs /
-     * gradle caches) and return that directory's real filesystem path. The engine's Gradle importer needs a
-     * [java.nio.file.Path], but SAF hands back a `content://` tree, not a file — so we materialize a local
-     * copy first. Returns null on failure, cleaning up any partial copy. Call off the main thread (it does
-     * full-tree I/O).
+     * Copy a source file (at most 64 MiB) under [targetDir]. All import/copy entry points are blocking:
+     * call on Dispatchers.IO. Invalid/unreadable/oversized input returns null; cancellation propagates.
      */
-    fun copyTreeToCache(treeUri: Uri): String? {
-        val rootDocId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull() ?: return null
-        val dest = File(activity.cacheDir, "gradle-import-${System.currentTimeMillis()}")
-        return runCatching {
-            dest.mkdirs()
-            copyDocTree(treeUri, rootDocId, dest)
-            dest.absolutePath
-        }.getOrElse { dest.deleteRecursively(); null }
+    fun importUri(uri: Uri, targetDir: String, backend: IdeBackend): String? = AndroidImportLimits.orNull {
+        val metadata = importMetadata(uri)
+        val name = AndroidImportLimits.fileName(metadata.name ?: "imported-${UUID.randomUUID()}")
+        // The backend accepts bytes and refuses existing files. Validate containment before handing it a name.
+        AndroidImportLimits.child(File(targetDir), File(targetDir), name)
+        val budget = AndroidImportLimits.ByteBudget(AndroidImportLimits.MAX_SOURCE_BYTES)
+        budget.checkFileSize(metadata.size, AndroidImportLimits.MAX_SOURCE_BYTES)
+        val bytes = ByteArrayOutputStream().use { output ->
+            val input = activity.contentResolver.openInputStream(uri)
+                ?: throw AndroidImportException("The selected file could not be opened.")
+            input.use {
+                AndroidImportLimits.copy(it, output, budget, AndroidImportLimits.MAX_SOURCE_BYTES, metadata.size)
+            }
+            output.toByteArray()
+        }
+        AndroidImportLimits.checkInterrupted()
+        backend.files.createFileBytes(targetDir, name, bytes)
     }
 
-    /** Recursively copy the SAF document [parentDocId] (a directory) under [treeUri] into [destDir]. */
-    private fun copyDocTree(treeUri: Uri, parentDocId: String, destDir: File) {
+    /** Copy an inbound (`Open with`) file into a fresh private cache directory. Never interpret [name] as a path. */
+    fun copyInboundToCache(uri: Uri, name: String): String? = AndroidImportLimits.orNull {
+        val safeName = AndroidImportLimits.fileName(name)
+        copyFileToFreshCache(uri, safeName, importMetadata(uri).size, "import")
+    }
+
+    /**
+     * Materialize a SAF folder for the engine, bounded to 512 MiB, 20,000 entries and 64 levels. Exclude
+     * regenerable directories but preserve .platform workspace data. Never return a partially read tree.
+     * Call off the main thread. On refusal, clean up only this invocation's fresh staging directory.
+     */
+    fun copyTreeToCache(treeUri: Uri): String? = AndroidImportLimits.orNull {
+        val rootDocId = DocumentsContract.getTreeDocumentId(treeUri)
+        val budget = AndroidImportLimits.TreeBudget(rootDocId)
+        AndroidImportLimits.inFreshDirectory(activity.cacheDir, "gradle-import") { dest ->
+            copyDocTree(treeUri, rootDocId, dest, dest, 0, budget)
+            dest.absolutePath
+        }
+    }
+
+    private fun copyDocTree(
+        treeUri: Uri,
+        parentDocId: String,
+        root: File,
+        destDir: File,
+        depth: Int,
+        budget: AndroidImportLimits.TreeBudget,
+    ) {
+        AndroidImportLimits.checkInterrupted()
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
         val resolver = activity.contentResolver
-        resolver.query(
+        val cursor = resolver.query(
             childrenUri,
             arrayOf(
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                 DocumentsContract.Document.COLUMN_DISPLAY_NAME,
                 DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
             ),
             null, null, null,
-        )?.use { c ->
+        ) ?: throw AndroidImportException("The selected folder could not be read completely.")
+        cursor.use { c ->
             val idIdx = c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
             val nameIdx = c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
             val mimeIdx = c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            val sizeIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+            val childNames = HashSet<String>()
             while (c.moveToNext()) {
-                val childName = c.getString(nameIdx) ?: continue
-                // Skip regenerable build outputs / IDE metadata to keep the copy small (the engine's importer
-                // drops build/.gradle too, so leaving them out here just saves a redundant round-trip).
-                if (childName == "build" || childName == ".gradle" || childName == ".idea") continue
                 val childId = c.getString(idIdx)
-                val child = File(destDir, childName)
-                if (c.getString(mimeIdx) == DocumentsContract.Document.MIME_TYPE_DIR) {
-                    child.mkdirs()
-                    copyDocTree(treeUri, childId, child)
+                    ?: throw AndroidImportException("The selected folder contains an invalid document.")
+                budget.visit(childId, depth + 1)
+                val childName = AndroidImportLimits.fileName(c.getString(nameIdx))
+                if (!childNames.add(childName)) throw AndroidImportException("The selected folder contains duplicate file names.")
+                val mime = c.getString(mimeIdx)
+                if (mime.isNullOrBlank()) throw AndroidImportException("The selected folder contains an unreadable item.")
+                val child = AndroidImportLimits.child(root, destDir, childName)
+                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    if (AndroidImportLimits.skipDirectory(childName)) continue
+                    if (!child.mkdir()) throw AndroidImportException("An import folder could not be created.")
+                    copyDocTree(treeUri, childId, root, child, depth + 1, budget)
                 } else {
+                    val size = if (sizeIdx >= 0 && !c.isNull(sizeIdx)) c.getLong(sizeIdx) else null
+                    budget.bytes.checkFileSize(size)
                     val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childId)
-                    resolver.openInputStream(docUri)?.use { input -> child.outputStream().use { input.copyTo(it) } }
+                    val input = resolver.openInputStream(docUri)
+                        ?: throw AndroidImportException("The selected file could not be opened.")
+                    input.use {
+                        // CREATE_NEW also refuses duplicate/case-aliased names instead of clobbering a file.
+                        Files.newOutputStream(child.toPath(), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE).use { output ->
+                            AndroidImportLimits.copy(it, output, budget.bytes, declaredBytes = size)
+                        }
+                    }
                 }
             }
+            // Cloud providers can return an incomplete cursor while fetching; do not report it as success.
+            if (c.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false) ||
+                c.extras.containsKey(DocumentsContract.EXTRA_ERROR)
+            ) throw AndroidImportException("The selected folder could not be read completely. Try again when it is available offline.")
         }
     }
 
-    /** Copy a picked content:// file into the app cache and return its real path (keystores, screenshots). */
-    fun copyUriToCache(uri: Uri): String? = runCatching {
-        val name = queryDisplayName(uri) ?: "picked-${System.currentTimeMillis()}"
-        // Keyed by the document URI, not by the display name alone. Two screenshots from different folders
-        // are both called "Screenshot_2026-09-12.png", and a name-only path made the second overwrite the
-        // first and come back as a path the caller had already recorded: the publish form dropped it as a
-        // duplicate while the thumbnail already on screen silently became the new image. The key keeps
-        // distinct documents distinct, and the SAME document picked twice still maps to one path, which is
-        // what those duplicate checks are actually for.
-        val key = uri.toString().hashCode().toUInt().toString(16)
-        val dest = File(activity.cacheDir, "picked-$key-$name")
-        activity.contentResolver.openInputStream(uri)
-            ?.use { input -> dest.outputStream().use { input.copyTo(it) } } ?: return null
-        dest.absolutePath
-    }.getOrNull()
+    /**
+     * Copy a picked file (at most 512 MiB) on an I/O thread. Every pick is a new immutable snapshot: even
+     * the same URI can change, and a previous copy may be in publication preflight. Deduplicate by content
+     * at the consumer, not by an overwritable URI-hash path. Returns null on refusal/unreadable input.
+     */
+    fun copyUriToCache(uri: Uri): String? = AndroidImportLimits.orNull {
+        val metadata = importMetadata(uri)
+        val name = AndroidImportLimits.fileName(metadata.name ?: "picked-${UUID.randomUUID()}")
+        copyFileToFreshCache(uri, name, metadata.size, "picked")
+    }
+
+    private fun copyFileToFreshCache(uri: Uri, name: String, size: Long?, prefix: String): String {
+        val budget = AndroidImportLimits.ByteBudget(AndroidImportLimits.MAX_FILE_BYTES)
+        budget.checkFileSize(size)
+        return AndroidImportLimits.inFreshDirectory(activity.cacheDir, prefix) { root ->
+            val dest = AndroidImportLimits.child(root, root, name)
+            val input = activity.contentResolver.openInputStream(uri)
+                ?: throw AndroidImportException("The selected file could not be opened.")
+            input.use {
+                Files.newOutputStream(dest.toPath(), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE).use { output ->
+                    AndroidImportLimits.copy(it, output, budget, declaredBytes = size)
+                }
+            }
+            dest.absolutePath
+        }
+    }
+
+    private data class ImportMetadata(val name: String?, val size: Long?)
+
+    private fun importMetadata(uri: Uri): ImportMetadata {
+        AndroidImportLimits.checkInterrupted()
+        if (uri.scheme == "file") {
+            val file = File(uri.path ?: throw AndroidImportException("The selected file could not be opened."))
+            return ImportMetadata(uri.lastPathSegment, file.length())
+        }
+        // A name/size is optional for non-document providers (e.g. clipboard images). Never use size to
+        // allocate memory or trust a missing/small value; the stream is always counted independently.
+        return activity.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
+            ?.use { c ->
+                if (!c.moveToFirst()) return@use ImportMetadata(null, null)
+                val nameIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeIdx = c.getColumnIndex(OpenableColumns.SIZE)
+                ImportMetadata(
+                    if (nameIdx >= 0 && !c.isNull(nameIdx)) c.getString(nameIdx) else null,
+                    if (sizeIdx >= 0 && !c.isNull(sizeIdx)) c.getLong(sizeIdx) else null,
+                )
+            } ?: ImportMetadata(null, null)
+    }
 
     /** A fresh file for the camera to write a photo into, and the FileProvider URI the camera app writes through
      *  (the camera runs in another process, so it needs a grantable content:// URI, not a path). */

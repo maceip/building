@@ -1,0 +1,18 @@
+--- a/tools/v8_gypfiles/v8.gyp
++++ b/tools/v8_gypfiles/v8.gyp
+@@ -1061,6 +1061,15 @@
+       'target_name': 'v8_base_without_compiler',
+       'type': 'static_library',
+       'toolsets': ['host', 'target'],
++      'target_conditions': [
++        ['OS=="android" and _toolset=="host" and host_os in "linux mac" and v8_enable_webassembly==1', {
++          # Host mksnapshot has POSIX traps; Android target explicitly does not.
++          'sources': [
++            '<(V8_ROOT)/src/trap-handler/handler-inside-posix.cc',
++            '<(V8_ROOT)/src/trap-handler/handler-outside-posix.cc',
++          ],
++        }],
++      ],
+       'dependencies': [
+         'torque_generated_definitions',
+         'v8_bigint',

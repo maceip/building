@@ -1,0 +1,11 @@
+--- a/tools/gyp/pylib/gyp/generator/make.py
++++ b/tools/gyp/pylib/gyp/generator/make.py
+@@ -2521,6 +2521,9 @@
+         android_commands = LINK_COMMANDS_ANDROID
+         if sys.platform == "darwin":
++            # Apple ld cannot read ELF-style thin archives. llvm-ar writes Mach-O
++            # archive indexes when regular archives are requested for host tools.
++            android_commands = android_commands.replace(" crsT ", " crs ")
+             # Host generators use Apple ld, while the Android target uses ELF lld.
+             android_commands = android_commands.replace(
+                 "cmd_link_host = $(LINK.$(TOOLSET)) $(GYP_LDFLAGS) $(LDFLAGS.$(TOOLSET)) -o $@ -Wl,--start-group $(LD_INPUTS) -Wl,--end-group $(LIBS)",

@@ -7,4 +7,5 @@
     <files-path name="codeassist" path="codeassist/" />
     <!-- Where the camera writes a photo taken for the AI chat (see AndroidFileOps.newCameraTarget). -->
     <cache-path name="camera" path="camera/" />
+    <cache-path name="workbench-exports" path="exports/" />
 </paths>

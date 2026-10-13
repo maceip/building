@@ -2,20 +2,20 @@ plugins {
     `java-library`
 }
 
-// applog-runtime — a tiny, dependency-free Java runtime that the Android build system injects into DEBUG
-// builds (never release). It ships as a jar of plain .class files; the debug APK pipeline adds it to the
-// app's external dex scope and registers its ContentProvider in the merged manifest, so on app start the
-// provider boots a background bridge that forwards the app's own logs (logcat of its own PID, plus
-// System.out/err and uncaught exceptions as a fallback) over an abstract-namespace LocalSocket back to the
-// IDE, which shows them in a live "Logcat" console tab. See docs/app-log-forwarding.md.
-//
-// It is written in Java (not Kotlin) and links NOTHING at runtime so the injected footprint is a couple of
-// classes with no kotlin-stdlib. The android.* framework types it uses are provided by a throwaway stub
-// android.jar at compile time only (compileOnly) — they resolve against the real android.jar when D8 dexes
-// this jar into a user's app. That keeps the module buildable with no Android SDK (CI_CORE_ONLY).
+// Native local-first reliability SDK, API 26+, Java 8. No bundled runtime libraries or JavaScript VM.
+// The optional provider is inert without explicit per-project configuration and user consent.
+// Framework types (including platform org.json) are compile-only, so CI_CORE_ONLY needs no Android SDK.
 dependencies {
     compileOnly(libs.android.stub)
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.platform.launcher)
+    testImplementation("org.json:json:20080701")
+    testCompileOnly(libs.android.stub)
+    testRuntimeOnly(libs.android.stub)
 }
+
+tasks.withType<Test>().configureEach { useJUnitPlatform() }
 
 java {
     // Java 8 bytecode: D8 rejects class files newer than it supports, and these classes are dexed into every

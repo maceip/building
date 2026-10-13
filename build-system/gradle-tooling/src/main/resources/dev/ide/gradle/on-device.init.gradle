@@ -10,12 +10,297 @@
 import org.gradle.api.artifacts.ExternalModuleDependency
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.JavaExec
+import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+
+// Only public Gradle/AGP APIs are used below. AGP is loaded by the app project, not this init script.
+// These tasks are deliberately not cacheable: their debug config contains a host-private pairing nonce.
+abstract class IdeReliabilityAssets extends DefaultTask {
+    @InputFile @PathSensitive(PathSensitivity.NONE) abstract RegularFileProperty getConfigFile()
+    @InputFile @PathSensitive(PathSensitivity.NONE) abstract RegularFileProperty getDescriptorFile()
+    @Input abstract Property<String> getArtifactBuildId()
+    @OutputDirectory abstract DirectoryProperty getAssetDirectory()
+    @OutputDirectory abstract DirectoryProperty getJavaDirectory()
+    @Internal abstract ConfigurableFileCollection getOtherAssets()
+
+    static String sha256(File file) {
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        file.withInputStream { stream ->
+            byte[] buffer = new byte[8192]
+            int count
+            while ((count = stream.read(buffer)) != -1) digest.update(buffer, 0, count)
+        }
+        return digest.digest().encodeHex().toString()
+    }
+
+    @TaskAction void generate() {
+        def descriptor = new groovy.json.JsonSlurper().parse(descriptorFile.get().asFile, 'UTF-8')
+        def config = new groovy.json.JsonSlurper().parse(configFile.get().asFile, 'UTF-8')
+        def root = new File(descriptor.projectRoot.toString()).canonicalFile.toPath()
+        def optionsFile = root.resolve('.building/reliability.json').toFile()
+        if (!optionsFile.isFile()) throw new GradleException('Reliability: project consent was removed; start a new build.')
+        def options = new groovy.json.JsonSlurper().parse(optionsFile, 'UTF-8')
+        def defaults = [version: 1, enabled: false, consentGranted: false, captureCrashes: true,
+                        captureLifecycle: true, capturePreviousExitInfo: true, captureNetwork: false,
+                        teeStdout: false, productionEnabled: false]
+        if (!(options instanceof Map) || !defaults.keySet().containsAll(options.keySet()) ||
+                (defaults + options) != descriptor.options) {
+            throw new GradleException('Reliability: project consent changed; start a new build.')
+        }
+        // Recheck the host snapshot immediately before compilation; the host also rechecks the canonical
+        // snapshot AFTER execute, which catches additions/removals and edits made while Gradle was running.
+        descriptor.sourceFiles.each { relative, expected ->
+            def path = root.resolve(relative.toString()).normalize()
+            if (!path.startsWith(root) || path.toFile().canonicalFile.toPath() != path ||
+                    !java.nio.file.Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS) ||
+                    sha256(path.toFile()) != expected) {
+                throw new GradleException('Reliability: sources changed since pairing; start a new build.')
+            }
+        }
+        if (config.version != 1 || config.enabled != true || config.consentGranted != true ||
+                config.buildId != artifactBuildId.get() || config.sourceRevision != descriptor.sourceRevision) {
+            throw new GradleException('Reliability: invalid generated build configuration.')
+        }
+        otherAssets.files.each { directory ->
+            ['ide-reliability.json', 'ide-reliability-sources.json'].each { reserved ->
+                if (new File(directory, reserved).exists()) {
+                    throw new GradleException('Reliability: app assets already contain a reserved generated configuration/source asset.')
+                }
+            }
+        }
+        def assets = assetDirectory.get().asFile
+        assets.mkdirs()
+        new File(assets, 'ide-reliability.json').setText(groovy.json.JsonOutput.toJson(config) + '\n', 'UTF-8')
+        def publicManifest = [version: 1, buildId: config.buildId, sourceRevision: descriptor.sourceRevision,
+                              files: descriptor.publicSources]
+        new File(assets, 'ide-reliability-sources.json').setText(groovy.json.JsonOutput.toJson(publicManifest) + '\n', 'UTF-8')
+        def source = new File(javaDirectory.get().asFile, 'dev/ide/applog/generated/ReliabilityBuildInfo.java')
+        source.parentFile.mkdirs()
+        // Hash/UUID only; no recipient, nonce, source path or user data is compiled into this class.
+        source.setText('package dev.ide.applog.generated;\npublic final class ReliabilityBuildInfo {\n' +
+                '  private ReliabilityBuildInfo() {}\n' +
+                '  public static final String BUILD_ID = "' + config.buildId + '";\n' +
+                '  public static final String SOURCE_REVISION = "' + descriptor.sourceRevision + '";\n}\n', 'UTF-8')
+    }
+}
+
+abstract class IdeReliabilityManifest extends DefaultTask {
+    @InputFile @PathSensitive(PathSensitivity.NONE) abstract RegularFileProperty getInputManifest()
+    @InputFile @PathSensitive(PathSensitivity.NONE) abstract RegularFileProperty getConfigFile()
+    @Input abstract Property<String> getApplicationId()
+    @OutputFile abstract RegularFileProperty getOutputManifest()
+
+    @TaskAction void inject() {
+        def factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+        factory.namespaceAware = true
+        factory.setFeature('http://apache.org/xml/features/disallow-doctype-decl', true)
+        factory.setFeature('http://xml.org/sax/features/external-general-entities', false)
+        factory.setFeature('http://xml.org/sax/features/external-parameter-entities', false)
+        factory.expandEntityReferences = false
+        def doc = factory.newDocumentBuilder().parse(inputManifest.get().asFile)
+        def manifest = doc.documentElement
+        def android = 'http://schemas.android.com/apk/res/android'
+        manifest.setAttribute('xmlns:android', android)
+        def children = { parent, tag ->
+            def result = []
+            for (int i = 0; i < parent.childNodes.length; i++) {
+                def child = parent.childNodes.item(i)
+                if (child instanceof org.w3c.dom.Element && child.tagName == tag) result << child
+            }
+            result
+        }
+        def apps = children(manifest, 'application')
+        if (apps.size() != 1) throw new GradleException('Reliability: opted-in app manifest must contain one application.')
+        def app = apps[0]
+        if (app.getAttributeNS(android, 'hasCode') == 'false') app.setAttributeNS(android, 'android:hasCode', 'true')
+        def providerClass = 'dev.ide.applog.IdeLogBridgeProvider'
+        def providers = children(app, 'provider').findAll { it.getAttributeNS(android, 'name') == providerClass }
+        if (providers.size() > 1) throw new GradleException('Reliability: duplicate SDK providers in the merged manifest.')
+        def provider = providers ? providers[0] : doc.createElement('provider')
+        if (!providers) app.appendChild(provider)
+        provider.setAttributeNS(android, 'android:name', providerClass)
+        provider.setAttributeNS(android, 'android:authorities', applicationId.get() + '.ide-reliability')
+        provider.setAttributeNS(android, 'android:exported', 'false')
+        provider.setAttributeNS(android, 'android:initOrder', '100')
+        provider.removeAttributeNS(android, 'process')
+        provider.removeAttributeNS(android, 'multiprocess')
+        provider.removeAttributeNS(android, 'grantUriPermissions')
+        children(app, 'meta-data').findAll { it.getAttributeNS(android, 'name') == 'dev.ide.reliability.CONFIG_ASSET' }
+                .each { app.removeChild(it) }
+        def metadata = doc.createElement('meta-data')
+        metadata.setAttributeNS(android, 'android:name', 'dev.ide.reliability.CONFIG_ASSET')
+        metadata.setAttributeNS(android, 'android:value', 'ide-reliability.json')
+        app.appendChild(metadata)
+        def config = new groovy.json.JsonSlurper().parse(configFile.get().asFile, 'UTF-8')
+        def recipient = config.idePackage?.toString() ?: ''
+        if (!recipient.isEmpty()) {
+            def queries = children(manifest, 'queries')
+            def query = queries ? queries[0] : doc.createElement('queries')
+            if (!queries) manifest.appendChild(query)
+            if (!children(query, 'package').any { it.getAttributeNS(android, 'name') == recipient }) {
+                def pkg = doc.createElement('package')
+                pkg.setAttributeNS(android, 'android:name', recipient)
+                query.appendChild(pkg)
+            }
+        }
+        def out = outputManifest.get().asFile
+        out.parentFile.mkdirs()
+        def transformer = javax.xml.transform.TransformerFactory.newInstance().newTransformer()
+        transformer.setOutputProperty(javax.xml.transform.OutputKeys.ENCODING, 'UTF-8')
+        transformer.transform(new javax.xml.transform.dom.DOMSource(doc), new javax.xml.transform.stream.StreamResult(out))
+    }
+}
 
 def KEEP = "arm64-v8a"
 def NATIVE = ["exe", "linux-x86_64", "osx-x86_64", "windows-x86_64"] as Set
 
 def removed = Collections.synchronizedSet(new TreeSet())
 def slots = new java.util.concurrent.ConcurrentHashMap()
+
+def reliabilityInput = gradle.startParameter.projectProperties['dev.ide.reliability.input']
+def reliabilityDescriptorFile = reliabilityInput ? new File(reliabilityInput.toString()).canonicalFile : null
+def reliabilityDescriptor = null
+def reliabilityMatched = Collections.synchronizedSet(new HashSet())
+if (reliabilityDescriptorFile != null) {
+    if (!reliabilityDescriptorFile.isFile() || reliabilityDescriptorFile.length() > 32L * 1024 * 1024) {
+        throw new GradleException('Reliability: private injection descriptor is missing or too large.')
+    }
+    reliabilityDescriptor = new groovy.json.JsonSlurper().parse(reliabilityDescriptorFile, 'UTF-8')
+    if (reliabilityDescriptor.version != 1 || reliabilityDescriptor.options?.enabled != true ||
+            reliabilityDescriptor.options?.consentGranted != true || !(reliabilityDescriptor.variants instanceof List) ||
+            !(reliabilityDescriptor.buildId ==~ /[0-9a-f-]{36}/) ||
+            !(reliabilityDescriptor.sourceRevision ==~ /[0-9a-f]{64}/)) {
+        throw new GradleException('Reliability: invalid private injection descriptor or missing project consent.')
+    }
+    def projectRoot = new File(reliabilityDescriptor.projectRoot.toString()).canonicalFile.toPath()
+    if (reliabilityDescriptorFile.toPath().startsWith(projectRoot)) {
+        throw new GradleException('Reliability: private config must not be stored in the user project.')
+    }
+}
+
+def applyReliability = { p ->
+    if (reliabilityDescriptor == null) return
+    def requested = reliabilityDescriptor.variants.findAll { it.modulePath == p.path }
+    if (requested.isEmpty()) return
+    if (p.rootProject.projectDir.canonicalPath != reliabilityDescriptor.projectRoot) {
+        throw new GradleException('Reliability: injection descriptor belongs to a different project.')
+    }
+    def components = p.extensions.findByName('androidComponents')
+    if (components == null) throw new GradleException('Reliability: opted-in app requires public AGP variant APIs (AGP 8.4–9.x).')
+    def version
+    try { version = components.pluginVersion } catch (Exception problem) {
+        throw new GradleException('Reliability: unable to determine AGP version; no automatic injection was applied.', problem)
+    }
+    if (!((version.major == 8 && version.minor >= 4) || version.major == 9) || version.preview != 0) {
+        throw new GradleException("Reliability: unsupported AGP ${version}; use a stable AGP 8.4–9.x or disable project reliability injection.")
+    }
+    def agpLoader = components.class.classLoader
+    def mergedManifest
+    def applicationVariant
+    try {
+        // Public API classes, resolved from the project's AGP classloader, never AGP internal tasks.
+        mergedManifest = agpLoader.loadClass('com.android.build.api.artifact.SingleArtifact$MERGED_MANIFEST').getField('INSTANCE').get(null)
+        applicationVariant = agpLoader.loadClass('com.android.build.api.variant.ApplicationVariant')
+    } catch (Exception problem) {
+        throw new GradleException('Reliability: this AGP lacks required public application/manifest APIs; injection was not applied.', problem)
+    }
+    components.onVariants(components.selector().all()) { variant ->
+        if (!applicationVariant.isInstance(variant)) return // Never nested tests, fixtures, libraries or features.
+        def row = requested.find { it.variant == variant.name }
+        if (row == null) return
+        def debuggable = variant.debuggable
+        def actualId = variant.applicationId.get()
+        if (debuggable != row.debuggable || actualId != row.applicationId) {
+            throw new GradleException('Reliability: applicationId/debuggable changed since sync; sync again before building.')
+        }
+        if (!debuggable && reliabilityDescriptor.options.productionEnabled != true) {
+            throw new GradleException('Reliability: production injection requires explicit productionEnabled consent.')
+        }
+        def privateRoot = reliabilityDescriptorFile.parentFile.toPath()
+        def configFile = new File(row.configFile.toString()).canonicalFile
+        def generated = new File(row.outputDir.toString()).canonicalFile
+        def runtime = new File(reliabilityDescriptor.runtimeArtifact.toString()).canonicalFile
+        if (!configFile.toPath().startsWith(privateRoot) || !generated.toPath().startsWith(privateRoot) ||
+                !runtime.toPath().startsWith(privateRoot) || !configFile.isFile() || !runtime.isFile() ||
+                IdeReliabilityAssets.sha256(runtime) != reliabilityDescriptor.runtimeSha256) {
+            throw new GradleException('Reliability: generated config/runtime must be intact in the host-private build cache.')
+        }
+        def config = new groovy.json.JsonSlurper().parse(configFile, 'UTF-8')
+        if (config.version != 1 || config.enabled != true || config.consentGranted != true ||
+                !(row.buildId ==~ /[0-9a-f-]{36}/) || config.buildId != row.buildId || config.sourceRevision != reliabilityDescriptor.sourceRevision) {
+            throw new GradleException('Reliability: config does not match the opted-in build/source snapshot.')
+        }
+        if (config.idePackage || config.ideService || config.pairingNonce || config.ideSignerSha256) {
+            if (!(config.idePackage ==~ /[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+/) ||
+                    !(config.ideService ==~ /[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z_$][A-Za-z0-9_$]*)+/) ||
+                    !(config.pairingNonce ==~ /[0-9a-f]{64}/) ||
+                    (config.ideSignerSha256 && !(config.ideSignerSha256 ==~ /[0-9a-f]{64}/))) {
+                throw new GradleException('Reliability: invalid explicit debug recipient/pairing fields.')
+            }
+        }
+        if (!debuggable && (config.idePackage || config.ideService || config.pairingNonce || config.ideSignerSha256)) {
+            throw new GradleException('Reliability: production configuration must not contain debug pairing/IPC fields.')
+        }
+        def runtimeConfiguration = variant.runtimeConfiguration
+        def compileConfiguration = variant.compileConfiguration
+        if (variant.sources.java == null || variant.sources.assets == null) {
+            throw new GradleException('Reliability: this AGP variant does not expose generated Java/assets APIs.')
+        }
+        try {
+            def suffix = variant.name.substring(0, 1).toUpperCase(java.util.Locale.ROOT) + variant.name.substring(1)
+            def staticAssets = p.extensions.getByName('android').sourceSets.collectMany { sourceSet -> sourceSet.assets.srcDirs as List }
+            def generation = p.tasks.register('generateIdeReliability' + suffix, IdeReliabilityAssets) { task ->
+                task.configFile.set(configFile)
+                task.descriptorFile.set(reliabilityDescriptorFile)
+                task.artifactBuildId.set(row.buildId.toString())
+                task.assetDirectory.set(new File(generated, 'assets'))
+                task.javaDirectory.set(new File(generated, 'java'))
+                task.otherAssets.from(staticAssets)
+                task.outputs.upToDateWhen { false }
+                task.outputs.doNotCacheIf('Contains an explicit debug pairing capability') { true }
+            }
+            variant.sources.assets.addGeneratedSourceDirectory(generation) { task -> task.assetDirectory }
+            variant.sources.java.addGeneratedSourceDirectory(generation) { task -> task.javaDirectory }
+            def manifestTask = p.tasks.register('injectIdeReliabilityManifest' + suffix, IdeReliabilityManifest) { task ->
+                task.applicationId.set(variant.applicationId)
+                task.configFile.set(configFile)
+                task.outputManifest.set(new File(generated, 'manifest/AndroidManifest.xml'))
+                task.dependsOn(generation)
+            }
+            variant.artifacts.use(manifestTask).wiredWithFiles(
+                    { task -> task.inputManifest }, { task -> task.outputManifest }).toTransform(mergedManifest)
+            // The artifacts API assigns its conventional output while wiring. Re-apply our public task
+            // property afterwards so this transform also stays beside the private generated inputs.
+            manifestTask.configure { task -> task.outputManifest.set(new File(generated, 'manifest/AndroidManifest.xml')) }
+            // Public variant configurations, rather than guessed <variant>RuntimeClasspath names.
+            // A file dependency also supports a standalone production AAR (AGP handles its manifest/rules).
+            def dependencyBucket = p.configurations.create('ideReliability' + suffix) { bucket ->
+                bucket.canBeResolved = false
+                bucket.canBeConsumed = false
+                bucket.visible = false
+            }
+            dependencyBucket.dependencies.add(p.dependencies.create(p.files(runtime)))
+            compileConfiguration.extendsFrom(dependencyBucket)
+            runtimeConfiguration.extendsFrom(dependencyBucket)
+            reliabilityMatched.add(p.path + ':' + variant.name)
+            p.logger.lifecycle('Reliability: explicitly opted-in ' + p.path + ':' + variant.name +
+                    (debuggable ? ' (debug; recipient pairing still requires host approval)' : ' (production local journal only)'))
+        } catch (Exception problem) {
+            throw new GradleException('Reliability: required public AGP injection APIs are unavailable; no fallback task-name or build-file patching is attempted.', problem)
+        }
+    }
+}
 
 def modelOut = {
     def fromProp = gradle.startParameter.projectProperties["dev.ide.model.out"]
@@ -260,6 +545,8 @@ gradle.beforeProject { p ->
         slot.application = true
         slot.plugins.add("com.android.application")
         registerVariants(p, slot)
+        // Unlike model best-effort reads, opted-in instrumentation failures are never swallowed.
+        applyReliability(p)
     }
     p.plugins.withId("com.android.library") {
         slot.plugins.add("com.android.library")
@@ -281,6 +568,10 @@ gradle.beforeProject { p ->
 }
 
 gradle.projectsEvaluated {
+    if (reliabilityDescriptor != null) {
+        def missing = reliabilityDescriptor.variants.findAll { !reliabilityMatched.contains(it.modulePath + ':' + it.variant) }
+        if (!missing.isEmpty()) throw new GradleException('Reliability: opted-in application variants were not found; sync again. Libraries and test fixtures are not instrumented.')
+    }
     rootProject.allprojects { p ->
         try { narrow(p) } catch (Throwable ignored) {}
         try { applyCmake(p) } catch (Throwable ignored) {}

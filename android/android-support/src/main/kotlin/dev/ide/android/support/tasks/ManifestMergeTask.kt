@@ -37,6 +37,8 @@ internal class ManifestMergeTask(
     // versionName from the merged output so aapt2 injects the facet value instead (AGP's DSL-wins rule).
     private val stripVersionCode: Boolean = false,
     private val stripVersionName: Boolean = false,
+    /** App build-type authority, independent of reliability injection. Null preserves generic callers. */
+    private val debuggable: Boolean? = null,
 ) : Task {
     override val inputs: TaskInputs
         get() = TaskInputsImpl().apply {
@@ -56,6 +58,8 @@ internal class ManifestMergeTask(
             // from/to its default (which flips authority) must re-run the merge.
             property("stripVersionCode", stripVersionCode)
             property("stripVersionName", stripVersionName)
+            // A changed build-type flag must invalidate this merge even when the manifest bytes did not change.
+            property("debuggable", debuggable?.toString() ?: "manifest")
         }
     override val outputs: TaskOutputs get() = TaskOutputsImpl().apply { filePath("manifest", outManifest) }
 
@@ -69,7 +73,7 @@ internal class ManifestMergeTask(
         val result = try {
             ManifestMerger.merge(
                 primaryManifest, libs, placeholders, appMinSdk = minSdk,
-                stripVersionCode = stripVersionCode, stripVersionName = stripVersionName,
+                stripVersionCode = stripVersionCode, stripVersionName = stripVersionName, appDebuggable = debuggable,
             )
         } catch (t: Throwable) {
             val cause = t.cause ?: t

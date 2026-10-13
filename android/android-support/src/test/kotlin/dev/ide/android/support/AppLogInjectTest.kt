@@ -25,6 +25,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.zip.ZipFile
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import dev.ide.model.impl.open
 
@@ -72,6 +73,7 @@ class AppLogInjectTest {
             assertTrue(AndroidAppLogRuntime.DEFAULT_SINK_ACTION in manifestXml,
                 "instrumented manifest lacks the sink-service <queries> intent (API 30+ visibility):\n$manifestXml")
             assertTrue(dexContainsType(debugApk, PROVIDER_DESC), "debug APK dex lacks $PROVIDER")
+            assertApkDebuggable(sdk.aapt2, debugApk, true)
 
             // --- Release: never touched (debuggable = false), even with the runtime present. ---
             buildVariant(buildSystem, project, "release", cache)
@@ -79,6 +81,7 @@ class AppLogInjectTest {
             val relInstrumented = dir.resolve("app/build/intermediates/android/release/instrumented-manifest/AndroidManifest.xml")
             assertTrue(!Files.exists(relInstrumented), "release build must not instrument the manifest")
             assertTrue(!dexContainsType(releaseApk, PROVIDER_DESC), "release APK must not contain the log bridge")
+            assertApkDebuggable(sdk.aapt2, releaseApk, false)
         }
     }
 
@@ -116,6 +119,76 @@ class AppLogInjectTest {
         }
     }
 
+    /** Real D8/APK packaging of the consent-aware single Java-8 JAR, also for production local collection. */
+    @Test
+    fun reliabilityOptInPackagesBoundAssetsAndNoDebugControlsInRelease() {
+        val sdk = assumeAndroidSdk()
+        val runtimeJar = resolveRuntimeJar()
+        assumeTrue(runtimeJar != null, "applog-runtime jar not provided (-Dapplog.runtime.jar); skipping")
+        runtimeJar!!
+        testEnv("android-reliability-apk") { env ->
+            val dir = env.dir
+            // Reproduce an imported/generated source manifest that explicitly disables debugging.
+            val sourceManifest = NATIVE_MANIFEST.replace("<application ", "<application android:debuggable=\"false\" ")
+            val store = buildAppWorkspace(dir, env.platform, manifest = sourceManifest, activity = null)
+            val project = store.workspace.projects.single()
+            val manifestPath = dir.resolve("app/src/main/AndroidManifest.xml")
+            val originalManifest = Files.readString(manifestPath)
+            val privateCache = Files.createTempDirectory("reliability-apk-private")
+            try {
+                val runtime = ReliabilityBuildConfiguration(runtimeJar, privateCache)
+                val signing = DebugKeystore.getOrCreate(dir.resolve(".keystore/debug.ks"), sdk.keytool)
+                val system = AndroidBuildSystem.subprocess(sdk, signing, reliabilityConfiguration = { runtime })
+                val cache = BuildCache(dir.resolve(".caches/build"))
+                buildVariant(system, project, "debug", cache)
+                val debugApk = dir.resolve("app/build/outputs/apk/debug/app-debug.apk")
+                assertTrue(!dexContainsType(debugApk, "Ldev/ide/applog/Reliability;"), "default-off APK must not contain SDK")
+                assertApkDebuggable(sdk.aapt2, debugApk, true)
+                val options = dir.resolve(ReliabilityProjectOptions.PROJECT_FILE)
+                Files.createDirectories(options.parent)
+                Files.writeString(options, """{"version":1,"enabled":true,"consentGranted":true,"productionEnabled":true}""")
+                for (variant in listOf("debug", "release")) {
+                    buildVariant(system, project, variant, cache)
+                    val apk = dir.resolve("app/build/outputs/apk/$variant/app-$variant.apk")
+                    assertApkDebuggable(sdk.aapt2, apk, variant == "debug")
+                    assertEquals(originalManifest, Files.readString(manifestPath), "Variant flags must not rewrite source")
+                    assertTrue(dexContainsType(apk, "Ldev/ide/applog/Reliability;"), "$variant APK lacks SDK")
+                    assertTrue(!dexContainsType(apk, "Ldev/ide/reliability/test/FaultController;"), "fault controls must not leak into SDK")
+                    ZipFile(apk.toFile()).use { zip ->
+                        val config = zip.getInputStream(zip.getEntry("assets/ide-reliability.json")).bufferedReader().use { it.readText() }
+                        val sources = zip.getInputStream(zip.getEntry("assets/ide-reliability-sources.json")).bufferedReader().use { it.readText() }
+                        assertTrue("\"enabled\":true" in config)
+                        assertTrue("\"pairingNonce\":\"\"" in config, "unpaired/local-only builds contain no recipient nonce")
+                        assertTrue("sourceRevision" in config && "sourceRevision" in sources)
+                        assertTrue(dir.toString() !in config && dir.toString() !in sources)
+                    }
+                    val manifest = Files.readString(dir.resolve("app/build/intermediates/android/$variant/instrumented-manifest/AndroidManifest.xml"))
+                    assertTrue("dev.ide.reliability.CONFIG_ASSET" in manifest)
+                    assertTrue("$APPLICATION_ID.ide-reliability" in manifest)
+                    assertTrue("<queries" !in manifest, "local-only production has no generated IPC query")
+                    assertTrue("android:debuggable=\"${variant == "debug"}\"" in manifest)
+                }
+                // The inverse conflict matters for safety: production must override a source manifest
+                // with debugging left on, including when the reliability SDK itself is opted in.
+                val staleDebugManifest = originalManifest.replace("android:debuggable=\"false\"", "android:debuggable=\"true\"")
+                Files.writeString(manifestPath, staleDebugManifest)
+                buildVariant(system, project, "release", cache)
+                assertApkDebuggable(sdk.aapt2, dir.resolve("app/build/outputs/apk/release/app-release.apk"), false)
+                assertEquals(staleDebugManifest, Files.readString(manifestPath))
+                Files.writeString(manifestPath, originalManifest)
+                // Returning to default OFF must remove both classes and private config from the next APK.
+                Files.delete(options)
+                buildVariant(system, project, "debug", cache)
+                assertTrue(!dexContainsType(debugApk, "Ldev/ide/applog/Reliability;"))
+                assertApkDebuggable(sdk.aapt2, debugApk, true)
+                assertEquals(originalManifest, Files.readString(manifestPath))
+                ZipFile(debugApk.toFile()).use { assertTrue(it.getEntry("assets/ide-reliability.json") == null) }
+            } finally {
+                privateCache.toFile().deleteRecursively()
+            }
+        }
+    }
+
     private fun buildVariant(buildSystem: AndroidBuildSystem, project: dev.ide.model.Project, variant: String, cache: BuildCache) {
         val graph = buildSystem.createBuildGraph(
             project, BuildRequest(listOf(ModuleId("app")), VariantSelector(variant), BuildGoal.PACKAGE),
@@ -123,6 +196,15 @@ class AppLogInjectTest {
         val log = StringBuilder()
         val outcome = runBlocking { TaskExecutorImpl(cache).execute(graph, SimpleTaskContext(log = { log.appendLine(it) }), 2) }
         assertTrue(outcome.succeeded, "$variant APK build failed:\n$log")
+    }
+
+    /** Inspect the linked binary APK, not just the intermediate XML or selected variant name. */
+    private fun assertApkDebuggable(aapt2: Path, apk: Path, expected: Boolean) {
+        val process = ProcessBuilder(aapt2.toString(), "dump", "badging", apk.toString()).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        assertEquals(0, process.waitFor(), "aapt2 dump badging failed:\n$output")
+        assertEquals(expected, output.lineSequence().any { it.trim() == "application-debuggable" },
+            "Compiled APK debuggable flag differs from selected build type (${apk.fileName}):\n$output")
     }
 
     private fun resolveRuntimeJar(): Path? =

@@ -1,0 +1,32 @@
+{
+  "commit": "3885d8e1577097760b3bc4ee8d247ef367545d8e",
+  "baseUrl": "https://raw.githubusercontent.com/termux/termux-packages/3885d8e1577097760b3bc4ee8d247ef367545d8e/packages/",
+  "aliases": {"ncurses-ui-libs":"ncurses","python-ensurepip-wheels":"python"},
+  "recipes": {
+    "c-ares": {"license":"MIT","sha256":"39364f4135281f12c103e20468f8776c4dec2008f268d3cea73c9d17ff3441d3"},
+    "ca-certificates": {"license":"MPL-2.0","sha256":"49346cd737c0c8f423f26cb0cb04467f93fb9d69c9c1fb1aff5840a9ea215861"},
+    "dash": {"license":"BSD-3-Clause","sha256":"882117dd1d1008c1f649bf1f95aeabde98209c4ce2b9a5b4c64d1cf644e40aab"},
+    "libc++": {"license":"NCSA (Termux declaration); see NDK LLVM notices","sha256":"f0e670ec0f30469e91920a42427115e4bee082c8a22a6dc72e983603dfe659cf"},
+    "libicu": {"license":"ICU / Unicode; bundled copyright","sha256":"400ce1208f3c046b20a3875abbb3a3a17eefede53163bae9eab4032c8f322769"},
+    "libsqlite": {"license":"Public Domain","sha256":"27664a1e5479eb98eedc775e383be4395e53463250078de97262a9aed311415d"},
+    "nodejs-lts": {"license":"MIT and bundled Node/V8 notices","sha256":"7478c0adb5c1393a4eed6f44005f2454f66d4f4b3eec4102f18c43646648e156"},
+    "openssl": {"license":"Apache-2.0","sha256":"4520f242c196cf19cc68b1502484fbf27606da07c04752f98e91ceba667db224"},
+    "resolv-conf": {"license":"Public Domain","sha256":"29d51b364bc436629089e347a40cd8517817a4a6d9b01e0c838574fdb274c69d"},
+    "termux-exec": {"license":"Apache-2.0 and MIT; bundled notices","sha256":"c17393ac01252179aed7066ad11c6478225f4a17068c1197ce2029190af3dd67"},
+    "zlib": {"license":"Zlib","sha256":"9edf6e044f5ca08c91bde6e6b0d99c2569ba0f6bbbc57700bb9a0c5b3b4c27ec"},
+    "libandroid-support": {"license":"Apache-2.0 AND MIT","sha256":"23f10711528bcc66a3a8728d218f43efea8467bfbb7db222796e5f5b89ac0d79"},
+    "libbz2": {"license":"bzip2 BSD-style; bundled copyright","sha256":"68f9d95c4f2323a14ba8768884b88b782c922b80c9888c23dd8c3892631cf625"},
+    "libexpat": {"license":"MIT","sha256":"f8101759677259a33b83edd45cb47a57d19f4ddee52afc3d6e138ad04438e8f3"},
+    "libffi": {"license":"MIT","sha256":"0a7f2e44163fe2d43a48680968a5254bad0ee1032f89fe20cfcfe5dbddb2555e"},
+    "liblzma": {"license":"LGPL-2.1, GPL-2.0, GPL-3.0; bundled COPYING files","sha256":"b75e6d0c87edd1579e834139c66cd99c1a74de4f0d68bee9c0c9ad46eda30772"},
+    "ncurses": {"license":"MIT","sha256":"350a65eb4f5d5086d95c2b05db129557c62dbbbf0c5f82ee7163e0de12f4ea34"},
+    "zstd": {"license":"GPL-2.0 (Termux declaration); upstream BSD/GPL notices","sha256":"d7768dbd39af796ae9d5d1f0cc95d963ed5fa842332aecd9b6b046d87bbc48ec"},
+    "npm": {"license":"Artistic-2.0 and vendored notices","sha256":"7bf0bf1c95252097985bdc843c08bdaf806fb29b24572e9d127b92680d914c85"},
+    "python": {"license":"PSF-2.0 and bundled notices","sha256":"354ad5204056395bc423780da9112395aad862c01636ae3a56d2f4c025d69f12"},
+    "gdbm": {"license":"GPL-3.0","sha256":"ef44697164fd19b8433ceb9ac4cd35cd88eb99ed51b39fb6f8958f87c9db7b2a"},
+    "libandroid-posix-semaphore": {"license":"MIT","sha256":"ef7431b10b8f6c9e60e0c785e435138f6de39fa2a301a6fe73fabf2948dd6fec"},
+    "libcrypt": {"license":"BSD-2-Clause","sha256":"8d3d827030f2d51687dcf7fcb1a7dce8f79730bdbefbd5b90492def19ea43629"},
+    "readline": {"license":"GPL-3.0","sha256":"29e24da6099650f92703b2772e9515cfc6004901733b1c8a4dbb3938b85762e3"},
+    "python-pip": {"license":"MIT and vendored notices","sha256":"d183a90da94435a9a91c5b26fc787660fe73c311b9e429005d7796bfd8ce0054"}
+  }
+}

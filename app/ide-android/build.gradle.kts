@@ -292,10 +292,29 @@ val appLogRuntimeArtifact: Configuration by configurations.creating {
 dependencies { appLogRuntimeArtifact(project(":applog-runtime")) }
 
 val bundleAppLogRuntimeAsset = tasks.register<Copy>("bundleAppLogRuntimeAsset") {
-    description = "Stage the :applog-runtime jar as an asset (the debug-only in-app log bridge)."
+    description = "Stage the opt-in application reliability SDK jar for generated builds."
     from(appLogRuntimeArtifact)
     into(layout.buildDirectory.dir("applog-runtime-asset"))
     rename { "applog-runtime.jar" }
+}
+
+val appEngineSdkArtifact: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+    attributes {
+        attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage::class.java, Usage.JAVA_RUNTIME))
+        attribute(org.gradle.api.artifacts.type.ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, "android-classes-jar")
+        attribute(com.android.build.api.attributes.BuildTypeAttr.ATTRIBUTE, objects.named(com.android.build.api.attributes.BuildTypeAttr::class.java, "release"))
+    }
+}
+dependencies { appEngineSdkArtifact(project(":runtime-engine")) }
+val bundleAppEngineSdkAsset = tasks.register<Copy>("bundleAppEngineSdkAsset") {
+    description = "Stage the Java app-engine embedding SDK without native runtime payloads."
+    dependsOn(appEngineSdkArtifact)
+    from(appEngineSdkArtifact)
+    into(layout.buildDirectory.dir("app-engine-sdk-asset"))
+    rename { "runtime-engine-sdk.jar" }
 }
 
 // --- kotlinc resources asset (extension-point descriptors for on-device K2) ----------------------
@@ -468,10 +487,20 @@ val realAdmobNativeUnitsByPlacement = mapOf(
     (findProperty("ADMOB_NATIVE_UNIT_$placement") as String?) ?: System.getenv("ADMOB_NATIVE_UNIT_$placement") ?: default
 }.filterValues { it.isNotBlank() }.entries.joinToString(";") { "${it.key}=${it.value}" }
 
+val developerRuntimePackEnabled = providers.gradleProperty("DEVELOPER_RUNTIME_PACK")
+    .getOrElse("false").toBooleanStrict()
+val appEngineDelivery = providers.gradleProperty("IDE_APP_ENGINE_DELIVERY").getOrElse("none")
+val selectedAppEngine = providers.gradleProperty("IDE_APP_ENGINE").getOrElse("python")
+require(appEngineDelivery in setOf("none", "direct", "play"))
+require(selectedAppEngine in setOf("node", "python"))
+
 android {
     namespace = "dev.ide.android"
     compileSdk = 36
     compileSdkMinor = 1
+    if (appEngineDelivery == "play") {
+        dynamicFeatures += setOf(":runtime_engine_ide_feature")
+    }
 
     defaultConfig {
         // The Play Store identity (immutable once published). The Kotlin source package (namespace,
@@ -484,6 +513,7 @@ android {
         // which is API 26+. Targeting 26 keeps it native and avoids core-library desugaring complexity.
         minSdk = 26
         targetSdk = 36
+        if (appEngineDelivery != "none") ndk.abiFilters += setOf("arm64-v8a")
         // versionCode must exceed the last published release (the previous-codebase app reached ~29).
         versionCode = providers.gradleProperty("ANDROID_VERSION_CODE")
             .orElse(providers.environmentVariable("ANDROID_VERSION_CODE"))
@@ -530,10 +560,16 @@ android {
         buildConfigField("String", "AD_INTERSTITIAL_UNIT_ID", "\"$testAdmobInterstitialUnitId\"")
         buildConfigField("String", "AD_NATIVE_UNIT_IDS", "\"\"")
         buildConfigField("boolean", "ADS_ENABLED", "true")
+        buildConfigField("boolean", "NATIVE_TOOLCHAIN_DOWNLOADS_ENABLED", "false")
+        buildConfigField("boolean", "DEVELOPER_RUNTIME_PACK_BUNDLED", developerRuntimePackEnabled.toString())
+        buildConfigField("String", "APP_ENGINE_DELIVERY", "\"$appEngineDelivery\"")
+        buildConfigField("String", "APP_ENGINE", "\"$selectedAppEngine\"")
+        resValue("string", "runtime_engine_feature_title", "Embedded app runtime")
     }
 
     buildFeatures {
         buildConfig = true
+        resValues = true
         aidl = true
     }
 
@@ -558,7 +594,12 @@ android {
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("compose-drawables-asset").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("r8-dex-asset").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("applog-runtime-asset").get().asFile)
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("app-engine-sdk-asset").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("gradle-tooling-asset").get().asFile)
+    if (developerRuntimePackEnabled) {
+        sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("developer-runtime-pack/assets").get().asFile)
+        sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("developer-runtime-pack/jniLibs").get().asFile)
+    }
     sourceSets.getByName("androidTest").assets.srcDir(layout.buildDirectory.dir("vm-spike-asset").get().asFile)
     sourceSets.getByName("androidTest").assets.srcDir(layout.buildDirectory.dir("moshi-libs-asset").get().asFile)
     // The Kotlin-analysis parity corpus and its goldens, staged as test assets so the instrumented suite
@@ -595,6 +636,9 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            buildConfigField("boolean", "NATIVE_TOOLCHAIN_DOWNLOADS_ENABLED", "true")
+        }
         getByName("release") {
             // R8 is OFF: the app loads JDT/ecj/D8/apksig classes reflectively and dexes user code at
             // runtime, so aggressive shrinking would strip needed classes. Revisit with keep rules if
@@ -732,7 +776,7 @@ android {
         // (when an NDK is present) would corrupt it.
         jniLibs {
             useLegacyPackaging = true
-            keepDebugSymbols += setOf("**/libaapt2.so", "**/libsdk-*.so")
+            keepDebugSymbols += setOf("**/libaapt2.so", "**/libsdk-*.so", "**/libdevruntime*.so")
         }
     }
 
@@ -810,6 +854,8 @@ val fetchAndroidBuildTools = tasks.register("fetchAndroidBuildTools") {
 
 // The tooling fat jar is exec'd, not loaded. Staging it as an asset (and excluding the same bytes
 // from Java resources above) keeps it out of the IDE's dex classpath.
+apply(from = "runtime-pack.gradle.kts")
+
 val stageGradleToolingAsset = tasks.register<Copy>("stageGradleToolingAsset") {
     description = "Stage the Gradle tooling fat jar as an APK asset the host extracts and execs."
     dependsOn(":gradle-tooling:toolingJar")
@@ -830,7 +876,7 @@ val buildNativeSdkTools = tasks.register<Exec>("buildNativeSdkTools") {
 // Run before anything AGP does, so the freshly-fetched lib*.so are on disk when the native-lib merge runs,
 // and the staged kotlin-stdlib.jar asset is present when the asset merge runs.
 tasks.named("preBuild").configure {
-    dependsOn(buildNativeSdkTools)
+    dependsOn(buildNativeSdkTools, bundleAppEngineSdkAsset)
     dependsOn(fetchAndroidBuildTools, stripAndroidJarAsset, generatePrebuiltIndexAsset, bundleKotlinStdlibAsset, bundleKotlincResourcesAsset, bundleComposeRuntimeAsset, bundleComposeFontsAsset, bundleComposeStringAsset, bundleAgentUiComposeStringAsset, bundleVcsUiComposeStringAsset, bundleComposeDrawablesAsset, bundleR8DexAsset, bundleAppLogRuntimeAsset, bundleVmSpikeComposeRuntimeAsset, bundleVmSpikeMaterial3Asset, bundleVmStackAsset, bundleMoshiLibsAsset, bundleAwtFixtureAsset, stageGradleToolingAsset)
 }
 
@@ -953,6 +999,15 @@ configurations.configureEach {
 
 dependencies {
     implementation(project(":ide-ui"))
+    implementation(project(":developer-workbench"))
+    implementation(project(":agent-api"))
+    implementation(project(":agent-impl"))
+    implementation(project(":runtime-engine"))
+    if (appEngineDelivery == "direct") implementation(project(":runtime-engine-$selectedAppEngine"))
+    implementation("com.google.android.play:feature-delivery:2.1.0")
+    implementation(libs.okhttp)
+    implementation(libs.kotlinx.serialization.json)
+    implementation("com.google.android.gms:play-services-auth:22.0.0")
 
     // Installs src/main/baseline-prof.txt (compiled into assets/dexopt/baseline.prof) on first launch when the
     // APK was not installed by Play, so sideloaded installs AOT-compile the startup and editing hot paths too.
@@ -1145,6 +1200,7 @@ dependencies {
     // On-device instrumentation: the Kotlin-compiler-on-ART discovery spike.
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.commons.compress)
     // On-device throughput benchmark for the :jvm-interp bytecode interpreter. Not in the app dex, so it is
     // included in the test APK; its asm dependency resolves against the app's dexed copy at runtime.
     androidTestImplementation(project(":jvm-interp"))

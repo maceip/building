@@ -14,6 +14,7 @@ dependencies {
     // The JSON reader the notification store and the challenge backend parse with. Its own module (rather
     // than platform-core) because the store transport shares it and now has to compile for iOS too.
     implementation(project(":platform-json"))
+    implementation(project(":developer-workbench"))
     implementation(project(":project-model-api"))
     implementation(project(":project-model-impl"))
     // The built-in Kotlin templates and the shared scaffolding helpers, in the framework because the iOS
@@ -71,6 +72,7 @@ dependencies {
     implementation(project(":vfs-api"))
 
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.okhttp)
     // Editor customizations (symbol bar / macros) persist + import/export as JSON via the tree API (no
     // @Serializable / compiler plugin needed).
     implementation(libs.kotlinx.serialization.json)

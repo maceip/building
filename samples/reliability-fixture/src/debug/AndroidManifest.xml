@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <queries>
+        <!-- PackageManager signer pin verification precedes the explicit Binder connection. -->
+        <package android:name="${fixtureIdePackage}" />
+    </queries>
+    <application
+        android:name=".FixtureApplication"
+        android:label="Reliability test fixture"
+        android:testOnly="true"
+        android:allowBackup="false"
+        android:networkSecurityConfig="@xml/fixture_network_security"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity android:name=".FixtureActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

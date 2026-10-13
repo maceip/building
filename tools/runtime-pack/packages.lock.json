@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "abi": "arm64-v8a",
+  "baseUrl": "https://packages.termux.dev/apt/termux-main/",
+  "metadata": {
+    "url": "https://packages.termux.dev/apt/termux-main/dists/stable/main/binary-aarch64/Packages.gz",
+    "sha256": "a356d6bf1aa0a291f684e213c8820375a2437bc9d9569ab9fd59fb8e3054ab5f",
+    "releaseDate": "Mon, 12 Oct 2026 19:47:22 UTC",
+    "verification": "Package SHA256 and lengths from HTTPS repository metadata; metadata digest matched HTTPS Release. Not a separately verified OpenPGP signature."
+  },
+  "bootstrapCatalog": "../../build-system/gradle-build/src/main/resources/dev/ide/gradle/bootstrap-catalog.json",
+  "bootstrapPackages": [
+    "c-ares", "ca-certificates", "dash", "libc++", "libicu", "libsqlite", "nodejs-lts", "openssl", "resolv-conf", "termux-exec", "zlib",
+    "libandroid-support", "libbz2", "libexpat", "libffi", "liblzma", "ncurses", "zstd"
+  ],
+  "packages": [
+    {"name":"npm","version":"11.20.0","filename":"pool/main/n/npm/npm_11.20.0_all.deb","sha256":"a2775653a0626749138ccd6e37a7b63239f36a9e3c62a9e6740818ca4b2d088b","size":2025572,"license":"Artistic-2.0"},
+    {"name":"python","version":"3.14.6-1","filename":"pool/main/p/python/python_3.14.6-1_aarch64.deb","sha256":"3166e56c2b6c03fff41191fbb9d736302978e7c484702814d9f6dc99dd6006bd","size":4816756,"license":"PSF-2.0 and bundled notices"},
+    {"name":"gdbm","version":"1.26-1","filename":"pool/main/g/gdbm/gdbm_1.26-1_aarch64.deb","sha256":"c378de833aae3cf41f3028491ea11836479d9833ab653edc27d0c0e0e691d5c5","size":150284,"license":"GPL-3.0"},
+    {"name":"libandroid-posix-semaphore","version":"0.1-4","filename":"pool/main/liba/libandroid-posix-semaphore/libandroid-posix-semaphore_0.1-4_aarch64.deb","sha256":"0efa8677a0166315ba4e685863712eba0ca0a1732827492f38226e2723730c7a","size":4076,"license":"MIT"},
+    {"name":"libcrypt","version":"0.2-6","filename":"pool/main/libc/libcrypt/libcrypt_0.2-6_aarch64.deb","sha256":"6c283eed576b98cc3568f99638156f8588f77d979579d03bef8683d6eb8601e1","size":8880,"license":"BSD-2-Clause"},
+    {"name":"ncurses-ui-libs","version":"6.6.20260307+really6.5.20250830","filename":"pool/main/n/ncurses-ui-libs/ncurses-ui-libs_6.6.20260307+really6.5.20250830_aarch64.deb","sha256":"7393f369009be189b3d4ec1f9b16ebd57621d6a1b22949ae07685573950d1f37","size":32940,"license":"MIT"},
+    {"name":"readline","version":"8.3.6","filename":"pool/main/r/readline/readline_8.3.6_aarch64.deb","sha256":"616cc73009bc0223f61caed8dd09455714455aa5ea5e180126e2f69c4c775136","size":294164,"license":"GPL-3.0"},
+    {"name":"python-pip","version":"26.2.1","filename":"pool/main/p/python-pip/python-pip_26.2.1_all.deb","sha256":"92a9cb4b3c99dd20086f90fedc95c604eefc5bd0f88d1862690884474f82de44","size":1190440,"license":"MIT and vendored notices"},
+    {"name":"python-ensurepip-wheels","version":"3.14.6-1","filename":"pool/main/p/python-ensurepip-wheels/python-ensurepip-wheels_3.14.6-1_all.deb","sha256":"383d9ed70cb523733d325d2484377eaba265ae32396c10a6839a435b1a8f73e5","size":1740096,"license":"PSF-2.0; bundled pip MIT and vendored notices"}
+  ],
+  "sourceRecipes": "https://github.com/termux/termux-packages/tree/3885d8e1577097760b3bc4ee8d247ef367545d8e/packages/",
+  "approvedNpmPackages": {},
+  "policy": "Runtime-pack native payloads are acquired only at APK build time; device provisioning never downloads native code. No package-manager hooks or apt database are installed. User programs are trusted, not sandboxed. Default APK-only dependency action accepts dependency-free projects only. A separately gated developer/sideload distribution can explicitly install untrusted npm packages with lifecycle scripts disabled; it is not represented as Play compliant."
+}

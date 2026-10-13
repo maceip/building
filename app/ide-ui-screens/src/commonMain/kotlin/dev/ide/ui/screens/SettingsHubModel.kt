@@ -44,6 +44,7 @@ enum class HubTool { Colors, CodeStyle, Symbols, SdkManager, Keystore, Plugins, 
 sealed interface HubTarget {
     data class Page(val id: String) : HubTarget
     data class Tool(val tool: HubTool) : HubTarget
+    data class ContributedScreen(val id: String) : HubTarget
 }
 
 /** The hub's sections, named for what the user is trying to do rather than for how a screen is built. */
@@ -138,7 +139,11 @@ class HubSection(val group: HubGroup, val title: String, val entries: List<HubEn
 fun hubSections(pages: List<UiSettingsPage>): List<HubSection> {
     val byId = pages.associateBy { it.id }
     val projectLabel = stringResource(Res.string.settings_scope_project)
-    return hubPlacement(pages.map { it.id }).map { (group, targets) ->
+    val contributed = dev.ide.ui.ext.ScreenRegistry.all().filter { it.showInTools }
+    return hubPlacement(pages.map { it.id }).map { (group, originalTargets) ->
+        val targets = if (group == HubGroup.Build) {
+            originalTargets + contributed.map { HubTarget.ContributedScreen(it.id) }
+        } else originalTargets
         HubSection(
             group = group,
             title = stringResource(group.label),
@@ -158,6 +163,17 @@ fun hubSections(pages: List<UiSettingsPage>): List<HubSection> {
                         )
                     }
                     is HubTarget.Tool -> toolEntry(target)
+                    is HubTarget.ContributedScreen -> {
+                        val screen = contributed.first { it.id == target.id }
+                        HubEntry(
+                            target,
+                            dev.ide.ui.icons.actionIcon(screen.toolIconId),
+                            screen.title,
+                            screen.toolDescription,
+                            scopeLabel = null,
+                            keywords = listOf(screen.id),
+                        )
+                    }
                 }
             },
         )

@@ -1,0 +1,11 @@
+--- a/tools/v8_gypfiles/v8.gyp
++++ b/tools/v8_gypfiles/v8.gyp
+@@ -1062,7 +1062,7 @@
+       'type': 'static_library',
+       'toolsets': ['host', 'target'],
+       'target_conditions': [
+-        ['OS=="android" and _toolset=="host" and host_os in "linux mac" and v8_enable_webassembly==1', {
++        ['OS=="android" and _toolset=="host" and host_os in "linux mac"', {
+           # Host mksnapshot has POSIX traps; Android target explicitly does not.
+           'sources': [
+             '<(V8_ROOT)/src/trap-handler/handler-inside-posix.cc',

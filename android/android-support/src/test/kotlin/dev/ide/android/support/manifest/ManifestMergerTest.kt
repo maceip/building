@@ -115,6 +115,41 @@ class ManifestMergerTest {
     }
 
     @Test
+    fun appBuildTypeOwnsDebuggableEvenWhenSourceOrLibraryDisagrees() {
+        for (debuggable in listOf(true, false)) {
+            for (declared in listOf(null, true, false)) {
+                val attribute = declared?.let { "a:debuggable=\"$it\"" }.orEmpty()
+                // Nonstandard namespace prefix proves replacement is namespace-based, not string matching.
+                val primary = """<manifest xmlns:a="${ManifestMerger.ANDROID_NS}" package="com.example.app"><application $attribute/></manifest>"""
+                val library = """<manifest xmlns:android="${ManifestMerger.ANDROID_NS}" package="com.example.lib"><application android:debuggable="${!debuggable}"/></manifest>"""
+                val result = ManifestMerger.mergeXml(primary, listOf(library), appDebuggable = debuggable)
+                assertFalse(result.hasErrors, "${result.messages}")
+                val application = descendants(parse(result.xml), "application").single()
+                assertEquals(debuggable.toString(), android(application, "debuggable"), "source=$declared variant=$debuggable")
+                val flags = (0 until application.attributes.length).map { application.attributes.item(it) }
+                    .count { it.namespaceURI == ManifestMerger.ANDROID_NS && it.localName == "debuggable" }
+                assertEquals(1, flags, "The final manifest must contain one authoritative Android flag")
+            }
+        }
+    }
+
+    @Test
+    fun buildTypeDebuggableIsAppliedAfterToolsRemovalAndAddsMissingAndroidNamespace() {
+        val bare = ManifestMerger.mergeXml("""<manifest package="com.example.app"><application/></manifest>""",
+            emptyList(), appDebuggable = true)
+        assertEquals("true", android(descendants(parse(bare.xml), "application").single(), "debuggable"))
+        val removal = """<manifest xmlns:android="${ManifestMerger.ANDROID_NS}" xmlns:tools="${ManifestMerger.TOOLS_NS}" package="com.example.app"><application android:debuggable="true" tools:remove="android:debuggable"/></manifest>"""
+        val release = ManifestMerger.mergeXml(removal, emptyList(), appDebuggable = false)
+        assertEquals("false", android(descendants(parse(release.xml), "application").single(), "debuggable"))
+    }
+
+    @Test
+    fun genericManifestMergeDoesNotInventBuildTypeDebuggable() {
+        val result = ManifestMerger.mergeXml(APP, emptyList())
+        assertEquals("", android(descendants(parse(result.xml), "application").single(), "debuggable"))
+    }
+
+    @Test
     fun substitutesApplicationIdPlaceholder() {
         val r = ManifestMerger.mergeXml(APP, listOf(FIREBASE_LIB), mapOf("applicationId" to "com.example.app"))
         val provider = descendants(parse(r.xml), "provider").single()

@@ -41,81 +41,199 @@ class GradleBuildSystem : BuildSystem {
     override fun supports(moduleType: ModuleType): Boolean = false
 
     override fun tasks(project: Project): List<TaskDescriptor> = listOf(
-        TaskDescriptor("assemble", "build", "Assemble with Gradle"),
+        TaskDescriptor("assemble", "build", "Assemble with Gradle (without installing)"),
+        TaskDescriptor("test", "verification", "Run Gradle unit tests"),
+        TaskDescriptor("lint", "verification", "Run Android lint with Gradle"),
+        TaskDescriptor("bundle", "build", "Build an Android App Bundle with Gradle"),
+        TaskDescriptor("clean", "build", "Clean Gradle outputs"),
     )
 
-    override fun runTasks(project: Project): List<RunTaskSpec> {
-        val snapshot = GradleProjectSnapshot.load(Path.of(project.rootDir.path))
-        val chosen = snapshot?.let { VariantChoice.choose(it.variants()) }
-        val label = when {
-            chosen == null -> "Build with Gradle"
-            chosen.variant.application -> "Run ${chosen.variant.name}"
-            else -> chosen.variant.assembleTask
-        }
-        return listOf(RunTaskSpec(TASK_ID, label, if (chosen?.variant?.application == true) "android" else "build"))
-    }
+    /**
+     * [TASK_ID] stays first and keeps its historical Run behavior. All other rows encode their intent:
+     * `gradle:build/test/lint/bundle` never install. Qualified IDs append the Gradle module path (without
+     * its leading colon) and the variant, e.g. `gradle:bundle:app:android:release`. A root module uses an
+     * empty path (`gradle:build::main`). Callers should enumerate these IDs, not infer variants from facets.
+     */
+    override fun runTasks(project: Project): List<RunTaskSpec> = options(project).map { it.spec }
 
     override fun actionFor(spec: RunTaskSpec, project: Project, ctx: BuildContext): RunAction? {
-        if (spec.id != TASK_ID) return null
-        val root = Path.of(project.rootDir.path)
-        val snapshot = GradleProjectSnapshot.load(root)
-        val chosen = snapshot?.let { VariantChoice.choose(it.variants()) }
-        val goal = BuildGoal.ASSEMBLE
-        val session = GradleSessionTask(root, goal, chosen)
-        val tasks = DefaultTaskContainer()
-        tasks.register(session.name) { session }
-        val header = chosen?.let { "> ${it.taskPath}" } ?: "> gradle assemble"
+        val option = options(project).firstOrNull { it.spec.id == spec.id } ?: return null
+        return action(Path.of(project.rootDir.path), option.goal, option.targets, option.runAfterBuild)
+    }
+
+    /** The host's legacy per-module rows retain their exact goal/variant and opt into Run explicitly. */
+    fun actionFor(project: Project, request: BuildRequest, runAfterBuild: Boolean = false): RunAction =
+        action(Path.of(project.rootDir.path), request.goal, targets(project, request), runAfterBuild)
+
+    override fun createBuildGraph(project: Project, request: BuildRequest): TaskGraph =
+        graph(GradleSessionTask(Path.of(project.rootDir.path), request.goal, targets(project, request)))
+
+    override fun createBuildGraph(project: Project, request: BuildRequest, ctx: BuildContext): TaskGraph =
+        createBuildGraph(project, request)
+
+    private fun action(root: Path, goal: BuildGoal, targets: List<GradleTarget>, runAfterBuild: Boolean): RunAction {
+        require(!runAfterBuild || goal == BuildGoal.ASSEMBLE) { "Only an assemble Run can install an APK." }
+        val session = GradleSessionTask(root, goal, targets)
         return RunAction(
-            header = header,
-            graph = tasks.build(),
-            onSuccess = { log ->
+            header = "> gradle ${session.requestedTasks.joinToString(" ")}",
+            graph = graph(session),
+            // Build-only intent is part of the action, never a temporary change to the global installer.
+            // Artifacts/reports are logged by the session, also for createBuildGraph callers.
+            onSuccess = if (runAfterBuild) { log ->
                 val apk = session.apk
                 val applicationId = session.applicationId
                 val install = GradleEnvironment.installAndLaunch
                 if (apk != null && applicationId != null && install != null) install(apk, applicationId, log)
-                else if (apk != null) log("APK: $apk")
-            },
+            } else null,
         )
     }
 
-    override fun createBuildGraph(project: Project, request: BuildRequest): TaskGraph =
-        createBuildGraph(project, request, BuildContext(env = dev.ide.build.engine.DefaultBuildEnv(Path.of(project.rootDir.path))))
+    private fun graph(session: GradleSessionTask): TaskGraph = DefaultTaskContainer().apply {
+        register(session.name) { session }
+    }.build()
 
-    override fun createBuildGraph(project: Project, request: BuildRequest, ctx: BuildContext): TaskGraph {
-        val root = Path.of(project.rootDir.path)
+    private data class Option(
+        val spec: RunTaskSpec,
+        val goal: BuildGoal,
+        val targets: List<GradleTarget>,
+        val runAfterBuild: Boolean = false,
+    )
+
+    private fun options(project: Project): List<Option> {
+        val snapshot = GradleProjectSnapshot.load(Path.of(project.rootDir.path))
+        val all = snapshot?.targets().orEmpty()
+        val chosen = choose(all)
+        return buildList {
+            val legacyLabel = when {
+                chosen == null -> "Build with Gradle"
+                chosen.choice.variant.application -> "Run ${chosen.choice.variant.name}"
+                else -> chosen.choice.variant.assembleTask
+            }
+            add(Option(RunTaskSpec(TASK_ID, legacyLabel, if (chosen?.choice?.variant?.application == true) "android" else "build"),
+                BuildGoal.ASSEMBLE, listOfNotNull(chosen), runAfterBuild = true))
+            for ((taskId, goal, label) in listOf(
+                Triple(BUILD_TASK_ID, BuildGoal.ASSEMBLE, "Build with Gradle"),
+                Triple(TEST_TASK_ID, BuildGoal.TEST, "Test with Gradle"),
+                Triple(LINT_TASK_ID, BuildGoal.LINT, "Lint with Gradle"),
+                Triple(BUNDLE_TASK_ID, BuildGoal.BUNDLE, "Bundle with Gradle (.aab)"),
+            )) {
+                val eligible = all.filter { eligible(it, goal) }
+                if (snapshot != null && eligible.isEmpty() && goal in setOf(BuildGoal.LINT, BuildGoal.BUNDLE)) continue
+                add(Option(RunTaskSpec(taskId, label, "build"), goal, listOfNotNull(choose(eligible))))
+                for (target in eligible) {
+                    val variant = target.choice.variant
+                    val suffix = "${variant.modulePath.removePrefix(":")}:${variant.name}"
+                    val title = "${label.substringBefore(" with")} ${variant.name} · ${variant.modulePath}"
+                    add(Option(RunTaskSpec("$taskId:$suffix", title, "build"), goal, listOf(target)))
+                }
+            }
+            for (target in all.filter { it.choice.variant.application }) {
+                val variant = target.choice.variant
+                add(Option(
+                    RunTaskSpec("gradle:run:${variant.modulePath.removePrefix(":")}:${variant.name}",
+                        "Run ${variant.name} · ${variant.modulePath}", "android"),
+                    BuildGoal.ASSEMBLE, listOf(target), runAfterBuild = true,
+                ))
+            }
+        }
+    }
+
+    private fun GradleProjectSnapshot.targets(): List<GradleTarget> = variants().map { variant ->
+        GradleTarget(
+            VariantChoice.Chosen(variant, VariantChoice.taskPath(variant.modulePath, variant.assembleTask)),
+            android = variant.application || module(variant.modulePath)?.plugins.orEmpty().any { it.startsWith("com.android.") },
+        )
+    }
+
+    private fun choose(targets: List<GradleTarget>): GradleTarget? {
+        val chosen = VariantChoice.choose(targets.map { it.choice.variant }) ?: return null
+        return targets.first { it.choice == chosen }
+    }
+
+    private fun eligible(target: GradleTarget, goal: BuildGoal): Boolean = when (goal) {
+        BuildGoal.BUNDLE -> target.choice.variant.application
+        BuildGoal.LINT -> target.android
+        else -> true
+    }
+
+    private fun targets(project: Project, request: BuildRequest): List<GradleTarget> {
+        if (request.goal == BuildGoal.CLEAN && request.targets.isEmpty()) return emptyList()
+        val root = Path.of(project.rootDir.path).toAbsolutePath().normalize()
         val snapshot = GradleProjectSnapshot.load(root)
-        val chosen = snapshot?.let { VariantChoice.choose(it.variants()) }
-        val session = GradleSessionTask(root, request.goal, chosen)
-        val tasks = DefaultTaskContainer()
-        tasks.register(session.name) { session }
-        return tasks.build()
+        if (snapshot == null) {
+            require(request.targets.isEmpty() && request.variant.name in setOf("", "main")) {
+                "Sync this Gradle project before selecting a module and variant."
+            }
+            return emptyList()
+        }
+        val all = snapshot.targets()
+        val requestedVariant = request.variant.name
+        fun select(candidates: List<GradleTarget>): GradleTarget {
+            val matching = candidates.filter { eligible(it, request.goal) }
+                .filter { requestedVariant.isBlank() || it.choice.variant.name == requestedVariant || request.goal == BuildGoal.CLEAN }
+            return choose(matching) ?: error(
+                "No Gradle ${request.goal.name.lowercase()} target for variant '$requestedVariant'. Sync the project and choose an available task.",
+            )
+        }
+        if (request.targets.isEmpty()) return listOf(select(all))
+        return request.targets.distinct().map { id ->
+            val module = project.modules.firstOrNull { it.id == id } ?: error("No module '${id.value}' in this Gradle project.")
+            val dir = Path.of(module.dir.path).toAbsolutePath().normalize()
+            // Directories, not display names: nested projects can share a leaf name or remap projectDir.
+            val model = snapshot.modules.singleOrNull { root.resolve(it.dir.ifBlank { "." }).normalize() == dir }
+                ?: error("No synced Gradle module for '${module.name}'. Sync the project before building.")
+            select(all.filter { it.choice.variant.modulePath == model.path })
+        }
     }
 
     companion object {
+        /** Historical default Run ID. Unlike [BUILD_TASK_ID], this may install and launch. */
         const val TASK_ID = "gradle:assemble"
+        const val BUILD_TASK_ID = "gradle:build"
+        const val TEST_TASK_ID = "gradle:test"
+        const val LINT_TASK_ID = "gradle:lint"
+        const val BUNDLE_TASK_ID = "gradle:bundle"
     }
 }
 
-class GradleSessionTask(
+internal data class GradleTarget(val choice: VariantChoice.Chosen, val android: Boolean)
+
+class GradleSessionTask internal constructor(
     private val projectDir: Path,
     private val goal: BuildGoal,
-    private val chosen: VariantChoice.Chosen?,
+    private val targets: List<GradleTarget>,
 ) : Task, AlwaysRun {
 
+    /** Kept for callers that already chose a single variant. */
+    constructor(projectDir: Path, goal: BuildGoal, chosen: VariantChoice.Chosen?) : this(
+        projectDir, goal, listOfNotNull(chosen?.let { GradleTarget(it, it.variant.application || it.variant.name != "main") }),
+    )
+
+    internal val requestedTasks: List<String> = if (targets.isEmpty()) listOf(taskFor(null))
+        else targets.map { taskFor(it) }.distinct()
+
     override val name: TaskName = TaskName(":gradle:execute")
-    override val inputs: TaskInputs = TaskInputsImpl().apply { property("goal", goal.name) }
+    override val inputs: TaskInputs = TaskInputsImpl().apply {
+        property("goal", goal.name)
+        property("tasks", requestedTasks)
+    }
     override val outputs: TaskOutputs = TaskOutputsImpl()
 
     @Volatile var apk: Path? = null
     @Volatile var applicationId: String? = null
+    @Volatile var artifacts: List<Path> = emptyList()
+        private set
 
     override suspend fun execute(ctx: TaskContext): TaskResult {
+        ctx.checkCanceled()
+        apk = null
+        applicationId = null
+        artifacts = emptyList()
         val host = GradleEnvironment.host
             ?: return TaskResult.Failed("This project builds with Gradle. Sync it once the JDK is installed.")
         if (!host.available()) {
             return TaskResult.Failed("This project builds with Gradle. Sync it once the JDK is installed.")
         }
-        val tasks = gradleTasks()
         val parser = CompilerOutputParser("gradle")
         val canceled = java.util.concurrent.atomic.AtomicBoolean(false)
         val watcher = thread(isDaemon = true, name = "gradle-cancel") {
@@ -134,7 +252,7 @@ class GradleSessionTask(
             }
         }
         return try {
-            val snapshot = GradleToolchain.execute(projectDir, host, tasks, isCanceled = { canceled.get() }) { event ->
+            val snapshot = GradleToolchain.execute(projectDir, host, requestedTasks, isCanceled = { canceled.get() }) { event ->
                 when (event["event"]) {
                     "progress" -> {
                         val task = event["task"] as? String ?: return@execute
@@ -148,7 +266,8 @@ class GradleSessionTask(
                     }
                 }
             }
-            parser.flush { ctx.diagnostics.report(it) }
+            ctx.checkCanceled()
+            if (canceled.get()) throw java.util.concurrent.CancellationException("canceled")
             snapshot?.issues?.forEach { issue ->
                 ctx.diagnostics.report(
                     dev.ide.build.BuildDiagnostic(
@@ -160,46 +279,108 @@ class GradleSessionTask(
                 )
             }
             if (snapshot != null) GradleProjectSnapshot.store(projectDir, snapshot.raw)
-            val variant = chosen?.variant
-            if (variant != null) {
-                apk = findApk(projectDir, variant.moduleDir, variant.name)
-                applicationId = variant.applicationId
-            }
-            if (canceled.get()) throw java.util.concurrent.CancellationException("canceled")
+            collectArtifacts(ctx)
             TaskResult.Success
         } catch (c: java.util.concurrent.CancellationException) {
             throw c
-        } catch (e: GradleToolchain.UnsupportedWrapper) {
-            TaskResult.Failed(e.message ?: "This project stays on the static Gradle reader.")
-        } catch (e: ToolingClient.ToolingException) {
-            val tail = e.stderr.lineSequence().filter { it.isNotBlank() }.toList().takeLast(40).joinToString("\n")
-            TaskResult.Failed(listOfNotNull(e.message, tail.takeIf { it.isNotBlank() }).joinToString("\n"))
         } catch (e: Exception) {
-            TaskResult.Failed(e.message ?: e.toString())
+            // Tooling API cancellation can arrive as an error response rather than a CancellationException.
+            ctx.checkCanceled()
+            if (canceled.get()) throw java.util.concurrent.CancellationException("canceled")
+            when (e) {
+                is GradleToolchain.UnsupportedWrapper -> TaskResult.Failed(e.message ?: "This project stays on the static Gradle reader.")
+                is ToolingClient.ToolingException -> {
+                    val tail = e.stderr.lineSequence().filter { it.isNotBlank() }.toList().takeLast(40).joinToString("\n")
+                    TaskResult.Failed(listOfNotNull(e.message, tail.takeIf { it.isNotBlank() }).joinToString("\n"))
+                }
+                else -> TaskResult.Failed(e.message ?: e.toString())
+            }
         } finally {
+            parser.flush { ctx.diagnostics.report(it) }
             watcher.interrupt()
         }
     }
 
-    private fun gradleTasks(): List<String> {
-        val assemble = chosen?.taskPath ?: ":assemble"
-        return when (goal) {
-            BuildGoal.CLEAN -> listOf(":clean")
-            BuildGoal.TEST -> listOf(":test")
-            BuildGoal.BUNDLE -> listOf(VariantChoice.bundleTask(assemble))
-            else -> listOf(assemble)
+    private fun taskFor(target: GradleTarget?): String {
+        val variant = target?.choice?.variant
+        val cap = variant?.name?.replaceFirstChar { it.uppercase() }.orEmpty()
+        val task = when (goal) {
+            BuildGoal.ASSEMBLE, BuildGoal.PACKAGE -> return target?.choice?.taskPath ?: ":assemble"
+            BuildGoal.CLEAN -> "clean"
+            BuildGoal.TEST -> if (target?.android == true) "test${cap}UnitTest" else "test"
+            BuildGoal.LINT -> {
+                require(target == null || target.android) { "Android lint is not available for '${variant?.modulePath}'." }
+                if (target == null) "lint" else "lint$cap"
+            }
+            BuildGoal.BUNDLE -> {
+                require(target == null || variant?.application == true) { "Only Android application modules produce an App Bundle." }
+                if (target == null) "bundle" else "bundle$cap"
+            }
+            // Never silently replace a different goal with a production assemble.
+            BuildGoal.COMPILE_ONLY, BuildGoal.INSTALL, BuildGoal.DEX ->
+                error("Gradle goal ${goal.name} is not supported here. Choose Build, Test, Lint, Bundle, or Run.")
         }
+        return VariantChoice.taskPath(variant?.modulePath ?: ":", task)
     }
 
-    private fun findApk(root: Path, moduleDir: String, variant: String): Path? {
-        val base = if (moduleDir.isBlank() || moduleDir == ".") root else root.resolve(moduleDir)
-        val outputs = base.resolve("build/outputs/apk")
-        if (!Files.isDirectory(outputs)) return null
+    private fun collectArtifacts(ctx: TaskContext) {
+        val found = ArrayList<Path>()
+        for (target in targets) {
+            val variant = target.choice.variant
+            val build = projectDir.resolve(variant.moduleDir.ifBlank { "." }).resolve("build").normalize()
+            val files = when (goal) {
+                BuildGoal.ASSEMBLE, BuildGoal.PACKAGE -> when {
+                    variant.application -> outputFiles(build.resolve("outputs/apk"), "apk", variant)
+                    target.android -> outputFiles(build.resolve("outputs/aar"), "aar", variant)
+                    else -> outputFiles(build.resolve("libs"), "jar", null)
+                }
+                BuildGoal.BUNDLE -> outputFiles(build.resolve("outputs/bundle"), "aab", variant)
+                BuildGoal.TEST -> {
+                    val task = taskFor(target).substringAfterLast(':')
+                    listOf(build.resolve("reports/tests/$task/index.html"), build.resolve("test-results/$task"))
+                        .filter { Files.exists(it) }
+                }
+                BuildGoal.LINT -> listOf("html", "xml", "txt")
+                    .map { build.resolve("reports/lint-results-${variant.name}.$it") }
+                    .filter { Files.isRegularFile(it) }
+                else -> emptyList()
+            }
+            found += files
+            for (file in files) {
+                val label = when (goal) {
+                    BuildGoal.TEST -> "Test report"
+                    BuildGoal.LINT -> "Lint report"
+                    else -> file.fileName.toString().substringAfterLast('.').uppercase()
+                }
+                ctx.buildLog.log(dev.ide.build.BuildLogEntry("$label: $file"))
+            }
+            if (goal == BuildGoal.ASSEMBLE && variant.application && targets.size == 1) {
+                apk = files.maxByOrNull { Files.getLastModifiedTime(it).toMillis() }
+                applicationId = variant.applicationId
+            }
+        }
+        artifacts = found.distinct()
+    }
+
+    private fun outputFiles(outputs: Path, extension: String, variant: VariantChoice.Variant?): List<Path> {
+        if (!Files.isDirectory(outputs)) return emptyList()
         return Files.walk(outputs).use { stream ->
-            stream.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".apk") }
-                .filter { variant.isEmpty() || it.toString().contains(variant, ignoreCase = true) }
-                .max(compareBy<Path> { Files.getLastModifiedTime(it).toMillis() })
-                .orElse(null)
+            stream.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".$extension") }
+                .filter { file ->
+                    if (variant == null) true
+                    else {
+                        // Match within this module's output directory, never a substring of the project path.
+                        // APK flavors occupy separate directories (free/debug), bundles use freeDebug, and
+                        // AARs use a flat name (library-free-debug.aar).
+                        val relative = outputs.relativize(file)
+                        val directory = relative.parent?.joinToString("").orEmpty()
+                        val suffix = (variant.flavors + variant.buildType).joinToString("-")
+                        directory.equals(variant.name, ignoreCase = true) ||
+                            (extension == "aar" && (file.fileName.toString().endsWith("-$suffix.aar", ignoreCase = true) ||
+                                file.fileName.toString().endsWith("-${variant.name}.aar", ignoreCase = true)))
+                    }
+                }
+                .sorted().toList()
         }
     }
 }

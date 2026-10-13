@@ -3,17 +3,26 @@ package dev.ide.core
 import dev.ide.testkit.withTempDir
 import dev.ide.build.BUILD_SYSTEM_EP
 import dev.ide.build.BuildContext
+import dev.ide.build.BuildGoal
+import dev.ide.build.BuildLogEntry
 import dev.ide.build.BuildRequest
 import dev.ide.build.BuildSystem
 import dev.ide.build.RUN_TASK_PROVIDER_EP
 import dev.ide.build.RunAction
 import dev.ide.build.RunTaskProvider
 import dev.ide.build.RunTaskSpec
+import dev.ide.build.Task
+import dev.ide.build.TaskContext
 import dev.ide.build.TaskDescriptor
+import dev.ide.build.TaskInputsImpl
+import dev.ide.build.TaskOutputsImpl
+import dev.ide.build.TaskResult
 import dev.ide.build.TaskGraph
 import dev.ide.build.TaskName
 import dev.ide.build.engine.DefaultTaskContainer
 import dev.ide.build.engine.LifecycleTask
+import dev.ide.gradle.GradleBuildSystem
+import dev.ide.gradle.GradleProjectSnapshot
 import dev.ide.model.BuildSystemId
 import dev.ide.model.Module
 import dev.ide.model.ModuleType
@@ -26,6 +35,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -134,6 +144,148 @@ class BuildSystemExtensionTest {
             )
             }
         }
+    }
+
+    /** The Gradle owner receives the original build request, never the install-capable default Run row. */
+    @Test
+    fun legacyHostBuildOnlyIdsKeepTheirGoalsTargetsAndVariantsOnGradleProjects() {
+        withTempDir("gradle-goal-dispatch") { dir ->
+            IdeServices.bootstrapJavaDemo(dir).use { ide ->
+                val owner = RecordingGradleBuildSystem()
+                ide.platform.extensions.register(BUILD_SYSTEM_EP, owner, PluginId("test-gradle-owner"))
+                bindToGradle(ide)
+                val module = ide.modules().first()
+                ide.setActiveVariant(module, "chosenRelease")
+                for ((id, goal, variant) in listOf(
+                    Triple("build:${module.name}", BuildGoal.ASSEMBLE, "chosenRelease"),
+                    Triple("assemble:${module.name}:freeRelease", BuildGoal.ASSEMBLE, "freeRelease"),
+                    Triple("assembleAar:${module.name}:freeDebug", BuildGoal.ASSEMBLE, "freeDebug"),
+                    Triple("bundle:${module.name}:freeRelease", BuildGoal.BUNDLE, "freeRelease"),
+                    Triple("test:${module.name}:freeDebug", BuildGoal.TEST, "freeDebug"),
+                    Triple("lint:${module.name}:freeDebug", BuildGoal.LINT, "freeDebug"),
+                )) {
+                    ide.build.runTask(id)
+                    val state = terminal(ide)
+                    assertEquals(RunStatus.Succeeded, state.status, state.log.toString())
+                    val request = owner.requests.last()
+                    assertEquals(goal, request.goal, id)
+                    assertEquals(listOf(module.id), request.targets, id)
+                    assertEquals(variant, request.variant.name, id)
+                    assertTrue(state.log.any { it.message == "executing $goal $variant" }, state.log.toString())
+                    assertEquals(0, owner.runActions, "$id must not request the default Run action")
+                    assertEquals(0, owner.installs, "$id must not install")
+                }
+                assertEquals(6, owner.requests.size)
+            }
+        }
+    }
+
+    @Test
+    fun gradleOwnedConsoleModulesOnlyListTheirOwnersTasksAndDefaultRunIsPreserved() {
+        withTempDir("gradle-owned-picker") { dir ->
+            IdeServices.bootstrapJavaDemo(dir).use { ide ->
+                val owner = RecordingGradleBuildSystem()
+                ide.platform.extensions.register(BUILD_SYSTEM_EP, owner, PluginId("test-gradle-owner"))
+                bindToGradle(ide)
+                val rows = ide.build.runTasks()
+                assertEquals(listOf(GradleBuildSystem.TASK_ID), rows.map { it.id })
+                assertFalse(rows.any { it.id.startsWith("build:") || it.id.startsWith("run:") })
+                ide.build.runBuild()
+                assertEquals(RunStatus.Succeeded, terminal(ide).status)
+                assertEquals(1, owner.runActions)
+                assertEquals(1, owner.installs, "the legacy default Run still executes its post-build action")
+                val module = ide.modules().first()
+                for (id in listOf("run:${module.name}", "androidRun:${module.name}:debug")) {
+                    ide.build.runTask(id)
+                    assertEquals(RunStatus.Succeeded, terminal(ide).status)
+                }
+                assertEquals(3, owner.installs, "explicit Run aliases retain their install-capable action")
+            }
+        }
+    }
+
+    @Test
+    fun actualGradleOwnerExposesBuildQualityAndBundleRowsWithoutNativeDuplicates() {
+        withTempDir("gradle-workbench-picker") { dir ->
+            IdeServices.bootstrapJavaDemo(dir).use { ide ->
+                bindToGradle(ide)
+                ide.platform.extensions.register(BUILD_SYSTEM_EP, GradleBuildSystem(), PluginId("test-gradle-owner"))
+                GradleProjectSnapshot.store(dir, """
+                    {"schemaVersion":2,"name":"fixture","modules":[
+                      {"name":"app","path":":app:android","dir":"app","application":true,
+                       "plugins":["com.android.application"],"variants":[
+                         {"name":"debug","buildType":"debug","assembleTask":"assembleDebug"},
+                         {"name":"release","buildType":"release","assembleTask":"assembleRelease"}]}
+                    ]}
+                """.trimIndent())
+                val ids = IdeServicesBackend(ide).build.runTasks().map { it.id }
+                assertEquals("gradle:assemble", ids.first())
+                for (goal in listOf("build", "test", "lint", "bundle")) {
+                    assertTrue("gradle:$goal" in ids, ids.toString())
+                    assertTrue("gradle:$goal:app:android:release" in ids, ids.toString())
+                }
+                assertFalse(ids.any { it.startsWith("build:") || it.startsWith("run:") })
+            }
+        }
+    }
+
+    @Test
+    fun nativeTestWithoutATaskProviderFailsExplicitlyAndDoesNotCompileProductionSources() {
+        withTempDir("native-test-unsupported") { dir ->
+            IdeServices.bootstrapJavaDemo(dir).use { ide ->
+                val module = ide.modules().first()
+                ide.build.runTask("test:${module.name}:main")
+                val state = ide.build.buildState.value
+                assertEquals(RunStatus.Failed, state.status)
+                assertTrue(state.log.any { "Native TEST is not supported" in it.message }, state.log.toString())
+                assertTrue(state.steps.isEmpty(), "unsupported tests must not become a production compile")
+            }
+        }
+    }
+
+    private fun bindToGradle(ide: IdeServices) {
+        val project = ide.store.workspace.projects.single()
+        ide.store.workspace.beginModification().apply {
+            setBuildSystem(project.id, BuildSystemId.GRADLE)
+            commit()
+        }
+    }
+
+    private fun terminal(ide: IdeServices) = runBlocking {
+        withTimeout(30_000) {
+            ide.build.buildState.first { it.status != RunStatus.Running && it.log.isNotEmpty() }
+        }
+    }
+
+    private class RecordingGradleBuildSystem : BuildSystem {
+        override val id = BuildSystemId.GRADLE
+        val requests = ArrayList<BuildRequest>()
+        var runActions = 0
+        var installs = 0
+        override fun supports(moduleType: ModuleType) = false
+        override fun tasks(project: Project) = emptyList<TaskDescriptor>()
+        override fun runTasks(project: Project) = listOf(RunTaskSpec(GradleBuildSystem.TASK_ID, "Run", "android"))
+        override fun createBuildGraph(project: Project, request: BuildRequest): TaskGraph {
+            requests += request
+            return graph("executing ${request.goal} ${request.variant.name}")
+        }
+        override fun actionFor(spec: RunTaskSpec, project: Project, ctx: BuildContext): RunAction {
+            runActions++
+            return RunAction("> Gradle Run", graph("running app"), onSuccess = { installs++ })
+        }
+        private fun graph(message: String): TaskGraph = DefaultTaskContainer().apply {
+            register(TaskName(":recordGoal")) {
+                object : Task {
+                    override val name = TaskName(":recordGoal")
+                    override val inputs = TaskInputsImpl().apply { property("message", message) }
+                    override val outputs = TaskOutputsImpl()
+                    override suspend fun execute(ctx: TaskContext): TaskResult {
+                        ctx.buildLog.log(BuildLogEntry(message))
+                        return TaskResult.Success
+                    }
+                }
+            }
+        }.build()
     }
 
     /** An id nobody claims still fails cleanly rather than throwing or hanging. */

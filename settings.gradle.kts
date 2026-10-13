@@ -91,7 +91,8 @@ include(
     ":build-engine",
     ":android-support",
     ":android-sdk-metadata", // build-time generator: SDK attrs.xml + android.jar → bundled metadata asset
-    ":applog-runtime", // tiny Java runtime injected into DEBUG apps: a ContentProvider that forwards the app's logs to the IDE
+    ":applog-runtime", // opt-in app reliability runtime; test controls are a separate artifact
+    ":reliability-test-support",
 
     ":language-api",
     ":index-api",
@@ -135,6 +136,7 @@ include(
     ":agent-api",   // agentic-coding SPI: provider-neutral LLM client + AgentTool + AgentWorkspace engine port
     ":agent-impl",  // the agent engine: OkHttp/SSE transport, Anthropic/OpenAI/Gemini providers, loop, built-in tools
     ":agent-mcp",   // Model Context Protocol server: exposes the agent's tools over stdio JSON-RPC to external clients
+    ":developer-workbench",
     ":layout-preview-api",  // owned XML-layout preview: render contracts (RCanvas/RenderNode/Renderer), android-free
     ":layout-preview-impl", // the preview engine: resource value resolver, inflater, built-in renderers, ASM bridge remapper
     // The platform-free core of the SPI: the symbol model, the DOM, VirtualFile and ContentHash.
@@ -168,7 +170,17 @@ include(
 // above (the part with the unit tests + regression suites) without provisioning an Android SDK; a normal
 // local build leaves it unset and includes everything. Nothing in the framework depends on these, so
 // excluding them is safe and keeps the acyclic graph intact.
+val appEngineDelivery = providers.gradleProperty("IDE_APP_ENGINE_DELIVERY").getOrElse("none")
+val appEngine = providers.gradleProperty("IDE_APP_ENGINE").getOrElse("python")
+require(appEngineDelivery in setOf("none", "direct", "play")) { "IDE_APP_ENGINE_DELIVERY must be none, direct or play" }
+require(appEngine in setOf("node", "python")) { "IDE_APP_ENGINE must be node or python" }
+
 if (System.getenv("CI_CORE_ONLY") != "true") {
+    if (appEngineDelivery != "none") include(":runtime-engine-$appEngine")
+    if (appEngineDelivery == "play") include(":runtime_engine_ide_feature")
+    if (providers.gradleProperty("RUNTIME_ENGINE_RELIABILITY").getOrElse("false").toBooleanStrict()) {
+        include(":runtime-engine-reliability")
+    }
     include(
         ":interp-compose", // Compose bridge + render surface (KMP: desktop+android) — needs the Compose plugin
         ":ide-ui-api", // neutral IdeBackend port + DTOs + UI-contribution model, shared by :ide-ui and :ide-core
@@ -206,9 +218,11 @@ if (System.getenv("CI_CORE_ONLY") != "true") {
         // script for why that is worth a module.
         ":art-compat",
         ":ide-android",
+        ":runtime-engine",
         // A plugin packaged as its own app, built here so it cannot drift from the SPI it compiles against.
         ":samples:hello-plugin",
         ":samples:ndk-plugin",
+        ":samples:reliability-fixture",
     )
 }
 
@@ -246,7 +260,7 @@ val layers = mapOf(
     // preview, and the ART compatibility shims.
     "android" to listOf(
         "android-support", "android-sdk-metadata", "art-compat",
-        "layout-preview-api", "layout-preview-impl", "applog-runtime",
+        "layout-preview-api", "layout-preview-impl", "applog-runtime", "reliability-test-support",
     ),
     // Cross-cutting services, each an api/impl pair (plus its own Compose UI where it has one):
     // dependency resolution, version control, the Projects Store, analytics, the AI agent.
@@ -254,6 +268,7 @@ val layers = mapOf(
         "deps-api", "deps-impl", "vcs-api", "vcs-impl", "vcs-ui",
         "store-api", "store-impl", "store-bridge",
         "analytics-api", "analytics-impl", "agent-api", "agent-impl", "agent-mcp", "agent-ui",
+        "developer-workbench",
     ),
     // The plugin SPI a third-party plugin compiles against, and the host that resolves it.
     "plugins" to listOf("plugin-api", "plugin-ui-api", "plugin-bom", "plugin-impl", "spi-compat"),
@@ -271,7 +286,14 @@ val layers = mapOf(
 )
 
 // `samples` holds plugins built as their own apps; it is already a directory, so it needs no mapping.
-val unlayered = rootProject.children.map { it.name } - layers.values.flatten().toSet() - setOf("samples")
+val runtimeEngineDirectories = mapOf(
+    "runtime-engine" to "android/runtime-engine/core",
+    "runtime-engine-node" to "android/runtime-engine/node",
+    "runtime-engine-python" to "android/runtime-engine/python",
+    "runtime-engine-reliability" to "android/runtime-engine/reliability",
+    "runtime_engine_ide_feature" to "android/runtime-engine/ide-feature",
+)
+val unlayered = rootProject.children.map { it.name } - layers.values.flatten().toSet() - setOf("samples") - runtimeEngineDirectories.keys
 require(unlayered.isEmpty()) {
     "settings.gradle.kts: $unlayered are included but not assigned a layer directory, so Gradle would " +
         "look for them at the repo root. Add each to the `layers` map above."
@@ -281,4 +303,7 @@ require(unlayered.isEmpty()) {
 val included = rootProject.children.map { it.name }.toSet()
 layers.forEach { (layer, modules) ->
     modules.filter { it in included }.forEach { project(":$it").projectDir = file("$layer/$it") }
+}
+runtimeEngineDirectories.filterKeys { it in included }.forEach { (name, directory) ->
+    project(":$name").projectDir = file(directory)
 }

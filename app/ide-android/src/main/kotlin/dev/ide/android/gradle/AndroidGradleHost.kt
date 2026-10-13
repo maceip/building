@@ -39,7 +39,17 @@ class AndroidGradleHost(private val context: Context) : GradleHost {
 
     override val android: Boolean = true
 
-    override fun available(): Boolean = javaHome(JdkSelection.Image.JDK_17) != null
+    override fun available(): Boolean {
+        val prefix = prefix()
+        val stamp = prefix.resolve(".bootstrap-stamp")
+        return javaHome(JdkSelection.Image.JDK_17) != null &&
+            Files.isRegularFile(prefix.resolve("lib/libtermux-exec.so")) &&
+            Files.isRegularFile(prefix.resolve("bin/sh")) &&
+            runCatching {
+                Files.isRegularFile(stamp) && stamp.readText() ==
+                    Prefix.catalog().packages.joinToString("\n") { "${it.name} ${it.sha256}" }
+            }.getOrDefault(false)
+    }
 
     override fun javaHome(image: JdkSelection.Image): Path? {
         val name = when (image) {
@@ -157,6 +167,9 @@ class AndroidGradleHost(private val context: Context) : GradleHost {
                 Files.exists(prefix.resolve("bin/sh")) &&
                 Files.isRegularFile(stamp) && stamp.readText() == expected
             if (ready) return
+            check(dev.ide.android.BuildConfig.NATIVE_TOOLCHAIN_DOWNLOADS_ENABLED) {
+                "Native toolchain downloads are disabled in this distribution. Use an APK-delivered toolchain or a developer build."
+            }
             log("Installing the build prefix")
             Prefix.install(catalog, prefix) { url ->
                 log(url.substringAfterLast('/'))

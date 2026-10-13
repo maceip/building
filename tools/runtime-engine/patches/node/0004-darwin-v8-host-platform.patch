@@ -1,0 +1,22 @@
+--- a/tools/v8_gypfiles/v8.gyp
++++ b/tools/v8_gypfiles/v8.gyp
+@@ -1489,10 +1489,16 @@
+           },
+           'target_conditions': [
+             ['_toolset=="host"', {
+-              'sources': [
+-                '<(V8_ROOT)/src/base/debug/stack_trace_posix.cc',
+-                '<(V8_ROOT)/src/base/platform/platform-linux.cc',
++              'conditions': [
++                ['host_os=="linux"', {
++                  'sources': [
++                    '<(V8_ROOT)/src/base/debug/stack_trace_posix.cc',
++                    '<(V8_ROOT)/src/base/platform/platform-linux.cc',
++                  ],
++                }],
+               ],
++              # macOS host sources are selected by the existing Darwin condition
++              # below. Never compile Linux syscalls with the macOS SDK.
+             }, {
+               'sources': [
+                 '<(V8_ROOT)/src/base/debug/stack_trace_android.cc',

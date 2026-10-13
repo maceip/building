@@ -6,14 +6,9 @@ import android.database.Cursor;
 import android.net.Uri;
 
 /**
- * A no-op {@link ContentProvider} whose only job is to run {@link #onCreate()} early in the app's startup —
- * before {@code Application.onCreate()} — the same auto-initialization trick androidx-startup and Firebase
- * use. The Android debug build pipeline injects a {@code <provider>} pointing here into the merged manifest
- * (debug builds only), so the system instantiates it at process start and boots {@link IdeLogBridge}, which
- * forwards the app's logs back to the IDE.
- *
- * <p>All the data-access methods are inert; nothing ever queries this provider. It exists purely for its
- * lifecycle callback. It is never present in release builds.
+ * Optional, non-exported initialization provider. All data-access methods are inert. Presence alone does
+ * nothing: application metadata must explicitly name a versioned Config asset with enabled + consentGranted.
+ * The reusable SDK can instead be initialized directly from Application.onCreate(), including release apps.
  */
 public final class IdeLogBridgeProvider extends ContentProvider {
 

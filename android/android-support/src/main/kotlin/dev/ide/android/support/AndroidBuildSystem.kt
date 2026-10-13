@@ -18,6 +18,8 @@ import dev.ide.android.support.tasks.DexMergeTask
 import dev.ide.android.support.tasks.GenerateAarRJarTask
 import dev.ide.android.support.tasks.GenerateLibraryRTask
 import dev.ide.android.support.tasks.GenerateRJarTask
+import dev.ide.android.support.tasks.GenerateReliabilityAssetsTask
+import dev.ide.android.support.tasks.VerifyReliabilitySourcesTask
 import dev.ide.android.support.tasks.GenerateViewBindingTask
 import dev.ide.android.support.tasks.InjectAppLogProviderTask
 import dev.ide.android.support.tasks.InjectCrashlyticsMappingFileIdTask
@@ -169,14 +171,15 @@ class AndroidBuildSystem(
      *  large app's merge is split into chunks of this size so its working set stays bounded ([DexMergeTask]).
      *  Read once per [createBuildGraph]; defaults to [DexMergeTask.DEFAULT_MERGE_CHUNK]. */
     private val mergeChunk: () -> Int = { DexMergeTask.DEFAULT_MERGE_CHUNK },
-    /** The IDE log-bridge runtime woven into DEBUG builds (never release/minify). Evaluated per build graph so
-     *  the host can gate it on a setting live; returns null (default) to not instrument — the build is then
-     *  byte-identical to before. `:ide-android` supplies the bundled runtime when the "Forward app logs"
-     *  setting is on. See [AndroidAppLogRuntime]. */
+    /** Explicit legacy log-bridge API, debug/non-minified only. No reliability consent is inferred from it.
+     *  Built-in hosts use [reliabilityConfiguration] with per-project consent instead. Default null means
+     *  no legacy instrumentation. See [AndroidAppLogRuntime]. */
     private val appLogRuntime: () -> AndroidAppLogRuntime? = { null },
     /** The installed platform `android.jar` for a compileSdk level, or null to use [sdk]'s. Lets each module
      *  compile against its own compileSdk rather than the one platform the SDK was detected with. */
     private val platformFor: (compileSdk: Int) -> Path? = { null },
+    /** Production SDK + host-private config generation. Availability alone never enables injection. */
+    private val reliabilityConfiguration: () -> ReliabilityBuildConfiguration? = { null },
 ) : BuildSystem {
 
     override val id: BuildSystemId = BuildSystemId.NATIVE
@@ -331,7 +334,7 @@ class AndroidBuildSystem(
         // would otherwise present the pipeline's own generated directories twice.
         val sourceRoots =
             collapseNestedRoots(contentRoots(app, variant, ContentRole.SOURCE) + roots(variant, ContentRole.GENERATED))
-        val assetsDirs = depAndroidLibs.flatMap { depRoots(it, ContentRole.ASSETS) } +
+        val projectAssetsDirs = depAndroidLibs.flatMap { depRoots(it, ContentRole.ASSETS) } +
             libs.assetsDirs + contentRoots(app, variant, ContentRole.ASSETS)
         val level = levelOf(app.languageLevel)
         val bt = facet.buildType(variant.buildTypeName)
@@ -339,11 +342,24 @@ class AndroidBuildSystem(
         val minify = bt?.minifyEnabled == true
         // shrinkResources requires minify (R8's reachable-code analysis drives it); ignored otherwise (AGP errors).
         val shrinkResources = minify && bt.shrinkResources
-        // Debug-only IDE log bridge: on a debuggable, non-minified build the host-supplied runtime is woven in
-        // (its ContentProvider registered in the manifest + its classes added to the external dex scope), so
-        // the running app forwards its logs back to the IDE. Never touches release/minify builds; the DEX goal
-        // (layout-preview dex-prepare) is excluded so its dex-bucket seeding stays byte-identical.
-        val appLog = appLogRuntime()?.takeIf { bt?.debuggable == true && !minify && goal != BuildGoal.DEX }
+        val projectRoot = Paths.get(config.project.rootDir.path)
+        val reliabilityOptions = ReliabilityProjectOptions.read(projectRoot)
+        // Neither a bundled JAR nor the former global default-on app-log preference is project consent.
+        // Preview/compile-only graphs do not package SDKs. Production requires its own explicit flag.
+        val reliability = if (goal !in setOf(BuildGoal.DEX, BuildGoal.COMPILE_ONLY) &&
+            reliabilityOptions.appliesTo(bt?.debuggable == true)) {
+            reliabilityConfiguration() ?: error("Reliability: project opted in, but the host has no production SDK/private configuration cache.")
+        } else null
+        // Explicit API compatibility only. BuildService no longer supplies this default-on legacy hook.
+        // It writes no reliability metadata, so the consent-aware SDK remains inert on this old path.
+        val appLog = if (reliability == null) appLogRuntime()?.takeIf {
+            bt?.debuggable == true && !minify && goal !in setOf(BuildGoal.DEX, BuildGoal.COMPILE_ONLY)
+        } else null
+        val reliabilityBuildId = if (reliability != null) java.util.UUID.randomUUID().toString() else null
+        val reliabilityDir = reliability?.privateCacheRoot?.resolve("native")?.resolve(reliabilityBuildId!!)
+        val reliabilityAssets = reliabilityDir?.resolve("assets")
+        val reliabilityRecipient = reliabilityDir?.resolve("recipient-package.txt")
+        val assetsDirs = listOfNotNull(reliabilityAssets) + projectAssetsDirs
         // An app bundle (.aab) is built from PROTO resources, so force proto linking for the bundle goal too.
         val bundle = goal == BuildGoal.BUNDLE
         val protoResources = shrinkResources || bundle
@@ -367,6 +383,21 @@ class AndroidBuildSystem(
         // the ${applicationId} manifest placeholder Firebase/Play Services authorities depend on. Same
         // computation the run/launch + app-log-capture paths use (AndroidVariants.applicationId), one source.
         val applicationId = AndroidVariants.applicationId(facet, variant)
+        val generateReliability = if (reliability != null) step("generateReliabilityAssets") else null
+        if (generateReliability != null) {
+            tasks.task(generateReliability) {
+                GenerateReliabilityAssetsTask(
+                    generateReliability, projectRoot, app.id.value, applicationId, variant.name,
+                    bt?.debuggable == true, reliabilityBuildId!!, reliabilityOptions, reliability!!,
+                    reliabilityAssets!!, reliabilityRecipient!!, projectAssetsDirs,
+                )
+            }
+            // Capture before ANY dependent module/native/source-generator compiles, not merely before
+            // this app's compile task. Generation tasks themselves have no build dependencies.
+            tasks.configureEach {
+                if (!name.value.substringAfterLast(':').startsWith("generateReliabilityAssets")) dependsOn(generateReliability)
+            }
+        }
         // The built-in applicationId/packageName plus the placeholders the module declares (defaultConfig +
         // flavors + build type). A dependency's manifest routinely REQUIRES one of the module's: the Myket
         // billing client names `${marketApplicationId}`/`${marketPermission}`, and an unresolved placeholder
@@ -387,7 +418,8 @@ class AndroidBuildSystem(
         val appHasKotlin = kotlin != null && containsKotlin(sourceRoots)
         val directDepKotlin = directModuleDeps(app, byId).filter { moduleHasKotlin(it) }
             .map { TaskName(":${it.name}:compileKotlin") }
-        val kotlinClasspath = compileBootclasspath + libs.compileJars + appModuleOutputs + upstreamKotlin
+        val kotlinClasspath = compileBootclasspath + libs.compileJars + appModuleOutputs + upstreamKotlin +
+            listOfNotNull(reliability?.runtimeJar)
         // The Java compile resolves `R` from the generated R.jar (Kotlin keeps resolving it from `R.java` source).
         val compileClasspath = kotlinClasspath + listOf(layout.rJar) + if (appHasKotlin) listOf(layout.kotlinClasses) else emptyList()
 
@@ -477,13 +509,24 @@ class AndroidBuildSystem(
                 processManifest, layout.manifest(facet), libraryManifests, manifestPlaceholders,
                 facet.minSdk, facet.targetSdk, layout.mergedManifest, facet.namespace,
                 stripVersionCode = versionCodeAuthoritative, stripVersionName = versionNameAuthoritative,
+                debuggable = bt?.debuggable == true,
             )
         }
-        // On a debug build, splice the log-bridge <provider> into the merged manifest before linking; aapt2
-        // then links the instrumented copy. Non-debug builds link the plain merged manifest directly.
+        // Opted-in production also gets the inert-until-configured SDK, without debug pairing/query fields.
         val linkManifest: Path
         val manifestDep: TaskName
-        if (appLog != null) {
+        if (reliability != null) {
+            val inject = step("injectReliabilityProvider")
+            tasks.task(inject, listOf(processManifest, generateReliability!!)) {
+                InjectAppLogProviderTask(
+                    inject, layout.mergedManifest, ReliabilityProjectOptions.PROVIDER_CLASS,
+                    "$applicationId.${ReliabilityProjectOptions.AUTHORITY_SUFFIX}", null, layout.instrumentedManifest,
+                    configAsset = ReliabilityProjectOptions.ASSET_NAME, recipientPackageFile = reliabilityRecipient,
+                )
+            }
+            linkManifest = layout.instrumentedManifest
+            manifestDep = inject
+        } else if (appLog != null) {
             val injectAppLogTask = step("injectAppLogProvider")
             val authority = "$applicationId.${appLog.authoritySuffix}"
             tasks.task(injectAppLogTask, listOf(processManifest)) {
@@ -581,7 +624,7 @@ class AndroidBuildSystem(
         val moduleJarProducers = closure.map { TaskName(":${it.name}:jar") }
         // The debug-only log-bridge runtime rides the external dex scope (its immutable jar is content-hashed,
         // so it's dexed once and cached like any library); null on release/non-instrumented builds.
-        val rawExternalJars = libs.dexJars + (appLog?.let { listOf(it.runtimeJar) } ?: emptyList())
+        val rawExternalJars = (libs.dexJars + listOfNotNull(appLog?.runtimeJar, reliability?.runtimeJar)).distinct()
 
         // Contributed bytecode rewrites (`platform.classTransform`): everything below dexes the instrumented
         // copies instead of the compile outputs. Like the Hilt transform above, the originals are left alone
@@ -859,7 +902,17 @@ class AndroidBuildSystem(
 
         // The packaging step also waits on the native-lib + Java-resource merges (common to both the APK and
         // bundle terminals, and to the minify + debug dex paths).
-        pkgDeps = pkgDeps + packagingDeps
+        pkgDeps = pkgDeps + packagingDeps + listOfNotNull(generateReliability)
+        if (reliability != null) {
+            val verifySources = step("verifyReliabilitySources")
+            tasks.task(verifySources, pkgDeps) {
+                VerifyReliabilitySourcesTask(
+                    verifySources, projectRoot, reliabilityAssets!!.resolve(ReliabilityProjectOptions.SOURCE_ASSET_NAME),
+                    reliabilityOptions,
+                )
+            }
+            pkgDeps = pkgDeps + verifySources
+        }
 
         // The keystore that signs this variant: the build type's assigned signing config (release keystore),
         // or the default debug keystore when unassigned / dangling. Resolved once for both APK and bundle.
@@ -1529,8 +1582,8 @@ class AndroidBuildSystem(
          * Desktop wiring: every tool is a subprocess over an installed SDK (`java -cp d8.jar …`,
          * `java -jar apksigner.jar …`, native aapt2/zipalign). No statically-linked tool jars needed.
          */
-        fun subprocess(sdk: AndroidSdk, signing: SigningConfig, bootClasspath: List<Path> = emptyList(), kotlin: IncrementalKotlinCompiler? = null, plugins: List<KotlinCompilerPlugin> = BUILTIN_KOTLIN_COMPILER_PLUGINS, generators: List<SourceGenerator> = emptyList(), classTransforms: List<ClassTransform> = emptyList(), dexCacheRoot: Path? = null, desugarLib: DesugarLib? = null, signingResolver: ((Module, String) -> SigningConfig?)? = null, appLogRuntime: () -> AndroidAppLogRuntime? = { null }, platformFor: (Int) -> Path? = { null }): AndroidBuildSystem =
-            AndroidBuildSystem(sdk, signing, bootClasspath, kotlin = kotlin, plugins = plugins, generators = generators, classTransforms = classTransforms, dexCacheRoot = dexCacheRoot, desugarLib = desugarLib, signingResolver = signingResolver, appLogRuntime = appLogRuntime, platformFor = platformFor)
+        fun subprocess(sdk: AndroidSdk, signing: SigningConfig, bootClasspath: List<Path> = emptyList(), kotlin: IncrementalKotlinCompiler? = null, plugins: List<KotlinCompilerPlugin> = BUILTIN_KOTLIN_COMPILER_PLUGINS, generators: List<SourceGenerator> = emptyList(), classTransforms: List<ClassTransform> = emptyList(), dexCacheRoot: Path? = null, desugarLib: DesugarLib? = null, signingResolver: ((Module, String) -> SigningConfig?)? = null, appLogRuntime: () -> AndroidAppLogRuntime? = { null }, platformFor: (Int) -> Path? = { null }, reliabilityConfiguration: () -> ReliabilityBuildConfiguration? = { null }): AndroidBuildSystem =
+            AndroidBuildSystem(sdk, signing, bootClasspath, kotlin = kotlin, plugins = plugins, generators = generators, classTransforms = classTransforms, dexCacheRoot = dexCacheRoot, desugarLib = desugarLib, signingResolver = signingResolver, appLogRuntime = appLogRuntime, platformFor = platformFor, reliabilityConfiguration = reliabilityConfiguration)
 
         /**
          * On-device-shaped wiring: the native tools (aapt2, zipalign) run as subprocesses against the
@@ -1539,7 +1592,7 @@ class AndroidBuildSystem(
          * ART (where `java -jar` is impossible); the desktop test runs it too, so the on-device dex/sign
          * code path is exercised on the host.
          */
-        fun inProcess(sdk: AndroidSdk, signing: SigningConfig, bootClasspath: List<Path> = emptyList(), kotlin: IncrementalKotlinCompiler? = null, plugins: List<KotlinCompilerPlugin> = BUILTIN_KOTLIN_COMPILER_PLUGINS, generators: List<SourceGenerator> = emptyList(), classTransforms: List<ClassTransform> = emptyList(), dexCacheRoot: Path? = null, desugarLib: DesugarLib? = null, signingResolver: ((Module, String) -> SigningConfig?)? = null, shrinker: Shrinker? = null, dexer: Dexer? = null, mergeDexer: Dexer? = null, mergeChunk: () -> Int = { DexMergeTask.DEFAULT_MERGE_CHUNK }, appLogRuntime: () -> AndroidAppLogRuntime? = { null }, platformFor: (Int) -> Path? = { null }): AndroidBuildSystem =
+        fun inProcess(sdk: AndroidSdk, signing: SigningConfig, bootClasspath: List<Path> = emptyList(), kotlin: IncrementalKotlinCompiler? = null, plugins: List<KotlinCompilerPlugin> = BUILTIN_KOTLIN_COMPILER_PLUGINS, generators: List<SourceGenerator> = emptyList(), classTransforms: List<ClassTransform> = emptyList(), dexCacheRoot: Path? = null, desugarLib: DesugarLib? = null, signingResolver: ((Module, String) -> SigningConfig?)? = null, shrinker: Shrinker? = null, dexer: Dexer? = null, mergeDexer: Dexer? = null, mergeChunk: () -> Int = { DexMergeTask.DEFAULT_MERGE_CHUNK }, appLogRuntime: () -> AndroidAppLogRuntime? = { null }, platformFor: (Int) -> Path? = { null }, reliabilityConfiguration: () -> ReliabilityBuildConfiguration? = { null }): AndroidBuildSystem =
             AndroidBuildSystem(
                 sdk, signing, bootClasspath,
                 // The dexBuilder ARCHIVE dexer. The host can inject a forked-VM D8 (an [OffHeapArchiveDexer]) so a
@@ -1563,6 +1616,7 @@ class AndroidBuildSystem(
                 mergeChunk = mergeChunk,
                 appLogRuntime = appLogRuntime,
                 platformFor = platformFor,
+                reliabilityConfiguration = reliabilityConfiguration,
             )
 
         /** A debug-signed [subprocess] build system, creating the shared debug keystore on demand. */

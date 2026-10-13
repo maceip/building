@@ -123,6 +123,7 @@ internal fun AppNavGraph(
                     when (target) {
                         is HubTarget.Page -> SettingsRoute(app, state, codeFont, fileActions, target.id)
                         is HubTarget.Tool -> AppRoute(screenOf(target.tool), app, state, fileActions, codeFont, dark, scope)
+                        is HubTarget.ContributedScreen -> AppRoute(Screen.PluginScreen, app, state, fileActions, codeFont, dark, scope)
                     }
                 }
             } else {
@@ -200,6 +201,7 @@ private fun openHubTarget(app: CodeAssistAppState, target: HubTarget) {
         is HubTarget.Page -> app.openSettingsPage(target.id)
         // The keystore manager remembers that it was entered from Settings (its Back and its signing row).
         is HubTarget.Tool -> if (target.tool == HubTool.Keystore) app.openKeystoreManagerFromHub() else app.navigateTo(screenOf(target.tool))
+        is HubTarget.ContributedScreen -> app.openPluginScreen(target.id)
     }
 }
 

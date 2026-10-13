@@ -12,9 +12,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -26,11 +28,20 @@ import dev.ide.ui.editor.preview.OffscreenPreviewRenderer
 import dev.ide.ui.ext.AppKeys
 import dev.ide.ui.ext.PreviewSnapshots
 import dev.ide.android.preview.SurfaceComposer
+import dev.ide.android.workbench.LocalWorkbenchRuntime
+import dev.ide.android.workbench.WorkbenchUiPlugin
+import dev.ide.android.workbench.runtime.AndroidRuntimeHost
+import dev.ide.ui.ext.UiPluginHost
+import dev.ide.workbench.runtime.RuntimeController
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import dev.ide.ui.backend.FileActions
 import dev.ide.ui.backend.IdeBackend
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -51,6 +62,8 @@ private const val ADS_STARTUP_DELAY_MS = 5_000L
 class MainActivity : ComponentActivity() {
 
     private var session: AndroidIde.Session? = null
+    private val workbenchScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var workbenchRuntime: RuntimeController? = null
 
     /** A file handed in by another app ("Open with" / "Share to"), pending import once the engine is up. */
     private val inbound = mutableStateOf<Uri?>(null)
@@ -87,6 +100,8 @@ class MainActivity : ComponentActivity() {
         // `SystemBarStyle.dark` here forced light icons even in light mode.
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        workbenchRuntime = RuntimeController(AndroidRuntimeHost(applicationContext), workbenchScope)
+        UiPluginHost.register(WorkbenchUiPlugin)
         // Before extractStream: a sign-in redirect is an ACTION_VIEW with a URI, which would otherwise be
         // taken for a file to import.
         if (!takeAuthRedirect(intent) && !takeStoreLink(intent)) inbound.value = extractStream(intent)
@@ -110,22 +125,34 @@ class MainActivity : ComponentActivity() {
 
             // POST_NOTIFICATIONS (Android 13+/API 33) is asked for at the FIRST build, not here at launch, so the
             // request lands in context — see BuildNotificationGate (:ide-ui). Nothing to request in this activity.
+            val hostScope = rememberCoroutineScope()
             var pendingTarget by remember { mutableStateOf<String?>(null) }
             var pendingCallback by remember { mutableStateOf<((List<String>) -> Unit)?>(null) }
             val importLauncher =
                 rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
                     val b = backend
                     val target = pendingTarget
-                    val created =
-                        if (b != null && target != null) uris.mapNotNull { fileOps.importUri(it, target, b) } else emptyList()
-                    pendingCallback?.invoke(created)
+                    val callback = pendingCallback
                     pendingTarget = null; pendingCallback = null
+                    hostScope.launch {
+                        val created = runInterruptible(Dispatchers.IO) {
+                            if (b != null && target != null) uris.mapNotNull { fileOps.importUri(it, target, b) } else emptyList()
+                        }
+                        callback?.invoke(created)
+                    }
                 }
             var pendingPick by remember { mutableStateOf<((String?) -> Unit)?>(null) }
             val pickLauncher =
                 rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                    pendingPick?.invoke(uri?.let { fileOps.copyUriToCache(it) })
+                    val callback = pendingPick
                     pendingPick = null
+                    hostScope.launch {
+                        val path = runInterruptible(Dispatchers.IO) { uri?.let { fileOps.copyUriToCache(it) } }
+                        if (uri != null && path == null) {
+                            Toast.makeText(this@MainActivity, "Couldn't import file: unreadable, invalid name, or too large", Toast.LENGTH_LONG).show()
+                        }
+                        callback?.invoke(path)
+                    }
                 }
             // Camera capture for the AI chat: the camera app writes into a FileProvider URI we hand it.
             var pendingPhoto by remember { mutableStateOf<Pair<File, (String?) -> Unit>?>(null) }
@@ -138,7 +165,6 @@ class MainActivity : ComponentActivity() {
                 }
             // Directory picker (Gradle import): SAF hands back a content:// tree, so copy it into local
             // storage off the main thread and return that path — the copy can be large, hence the coroutine.
-            val hostScope = rememberCoroutineScope()
             var pendingPickDir by remember { mutableStateOf<((String?) -> Unit)?>(null) }
             val pickDirLauncher =
                 rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -147,7 +173,10 @@ class MainActivity : ComponentActivity() {
                     if (uri == null) { cb?.invoke(null); return@rememberLauncherForActivityResult }
                     Toast.makeText(this@MainActivity, "Copying project…", Toast.LENGTH_SHORT).show()
                     hostScope.launch {
-                        val path = withContext(Dispatchers.IO) { fileOps.copyTreeToCache(uri) }
+                        val path = runInterruptible(Dispatchers.IO) { fileOps.copyTreeToCache(uri) }
+                        if (path == null) {
+                            Toast.makeText(this@MainActivity, "Couldn't import folder: unreadable, invalid entries, or too large", Toast.LENGTH_LONG).show()
+                        }
                         cb?.invoke(path)
                     }
                 }
@@ -206,7 +235,10 @@ class MainActivity : ComponentActivity() {
                     override val canPasteImage: Boolean = true
                     override fun hasClipboardImage(): Boolean = fileOps.clipboardHasImage()
                     override fun pasteImage(onPasted: (String?) -> Unit) {
-                        onPasted(fileOps.clipboardImageUri()?.let { fileOps.copyUriToCache(it) })
+                        val uri = fileOps.clipboardImageUri()
+                        hostScope.launch {
+                            onPasted(runInterruptible(Dispatchers.IO) { uri?.let { fileOps.copyUriToCache(it) } })
+                        }
                     }
 
                     override val canPickDirectory: Boolean = true
@@ -284,12 +316,12 @@ class MainActivity : ComponentActivity() {
                 if (b != null && uri != null) {
                     val name = fileOps.queryDisplayName(uri) ?: ""
                     if (name.endsWith(".${CaprojFormat.EXTENSION}", ignoreCase = true)) {
-                        val path = withContext(Dispatchers.IO) { fileOps.copyInboundToCache(uri, name) }
+                        val path = runInterruptible(Dispatchers.IO) { fileOps.copyInboundToCache(uri, name) }
                         if (path != null) importPackagePath = path
                         else Toast.makeText(this@MainActivity, "Couldn't open the project package", Toast.LENGTH_SHORT).show()
                     } else {
                         val target = firstSourceRoot(b.files.fileTree())
-                        val path = if (target != null) fileOps.importUri(uri, target, b) else null
+                        val path = runInterruptible(Dispatchers.IO) { if (target != null) fileOps.importUri(uri, target, b) else null }
                         Toast.makeText(
                             this@MainActivity,
                             if (path != null) "Imported ${File(path).name}" else "Couldn't import file",
@@ -312,15 +344,25 @@ class MainActivity : ComponentActivity() {
                 onDispose { registration?.dispose() }
             }
             when {
-                b != null -> CodeAssistApp(
-                    b,
-                    fileActions = fileActions,
-                    adHost = adHost,
-                    composePreviewHost = previewHost,
-                    importPackagePath = importPackagePath,
-                    openStoreItemId = storeLink.value,
-                    onStoreItemIdHandled = { storeLink.value = null },
-                )
+                b != null -> CompositionLocalProvider(LocalWorkbenchRuntime provides workbenchRuntime) {
+                    val projectEpoch by b.projects.projectEpoch.collectAsState()
+                    var lastProjectEpoch by remember(b) { mutableStateOf(projectEpoch) }
+                    LaunchedEffect(projectEpoch) {
+                        if (lastProjectEpoch != projectEpoch) workbenchRuntime?.stop()
+                        lastProjectEpoch = projectEpoch
+                    }
+                    dev.ide.android.reliability.repair.IncidentRepairScope(b, projectEpoch) {
+                        CodeAssistApp(
+                            b,
+                            fileActions = fileActions,
+                            adHost = adHost,
+                            composePreviewHost = previewHost,
+                            importPackagePath = importPackagePath,
+                            openStoreItemId = storeLink.value,
+                            onStoreItemIdHandled = { storeLink.value = null },
+                        )
+                    }
+                }
 
                 error != null -> Splash("Failed to start: $error")
                 else -> Splash("Starting building…")
@@ -403,6 +445,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        workbenchRuntime?.close()
+        workbenchRuntime = null
+        workbenchScope.cancel()
         super.onDestroy()
         // Close the *active* engine (a project switch may have swapped it), not just the initial one.
         session?.backend?.close()
