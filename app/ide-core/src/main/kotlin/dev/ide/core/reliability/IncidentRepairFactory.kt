@@ -30,7 +30,7 @@ fun createIncidentRepairController(
     verificationPlan: suspend (IncidentKnownBuild) -> IncidentVerificationPlan?,
     initialPolicy: IncidentRepairPolicy = IncidentRepairPolicy(projectId),
     persistPolicy: (IncidentRepairPolicy) -> Unit = {},
-    checkedApply: (suspend (IncidentPatchReview) -> IncidentApplyResult)? = null,
+    checkedApply: (suspend (IncidentPatchReview, () -> Boolean) -> IncidentApplyResult)? = null,
     artifact: (suspend (IncidentPatchReview, Set<String>) -> IncidentRepairArtifact?)? = null,
     install: (suspend (IncidentRepairArtifact) -> IncidentDeviceResult)? = null,
     launch: (suspend (IncidentRepairArtifact) -> IncidentDeviceResult)? = null,

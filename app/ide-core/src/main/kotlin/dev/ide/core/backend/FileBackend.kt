@@ -420,35 +420,44 @@ internal class FileBackend(private val ctx: BackendContext) : FileService {
         }
     }
 
-    override fun createDirectory(parentPath: String, name: String): String? = runCatching {
-        val target = Paths.get(parentPath).resolve(name)
-        if (Files.exists(target)) null
-        else {
-            Files.createDirectories(target)
-            // A conventionally-named folder under a source-set base (e.g. `src/main/resources`) becomes a
-            // typed content root automatically, so the build engine + tree icon pick it up immediately.
-            ctx.services.moduleService.maybeRegisterSourceRoot(target)
-            ctx.services.events.fileCreated(target) // dir events are no-op locally; remote hints see them
-            ctx.bumpFileSystemEpoch()
-            target.toString()
+    override fun createDirectory(parentPath: String, name: String): String? {
+        val services = ctx.services
+        return services.mutateSources {
+            runCatching {
+                val target = Paths.get(parentPath).resolve(name)
+                if (Files.exists(target)) null
+                else {
+                    Files.createDirectories(target)
+                    // Conventional source-set folders become typed content roots automatically.
+                    services.moduleService.maybeRegisterSourceRoot(target)
+                    services.events.fileCreated(target)
+                    ctx.bumpFileSystemEpoch()
+                    target.toString()
+                }
+            }.getOrNull()
         }
-    }.getOrNull()
+    }
 
     /** Create `[dirPath]/[fileName]` via [write] (fails if it exists); publish the created-file event (the
      *  hub's reaction refreshes R for `res/`, invalidates analyzers + re-syncs for a source file), bump the
      *  fs epoch. */
-    private fun writeNewFile(dirPath: String, fileName: String, write: (Path) -> Unit): String? = runCatching {
-        val dir = Paths.get(dirPath)
-        Files.createDirectories(dir)
-        val target = dir.resolve(fileName)
-        if (Files.exists(target)) null
-        else {
-            write(target)
-            ctx.services.events.fileCreated(target)
-            ctx.bumpFileSystemEpoch()
-            target.toString()
+    private fun writeNewFile(dirPath: String, fileName: String, write: (Path) -> Unit): String? {
+        val services = ctx.services
+        return services.mutateSources {
+            runCatching {
+                val dir = Paths.get(dirPath)
+                Files.createDirectories(dir)
+                val target = dir.resolve(fileName)
+                if (Files.exists(target)) null
+                else {
+                    write(target)
+                    services.events.fileCreated(target)
+                    ctx.bumpFileSystemEpoch()
+                    target.toString()
+                }
+            }.getOrNull()
         }
-    }.getOrNull()
+    }
 
     override fun deletePath(path: String): Boolean {
         val ok = ctx.services.deletePath(Paths.get(path))

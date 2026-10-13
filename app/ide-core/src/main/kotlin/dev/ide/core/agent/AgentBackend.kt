@@ -145,6 +145,9 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
     @Volatile
     private var ftpServer: FtpServer? = null
 
+    // Closing the listener does not join established client threads; only a fresh process clears this boundary.
+    internal fun hasExternalWorkspaceWriters(): Boolean = externalWorkspaceWasExposed || mcpServer != null || ftpServer != null
+
     init {
         live += WeakReference(this)
         if (prefBool("mcpServer", default = false)) {
@@ -191,6 +194,7 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
 
     /** Binds the MCP-over-HTTP server to the engine workspace; null when startup fails (e.g. port taken). */
     private fun startMcpServer(): HttpMcpServer? = try {
+        externalWorkspaceWasExposed = true
         CodeAssistMcpServer.startHttpServer(
             workspace = workspace,
             port = CodeAssistMcpServer.DEFAULT_HTTP_PORT,
@@ -211,6 +215,7 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
     private fun startFtpServer(): FtpServer? = try {
         val assets = ctx.servicesOrNull?.workspaceRoot?.resolve("assets")
             ?: return null
+        externalWorkspaceWasExposed = true
         Files.createDirectories(assets)
         CodeAssistMcpServer.startFtpServer(assets, CodeAssistMcpServer.DEFAULT_FTP_PORT)
     } catch (e: Exception) {
@@ -225,6 +230,12 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
     override fun ftpServerEnabled(): Boolean = ftpServer != null
 
     override fun setFtpServerEnabled(enabled: Boolean) {
+        val current = ctx.servicesOrNull
+        if (current == null) setFtpServerEnabledLocked(enabled)
+        else current.mutateSources { setFtpServerEnabledLocked(enabled) }
+    }
+
+    private fun setFtpServerEnabledLocked(enabled: Boolean) {
         ctx.manager?.setPreference("settings.$AI_PAGE.$FTP_PREF", enabled.toString())
         if (enabled) {
             if (ftpServer == null) ftpServer = startFtpServer()
@@ -673,9 +684,16 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
      *  retryable error bubble; afterwards mark [userId]'s turn undoable if it changed files, and save the
      *  session. Shared by [send], [retry] and the commands. */
     private fun runLoop(assistantId: Long, userId: Long? = null, block: suspend (AgentEventSink) -> Unit) {
+        val captured = ctx.servicesOrNull
         job = scope.launch {
-            val sink = AgentEventSink { event -> applyEvent(assistantId, event) }
+            var release: (() -> Unit)? = null
+            val sink = AgentEventSink { event ->
+                check(ctx.servicesOrNull === captured) { "The project changed during the agent request." }
+                applyEvent(assistantId, event)
+            }
             try {
+                release = captured?.retainSourceOperation()
+                check(ctx.servicesOrNull === captured) { "The project changed during the agent request." }
                 block(sink)
             } catch (e: CancellationException) {
                 finishStreaming()
@@ -684,6 +702,8 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
             } catch (e: Exception) {
                 appendError(e.message ?: "The agent request failed.", canRetry = true)
                 finishStreaming()
+            } finally {
+                release?.invoke()
             }
             afterTurn(userId)
         }
@@ -987,20 +1007,36 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
     override fun undoTurn(messageId: Long) {
         if (_chatState.value.busy) return
         val message = _chatState.value.messages.firstOrNull { it.id == messageId } ?: return
+        val captured = ctx.servicesOrNull
         scope.launch {
-            val report = checkpoints.revert(messageId)
-            _chatState.update { s ->
-                s.copy(messages = s.messages.map {
-                    if (it.role == UiAgentRole.USER && it.id >= messageId && it.canUndo) it.copy(canUndo = false, undone = true) else it
-                })
+            var release: (() -> Unit)? = null
+            try {
+                release = captured?.retainSourceOperation()
+                check(ctx.servicesOrNull === captured) { "The project changed before undo." }
+                val report = checkpoints.revert(messageId)
+                finishUndo(messageId, message.text, report)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                appendError("The project changed before undo could complete.", canRetry = false)
+            } finally {
+                release?.invoke()
             }
-            appendInfo(report)
-            // The model still remembers making those edits; without this it would edit files that are no longer
-            // in the state it thinks they are.
-            pendingNotes += "The user reverted every file change the agent made since their message \"" +
-                message.text.take(80) + "\". Those files are back to how they were before it; read them again before editing."
-            saveSession()
         }
+    }
+
+    private fun finishUndo(messageId: Long, message: String, report: String) {
+        _chatState.update { s ->
+            s.copy(messages = s.messages.map {
+                if (it.role == UiAgentRole.USER && it.id >= messageId && it.canUndo) it.copy(canUndo = false, undone = true) else it
+            })
+        }
+        appendInfo(report)
+        // The model still remembers making those edits; without this it would edit files that are no longer
+        // in the state it thinks they are.
+        pendingNotes += "The user reverted every file change the agent made since their message \"" +
+            message.take(80) + "\". Those files are back to how they were before it; read them again before editing."
+        saveSession()
     }
 
     /** The stable half of the prompt: the top-level system prefix, identical for the life of a conversation. */
@@ -1062,6 +1098,7 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         private const val COMPACTED = "**Conversation compacted.** "
 
         private val live = CopyOnWriteArrayList<WeakReference<AgentBackend>>()
+        @Volatile private var externalWorkspaceWasExposed = false
 
         /** The agent of the project at [root] (the most recently opened one when [root] matches none), for an
          *  editor action that runs outside any one project's backend. */

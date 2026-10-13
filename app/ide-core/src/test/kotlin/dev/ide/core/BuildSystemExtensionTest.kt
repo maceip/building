@@ -30,12 +30,22 @@ import dev.ide.model.Project
 import dev.ide.model.UnknownModuleType
 import dev.ide.platform.PluginId
 import dev.ide.ui.backend.RunStatus
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -240,6 +250,94 @@ class BuildSystemExtensionTest {
                 assertTrue(state.log.any { "Native TEST is not supported" in it.message }, state.log.toString())
                 assertTrue(state.steps.isEmpty(), "unsupported tests must not become a production compile")
             }
+        }
+    }
+
+    @Test
+    fun stoppedPresentationKeepsSourceLeaseUntilCancellationFinallyCompletes() = withTempDir("build-stop-quiescence") { dir ->
+        IdeServices.bootstrapJavaDemo(dir).use { ide ->
+            val entered = CompletableDeferred<Unit>()
+            val cleaning = CompletableDeferred<Unit>()
+            val finishCleanup = CompletableDeferred<Unit>()
+            ide.platform.extensions.register(RUN_TASK_PROVIDER_EP, object : RunTaskProvider {
+                override fun tasksFor(module: Module) = listOf(RunTaskSpec("hold:${module.name}", "Hold", "build"))
+                override fun actionFor(spec: RunTaskSpec, project: Project, module: Module, ctx: BuildContext): RunAction =
+                    RunAction("> hold", DefaultTaskContainer().apply {
+                        register(TaskName(":hold")) {
+                            object : Task {
+                                override val name = TaskName(":hold")
+                                override val inputs = TaskInputsImpl().apply { property("run", true) }
+                                override val outputs = TaskOutputsImpl()
+                                override suspend fun execute(ctx: TaskContext): TaskResult {
+                                    entered.complete(Unit)
+                                    try {
+                                        awaitCancellation()
+                                    } finally {
+                                        cleaning.complete(Unit)
+                                        withContext(NonCancellable) { finishCleanup.await() }
+                                    }
+                                }
+                            }
+                        }
+                    }.build())
+            }, PluginId("quiescence-test"))
+            val access = dev.ide.core.reliability.IncidentSourceAccess(ide.platform.modelLock, dir)
+            try {
+                assertNull(ide.buildRunner.sourceMutationBlocker())
+                ide.buildRunner.runTask("hold:${ide.modules().first().name}")
+                runBlocking { withTimeout(30_000) { entered.await() } }
+                ide.buildRunner.stopBuild()
+                runBlocking { withTimeout(30_000) { cleaning.await() } }
+                assertEquals(RunStatus.Failed, ide.build.buildState.value.status)
+                assertNotNull(ide.buildRunner.sourceMutationBlocker(), "Failed is presentation, not worker completion")
+                assertIs<dev.ide.agent.IncidentApplyResult.Pending>(
+                    access.checkBuffers(dir.toRealPath(), emptyMap(), emptySet(), emptyMap()),
+                    "the real engine lease must survive cancellation cleanup",
+                )
+                ide.buildRunner.runTask("lint:${ide.modules().first().name}")
+                assertTrue(ide.build.buildState.value.log.any { "prior build work is still finishing" in it.message })
+            } finally {
+                finishCleanup.complete(Unit)
+                runBlocking {
+                    withTimeout(30_000) {
+                        while (ide.buildRunner.sourceMutationBlocker() != null ||
+                            access.checkBuffers(dir.toRealPath(), emptyMap(), emptySet(), emptyMap()) != null) delay(10)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun graphConstructionRetainsSourcesWithoutHoldingTheModelLock() = withTempDir("build-start-quiescence") { dir ->
+        IdeServices.bootstrapJavaDemo(dir).use { ide ->
+            val entered = CountDownLatch(1)
+            val finishStart = CountDownLatch(1)
+            ide.platform.extensions.register(RUN_TASK_PROVIDER_EP, object : RunTaskProvider {
+                override fun tasksFor(module: Module) = listOf(RunTaskSpec("prepare:${module.name}", "Prepare", "build"))
+                override fun actionFor(spec: RunTaskSpec, project: Project, module: Module, ctx: BuildContext): RunAction? {
+                    assertFalse(ide.platform.modelLock.isWriteLockedByCurrentThread)
+                    entered.countDown()
+                    check(finishStart.await(30, TimeUnit.SECONDS))
+                    return null
+                }
+            }, PluginId("quiescence-test"))
+            val worker = Executors.newSingleThreadExecutor()
+            val access = dev.ide.core.reliability.IncidentSourceAccess(ide.platform.modelLock, dir)
+            val start = worker.submit { ide.buildRunner.runTask("prepare:${ide.modules().first().name}") }
+            try {
+                assertTrue(entered.await(30, TimeUnit.SECONDS))
+                assertNotNull(ide.buildRunner.sourceMutationBlocker())
+                assertIs<dev.ide.agent.IncidentApplyResult.Pending>(
+                    access.checkBuffers(dir.toRealPath(), emptyMap(), emptySet(), emptyMap()),
+                )
+            } finally {
+                finishStart.countDown()
+                start.get(30, TimeUnit.SECONDS)
+                worker.shutdownNow()
+            }
+            assertNull(ide.buildRunner.sourceMutationBlocker())
+            assertNull(access.checkBuffers(dir.toRealPath(), emptyMap(), emptySet(), emptyMap()))
         }
     }
 

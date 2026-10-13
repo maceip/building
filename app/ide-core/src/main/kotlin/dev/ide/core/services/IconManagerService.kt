@@ -238,15 +238,15 @@ internal class IconManagerService(private val ctx: EngineContext) {
         extension: String,
         bytes: ByteArray,
         overwrite: Boolean,
-    ): WriteOutcome {
+    ): WriteOutcome = ctx.mutateSources {
         val invalid = validateResourceName(name)
-        if (invalid != null) return WriteOutcome.Invalid(invalid)
+        if (invalid != null) return@mutateSources WriteOutcome.Invalid(invalid)
 
         val existing = existingResource(target, resType, name)
-        if (existing != null && !overwrite) return WriteOutcome.Conflict(existing)
+        if (existing != null && !overwrite) return@mutateSources WriteOutcome.Conflict(existing)
 
         val file = target.resDir.resolve(resType.rClass).resolve("$name.$extension")
-        return runCatching {
+        runCatching {
             file.createParentDirectories()
             // Replacing a resource declared with a different extension (an XML icon over a PNG one, say) has
             // to delete the old file, or aapt sees two declarations of the same name.
@@ -454,12 +454,12 @@ internal class IconManagerService(private val ctx: EngineContext) {
      * Write [plan]'s files under [target] and point the manifest at the icon. [rasters] supplies the bytes
      * for each raster the host rendered; a raster with no bytes is skipped and reported.
      */
-    fun applyAppIcon(plan: AppIconPlan, target: Target, rasters: Map<String, ByteArray>): ApplyOutcome {
+    fun applyAppIcon(plan: AppIconPlan, target: Target, rasters: Map<String, ByteArray>): ApplyOutcome = ctx.mutateSources {
         val written = ArrayList<Path>()
         val skipped = ArrayList<String>()
         for (file in plan.files) {
             val destination = resolveOutput(target, file.relativePath)
-                ?: return ApplyOutcome.Failed("Refusing to write outside the module: ${file.relativePath}")
+                ?: return@mutateSources ApplyOutcome.Failed("Refusing to write outside the module: ${file.relativePath}")
             val bytes = when (file) {
                 is AppIconFile.Text -> file.content.encodeToByteArray()
                 is AppIconFile.Bytes -> file.bytes
@@ -474,7 +474,7 @@ internal class IconManagerService(private val ctx: EngineContext) {
                 Unit
             }
             if (result.isFailure) {
-                return ApplyOutcome.Failed(result.exceptionOrNull()?.message ?: "Could not write $destination")
+                return@mutateSources ApplyOutcome.Failed(result.exceptionOrNull()?.message ?: "Could not write $destination")
             }
             written.add(destination)
         }
@@ -486,7 +486,7 @@ internal class IconManagerService(private val ctx: EngineContext) {
             val patched = text?.let { ManifestIconWriter.apply(it, manifestEdit) }
             patched != null && runCatching { manifestPath.writeText(patched) }.isSuccess
         }
-        return ApplyOutcome.Written(written, skipped, manifestUpdated)
+        ApplyOutcome.Written(written, skipped, manifestUpdated)
     }
 
     sealed interface ApplyOutcome {

@@ -124,10 +124,25 @@ class ApprovedRepairPlanStore(context: Context, val projectRoot: Path) {
         return IncidentTask(id, kind, listOf("gradle", gradleTask) + args, reports, test?.let(::setOf) ?: emptySet())
     }
 
+    companion object {
+        /** Shared by approval and reload. Task names do not sandbox the trusted project's Gradle code. */
+        internal fun validateLocalTasks(buildTask: String, unitTask: String) {
+            val deviceTask = Regex("(?i)(connected|device|instrument|androidtest|native|adb)")
+            require(listOf(buildTask, unitTask).none { deviceTask.containsMatchIn(it.substringAfterLast(':')) }) {
+                "Native/device/ADB verification is unavailable; approve local build and unit tasks only."
+            }
+            require(Regex(":(?:[A-Za-z0-9_-]+:)*(?:assemble[A-Za-z0-9]*|classes|compile[A-Za-z0-9]+)").matches(buildTask)) {
+                "An exact local assemble, classes, or compile task is required."
+            }
+            require(Regex(":(?:[A-Za-z0-9_-]+:)*test(?:[A-Z][A-Za-z0-9]*UnitTest)?").matches(unitTask)) {
+                "An exact local test or test<Variant>UnitTest task is required."
+            }
+        }
+    }
+
     private fun validate(input: Input) {
         require(Regex("[A-Za-z][A-Za-z0-9]{0,80}").matches(input.variant))
-        require(Regex(":(?:[A-Za-z0-9_-]+:)*(?:assemble[A-Za-z0-9]*|classes|compile[A-Za-z0-9]+)").matches(input.buildTask))
-        require(Regex(":(?:[A-Za-z0-9_-]+:)*test[A-Za-z0-9]*").matches(input.unitTask))
+        validateLocalTasks(input.buildTask, input.unitTask)
         val testPattern = Regex("[A-Za-z_$][A-Za-z0-9_.$]*#[A-Za-z_$][A-Za-z0-9_$]*")
         require(testPattern.matches(input.reproducerTest) && testPattern.matches(input.functionalTest) && input.reproducerTest != input.functionalTest)
         require(input.editableFiles.size in 1..32 && input.reproducerFiles.isNotEmpty() && input.functionalFiles.isNotEmpty())

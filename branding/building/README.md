@@ -1,8 +1,9 @@
 # building artwork
 
-The original Dark and ClearDark images came from the supplied `Archive.zip`.
-`sources.json` records the archive and image checksums. Dark supplies the color
-launcher artwork; ClearDark supplies the monochrome and notification masks.
+`icon-dark.png` is the supplied `building_app.png` Android/player artwork. It supplies
+the color launcher, themed monochrome mask, and Play Store icon. `icon-clear-dark.png`
+retains the original ClearDark artwork from `Archive.zip` solely for the existing
+notification symbol. `sources.json` records the source files and image checksums.
 
 Run `python3 tools/generate-android-branding.py` with Pillow installed to regenerate
 the checked-in Android resources and opaque 512 px Play Store icon. Adaptive layers

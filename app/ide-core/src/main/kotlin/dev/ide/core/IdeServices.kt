@@ -1,5 +1,10 @@
 package dev.ide.core
 
+import dev.ide.agent.IncidentApplyResult
+import dev.ide.agent.IncidentPatchReview
+import dev.ide.agent.impl.IncidentDigests
+import dev.ide.core.reliability.IncidentPatchApplier
+import dev.ide.core.reliability.IncidentSourceAccess
 import dev.ide.analysis.ACTION_PROVIDER_EP
 import dev.ide.analysis.ANALYZER_EP
 import dev.ide.analysis.AnalysisEvent
@@ -367,6 +372,37 @@ class IdeServices private constructor(
     internal var lastOpenPeak: MemSample? = null
     private val memLog = Log.logger("ide.mem")
     private val decorationLog by lazy { Log.logger("ide.editorDecorations") }
+    private val sourceAccess = IncidentSourceAccess(platform.modelLock, store.rootPath)
+
+    internal fun <T> mutateSources(block: () -> T): T = sourceAccess.write(block)
+    internal fun retainSourceOperation(): () -> Unit = sourceAccess.retainOperation()
+    internal fun retainEditorDocument(): () -> Unit = sourceAccess.retainDocument()
+    internal fun markExternalSourceWorkUnconfirmed() = sourceAccess.markExternalWorkUnconfirmed()
+
+    internal fun checkedApplyIncidentReview(
+        review: IncidentPatchReview,
+        privateWorkRoot: Path,
+        checkCurrent: () -> Unit,
+    ): IncidentApplyResult = mutateSources {
+        if (sourceAccess.isClosed()) return@mutateSources IncidentApplyResult.StaleSource
+        checkCurrent()
+        val root = workspaceRoot.toRealPath()
+        if (review.knownBuild.projectId != IncidentDigests.bytes(root.toString().toByteArray(Charsets.UTF_8))) {
+            return@mutateSources IncidentApplyResult.StaleSource
+        }
+        sourceAccess.checkBuffers(root, review.originalInputHashes, review.changes.map { it.path }.toSet(), openDocuments)?.let {
+            return@mutateSources it
+        }
+        IncidentPatchApplier(root, privateWorkRoot).apply(review, checkCurrent,
+            checkBuffers = { hashes, changed -> sourceAccess.checkBuffers(root, hashes, changed, openDocuments) },
+            committed = { paths ->
+                try {
+                    events.filesMutated(paths)
+                } catch (_: Exception) {
+                    memLog.warn("Verified source replacement committed; a workspace subscriber could not refresh.")
+                }
+            })
+    }
 
     // Platform ports resolved from the application service container the host ([ProjectManager]) registered
     // them on — not constructor-injected. Absent (desktop / a standalone test with no host) → null → the
@@ -558,6 +594,8 @@ class IdeServices private constructor(
     private val engineContext: EngineContext = object : EngineContext {
         override val store get() = this@IdeServices.store
         override val platform get() = this@IdeServices.platform
+        override fun <T> mutateSources(block: () -> T): T = this@IdeServices.mutateSources(block)
+        override fun retainSourceOperation(): () -> Unit = this@IdeServices.retainSourceOperation()
         override val workspaceRoot get() = this@IdeServices.workspaceRoot
         override val sharedCachesRoot get() = this@IdeServices.sharedCachesRoot
         override val indexService get() = this@IdeServices.indexService
@@ -594,8 +632,9 @@ class IdeServices private constructor(
             this@IdeServices.analysisUnavailable.add(language)
         }
 
-        override fun removeOverlay(path: Path) =
+        override fun removeOverlay(path: Path) = mutateSources {
             this@IdeServices.openDocuments.remove(path.toAbsolutePath().normalize())
+        }
 
         override fun projectJavaFiles() = this@IdeServices.projectJavaFiles()
         override fun isValidJavaIdentifier(s: String) = this@IdeServices.isValidJavaIdentifier(s)
@@ -1143,7 +1182,9 @@ class IdeServices private constructor(
      * entry carries the default Android SDK's extra boot jars (desugar stubs, the Swing API). Entries whose
      * platform is gone are dropped. Saved, so the separate build process reads the same table.
      */
-    private fun syncPlatformSdks() {
+    private fun syncPlatformSdks() = mutateSources { syncPlatformSdksLocked() }
+
+    private fun syncPlatformSdksLocked() {
         val current = store.data.sdks
         val primary = current.firstOrNull { it.kind == PlatformKind.ANDROID && !PLATFORM_SDK_NAME.matches(it.name) }
         val extras = primary?.bootClasspath?.drop(1) ?: emptyList()
@@ -1184,7 +1225,9 @@ class IdeServices private constructor(
      * stdlib, and again by a build before it compiles a newly-added Kotlin module. Reached by the build via
      * [EngineContext.ensureKotlinStdlib].
      */
-    fun ensureKotlinStdlib() {
+    fun ensureKotlinStdlib() = mutateSources { ensureKotlinStdlibLocked() }
+
+    private fun ensureKotlinStdlibLocked() {
         val libName = "kotlin-stdlib"
         val kotlinModules = store.workspace.projects.flatMap { p -> p.modules.map { p to it } }
             .filter { (_, m) -> moduleHasKotlin(m) }
@@ -1306,7 +1349,7 @@ class IdeServices private constructor(
     private val openDocuments = ConcurrentHashMap<Path, String>()
 
     /** Called by the editor on every change so cross-file analysis sees the latest text. */
-    fun updateDocument(file: Path, text: String) {
+    fun updateDocument(file: Path, text: String) = mutateSources {
         val norm = file.toAbsolutePath().normalize()
         val changed = openDocuments.put(norm, text) != text
         // An UNSAVED edit to a `res/` file must make the synthetic `R` (code `R.string.*`) reflect it before
@@ -1332,16 +1375,15 @@ class IdeServices private constructor(
      * either way, and the engine agreeing with what a build would compile is the better of two wrong
      * answers. The tab keeps showing the user's text, and their next keystroke pushes it back here.
      */
-    fun refreshOverlay(file: Path) {
+    fun refreshOverlay(file: Path) = mutateSources {
         val norm = file.toAbsolutePath().normalize()
-        if (!openDocuments.containsKey(norm)) return
+        if (!openDocuments.containsKey(norm)) return@mutateSources
         // A binary/oversized file's overlay is the read-only placeholder FileBackend.readFile handed the
         // editor, not the file's bytes; re-reading it as text would put garbage where the placeholder was.
-        if (isBinaryOnDisk(norm)) return
-        val disk = runCatching { norm.readText() }.getOrNull() ?: return
-        // replace(), not put(): the tab may have been closed between the containsKey and here, and this must
-        // not resurrect an overlay for a file nothing has open.
-        if (openDocuments.replace(norm, disk) == disk) return
+        if (isBinaryOnDisk(norm)) return@mutateSources
+        val disk = runCatching { norm.readText() }.getOrNull() ?: return@mutateSources
+        // replace(), not put(): refreshing must never create an overlay for a file nothing has open.
+        if (openDocuments.replace(norm, disk) == disk) return@mutateSources
         if (isResourcePath(norm)) invalidateSyntheticClasses()
     }
 
@@ -1353,9 +1395,9 @@ class IdeServices private constructor(
      * already discards the edit on the UI side, so keeping it here was divergence rather than a working
      * copy.
      */
-    fun documentClosed(file: Path) {
+    fun documentClosed(file: Path) = mutateSources {
         val norm = file.toAbsolutePath().normalize()
-        if (openDocuments.remove(norm) == null) return
+        if (openDocuments.remove(norm) == null) return@mutateSources
         // Same reason as [updateDocument]: dropping a `res/` buffer changes what the synthetic `R` resolves.
         if (isResourcePath(norm)) invalidateSyntheticClasses()
     }
@@ -1372,9 +1414,9 @@ class IdeServices private constructor(
      * form of [dev.ide.core.services.RefactorService]'s multi-file apply loop, used by the AI agent's edit
      * tools; the caller is responsible for permission gating.
      */
-    fun applyDocumentEdits(file: Path, edits: List<DocumentEdit>) {
+    fun applyDocumentEdits(file: Path, edits: List<DocumentEdit>) = mutateSources {
         val path = file.toAbsolutePath().normalize()
-        val current = openDocuments[path] ?: runCatching { path.readText() }.getOrNull() ?: return
+        val current = openDocuments[path] ?: runCatching { path.readText() }.getOrNull() ?: return@mutateSources
         val sb = StringBuilder(current)
         for (e in edits.sortedByDescending { it.offset }) {
             val s = e.offset.coerceIn(0, sb.length)
@@ -1390,12 +1432,12 @@ class IdeServices private constructor(
     /** Persist a single editor buffer to disk and keep it as the live overlay (it now equals disk). The
      *  invalidation chain (JDT binding-cache drop, res→R refresh, xml re-index, kt→facade refresh) runs as
      *  the [events] hub's [FileChanged][dev.ide.vfs.FileChanged] reaction, not inline here. */
-    fun save(file: Path, text: String) {
+    fun save(file: Path, text: String) = mutateSources {
         val path = file.toAbsolutePath().normalize()
         // A binary/oversized file opened in the editor is shown as a read-only placeholder (FileBackend
         // .readFile), so `text` here is that placeholder, not the file's real content. Writing it would
         // destroy the asset (an opened PNG becomes ~150 bytes of text). Leave such a file untouched.
-        if (isBinaryOnDisk(path)) return
+        if (isBinaryOnDisk(path)) return@mutateSources
         openDocuments[path] = text
         path.parent?.let { Files.createDirectories(it) }
         path.writeText(text)
@@ -1413,7 +1455,7 @@ class IdeServices private constructor(
      * separate `:build` daemon — the daemon has no editor buffers of its own, so its own flush is a no-op and
      * it would otherwise compile whatever was last saved to disk (running stale code on an unsaved edit).
      */
-    fun flushOpenDocuments() {
+    fun flushOpenDocuments() = mutateSources {
         for ((path, content) in openDocuments) {
             runCatching {
                 // Same guard as save(): an opened binary/oversized file lives in the overlay as placeholder
@@ -1905,10 +1947,10 @@ class IdeServices private constructor(
 
     /** Convert this compatibility-mode project to a native CodeAssist project (see [GradleImport.convertToNative]).
      *  Pure disk operation — the model is already the source of truth, so nothing needs re-resolving. */
-    internal fun convertToNative(): GradleImport.ConvertOutcome = GradleImport.convertToNative(workspaceRoot)
+    internal fun convertToNative(): GradleImport.ConvertOutcome = mutateSources { GradleImport.convertToNative(workspaceRoot) }
 
     /** Restore a converted project's Gradle build files and re-enter compatibility mode. */
-    internal fun revertToGradle(): GradleImport.ConvertOutcome = GradleImport.revertToGradle(workspaceRoot)
+    internal fun revertToGradle(): GradleImport.ConvertOutcome = mutateSources { GradleImport.revertToGradle(workspaceRoot) }
 
     fun sourceRoots(module: Module): List<Path> = module.sourceSets.flatMap { it.contentRoots }
         .filter { ContentRole.SOURCE in it.roles || ContentRole.GENERATED in it.roles }
@@ -2913,7 +2955,7 @@ class IdeServices private constructor(
      * top-level public type whose name matches its file is renamed, the backing `.java` file is renamed too
      * (its new path is returned so the editor can reopen it). Re-indexes and invalidates analyzers.
      */
-    suspend fun rename(file: Path, text: String, offset: Int, newName: String): RenameOutcome =
+    fun rename(file: Path, text: String, offset: Int, newName: String): RenameOutcome =
         refactor.rename(file, text, offset, newName)
 
     /** Every reference to the symbol under [offset] in [file]/[text], project-wide, as (file, range) pairs.
@@ -2927,14 +2969,14 @@ class IdeServices private constructor(
     private fun normPath(p: Path): Path = p.toAbsolutePath().normalize()
 
     /** Drop every open-document overlay at [root] or under it (after a delete). */
-    private fun dropOverlaysUnder(root: Path) {
+    private fun dropOverlaysUnder(root: Path) = mutateSources {
         val r = normPath(root)
         openDocuments.keys.filter { it == r || it.startsWith(r) }
             .forEach { openDocuments.remove(it) }
     }
 
     /** Re-point open-document overlays from [from] (a file or directory) to [to] after a move/rename. */
-    private fun rekeyOverlays(from: Path, to: Path) {
+    private fun rekeyOverlays(from: Path, to: Path) = mutateSources {
         val f = normPath(from)
         val t = normPath(to)
         for (k in openDocuments.keys.filter { it == f || it.startsWith(f) }) {
@@ -3104,7 +3146,7 @@ class IdeServices private constructor(
      * Delete a file or directory (recursively). Drops any open-document overlays under it, then invalidates
      * analyzers and resyncs the index. Returns true on success.
      */
-    fun deletePath(target: Path): Boolean {
+    fun deletePath(target: Path): Boolean = mutateSources {
         val abs = normPath(target)
         val ok = runCatching {
             if (Files.isDirectory(abs)) abs.toFile().deleteRecursively() else Files.deleteIfExists(
@@ -3112,7 +3154,7 @@ class IdeServices private constructor(
             )
         }.getOrDefault(false)
         if (ok) events.fileDeleted(abs) // reaction: drop overlays under it, invalidate analyzers, re-sync
-        return ok
+        ok
     }
 
     /**
@@ -3121,7 +3163,10 @@ class IdeServices private constructor(
      * (the backing file is renamed as part of that). Otherwise it is a plain filesystem rename. [newName] is
      * the full new name (with extension for files).
      */
-    suspend fun renameFile(target: Path, newName: String): RenameOutcome {
+    fun renameFile(target: Path, newName: String): RenameOutcome =
+        mutateSources { renameFileLocked(target, newName) }
+
+    private fun renameFileLocked(target: Path, newName: String): RenameOutcome {
         val name = newName.trim()
         if (name.isEmpty() || name.contains('/') || name.contains('\\')) return RenameOutcome(
             false, "'$newName' is not a valid name."
@@ -3153,7 +3198,9 @@ class IdeServices private constructor(
     }
 
     /** Move a file or directory into [destDir]. Returns the new path, or null on conflict/failure. */
-    fun movePath(target: Path, destDir: Path): Path? {
+    fun movePath(target: Path, destDir: Path): Path? = mutateSources { movePathLocked(target, destDir) }
+
+    private fun movePathLocked(target: Path, destDir: Path): Path? {
         val abs = normPath(target)
         val dir = normPath(destDir)
         val dest = dir.resolve(abs.fileName)
@@ -3171,7 +3218,9 @@ class IdeServices private constructor(
     }
 
     /** Copy a file or directory into [destDir]. Returns the new path, or null on conflict/failure. */
-    fun copyPath(target: Path, destDir: Path): Path? {
+    fun copyPath(target: Path, destDir: Path): Path? = mutateSources { copyPathLocked(target, destDir) }
+
+    private fun copyPathLocked(target: Path, destDir: Path): Path? {
         val abs = normPath(target)
         val dir = normPath(destDir)
         val dest = dir.resolve(abs.fileName)
@@ -4528,7 +4577,7 @@ class IdeServices private constructor(
 
         override fun projectScope(): ProjectAnalysisScope = IdeProjectScope()
 
-        override suspend fun applyEdit(edit: WorkspaceEdit): WorkspaceEdit {
+        override suspend fun applyEdit(edit: WorkspaceEdit): WorkspaceEdit = mutateSources {
             for ((vf, edits) in edit.edits) {
                 val p = Paths.get(vf.path).toAbsolutePath().normalize()
                 val current = openDocuments[p] ?: runCatching { p.readText() }.getOrDefault("")
@@ -4540,7 +4589,7 @@ class IdeServices private constructor(
                 }
                 openDocuments[p] = sb.toString()
             }
-            return edit
+            edit
         }
     }
 
@@ -4578,6 +4627,7 @@ class IdeServices private constructor(
     }
 
     override fun close() {
+        sourceAccess.close()
         // Stop being the app's active engine (only if a newer project hasn't already taken over).
         if (env.activeEngine === this) env.activeEngine = null
         analysisEngine.dispose()

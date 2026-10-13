@@ -66,7 +66,7 @@ fun IncidentRepairPanel(
             ConsentRow("Auto-apply verified diffs for this project", policy.autoApplyVerifiedPatch) { enabled ->
                 if (enabled) autoPatchDialog = true else actions.setPolicy(policy.copy(autoApplyVerifiedPatch = false))
             }
-            Text("Build/test execution is separately bounded by the host. Installation, launch, network access and production deployment are not granted by these toggles.",
+            Text("Checked apply supports one changed source file only when every editor tab is closed and the host confirms all workspace work has stopped. Remote build hosts without that confirmation and multi-file repairs keep the verified copy. These toggles do not grant installation, launch, network access or production deployment.",
                 style = MaterialTheme.typography.bodySmall)
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             Text("${state.phase.name.lowercase().replace('_', ' ')} · attempt ${state.attempt}/${policy.maxAttempts}", style = MaterialTheme.typography.labelMedium)

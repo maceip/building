@@ -170,6 +170,68 @@ class IncidentRepairTest {
         fixture.assertOriginal()
     }
 
+    @Test fun autoApplyRevocationAtHostCommitRetainsVerifiedCopy() = runBlocking {
+        val fixture = fixture()
+        fixture.policy = fixture.policy.copy(autoApplyVerifiedPatch = true)
+        fixture.beforeApply = { fixture.policy = fixture.policy.copy(autoApplyVerifiedPatch = false) }
+        fixture.ai.respond = { request -> patchTurn(request, "fixed") }
+        val result = fixture.engine().repair(fixture.record) {}
+        assertEquals(IncidentRepairPhase.VERIFIED_COPY, result.phase)
+        assertTrue(result.detail.contains("authorization changed"))
+        assertTrue(Files.isDirectory(requireNotNull(result.review).isolatedRoot))
+        fixture.assertOriginal()
+    }
+
+    @Test fun cloudConsentRevokedAtHostCommitCannotApply() = runBlocking {
+        val fixture = fixture()
+        fixture.ai.respond = { request -> patchTurn(request, "fixed") }
+        val engine = fixture.engine()
+        val verified = engine.repair(fixture.record) {}
+        fixture.beforeApply = { fixture.policy = fixture.policy.copy(cloudAiDataSharing = false) }
+        val result = engine.apply(requireNotNull(verified.review), verified)
+        assertEquals(IncidentRepairPhase.VERIFIED_COPY, result.phase)
+        assertTrue(result.detail.contains("authorization changed"))
+        fixture.assertOriginal()
+    }
+
+    @Test fun busyHostExplainsWhyVerifiedCopyWasNotApplied() = runBlocking {
+        val fixture = fixture()
+        fixture.policy = fixture.policy.copy(autoApplyVerifiedPatch = true)
+        fixture.beforeApply = { throw IncidentRepairPending("Close the project's editor tabs first.") }
+        fixture.ai.respond = { request -> patchTurn(request, "fixed") }
+        val result = fixture.engine().repair(fixture.record) {}
+        assertEquals(IncidentRepairPhase.VERIFIED_COPY, result.phase)
+        assertTrue(result.detail.contains("Close the project's editor tabs first."))
+        assertTrue(Files.isDirectory(requireNotNull(result.review).isolatedRoot))
+        fixture.assertOriginal()
+    }
+
+    @Test fun replacingVerificationPlanCannotAuthorizeAnOlderRetainedPatch() = runBlocking {
+        val fixture = fixture()
+        fixture.ai.respond = { request -> patchTurn(request, "fixed") }
+        val engine = fixture.engine()
+        val verified = engine.repair(fixture.record) {}
+        val review = requireNotNull(verified.review)
+        assertEquals(fixture.plan, review.verificationPlan)
+        fixture.plan = fixture.plan.copy(editableFiles = setOf("src/User.java"))
+        val result = engine.apply(review, verified)
+        assertEquals(IncidentRepairPhase.VERIFIED_COPY, result.phase)
+        assertTrue(result.detail.contains("verification plan changed"))
+        assertEquals(0, fixture.applies)
+        fixture.assertOriginal()
+    }
+
+    @Test fun replacingRequiredTestsInvalidatesThePreviouslyVerifiedPatch() = runBlocking {
+        val fixture = fixture()
+        fixture.ai.respond = { request -> patchTurn(request, "fixed") }
+        val engine = fixture.engine()
+        val verified = engine.repair(fixture.record) {}
+        fixture.plan = fixture.plan.copy(functional = fixture.plan.functional.copy(expectedTests = setOf("fixture.Function#newInvariant")))
+        assertEquals(IncidentRepairPhase.VERIFIED_COPY, engine.apply(requireNotNull(verified.review), verified).phase)
+        assertEquals(0, fixture.applies)
+        fixture.assertOriginal()
+    }
+
     @Test fun taskThatChangesAnImmutableTestIsRejected() = runBlocking {
         val fixture = fixture()
         fixture.afterTask = { root, task ->
@@ -302,6 +364,7 @@ class IncidentRepairTest {
         )
         var executions = 0
         var applies = 0
+        var beforeApply: () -> Unit = {}
         var afterTask: (Path, IncidentTask) -> Unit = { _, _ -> }
         // Unit fixture scripts are owned, fixed offline commands. This is NOT a production sandbox claim.
         private val processes = IncidentProcessTaskRunner(object : IncidentProcessLauncher {
@@ -324,8 +387,10 @@ class IncidentRepairTest {
             override suspend fun knownBuild(incident: IncidentRecord) = known
             override suspend fun snapshot(root: Path) = Fixture.snapshot(root)
             override suspend fun verificationPlan(build: IncidentKnownBuild) = plan
-            override suspend fun applyAtomically(review: IncidentPatchReview): IncidentApplyResult {
+            override suspend fun applyAtomically(review: IncidentPatchReview, authorized: () -> Boolean): IncidentApplyResult {
                 applies++
+                beforeApply()
+                if (!authorized()) return IncidentApplyResult.Pending("Repair authorization changed before commit.")
                 return IncidentApplyResult.Pending("No atomic editor transaction in the unit fixture.")
             }
         }

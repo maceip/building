@@ -146,25 +146,25 @@ internal class AndroidResourceService(private val ctx: EngineContext) : ModuleRe
     private fun putResourceBytes(
         module: Module, role: ContentRole, relativePath: String, onConflict: ResourceConflict,
         bytes: () -> ByteArray,
-    ): ResourceWrite {
-        if (relativePath.isBlank()) return ResourceWrite.Failed("relative path is blank")
+    ): ResourceWrite = ctx.mutateSources {
+        if (relativePath.isBlank()) return@mutateSources ResourceWrite.Failed("relative path is blank")
         val root = resourceRoots(module, role).firstOrNull()?.toAbsolutePath()?.normalize()
-            ?: return ResourceWrite.NoResourceRoot
+            ?: return@mutateSources ResourceWrite.NoResourceRoot
         val requested = runCatching { root.resolve(relativePath).normalize() }.getOrNull()
-            ?: return ResourceWrite.Failed("'$relativePath' is not a path")
+            ?: return@mutateSources ResourceWrite.Failed("'$relativePath' is not a path")
         // A `..` segment would let a caller write anywhere on the device through an API that says "into this
         // module", so containment is checked after normalizing rather than by scanning the string.
         if (!requested.startsWith(root) || requested == root) {
-            return ResourceWrite.Failed("'$relativePath' does not stay inside $root")
+            return@mutateSources ResourceWrite.Failed("'$relativePath' does not stay inside $root")
         }
         val existed = Files.exists(requested)
         val target = when {
             !existed -> requested
-            onConflict == ResourceConflict.FAIL -> return ResourceWrite.AlreadyExists(requested)
+            onConflict == ResourceConflict.FAIL -> return@mutateSources ResourceWrite.AlreadyExists(requested)
             onConflict == ResourceConflict.REPLACE -> requested
             else -> freeSibling(requested)
         }
-        return runCatching {
+        runCatching {
             Files.createDirectories(target.parent)
             Files.write(target, bytes())
             if (target != requested || !existed) ctx.events.fileCreated(target)
@@ -259,15 +259,15 @@ internal class AndroidResourceService(private val ctx: EngineContext) : ModuleRe
 
     override fun putValueResource(
         module: Module, rClass: String, name: String, value: String, onConflict: ResourceConflict,
-    ): ResourceWrite {
+    ): ResourceWrite = ctx.mutateSources {
         val type = ResourceType.byRClass(rClass)
-            ?: return ResourceWrite.Failed("unknown resource type '$rClass'")
+            ?: return@mutateSources ResourceWrite.Failed("unknown resource type '$rClass'")
         if (type !in VALUE_TYPES) {
-            return ResourceWrite.Failed("@$rClass is not a value resource type; see createResourceFile")
+            return@mutateSources ResourceWrite.Failed("@$rClass is not a value resource type; see createResourceFile")
         }
-        if (name.isBlank()) return ResourceWrite.Failed("resource name is blank")
+        if (name.isBlank()) return@mutateSources ResourceWrite.Failed("resource name is blank")
         val valuesDir = androidResRoot(module)?.resolve("values")
-            ?: return ResourceWrite.NoResourceRoot
+            ?: return@mutateSources ResourceWrite.NoResourceRoot
         val target = valuesDir.resolve(valuesFileName(type))
         val existingText = runCatching { if (Files.exists(target)) target.readText() else null }.getOrNull()
 
@@ -290,13 +290,13 @@ internal class AndroidResourceService(private val ctx: EngineContext) : ModuleRe
         val declared = declaredAt(name)
         val writeName = when {
             declared == null -> name
-            onConflict == ResourceConflict.FAIL -> return ResourceWrite.AlreadyExists(declared)
-            onConflict == ResourceConflict.REPLACE -> return replaceValueResource(type, name, value, declared)
+            onConflict == ResourceConflict.FAIL -> return@mutateSources ResourceWrite.AlreadyExists(declared)
+            onConflict == ResourceConflict.REPLACE -> return@mutateSources replaceValueResource(type, name, value, declared)
             else -> generateSequence(1) { it + 1 }.map { "${name}_$it" }.first { declaredAt(it) == null }
         }
 
         val entry = "    <${type.rClass} name=\"$writeName\">${escapeXml(value)}</${type.rClass}>\n"
-        return runCatching {
+        runCatching {
             Files.createDirectories(valuesDir)
             if (existingText == null) {
                 target.writeText(RESOURCES_HEAD + entry + "</resources>\n")
@@ -346,27 +346,27 @@ internal class AndroidResourceService(private val ctx: EngineContext) : ModuleRe
 
     override fun createResourceFile(
         module: Module, rClass: String, name: String, content: String?, onConflict: ResourceConflict,
-    ): ResourceWrite {
+    ): ResourceWrite = ctx.mutateSources {
         val type = ResourceType.byRClass(rClass)
-            ?: return ResourceWrite.Failed("unknown resource type '$rClass'")
+            ?: return@mutateSources ResourceWrite.Failed("unknown resource type '$rClass'")
         if (type !in FILE_TYPES) {
-            return ResourceWrite.Failed("@$rClass is not a file resource type; see putValueResource")
+            return@mutateSources ResourceWrite.Failed("@$rClass is not a file resource type; see putValueResource")
         }
-        if (name.isBlank()) return ResourceWrite.Failed("resource name is blank")
+        if (name.isBlank()) return@mutateSources ResourceWrite.Failed("resource name is blank")
         val folder = androidResRoot(module)?.resolve(type.rClass)
-            ?: return ResourceWrite.NoResourceRoot
+            ?: return@mutateSources ResourceWrite.NoResourceRoot
         // Judged against disk, not the repository: this creates a FILE, and a name free in the model but taken
         // on disk would silently clobber it.
         val requested = folder.resolve("$name.xml")
         val existed = Files.exists(requested)
         val target = when {
             !existed -> requested
-            onConflict == ResourceConflict.FAIL -> return ResourceWrite.AlreadyExists(requested)
+            onConflict == ResourceConflict.FAIL -> return@mutateSources ResourceWrite.AlreadyExists(requested)
             onConflict == ResourceConflict.REPLACE -> requested
             else -> generateSequence(1) { it + 1 }
                 .map { folder.resolve("${name}_$it.xml") }.first { !Files.exists(it) }
         }
-        return runCatching {
+        runCatching {
             Files.createDirectories(folder)
             target.writeText(content ?: resourceFileStub(type))
             val created = target != requested || !existed

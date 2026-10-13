@@ -329,6 +329,44 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
     @Volatile
     private var buildJob: Job? = null
 
+    // Protected by the engine's source gate. Terminal UI state can precede actual coroutine completion.
+    private var sourceStarts = 0
+    private var sourceCaptures = 0
+    private var disposed = false
+    private val sourceRoot = runCatching { ctx.workspaceRoot.toRealPath() }
+        .getOrElse { ctx.workspaceRoot.toAbsolutePath().normalize() }
+
+    fun sourceMutationBlocker(): String? = ctx.mutateSources {
+        when {
+            disposed -> "The build service is closed."
+            sourceRoot in unconfirmedExternalWork -> "External Gradle work has run for this workspace; child-process quiescence cannot be confirmed."
+            sourceStarts != 0 -> "Wait for the build start to finish preparing."
+            sourceCaptures != 0 || buildJob?.isCompleted == false -> "Wait for the build or run body to finish, including cancellation cleanup."
+            else -> null
+        }
+    }
+
+    /** Claim a synchronous start before graph construction; never hold the source lock through that work. */
+    private fun sourceStart(block: () -> Unit) {
+        val release = ctx.mutateSources {
+            if (disposed || sourceStarts != 0 || sourceCaptures != 0 || buildJob?.isCompleted == false) {
+                _buildState.update {
+                    it.copy(log = it.log + logLine("Run request ignored — prior build work is still finishing or the project is closed.", UiLogLevel.Warn))
+                }
+                return@mutateSources null
+            }
+            ctx.retainSourceOperation().also { sourceStarts++ }
+        } ?: return
+        try {
+            block()
+        } finally {
+            ctx.mutateSources {
+                sourceStarts--
+                release()
+            }
+        }
+    }
+
     // ---- interactive console run (the full-screen Run terminal: program stdio + lifecycle) ----
 
     private val _runConsole = MutableStateFlow<RunConsoleUi?>(null)
@@ -635,6 +673,9 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
         for (project in ctx.store.workspace.projects) {
             val system = buildSystemFor(project) ?: continue
             val spec = project.runTasksSafely(system).firstOrNull { it.id == id } ?: continue
+            if (project.buildSystemId != BuildSystemId.NATIVE) {
+                unconfirmedExternalWork.add(sourceRoot)
+            }
             system.actionFor(spec, project, context)?.let { return project.name to it }
         }
         for (provider in ctx.platform.extensions.extensions(RUN_TASK_PROVIDER_EP)) {
@@ -728,7 +769,9 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
     }
 
     /** Run/assemble the task with [id] (from [runTasks]); streams progress into [buildState]. */
-    fun runTask(id: String) {
+    fun runTask(id: String) = sourceStart { runTaskRetained(id) }
+
+    private fun runTaskRetained(id: String) {
         if (_buildState.value.status == RunStatus.Running) {
             // Dropped, but never silently: in the remote (:build daemon) flow the UI has already shown an
             // optimistic Running for ITS request, and a silent drop here would leave it waiting forever on
@@ -1006,10 +1049,10 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
     }
 
     /** Run the default task (first of [runTasks]) — the plain Run button + existing callers. */
-    override fun runBuild() {
+    override fun runBuild() = sourceStart {
         val first =
-            runTasks().firstOrNull() ?: return fail("Nothing to run or assemble in this project.")
-        runTask(first.id)
+            runTasks().firstOrNull() ?: return@sourceStart fail("Nothing to run or assemble in this project.")
+        runTaskRetained(first.id)
     }
 
     /**
@@ -1218,7 +1261,9 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                 })
             }
         })
-        buildJob = buildScope.launch {
+        val release = this.ctx.retainSourceOperation()
+        val job = try {
+            buildScope.launch {
             val memSampler = launch {
                 var ticks = 0
                 while (isActive) {
@@ -1303,7 +1348,15 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                 )
             )
             onComplete?.invoke(succeeded)
+            }
+        } catch (failure: Throwable) {
+            release()
+            throw failure
         }
+        // Publish before registration: invokeOnCompletion also runs immediately for a job launched into an
+        // already-cancelled scope. Neither cancellation nor a terminal UI status releases this lease early.
+        buildJob = job
+        job.invokeOnCompletion { release() }
     }
 
     /** Cancel an in-progress build/run. */
@@ -1456,6 +1509,7 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
     ): Boolean {
         val project = ctx.projectOf(module) ?: return false
         if (project.buildSystemId != BuildSystemId.GRADLE) return false
+        unconfirmedExternalWork.add(sourceRoot)
         val system = buildSystemFor(project)
         if (system == null) {
             fail("This project builds with Gradle. Sync it once the JDK is installed.")
@@ -1542,6 +1596,22 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
      */
     override suspend fun runAndCapture(
         moduleName: String, stdin: String, timeoutMs: Long
+    ): RunCapture {
+        val release = ctx.mutateSources {
+            ctx.retainSourceOperation().also { sourceCaptures++ }
+        }
+        return try {
+            runAndCaptureRetained(moduleName, stdin, timeoutMs)
+        } finally {
+            ctx.mutateSources {
+                sourceCaptures--
+                release()
+            }
+        }
+    }
+
+    private suspend fun runAndCaptureRetained(
+        moduleName: String, stdin: String, timeoutMs: Long,
     ): RunCapture {
         ctx.flushOpenDocuments()
         runCatching { ctx.ensureKotlinStdlib() }
@@ -1658,6 +1728,7 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
     }
 
     override fun dispose() {
+        ctx.mutateSources { disposed = true }
         // Unblock any in-flight run (a program reading stdin / waiting on a permission prompt) and don't
         // leave this disposed engine's broker installed process-wide.
         currentRunIo?.input?.close()
@@ -1668,6 +1739,10 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
     }
 
     private companion object {
+        // Job completion does not attest to a forked Gradle process group's exit. Keep this conservative
+        // across engine switches/reopens as well; only a future external-worker protocol can clear it.
+        val unconfirmedExternalWork = java.util.concurrent.ConcurrentHashMap.newKeySet<Path>()
+
         /** Below this many library deps, dexing is quick enough that the first-build notice is just noise. */
         private const val FIRST_BUILD_DEX_BANNER_THRESHOLD = 8
 

@@ -76,6 +76,14 @@ interface FileService {
 
 /** Editor-time language services for the active buffer: completion, analysis, hints, navigation, rename. */
 interface EditorService {
+    /**
+     * Synchronously retain a real UI document BEFORE its disk read. Each call owns an independent retention;
+     * its idempotent release is bound to the exact engine lifetime captured here, never a later project.
+     * The caller releases in finally if no tab is installed, otherwise after removing the authoritative tab
+     * and sending [onFileClosed] (or when disposing its project state).
+     */
+    fun retainDocument(path: String): () -> Unit = {}
+
     /** Register/refresh the live editor buffer so cross-file analysis sees in-progress edits. */
     fun updateDocument(path: String, text: String)
 

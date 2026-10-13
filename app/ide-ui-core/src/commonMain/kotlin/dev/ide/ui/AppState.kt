@@ -38,7 +38,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -138,6 +140,9 @@ class OpenFile(
      *  logical tab pass the old id so the tab keeps its strip identity (no crossfade) across the swap. Assigned
      *  on the UI thread (every OpenFile is built inside a Main-dispatched launch), so the counter needs no sync. */
     val tabId: Long = nextTabId(),
+    /** The idempotent, engine-bound release retained before reading this real file. Re-pointing the same
+     *  logical tab carries it forward; in-memory/read-only callers need no retention. */
+    internal val releaseDocument: () -> Unit = {},
 ) {
     val session = EditorSession(initial, languageFor(name), editable = !readOnly)
     var modified by mutableStateOf(false)
@@ -294,8 +299,16 @@ class IdeUiState(
      */
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
 
-    /** Cancel in-flight async work (file opens). Call when this state leaves composition. */
-    fun dispose() { scope.cancel() }
+    /** Cancel in-flight opens and release every tab when this project state leaves composition. */
+    fun dispose() {
+        scope.cancel()
+        val removed = openFiles.toList()
+        openFiles.clear()
+        activeIndex = -1
+        // The backend may already refer to a different project. Only invoke the captured releases, not
+        // new lifecycle notifications against whichever engine is current now.
+        removed.forEach { it.releaseDocument() }
+    }
 
     /**
      * The per-project bridges between this state and the backend, running for as long as the caller's
@@ -752,14 +765,29 @@ class IdeUiState(
      * on [ioDispatcher]; the resulting Compose-state mutations resume on the launching (main) dispatcher.
      */
     suspend fun openSuspend(path: String, name: String) {
+        scope.coroutineContext.ensureActive()
+        currentCoroutineContext().ensureActive()
         if (focusOpenTab(path)) return
-        val text = withContext(ioDispatcher) { backend.files.readFile(path) }
-        // A second tap on the same row may have opened it while we were reading — focus it, don't duplicate.
-        if (focusOpenTab(path)) return
-        backend.editor.updateDocument(path, text)
-        openFiles.add(OpenFile(path, name, text))
-        activeIndex = openFiles.lastIndex
-        backend.editor.onFileOpened(path) // a genuinely new tab (focus path returned above), for plugin events
+        val release = backend.editor.retainDocument(path)
+        var installed = false
+        try {
+            val text = withContext(ioDispatcher) {
+                scope.coroutineContext.ensureActive()
+                backend.files.readFile(path)
+            }
+            // Direct suspend callers need the state-lifetime check too: they need not be children of scope.
+            scope.coroutineContext.ensureActive()
+            currentCoroutineContext().ensureActive()
+            // A second tap may have opened it while we read. Release only OUR attempt, never the kept tab.
+            if (focusOpenTab(path)) return
+            backend.editor.updateDocument(path, text)
+            openFiles.add(OpenFile(path, name, text, releaseDocument = release))
+            installed = true
+            activeIndex = openFiles.lastIndex
+            backend.editor.onFileOpened(path) // a genuinely new tab, for plugin events
+        } finally {
+            if (!installed) release()
+        }
     }
 
     /** Focus the already-open tab for [path] if there is one; returns true when it existed. */
@@ -868,7 +896,11 @@ class IdeUiState(
         activeIndex = activeIndex.coerceAtMost(openFiles.lastIndex)
         closedTabs.addLast(file.path to file.name)
         while (closedTabs.size > CLOSED_TAB_LIMIT) closedTabs.removeFirst()
-        backend.editor.onFileClosed(file.path)
+        try {
+            backend.editor.onFileClosed(file.path)
+        } finally {
+            file.releaseDocument()
+        }
     }
 
     /** Close every tab except [keep] (tab context menu). Iterates a copy, so mutating [openFiles] is safe. */
@@ -1070,7 +1102,9 @@ class IdeUiState(
                 // The read suspends, and a tab closed meanwhile shifts every index after it.
                 val i = openFiles.indexOfFirst { it.tabId == f.tabId }.takeIf { it >= 0 } ?: continue
                 val name = diskPath.substringAfterLast('/').substringAfterLast('\\')
-                openFiles[i] = OpenFile(diskPath, name, text, tabId = f.tabId)
+                openFiles[i] = OpenFile(
+                    diskPath, name, text, tabId = f.tabId, releaseDocument = openFiles[i].releaseDocument,
+                )
                 backend.editor.updateDocument(diskPath, text)
             }
             dedupeTabsByPath()
@@ -1217,7 +1251,9 @@ class IdeUiState(
             // threw IndexOutOfBounds in the field. Find the tab again by its id.
             val i = openFiles.indexOfFirst { it.tabId == f.tabId }.takeIf { it >= 0 } ?: continue
             val name = rebased.substringAfterLast('/').substringAfterLast('\\')
-            openFiles[i] = OpenFile(rebased, name, text, tabId = f.tabId)
+            openFiles[i] = OpenFile(
+                rebased, name, text, tabId = f.tabId, releaseDocument = openFiles[i].releaseDocument,
+            )
             backend.editor.updateDocument(rebased, text)
         }
         dedupeTabsByPath()
@@ -1231,7 +1267,8 @@ class IdeUiState(
      * whose files are already open. Two tabs for one path are wrong (edits/saves would fight over one file), so
      * they are collapsed here. The tab strip itself no longer crashes on the transient duplicate — it keys its
      * lazy row by [OpenFile.tabId], not path — but the logical duplicate must still be reconciled. The backend
-     * is NOT told the file closed, because the kept tab still has it open.
+     * is NOT told the file closed, because the kept tab still has it open; only each removed tab's own
+     * retention is released.
      */
     private fun dedupeTabsByPath() {
         val seen = HashSet<String>()
@@ -1239,7 +1276,7 @@ class IdeUiState(
         if (duplicates.isEmpty()) return
         val activePath = openFiles.getOrNull(activeIndex)?.path
         // Remove from the end so the lower indices stay valid as the list shrinks.
-        duplicates.asReversed().forEach { openFiles.removeAt(it) }
+        duplicates.asReversed().forEach { openFiles.removeAt(it).releaseDocument() }
         // The active tab may have been one of the removed duplicates; follow its path to the tab that kept it.
         activeIndex = openFiles.indexOfFirst { it.path == activePath }
             .takeIf { it >= 0 } ?: activeIndex.coerceIn(0, openFiles.lastIndex.coerceAtLeast(0))

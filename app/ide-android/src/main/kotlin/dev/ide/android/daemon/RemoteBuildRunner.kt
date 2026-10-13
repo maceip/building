@@ -292,6 +292,11 @@ class RemoteBuildRunner(context: Context, private val services: IdeServices) : B
     override fun runBuild() = execute { client.runBuild() }
     override fun runTask(id: String) = execute { client.runTask(id) }
 
+    // Neither a terminal delta nor the local stop/watchdog accounts for queued opens, callback dispatch,
+    // cancelled job bodies, or a replaced daemon engine. Until IPC can attest to all of those, fail closed.
+    override fun sourceMutationBlocker(): String =
+        "The remote build process cannot confirm source-mutation quiescence; original-project repair is unavailable with this runner."
+
     override fun stopBuild() {
         // Drop a build still queued behind the daemon-open handshake — Stop must never let it fire later.
         synchronized(pendingLock) { pending = null }

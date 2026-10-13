@@ -22,11 +22,11 @@ def inset(image, canvas, artwork):
 def main():
     dark = Image.open(BRAND / "icon-dark.png").convert("RGBA")
     clear = Image.open(BRAND / "icon-clear-dark.png").convert("RGBA")
-    # Convert the neutral variant to a true white/alpha mask, not a solid square.
-    luminance = ImageOps.grayscale(clear)
+    # Themed launcher artwork follows the color source; alpha preserves its dark cutouts.
+    luminance = ImageOps.grayscale(dark)
     alpha = luminance.point(lambda n: max(0, min(255, round((n - 55) * 255 / 160))))
-    alpha = ImageChops.multiply(alpha, clear.getchannel("A"))
-    mono = Image.new("RGBA", clear.size, "white")
+    alpha = ImageChops.multiply(alpha, dark.getchannel("A"))
+    mono = Image.new("RGBA", dark.size, "white")
     mono.putalpha(alpha)
     # At notification size the artwork's speech/sparkle emblem reads more clearly
     # than the complete stack. Preserve its dark star cutouts in the alpha mask.

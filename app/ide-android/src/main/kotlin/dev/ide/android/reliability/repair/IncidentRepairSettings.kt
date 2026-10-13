@@ -51,7 +51,7 @@ fun IncidentRepairSettings(
                 Text(settings?.let { "Approved ${it.input.variant}: ${it.input.buildTask}; ${it.input.unitTask}. Reproducer ${it.input.reproducerTest}; separate function ${it.input.functionalTest}." }
                     ?: "No test plan approved. Select an existing failing Gradle unit test and a separate passing functional test before automatic repair can run.",
                     style = MaterialTheme.typography.bodySmall)
-                Text("On-device local unit tests only. Android activity instrumentation, installing a test APK, and launching an app require separate device permissions and remain pending here.",
+                Text("Local build and unit tests only. This IDE cannot start native Android instrumentation on a stock Android phone. Installer permission or project approval does not enable it. Native tests are not run here; app installation and launch are separate actions.",
                     style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(enabled = !busy, onClick = { edit = true }) { Text("Approve test plan…") }

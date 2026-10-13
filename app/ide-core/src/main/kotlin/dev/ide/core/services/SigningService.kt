@@ -53,36 +53,36 @@ internal class SigningService(private val ctx: EngineContext) {
     }
 
     /** Set (or clear, when [keystoreId] is null) the keystore that signs [moduleName]'s [buildType]. */
-    fun assignSigning(moduleName: String, buildType: String, keystoreId: String?): UiConfigResult {
-        val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return UiConfigResult(
+    fun assignSigning(moduleName: String, buildType: String, keystoreId: String?): UiConfigResult = ctx.mutateSources {
+        val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return@mutateSources UiConfigResult(
             false,
             "No module '$moduleName'."
         )
-        val facet = module.facets.get(AndroidFacet.KEY) ?: return UiConfigResult(
+        val facet = module.facets.get(AndroidFacet.KEY) ?: return@mutateSources UiConfigResult(
             false,
             "'$moduleName' is not an Android module."
         )
         val project =
-            ctx.projectOf(module) ?: return UiConfigResult(false, "No project owns '$moduleName'.")
+            ctx.projectOf(module) ?: return@mutateSources UiConfigResult(false, "No project owns '$moduleName'.")
         if (keystoreId != null && ctx.keystoreRegistry.get(keystoreId) == null) {
-            return UiConfigResult(false, "Unknown keystore '$keystoreId'.")
+            return@mutateSources UiConfigResult(false, "Unknown keystore '$keystoreId'.")
         }
-        if (facet.buildTypes.none { it.name == buildType }) return UiConfigResult(
+        if (facet.buildTypes.none { it.name == buildType }) return@mutateSources UiConfigResult(
             false, "No build type '$buildType'."
         )
         val newTypes =
             facet.buildTypes.map { if (it.name == buildType) it.copy(signingConfig = keystoreId) else it }
-        if (newTypes == facet.buildTypes) return UiConfigResult(true, "No change.")
+        if (newTypes == facet.buildTypes) return@mutateSources UiConfigResult(true, "No change.")
         try {
             project.beginModification().apply {
                 module(module.id).putFacet(facet.copy(buildTypes = newTypes))
                 commit()
             }
         } catch (e: Exception) {
-            return UiConfigResult(false, "Update failed: ${e.message}")
+            return@mutateSources UiConfigResult(false, "Update failed: ${e.message}")
         }
         ctx.store.save()
         val target = keystoreId?.let { ctx.keystoreRegistry.get(it)?.name } ?: "debug (default)"
-        return UiConfigResult(true, "$buildType → $target")
+        UiConfigResult(true, "$buildType → $target")
     }
 }

@@ -106,7 +106,10 @@ internal class RefactorService(private val ctx: EngineContext) {
      * top-level public type whose name matches its file is renamed, the backing `.java` file is renamed too
      * (its new path is returned so the editor can reopen it). Re-indexes and invalidates analyzers.
      */
-    suspend fun rename(file: Path, text: String, offset: Int, newName: String): RenameOutcome {
+    fun rename(file: Path, text: String, offset: Int, newName: String): RenameOutcome =
+        ctx.mutateSources { renameLocked(file, text, offset, newName) }
+
+    private fun renameLocked(file: Path, text: String, offset: Int, newName: String): RenameOutcome {
         val name = newName.trim()
         if (!ctx.isValidJavaIdentifier(name)) return RenameOutcome(false, "'$newName' is not a valid Java identifier.")
         if (ctx.analysisDisabled(file)) return RenameOutcome(false, "Java analysis is unavailable.")

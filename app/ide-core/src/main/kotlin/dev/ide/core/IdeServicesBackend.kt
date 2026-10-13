@@ -1,5 +1,8 @@
 package dev.ide.core
 
+import dev.ide.agent.IncidentApplyResult
+import dev.ide.agent.IncidentPatchReview
+import dev.ide.agent.impl.IncidentRepairPending
 import dev.ide.core.agent.AgentBackend
 import dev.ide.core.build.BuildFailureKind
 import dev.ide.core.build.BuildRunner
@@ -68,6 +71,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -128,11 +133,14 @@ class IdeServicesBackend(
      *  (and any daemon binding) becomes collectible. */
     private val runnerCache = java.util.WeakHashMap<IdeServices, BuildRunner>()
 
-    override fun buildRunnerFor(services: IdeServices): BuildRunner =
+    override fun buildRunnerFor(services: IdeServices): BuildRunner = services.mutateSources {
         synchronized(runnerCache) {
             runnerCache.getOrPut(services) {
                 val factory = buildRunnerFactory
-                val runner = if (factory != null && separateBuildProcessEnabled()) factory(services) else services.buildRunner
+                val runner = if (factory != null && separateBuildProcessEnabled()) {
+                    services.markExternalSourceWorkUnconfirmed()
+                    factory(services)
+                } else services.buildRunner
                 // Only the chosen runner warms its compiler: the in-process one here, the remote one in the
                 // `:build` process. Warming both would leave a second compiler resident that never compiles.
                 // Not straight away: the warm-up is seconds of CPU and heap (a forked compiler VM either way),
@@ -146,6 +154,7 @@ class IdeServicesBackend(
                 runner
             }
         }
+    }
 
     /** The app-global "Build in a separate process" setting (default ON; see [BuiltInSettingsPages]) AND-ed
      *  with [notificationsAllowed]: the isolated process shows an ongoing foreground-service notification, so
@@ -169,6 +178,32 @@ class IdeServicesBackend(
         get() = activeServices ?: error("No project is open")
 
     override val servicesOrNull: IdeServices? get() = activeServices
+
+    fun incidentPatchApplier(
+        projectRoot: java.nio.file.Path,
+        privateWorkRoot: java.nio.file.Path,
+    ): (suspend (IncidentPatchReview, () -> Boolean) -> IncidentApplyResult)? {
+        val captured = activeServices ?: return null
+        val root = projectRoot.toRealPath()
+        if (captured.workspaceRoot.toRealPath() != root) return null
+        return { review, authorized ->
+            val caller = currentCoroutineContext()
+            fun checkCurrent() {
+                caller.ensureActive()
+                if (activeServices !== captured || !authorized()) throw IncidentRepairPending("Project or repair authorization changed.")
+                if ((agent as? AgentBackend)?.hasExternalWorkspaceWriters() == true) {
+                    throw IncidentRepairPending("External workspace clients may still be active. Disable the MCP and FTP servers and restart the IDE before applying.")
+                }
+                if (agent.chatState.value.busy) {
+                    throw IncidentRepairPending("Finish the active AI request before applying the verified patch.")
+                }
+                buildRunnerFor(captured).sourceMutationBlocker()?.let { throw IncidentRepairPending(it) }
+                caller.ensureActive()
+            }
+            // The caller is the repair IO worker. No dispatcher hop may discard a committed result on cancellation.
+            captured.checkedApplyIncidentReview(review, privateWorkRoot, ::checkCurrent)
+        }
+    }
 
     // The SDK manager + keystore registry are APPLICATION-scoped (one shared instance per app), so they're
     // reached through the project manager — available even with no project open, which is what lets the
@@ -778,6 +813,8 @@ class IdeServicesBackend(
     }
 
     fun close() {
+        val closing = activeServices
+        closing?.mutateSources { if (activeServices === closing) activeServices = null }
         runCatching { Log.removeSink(errorDialogSink) }
         runCatching { analyticsScope.cancel() }
         runCatching { engineScope.cancel() }
@@ -790,7 +827,7 @@ class IdeServicesBackend(
         runCatching { (vcs as? VcsBackend)?.close() }
         runCatching { fsEpochSubscription?.dispose() }
         runCatching { userMessageRelay?.dispose() }
-        activeServices?.close()
+        closing?.close()
         runCatching { engineExecutor.shutdown() } // stop the dedicated ide-engine thread on teardown
         // Clean shutdown ⇒ drop the crash breadcrumb, so a file that survives to the next launch means the
         // process did NOT exit cleanly (crashed/killed) — the fallback signal where the OS exit reason is absent.
@@ -807,7 +844,8 @@ class IdeServicesBackend(
     /** Make [next] the active project: swap it in, bump the epoch (re-keys UI state), and close the old one. */
     override fun swapEngine(next: IdeServices) {
         val prev = activeServices
-        activeServices = next
+        if (prev == null) activeServices = next
+        else prev.mutateSources { activeServices = next }
         // Point the shared application environment at the now-active engine, for app-level extension callbacks
         // (command actions, synthetic-R, the XML resource host) that resolve the open project through it.
         manager?.env?.activeEngine = next

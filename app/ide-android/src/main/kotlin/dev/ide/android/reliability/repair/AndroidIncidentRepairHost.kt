@@ -3,7 +3,9 @@ package dev.ide.android.reliability.repair
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.os.Build
+import dev.ide.agent.IncidentApplyResult
 import dev.ide.agent.IncidentKnownBuild
+import dev.ide.agent.IncidentPatchReview
 import dev.ide.agent.IncidentTaskRunner
 import dev.ide.agent.impl.IncidentDigests
 import dev.ide.agent.impl.IncidentRepairPending
@@ -111,7 +113,12 @@ class AndroidIncidentRepairHost private constructor(private val context: Context
         }
     }
 
-    fun project(projectRoot: Path, agent: AgentService, scope: CoroutineScope): AndroidIncidentRepairProject {
+    fun project(
+        projectRoot: Path,
+        agent: AgentService,
+        scope: CoroutineScope,
+        applyFactory: ((Path, Path) -> (suspend (IncidentPatchReview, () -> Boolean) -> IncidentApplyResult)?)? = null,
+    ): AndroidIncidentRepairProject {
         val root = projectRoot.toRealPath()
         val store = ApprovedRepairPlanStore(context, root)
         val privateRoot = context.noBackupFilesDir.toPath().toRealPath().resolve("incident-repair-copies").resolve(store.projectId)
@@ -134,9 +141,22 @@ class AndroidIncidentRepairHost private constructor(private val context: Context
             }
             IncidentGradleTaskRunner(gradle, distribution, image, store.invocations(plan), boundary).run(copy, task)
         }
+        val editorApply = applyFactory?.invoke(root, privateRoot)
         val controller = createIncidentRepairController(store.projectId, root, privateRoot, agent, local.repository, scope,
             registeredBuild = { key -> registeredBuild(store.projectId, key) }, tasks = runner,
-            verificationPlan = { store.plan(it) }, initialPolicy = store.policy(), persistPolicy = store::savePolicy)
+            verificationPlan = { store.plan(it) }, initialPolicy = store.policy(), persistPolicy = store::savePolicy,
+            checkedApply = editorApply?.let { apply ->
+                { review, authorized ->
+                    val key = IncidentKey(review.incident.packageName, review.incident.buildId, review.incident.sessionId, review.incident.eventId)
+                    val approved = review.verificationPlan
+                    if (approved == null || store.plan(review.knownBuild) != approved) {
+                        IncidentApplyResult.Pending("The approved verification plan changed after verification.")
+                    } else apply(review) {
+                        authorized() && store.plan(review.knownBuild) == approved &&
+                            registeredBuild(store.projectId, key) == review.knownBuild
+                    }
+                }
+            })
         return AndroidIncidentRepairProject(controller, store)
     }
 

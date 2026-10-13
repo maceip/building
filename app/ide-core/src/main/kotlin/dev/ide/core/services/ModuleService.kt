@@ -131,18 +131,18 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
     }
 
     /** Persist [edit] (language level + facet values) to [moduleName] through a model transaction + save. */
-    fun updateModuleConfig(moduleName: String, edit: UiModuleConfigEdit): UiConfigResult {
+    fun updateModuleConfig(moduleName: String, edit: UiModuleConfigEdit): UiConfigResult = ctx.mutateSources {
         val module = ctx.modules().firstOrNull { it.name == moduleName }
-            ?: return UiConfigResult(false, "No module '$moduleName'.")
+            ?: return@mutateSources UiConfigResult(false, "No module '$moduleName'.")
         val result = model.updateModuleConfig(moduleName, edit)
-        if (!result.success) return result
+        if (!result.success) return@mutateSources result
         // The Run main-class override is a project PREFERENCE, independent of the model transaction above;
         // a non-null value sets it, blank clears it back to auto-detect.
         edit.mainClass?.let { ctx.setMainClassOverride(module, it) }
         ctx.invalidateAnalyzers()       // language level + facets affect the compile classpath/source sets
         ctx.invalidateSyntheticClasses() // an Android facet change can move the R package
         ctx.resyncIndex()
-        return result
+        result
     }
 
     /** The Android `buildFeatures` of [moduleName] as toggle descriptors, or null for a non-Android module.
@@ -291,11 +291,11 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
      * files too (for a project whose build scripts own the model, editing only the in-memory model would be
      * undone by the next sync).
      */
-    suspend fun fixToolchainWarning(moduleName: String, warningId: String): UiConfigResult {
+    suspend fun fixToolchainWarning(moduleName: String, warningId: String): UiConfigResult = sourceOperation {
         val module = ctx.modules().firstOrNull { it.name == moduleName }
-            ?: return UiConfigResult(false, "No module '$moduleName'.")
+            ?: return@sourceOperation UiConfigResult(false, "No module '$moduleName'.")
         val processor = kspRuntimeWarningProcessor(warningId)
-            ?: return UiConfigResult(false, "Unknown toolchain warning '$warningId'.")
+            ?: return@sourceOperation UiConfigResult(false, "Unknown toolchain warning '$warningId'.")
         val wanted = processor.runtimeCoordinates
         var changed = 0
         for (coordinate in wanted) {
@@ -306,17 +306,17 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
                 .forEach { ctx.dependencies.removeDependency(moduleName, it) }
             val added = ctx.dependencies.addDependency(moduleName, coordinate, "implementation")
             if (!added.success && !added.message.contains("already a dependency")) {
-                return UiConfigResult(false, "Couldn't set $coordinate: ${added.message}")
+                return@sourceOperation UiConfigResult(false, "Couldn't set $coordinate: ${added.message}")
             }
             changed++
         }
-        if (changed == 0) return UiConfigResult(false, "Nothing to change for '$warningId'.")
+        if (changed == 0) return@sourceOperation UiConfigResult(false, "Nothing to change for '$warningId'.")
         // The fix makes the problem go away, so a previously recorded acceptance is stale: clear it, or the
         // build would keep warning about a mismatch that no longer exists.
         setKspRuntimeAcceptance(module, processor.id, accepted = false)
         ctx.invalidateAnalyzers()
         ctx.resyncIndex()
-        return UiConfigResult(true, "Set ${wanted.joinToString()} on $moduleName.")
+        UiConfigResult(true, "Set ${wanted.joinToString()} on $moduleName.")
     }
 
     /**
@@ -341,24 +341,26 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
             ?.let { id -> kspProcessors.firstOrNull { it.id == id } }
 
     /** Persist (or clear) the runtime-mismatch acceptance for [processorId]; false when [module] has no facet. */
-    private fun setKspRuntimeAcceptance(module: Module, processorId: String, accepted: Boolean): Boolean {
-        val facet = module.facets.get(AndroidFacet.KEY) ?: return false
+    private fun setKspRuntimeAcceptance(module: Module, processorId: String, accepted: Boolean): Boolean = ctx.mutateSources {
+        // Dependency resolution may have suspended since the caller captured its module snapshot.
+        val current = ctx.modules().firstOrNull { it.id == module.id } ?: return@mutateSources false
+        val facet = current.facets.get(AndroidFacet.KEY) ?: return@mutateSources false
         val bf = facet.buildFeatures
         val updated = bf.copy(
             kspRuntimeMismatchAccepted =
                 if (accepted) bf.kspRuntimeMismatchAccepted + processorId
                 else bf.kspRuntimeMismatchAccepted - processorId,
         )
-        if (updated == bf) return true
-        val project = ctx.projectOf(module) ?: return false
+        if (updated == bf) return@mutateSources true
+        val project = ctx.projectOf(current) ?: return@mutateSources false
         runCatching {
             project.beginModification().apply {
-                module(module.id).putFacet(facet.copy(buildFeatures = updated))
+                module(current.id).putFacet(facet.copy(buildFeatures = updated))
                 commit()
             }
-        }.onFailure { return false }
+        }.onFailure { return@mutateSources false }
         ctx.store.save()
-        return true
+        true
     }
 
     /** The bundled Kotlin compiler plugins available to [moduleName] with their enable-state, or null for a
@@ -415,31 +417,35 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
      */
     suspend fun setCompilerPlugin(
         moduleName: String, pluginId: String, enabled: Boolean
-    ): UiConfigResult {
-        val module = ctx.modules().firstOrNull { it.name == moduleName }
-            ?: return UiConfigResult(false, "No module '$moduleName'.")
-        val facet = module.facets.get(AndroidFacet.KEY)
-            ?: return UiConfigResult(false, "'$moduleName' is not an Android module.")
-        val project = ctx.projectOf(module)
-            ?: return UiConfigResult(false, "No project owns '$moduleName'.")
+    ): UiConfigResult = sourceOperation {
         val tp = toggleablePlugins.firstOrNull { it.pluginId == pluginId }
         val ksp = if (tp == null) kspProcessors.firstOrNull { it.id == pluginId } else null
-        if (tp == null && ksp == null) return UiConfigResult(false, "Unknown compiler plugin '$pluginId'.")
-        val bf = facet.buildFeatures
-        val updated = when {
-            tp != null -> tp.set(bf, enabled)
-            else -> bf.copy(kspProcessors = if (enabled) bf.kspProcessors + ksp!!.id else bf.kspProcessors - ksp!!.id)
-        }
-        if (updated == bf) return UiConfigResult(true, "No change.")
-        try {
-            project.beginModification().apply {
-                module(module.id).putFacet(facet.copy(buildFeatures = updated))
-                commit()
+        val unchanged = ctx.mutateSources {
+            val module = ctx.modules().firstOrNull { it.name == moduleName }
+                ?: return@mutateSources UiConfigResult(false, "No module '$moduleName'.")
+            val facet = module.facets.get(AndroidFacet.KEY)
+                ?: return@mutateSources UiConfigResult(false, "'$moduleName' is not an Android module.")
+            val project = ctx.projectOf(module)
+                ?: return@mutateSources UiConfigResult(false, "No project owns '$moduleName'.")
+            if (tp == null && ksp == null) return@mutateSources UiConfigResult(false, "Unknown compiler plugin '$pluginId'.")
+            val bf = facet.buildFeatures
+            val updated = when {
+                tp != null -> tp.set(bf, enabled)
+                else -> bf.copy(kspProcessors = if (enabled) bf.kspProcessors + ksp!!.id else bf.kspProcessors - ksp!!.id)
             }
-        } catch (e: Exception) {
-            return UiConfigResult(false, "Update failed: ${e.message}")
+            if (updated == bf) return@mutateSources UiConfigResult(true, "No change.")
+            try {
+                project.beginModification().apply {
+                    module(module.id).putFacet(facet.copy(buildFeatures = updated))
+                    commit()
+                }
+            } catch (e: Exception) {
+                return@mutateSources UiConfigResult(false, "Update failed: ${e.message}")
+            }
+            ctx.store.save()
+            null
         }
-        ctx.store.save()
+        if (unchanged != null) return@sourceOperation unchanged
 
         // Enabling pulls in the plugin's runtime (its presence is what applies the plugin). A resolution failure
         // (e.g. offline) doesn't fail the toggle — the flag is set; the deps can be retried from Dependencies.
@@ -454,7 +460,7 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
         ctx.resyncIndex()
         val label = tp?.let { registeredPlugins()[pluginId]?.displayName } ?: ksp?.displayName ?: pluginId
         val verb = if (enabled) "Enabled" else "Disabled"
-        return UiConfigResult(true, "$verb $label on ${module.name}$depNote")
+        UiConfigResult(true, "$verb $label on $moduleName$depNote")
     }
 
     /**
@@ -465,34 +471,38 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
      */
     suspend fun setBuildFeature(
         moduleName: String, feature: String, enabled: Boolean
-    ): UiConfigResult {
-        val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return UiConfigResult(
-            false,
-            "No module '$moduleName'."
-        )
-        val facet = module.facets.get(AndroidFacet.KEY) ?: return UiConfigResult(
-            false,
-            "'$moduleName' is not an Android module."
-        )
-        val project =
-            ctx.projectOf(module) ?: return UiConfigResult(false, "No project owns '$moduleName'.")
-        val bf = facet.buildFeatures
-        val updated = when (feature) {
-            "viewBinding" -> bf.copy(viewBinding = enabled)
-            "compose" -> bf.copy(compose = enabled)
-            "parcelize" -> bf.copy(parcelize = enabled)
-            else -> return UiConfigResult(false, "Unknown build feature '$feature'.")
-        }
-        if (updated == bf) return UiConfigResult(true, "No change.")
-        try {
-            project.beginModification().apply {
-                module(module.id).putFacet(facet.copy(buildFeatures = updated))
-                commit()
+    ): UiConfigResult = sourceOperation {
+        val unchanged = ctx.mutateSources {
+            val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return@mutateSources UiConfigResult(
+                false,
+                "No module '$moduleName'."
+            )
+            val facet = module.facets.get(AndroidFacet.KEY) ?: return@mutateSources UiConfigResult(
+                false,
+                "'$moduleName' is not an Android module."
+            )
+            val project =
+                ctx.projectOf(module) ?: return@mutateSources UiConfigResult(false, "No project owns '$moduleName'.")
+            val bf = facet.buildFeatures
+            val updated = when (feature) {
+                "viewBinding" -> bf.copy(viewBinding = enabled)
+                "compose" -> bf.copy(compose = enabled)
+                "parcelize" -> bf.copy(parcelize = enabled)
+                else -> return@mutateSources UiConfigResult(false, "Unknown build feature '$feature'.")
             }
-        } catch (e: Exception) {
-            return UiConfigResult(false, "Update failed: ${e.message}")
+            if (updated == bf) return@mutateSources UiConfigResult(true, "No change.")
+            try {
+                project.beginModification().apply {
+                    module(module.id).putFacet(facet.copy(buildFeatures = updated))
+                    commit()
+                }
+            } catch (e: Exception) {
+                return@mutateSources UiConfigResult(false, "Update failed: ${e.message}")
+            }
+            ctx.store.save()
+            null
         }
-        ctx.store.save()
+        if (unchanged != null) return@sourceOperation unchanged
 
         // Enabling a feature pulls in its runtime dependencies (AGP adds these for you). A resolution failure
         // (e.g. offline) doesn't fail the toggle — the flag is set; the deps can be retried from Dependencies.
@@ -512,7 +522,7 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
         ctx.invalidateSyntheticClasses() // viewBinding on/off changes the synthetic binding classes
         ctx.resyncIndex()
         val verb = if (enabled) "Enabled" else "Disabled"
-        return UiConfigResult(true, "$verb $feature on ${module.name}$depNote")
+        UiConfigResult(true, "$verb $feature on $moduleName$depNote")
     }
 
     /** The Android packaging options of [moduleName] (Java-resource + native-lib merge rules), or null when
@@ -533,29 +543,29 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
      *  (the codec then omits it, so the module falls back to the AGP defaults). */
     fun updatePackagingOptions(
         moduleName: String, resources: UiPackagingRules, jniLibs: UiPackagingRules
-    ): UiConfigResult {
+    ): UiConfigResult = ctx.mutateSources {
         val module = ctx.modules().firstOrNull { it.name == moduleName }
-            ?: return UiConfigResult(false, "No module '$moduleName'.")
+            ?: return@mutateSources UiConfigResult(false, "No module '$moduleName'.")
         val facet = module.facets.get(AndroidFacet.KEY)
-            ?: return UiConfigResult(false, "'$moduleName' is not an Android module.")
-        val project = ctx.projectOf(module) ?: return UiConfigResult(false, "No project owns '$moduleName'.")
+            ?: return@mutateSources UiConfigResult(false, "'$moduleName' is not an Android module.")
+        val project = ctx.projectOf(module) ?: return@mutateSources UiConfigResult(false, "No project owns '$moduleName'.")
         fun clean(xs: List<String>): Set<String> = xs.map { it.trim() }.filter { it.isNotEmpty() }.toCollection(LinkedHashSet())
         val packaging = AndroidPackaging(
             resources = ResourcePackaging(clean(resources.excludes), clean(resources.pickFirsts), clean(resources.merges)),
             jniLibs = JniLibsPackaging(clean(jniLibs.excludes), clean(jniLibs.pickFirsts)),
         )
-        if (packaging == facet.packaging) return UiConfigResult(true, "No change.")
+        if (packaging == facet.packaging) return@mutateSources UiConfigResult(true, "No change.")
         try {
             project.beginModification().apply {
                 module(module.id).putFacet(facet.copy(packaging = packaging))
                 commit()
             }
         } catch (e: Exception) {
-            return UiConfigResult(false, "Update failed: ${e.message}")
+            return@mutateSources UiConfigResult(false, "Update failed: ${e.message}")
         }
         ctx.store.save()
         ctx.invalidateAnalyzers()
-        return UiConfigResult(true, "Saved packaging options for ${module.name}")
+        UiConfigResult(true, "Saved packaging options for ${module.name}")
     }
 
     /** Add each of [coordinates] to [moduleName] unless a dependency on the same `group:name` already exists.
@@ -615,16 +625,16 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
      * with a starter template body, returning its path. Null for an unknown/non-Android module, a bundled
      * default or absolute entry, or an I/O failure. Already-present files are returned untouched.
      */
-    fun createProguardFile(moduleName: String, entry: String): Path? {
-        val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return null
-        module.facets.get(AndroidFacet.KEY) ?: return null
-        if (dev.ide.android.support.DefaultProguardFiles.isDefault(entry)) return null
+    fun createProguardFile(moduleName: String, entry: String): Path? = ctx.mutateSources {
+        val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return@mutateSources null
+        module.facets.get(AndroidFacet.KEY) ?: return@mutateSources null
+        if (dev.ide.android.support.DefaultProguardFiles.isDefault(entry)) return@mutateSources null
         val rel = Paths.get(entry)
-        if (rel.isAbsolute) return null
-        val moduleDir = moduleDirOf(module) ?: return null
+        if (rel.isAbsolute) return@mutateSources null
+        val moduleDir = moduleDirOf(module) ?: return@mutateSources null
         val target = moduleDir.resolve(entry)
-        if (Files.exists(target)) return target
-        return runCatching {
+        if (Files.exists(target)) return@mutateSources target
+        runCatching {
             target.parent?.let { Files.createDirectories(it) }
             Files.write(target, DEFAULT_PROGUARD_RULES.toByteArray())
             target
@@ -664,15 +674,15 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
         typeId: String,
         languageLevel: String?,
         facetValues: Map<String, Map<String, Any?>>
-    ): UiConfigResult {
+    ): UiConfigResult = ctx.mutateSources {
         // `src/main/java` rather than the bridge's Kotlin default: this host compiles Java, and its
         // `JavaPlugin` registers a `compileKotlin` task for any `.kt` under the same root anyway.
         val result = model.createModule(name, typeId, languageLevel, facetValues, fallbackSourceDir = "src/main/java")
-        if (!result.success) return result
+        if (!result.success) return@mutateSources result
         ctx.invalidateAnalyzers()
         ctx.invalidateSyntheticClasses()
         ctx.resyncIndex()
-        return result
+        result
     }
 
     /**
@@ -697,12 +707,12 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
      * Remove [name] from the project model (files left on disk), also dropping any module-on-module
      * dependency other modules declared on it. Refreshes analyzers/index.
      */
-    fun removeModule(name: String): Boolean {
-        if (!model.removeModule(name)) return false
+    fun removeModule(name: String): Boolean = ctx.mutateSources {
+        if (!model.removeModule(name)) return@mutateSources false
         ctx.invalidateAnalyzers()
         ctx.invalidateSyntheticClasses()
         ctx.resyncIndex()
-        return true
+        true
     }
 
     /** Conventional source-set leaf-folder name → the [ContentRole] it implies. Drives both explicit
@@ -742,10 +752,10 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
      */
     override fun addSourceRoot(
         moduleName: String, sourceSetName: String, dirName: String, roles: Set<ContentRole>
-    ): Path? {
-        val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return null
-        val base = sourceSetBaseFor(module, sourceSetName) ?: return null
-        return addSourceRootAt(moduleName, sourceSetName, base.resolve(dirName), roles)
+    ): Path? = ctx.mutateSources {
+        val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return@mutateSources null
+        val base = sourceSetBaseFor(module, sourceSetName) ?: return@mutateSources null
+        addSourceRootAt(moduleName, sourceSetName, base.resolve(dirName), roles)
     }
 
     /**
@@ -770,26 +780,27 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
         return target
     }
 
-    override fun setFacetData(moduleName: String, data: dev.ide.model.FacetData): Boolean {
-        if (!model.putFacetData(moduleName, data)) return false
+    override fun setFacetData(moduleName: String, data: dev.ide.model.FacetData): Boolean = ctx.mutateSources {
+        if (!model.putFacetData(moduleName, data)) return@mutateSources false
         // A facet changes what the module builds and analyzes (a plugin's build tasks, a language's flags).
         ctx.invalidateAnalyzers()
         ctx.resyncIndex()
-        return true
+        true
     }
 
     /** Remove the content root at [dirRelPath] (relative to the module dir) from [sourceSetName] of
      *  [moduleName]. Model-only — the directory on disk is left untouched. Returns true on a model change. */
-    override fun removeSourceRoot(moduleName: String, sourceSetName: String, dirRelPath: String): Boolean {
-        if (!model.removeSourceRoot(moduleName, sourceSetName, dirRelPath)) return false
+    override fun removeSourceRoot(moduleName: String, sourceSetName: String, dirRelPath: String): Boolean = ctx.mutateSources {
+        if (!model.removeSourceRoot(moduleName, sourceSetName, dirRelPath)) return@mutateSources false
         ctx.invalidateAnalyzers()
         ctx.resyncIndex()
-        return true
+        true
     }
 
     /** Create an empty source set [name] on [moduleName] (returns false if it already exists). */
-    override fun addSourceSet(moduleName: String, name: String): Boolean =
+    override fun addSourceSet(moduleName: String, name: String): Boolean = ctx.mutateSources {
         model.addSourceSet(moduleName, name)
+    }
 
     /**
      * If [newDir] is a conventionally-named folder (`resources`/`java`/`kotlin`/`res`/`assets`/`aidl`)
@@ -801,16 +812,28 @@ internal class ModuleService(private val ctx: EngineContext) : ModuleSources {
         val role = conventionRoles[newDir.fileName?.toString()] ?: return false
         val dir = newDir.toAbsolutePath().normalize()
         val parent = dir.parent ?: return false
-        for (module in ctx.modules()) {
-            for (ss in module.sourceSets) {
-                val roots =
-                    ss.contentRoots.map { Paths.get(it.dir.path).toAbsolutePath().normalize() }
-                if (roots.none { it.parent == parent }) continue
-                if (dir in roots) return false // already a registered root
-                return addSourceRootAt(module.name, ss.name, dir, setOf(role)) != null
+        return ctx.mutateSources {
+            for (module in ctx.modules()) {
+                for (ss in module.sourceSets) {
+                    val roots =
+                        ss.contentRoots.map { Paths.get(it.dir.path).toAbsolutePath().normalize() }
+                    if (roots.none { it.parent == parent }) continue
+                    if (dir in roots) return@mutateSources false // already a registered root
+                    return@mutateSources addSourceRootAt(module.name, ss.name, dir, setOf(role)) != null
+                }
             }
+            false
         }
-        return false
+    }
+
+    /** Keep repair pending through dependency resolution without holding the model lock across suspension. */
+    private suspend fun <T> sourceOperation(block: suspend () -> T): T {
+        val release = ctx.retainSourceOperation()
+        return try {
+            block()
+        } finally {
+            release()
+        }
     }
 
     /** Map a codec value to a typed UI field: Long→Number, Boolean→Bool, String→Text, lists→StringList/TableList. */

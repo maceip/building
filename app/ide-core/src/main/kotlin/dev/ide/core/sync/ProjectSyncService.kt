@@ -76,6 +76,15 @@ internal class ProjectSyncService(private val ctx: EngineContext) {
         reason: SyncReason = SyncReason.MANUAL,
         progress: ProgressReporter = NoSyncProgress,
     ): ProjectSyncOutcome {
+        val release = ctx.retainSourceOperation()
+        return try {
+            syncRetained(reason, progress)
+        } finally {
+            release()
+        }
+    }
+
+    private suspend fun syncRetained(reason: SyncReason, progress: ProgressReporter): ProjectSyncOutcome {
         val importer = importer()
             ?: return ProjectSyncOutcome(false, "No build files to sync from were found.")
         val request = SyncRequest(ctx.workspaceRoot, progress, reason)

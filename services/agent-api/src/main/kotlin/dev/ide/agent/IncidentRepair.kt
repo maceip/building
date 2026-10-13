@@ -154,6 +154,8 @@ data class IncidentPatchReview(
     val evidence: List<IncidentTaskProof>,
     /** Includes approved non-source build/test inputs; host must compare these in the same transaction. */
     val originalInputHashes: Map<String, String> = originalSnapshot.files,
+    /** The exact host-approved plan used for this proof; applying cannot substitute a newer plan. */
+    val verificationPlan: IncidentVerificationPlan? = null,
 )
 
 sealed interface IncidentApplyResult {
@@ -190,9 +192,11 @@ interface IncidentRepairHost {
      * Only an atomic host/editor transaction may return Applied: compare ALL originalSnapshot filenames,
      * originalInputHashes, bytes, and live editor buffers while holding the write lock; all-or-nothing commit the reviewed diff.
      * A host lacking this primitive must return Pending. Never implement this with reset/stash or a series
-     * of unguarded writes. The engine never writes the original project itself.
+     * of unguarded writes. The engine never writes the original project itself. Recheck [authorized] and
+     * coroutine cancellation immediately before committing; once committed, report Applied even if the
+     * caller cancels afterward. Do not suspend between the commit and returning its outcome.
      */
-    suspend fun applyAtomically(review: IncidentPatchReview): IncidentApplyResult =
+    suspend fun applyAtomically(review: IncidentPatchReview, authorized: () -> Boolean): IncidentApplyResult =
         IncidentApplyResult.Pending("Verified isolated copy is ready; atomic editor apply is unavailable.")
 
     /** Bind an actual output's embedded package/variant/source provenance, not merely its filename. */

@@ -273,6 +273,8 @@ internal class EditorBackend(private val ctx: BackendContext) : EditorService {
         UiRenameResult(r.success, r.message, r.occurrences, r.filesChanged, r.newPath)
     }
 
+    override fun retainDocument(path: String): () -> Unit = ctx.services.retainEditorDocument()
+
     override fun updateDocument(path: String, text: String) =
         ctx.services.updateDocument(Paths.get(path), text)
 

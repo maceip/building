@@ -34,6 +34,12 @@ internal interface EngineContext {
     /** The per-project platform (extension-point registry, message bus, model lock). */
     val platform: PlatformCore
 
+    /** Serializes synchronous source and overlay changes with checked incident repair application. */
+    fun <T> mutateSources(block: () -> T): T
+
+    /** Inhibit checked repair application across an asynchronous workspace operation. */
+    fun retainSourceOperation(): () -> Unit
+
     /** The active workspace's root directory (`store.rootPath`). */
     val workspaceRoot: Path
 

@@ -228,7 +228,7 @@ class IncidentRepairEngine(
                 val repaired = freeze(host.snapshot(isolated.root))
                 isolated.assertSourceScope(repaired)
                 val review = IncidentPatchReview(runId, record.identity, registered, initial, repaired, isolated.root,
-                    isolated.changes(), proofs.toList(), isolated.originalBytes.mapValues { IncidentDigests.bytes(it.value) })
+                    isolated.changes(), proofs.toList(), isolated.originalBytes.mapValues { IncidentDigests.bytes(it.value) }, plan)
                 state = state.copy(phase = IncidentRepairPhase.AWAITING_REVIEW, review = review,
                     detail = "Verified isolated copy: same reproducer failed before and passed after; independent functional test passed. Original files are unchanged.")
                 // Artifact discovery must be read-only. A missing artifact/install callback never invalidates copy proof.
@@ -243,10 +243,10 @@ class IncidentRepairEngine(
                     state = state.copy(artifact = artifact)
                 }
                 checkAuthorized()
-                if (policy().autoApplyVerifiedPatch) {
-                    state = apply(review, state)
-                }
                 keepCopy = true
+                if (policy().autoApplyVerifiedPatch) {
+                    state = apply(review, state, automatic = true)
+                }
                 emit(state)
                 return state
             }
@@ -267,15 +267,19 @@ class IncidentRepairEngine(
         }
     }
 
-    suspend fun apply(review: IncidentPatchReview, state: IncidentRepairState): IncidentRepairState {
+    suspend fun apply(review: IncidentPatchReview, state: IncidentRepairState, automatic: Boolean = false): IncidentRepairState {
+        if (state.phase == IncidentRepairPhase.APPLIED) return state
         currentCoroutineContext().ensureActive()
         val consent = policy()
-        if (!consent.enabled || consent.projectId != host.projectId || !consent.cloudAiDataSharing ||
-            ai.configuration()?.id != consent.approvedAiConfiguration) return state.copy(phase = IncidentRepairPhase.VERIFIED_COPY,
+        if (!consent.enabled || consent.projectId != host.projectId || !consent.cloudAiDataSharing || consent.approvedAiConfiguration == null ||
+            (automatic && !consent.autoApplyVerifiedPatch) || ai.configuration()?.id != consent.approvedAiConfiguration) return state.copy(phase = IncidentRepairPhase.VERIFIED_COPY,
                 detail = "Verified copy retained; current project consent does not authorize applying it.")
-        if (review.originalSnapshot.files != state.review?.originalSnapshot?.files ||
-            review.changes != state.review?.changes || review.runId != state.runId) return state.copy(phase = IncidentRepairPhase.REFUSED,
+        if (review != state.review || review.runId != state.runId) return state.copy(phase = IncidentRepairPhase.REFUSED,
                 detail = "Only the exact retained verified review may be applied.")
+        if (review.verificationPlan == null || host.verificationPlan(review.knownBuild)?.let(::freeze) != review.verificationPlan) {
+            return state.copy(phase = IncidentRepairPhase.VERIFIED_COPY,
+                detail = "The approved verification plan changed. The previous verified copy was not applied.")
+        }
         val incident = source.read(review.incident)
         if (incident == null || incident.sourceRevision != review.knownBuild.sourceRevision ||
             host.knownBuild(incident) != review.knownBuild) return state.copy(phase = IncidentRepairPhase.REFUSED,
@@ -287,11 +291,23 @@ class IncidentRepairEngine(
                 IncidentDigests.file(incidentPath(review.isolatedRoot, name)) != hash
             }) return state.copy(phase = IncidentRepairPhase.REFUSED,
                 detail = "Source changed since verification; the reviewed patch was not applied.")
-        return when (host.applyAtomically(review)) {
+        val caller = currentCoroutineContext()
+        fun authorized(): Boolean = policy().let {
+            it.enabled && it.projectId == host.projectId && it.cloudAiDataSharing &&
+                (!automatic || it.autoApplyVerifiedPatch) && it.approvedAiConfiguration == consent.approvedAiConfiguration &&
+                ai.configuration()?.id == consent.approvedAiConfiguration
+        }
+        caller.ensureActive()
+        val outcome = try {
+            host.applyAtomically(review, ::authorized)
+        } catch (pending: IncidentRepairPending) {
+            IncidentApplyResult.Pending(pending.message ?: "Checked original application is unavailable.")
+        }
+        return when (outcome) {
             IncidentApplyResult.Applied -> state.copy(phase = IncidentRepairPhase.APPLIED, detail = "Verified diff applied by the host's atomic checked editor transaction. Installation and launch are separate.")
             IncidentApplyResult.StaleSource -> state.copy(phase = IncidentRepairPhase.REFUSED, detail = "Source changed; the patch was not applied.")
             is IncidentApplyResult.Pending -> state.copy(phase = IncidentRepairPhase.VERIFIED_COPY,
-                detail = "Verified isolated copy retained; checked atomic original apply is pending. No original source was changed.")
+                detail = "Verified isolated copy retained. ${outcome.reason} No original source was changed.")
         }
     }
 

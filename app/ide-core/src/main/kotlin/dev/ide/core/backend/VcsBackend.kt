@@ -1,6 +1,7 @@
 package dev.ide.core.backend
 
 import dev.ide.core.BackendContext
+import dev.ide.core.IdeServices
 import dev.ide.core.plugins.VcsPlugin
 import dev.ide.core.project.ImportableKind
 import dev.ide.platform.log.Log
@@ -145,10 +146,12 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
 
     // ---- working copy --------------------------------------------------------------------------
 
-    override suspend fun refresh() {
-        _status.value = withContext(Dispatchers.IO) {
+    override suspend fun refresh() = refresh(ctx.servicesOrNull)
+
+    private suspend fun refresh(engine: IdeServices?) {
+        val refreshed = withContext(Dispatchers.IO) {
             lock.withLock {
-                val repo = repositoryOrNull() ?: return@withLock UiVcsStatus(present = false)
+                val repo = repositoryOrNull(engine) ?: return@withLock UiVcsStatus(present = false)
                 runCatching {
                     val remotes = runCatching { repo.remotes().map { it.name } }.getOrDefault(emptyList())
                     repo.status().toUi(repo.root.toString()).copy(remotes = remotes)
@@ -158,10 +161,11 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
                 }
             }
         }
+        if (ctx.servicesOrNull === engine) _status.value = refreshed
     }
 
     override suspend fun initRepository(): UiVcsResult = command {
-        val root = ctx.servicesOrNull?.workspaceRoot ?: throw VcsException(VcsText.of(VcsMessage.NO_PROJECT))
+        val root = engine?.workspaceRoot ?: throw VcsException(VcsText.of(VcsMessage.NO_PROJECT))
         val git = provider ?: throw VcsException(VcsText.of(VcsMessage.NO_ENGINE))
         withContext(Dispatchers.IO) {
             lock.withLock {
@@ -173,7 +177,7 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
                 }
             }
         }
-        ctx.bumpFileSystemEpoch()
+        filesChanged()
         ok(VcsMessage.REPO_CREATED)
     }
 
@@ -185,7 +189,7 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
 
     override suspend fun discard(paths: List<String>): UiVcsResult = command {
         withRepository { it.discard(paths) }
-        ctx.bumpFileSystemEpoch()
+        filesChanged()
         UiVcsResult.Ok
     }
 
@@ -202,7 +206,7 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
 
     override suspend fun addDefaultIgnores(): UiVcsResult = command {
         withRepository { it.ignore(DEFAULT_IGNORES) }
-        ctx.bumpFileSystemEpoch()
+        filesChanged()
         ok(VcsMessage.GITIGNORE_UPDATED)
     }
 
@@ -213,13 +217,13 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
 
     override suspend fun createBranch(name: String, startPoint: String?, checkout: Boolean): UiVcsResult = command {
         val branch = withRepository { it.createBranch(name.trim(), startPoint, checkout) }
-        if (checkout) ctx.bumpFileSystemEpoch()
+        if (checkout) filesChanged()
         ok(VcsMessage.BRANCH_CREATED, branch.name)
     }
 
     override suspend fun checkoutBranch(name: String): UiVcsResult = command {
         withRepository { it.checkout(name) }
-        ctx.bumpFileSystemEpoch()
+        filesChanged()
         ok(VcsMessage.SWITCHED, name)
     }
 
@@ -231,7 +235,7 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
 
     override suspend fun mergeBranch(name: String): UiVcsResult = command {
         val merge = withRepository { it.merge(name) }
-        ctx.bumpFileSystemEpoch()
+        filesChanged()
         UiVcsResult(
             ok = merge.status != VcsMergeResult.Status.FAILED && merge.status != VcsMergeResult.Status.ABORTED,
             message = merge.message,
@@ -242,7 +246,7 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
 
     override suspend fun abortMerge(): UiVcsResult = command {
         withRepository { it.abortMerge() }
-        ctx.bumpFileSystemEpoch()
+        filesChanged()
         ok(VcsMessage.ABORTED)
     }
 
@@ -273,13 +277,13 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
 
     override suspend fun stashPush(message: String, includeUntracked: Boolean): UiVcsResult = command {
         val stashed = withRepository { it.stashPush(message, includeUntracked) }
-        ctx.bumpFileSystemEpoch()
+        filesChanged()
         ok(if (stashed) VcsMessage.STASHED else VcsMessage.NOTHING_TO_STASH)
     }
 
     override suspend fun stashApply(index: Int, drop: Boolean): UiVcsResult = command {
         withRepository { it.stashApply(index, drop) }
-        ctx.bumpFileSystemEpoch()
+        filesChanged()
         ok(VcsMessage.STASH_APPLIED)
     }
 
@@ -313,7 +317,7 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
                 val remote = syncRemote(repo)
                 repo.pull(remote, auth = credentialsFor(repo, remote), progress = progressSink())
             }
-            ctx.bumpFileSystemEpoch()
+            filesChanged()
             val text = sync.text.takeIf { sync.message.isNotBlank() }
                 ?: VcsText.of(if (sync.ok) VcsMessage.PULLED else VcsMessage.PULL_NOT_COMPLETED)
             UiVcsResult(
@@ -343,7 +347,7 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
         return UiVcsIdentity(author?.name.orEmpty(), author?.email.orEmpty())
     }
 
-    override suspend fun setIdentity(name: String, email: String): UiVcsResult = command {
+    override suspend fun setIdentity(name: String, email: String): UiVcsResult = command(mutatesSources = false) {
         ctx.manager?.setPreference(VcsPlugin.PREF_USER_NAME, name.trim())
         ctx.manager?.setPreference(VcsPlugin.PREF_USER_EMAIL, email.trim())
         ok(VcsMessage.IDENTITY_SAVED)
@@ -403,7 +407,7 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
         _signIn.value = UiVcsSignIn.Idle
     }
 
-    override suspend fun signInWithToken(token: String): UiVcsResult = command {
+    override suspend fun signInWithToken(token: String): UiVcsResult = command(mutatesSources = false) {
         val accounts = store ?: throw VcsException(VcsText.of(VcsMessage.NO_ENGINE))
         if (token.isBlank()) throw VcsException(VcsText.of(VcsMessage.TOKEN_REQUIRED))
         val account = withContext(Dispatchers.IO) {
@@ -417,7 +421,7 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
         ok(VcsMessage.SIGNED_IN, account.login)
     }
 
-    override suspend fun signOut(accountId: String): UiVcsResult = command {
+    override suspend fun signOut(accountId: String): UiVcsResult = command(mutatesSources = false) {
         val accounts = store ?: throw VcsException(VcsText.of(VcsMessage.NO_ENGINE))
         withContext(Dispatchers.IO) { accounts.remove(accountId) }
         reloadAccounts()
@@ -425,7 +429,7 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
         ok(VcsMessage.SIGNED_OUT)
     }
 
-    override suspend fun setActiveAccount(accountId: String): UiVcsResult = command {
+    override suspend fun setActiveAccount(accountId: String): UiVcsResult = command(mutatesSources = false) {
         val accounts = store ?: throw VcsException(VcsText.of(VcsMessage.NO_ENGINE))
         withContext(Dispatchers.IO) { accounts.setActive(accountId) }
         reloadAccounts()
@@ -437,14 +441,14 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
         return withContext(Dispatchers.IO) { accounts.credentialHosts() }
     }
 
-    override suspend fun saveHostCredentials(host: String, username: String, password: String): UiVcsResult = command {
+    override suspend fun saveHostCredentials(host: String, username: String, password: String): UiVcsResult = command(mutatesSources = false) {
         val accounts = store ?: throw VcsException(VcsText.of(VcsMessage.NO_ENGINE))
         if (host.isBlank() || username.isBlank()) throw VcsException(VcsText.of(VcsMessage.HOST_CREDENTIALS_REQUIRED))
         withContext(Dispatchers.IO) { accounts.saveHostCredentials(host.trim(), username.trim(), password) }
         ok(VcsMessage.HOST_CREDENTIALS_SAVED, host.trim())
     }
 
-    override suspend fun clearHostCredentials(host: String): UiVcsResult = command {
+    override suspend fun clearHostCredentials(host: String): UiVcsResult = command(mutatesSources = false) {
         val accounts = store ?: throw VcsException(VcsText.of(VcsMessage.NO_ENGINE))
         withContext(Dispatchers.IO) { accounts.clearHostCredentials(host) }
         ok(VcsMessage.HOST_CREDENTIALS_REMOVED, host)
@@ -565,7 +569,7 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
         if (refusedAccounts.add(active.id)) reloadAccounts()
     }
 
-    override suspend fun createPullRequest(title: String, body: String, base: String): UiVcsResult = command {
+    override suspend fun createPullRequest(title: String, body: String, base: String): UiVcsResult = command(mutatesSources = false) {
         val token = activeToken() ?: return@command failed(VcsText.of(VcsMessage.SIGN_IN_FIRST), authRequired = true)
         val slug = originSlug() ?: throw VcsException(VcsText.of(VcsMessage.NO_GITHUB_REMOTE))
         if (title.isBlank()) throw VcsException(VcsText.of(VcsMessage.PR_TITLE_REQUIRED))
@@ -581,10 +585,10 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
 
     // ---- repository access ---------------------------------------------------------------------
 
-    /** Open (and cache) the repository for the current project, or null when there is none. Holds [lock]. */
-    private fun repositoryOrNull(): VcsRepository? {
+    /** Open (and cache) [engine]'s repository, or null when there is none. Holds [lock]. */
+    private fun repositoryOrNull(engine: IdeServices? = ctx.servicesOrNull): VcsRepository? {
         val git = provider ?: return null
-        val workspace = ctx.servicesOrNull?.workspaceRoot ?: return null
+        val workspace = engine?.workspaceRoot ?: return null
         val root = git.findRoot(workspace)
         if (root == null) {
             closeRepository()
@@ -611,11 +615,26 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
         synchronized(this) { closeRepository() }
     }
 
-    /** Run [body] against the open repository, failing when the project is not under version control. */
-    private suspend fun <T> withRepository(body: (VcsRepository) -> T): T = withContext(Dispatchers.IO) {
-        lock.withLock {
-            val repo = repositoryOrNull() ?: throw VcsException(VcsText.of(VcsMessage.NOT_UNDER_VCS))
-            body(repo)
+    /** A command keeps using its leased engine even if a project switch happens while it is suspended. */
+    private inner class CommandContext(val engine: IdeServices?) {
+        suspend fun <T> withRepository(body: (VcsRepository) -> T): T = withContext(Dispatchers.IO) {
+            lock.withLock {
+                val repo = repositoryOrNull(engine) ?: throw VcsException(VcsText.of(VcsMessage.NOT_UNDER_VCS))
+                body(repo)
+            }
+        }
+
+        fun filesChanged() {
+            if (ctx.servicesOrNull === engine) ctx.bumpFileSystemEpoch()
+        }
+
+        suspend fun originSlug(): Pair<String, String>? {
+            val url = withRepository { repo ->
+                val remote = runCatching { syncRemote(repo) }.getOrNull() ?: return@withRepository null
+                repo.remotes().firstOrNull { it.name == remote }?.fetchUrl
+            } ?: return null
+            if (!hostOf(url).equals("github.com", ignoreCase = true)) return null
+            return parseSlug(url)
         }
     }
 
@@ -718,19 +737,31 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
      * can fail with a [LinkageError] when the device's runtime lacks a method it was compiled against. Such an
      * error is not an [Exception], so it used to unwind out of the coroutine and take the process down.
      */
-    private suspend fun command(body: suspend () -> UiVcsResult): UiVcsResult = try {
-        val result = body()
-        refresh()
-        result
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: VcsAuthException) {
-        refresh()
-        failed(e.userText(), authRequired = true)
-    } catch (e: Throwable) {
-        log.warn("Version-control command failed", e)
-        refresh()
-        failed(e.userText())
+    private suspend fun command(
+        mutatesSources: Boolean = true,
+        body: suspend CommandContext.() -> UiVcsResult,
+    ): UiVcsResult {
+        val engine = ctx.servicesOrNull
+        var release: (() -> Unit)? = null
+        return try {
+            // Acquire before the first suspension (including waiting for the VCS mutex). The lease keeps repair
+            // pending but holds no model lock while Git performs blocking I/O or the command changes dispatchers.
+            release = if (mutatesSources) engine?.retainSourceOperation() else null
+            val result = CommandContext(engine).body()
+            refresh(engine)
+            result
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: VcsAuthException) {
+            refresh(engine)
+            failed(e.userText(), authRequired = true)
+        } catch (e: Throwable) {
+            log.warn("Version-control command failed", e)
+            refresh(engine)
+            failed(e.userText())
+        } finally {
+            release?.invoke()
+        }
     }
 
     /** What to tell the user about [this]: the engine's own message when it wrote one, else the raw text. */

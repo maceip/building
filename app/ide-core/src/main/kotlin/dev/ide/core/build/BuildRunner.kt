@@ -26,6 +26,15 @@ interface BuildRunner {
     fun runTask(id: String)
     fun runBuild()
     fun stopBuild()
+
+    /**
+     * Null only when this runner can attest that no queued start or unfinished source-affecting build/run
+     * remains. Presentation states (including Failed after Stop) are not proof of job completion. A caller
+     * applying repair must hold the workspace's source gate through this check and the atomic replacement.
+     * Runners without an authoritative quiescence capability fail closed.
+     */
+    fun sourceMutationBlocker(): String? = "This build runner cannot confirm source-mutation quiescence."
+
     fun sendRunInput(text: String)
     fun closeRunInput()
     fun sendRunPointer(action: Int, x: Float, y: Float)
@@ -59,6 +68,7 @@ internal class InProcessBuildRunner(
     override fun runTask(id: String) = build.runTask(id)
     override fun runBuild() = build.runBuild()
     override fun stopBuild() = build.stopBuild()
+    override fun sourceMutationBlocker(): String? = build.sourceMutationBlocker()
     override fun sendRunInput(text: String) = build.sendRunInput(text)
     override fun closeRunInput() = build.closeRunInput()
     override fun sendRunPointer(action: Int, x: Float, y: Float) = build.sendRunPointer(action, x, y)

@@ -74,9 +74,13 @@ class IncidentRepairController(
             if (!policy.enabled || !policy.cloudAiDataSharing || previous.approvedAiConfiguration != policy.approvedAiConfiguration) {
                 active?.cancel()
             }
-            if (active == null && !policy.enabled) mutableState.value = if (state.value.review == null) IncidentRepairState()
-                else state.value.copy(phase = IncidentRepairPhase.VERIFIED_COPY,
+            if (active == null && !policy.enabled) mutableState.value = when {
+                state.value.phase == IncidentRepairPhase.APPLIED -> state.value.copy(
+                    detail = "Automatic repair is disabled. The previously applied verified patch remains in the original workspace.")
+                state.value.review == null -> IncidentRepairState()
+                else -> state.value.copy(phase = IncidentRepairPhase.VERIFIED_COPY,
                     detail = "Automatic repair is disabled. The verified isolated copy is retained; no original apply or device action is authorized.")
+            }
             // A user changing consent may retry a previously blocked incident; normal repository re-emits do not.
             if (previous != policy) processed.clear()
             if (active == null) scheduleNext()
@@ -186,8 +190,11 @@ class IncidentRepairController(
                 if (state.value.review == null) mutableState.value = state.value.copy(phase = IncidentRepairPhase.CANCELLED,
                     detail = "Repair cancelled; no original source was changed.")
             } catch (_: Exception) {
-                mutableState.value = state.value.copy(phase = if (state.value.review != null) IncidentRepairPhase.VERIFIED_COPY else IncidentRepairPhase.PENDING,
-                    detail = "The host operation did not confirm completion; verified-copy and device states remain separate.")
+                mutableState.value = state.value.copy(phase = when {
+                    state.value.phase == IncidentRepairPhase.APPLIED -> IncidentRepairPhase.APPLIED
+                    state.value.review != null -> IncidentRepairPhase.VERIFIED_COPY
+                    else -> IncidentRepairPhase.PENDING
+                }, detail = "The host operation did not confirm completion; source-apply and device states remain separate.")
             }
         }
         active = job

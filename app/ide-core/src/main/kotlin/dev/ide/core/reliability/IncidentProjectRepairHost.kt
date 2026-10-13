@@ -25,7 +25,7 @@ class IncidentProjectRepairHost(
     override val tasks: IncidentTaskRunner,
     private val registeredBuild: suspend (IncidentRecord) -> IncidentKnownBuild?,
     private val plan: suspend (IncidentKnownBuild) -> IncidentVerificationPlan?,
-    private val checkedApply: (suspend (IncidentPatchReview) -> IncidentApplyResult)? = null,
+    private val checkedApply: (suspend (IncidentPatchReview, () -> Boolean) -> IncidentApplyResult)? = null,
     private val findArtifact: (suspend (IncidentPatchReview, Set<String>) -> IncidentRepairArtifact?)? = null,
     private val installArtifact: (suspend (IncidentRepairArtifact) -> IncidentDeviceResult)? = null,
     private val launchArtifact: (suspend (IncidentRepairArtifact) -> IncidentDeviceResult)? = null,
@@ -39,8 +39,8 @@ class IncidentProjectRepairHost(
         IncidentSourceSnapshot(result.revision, result.privateRelativeFiles.toMap())
     }
 
-    override suspend fun applyAtomically(review: IncidentPatchReview): IncidentApplyResult =
-        checkedApply?.invoke(review) ?: super.applyAtomically(review)
+    override suspend fun applyAtomically(review: IncidentPatchReview, authorized: () -> Boolean): IncidentApplyResult =
+        checkedApply?.invoke(review, authorized) ?: super.applyAtomically(review, authorized)
     override suspend fun artifact(review: IncidentPatchReview, candidates: Set<String>): IncidentRepairArtifact? =
         findArtifact?.invoke(review, candidates)
     override suspend fun install(artifact: IncidentRepairArtifact): IncidentDeviceResult =

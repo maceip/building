@@ -11,6 +11,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalContext
+import dev.ide.core.IdeServicesBackend
 import dev.ide.ui.backend.IdeBackend
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -32,14 +33,15 @@ fun IncidentRepairScope(backend: IdeBackend, projectEpoch: Int, content: @Compos
             null
         }
     }
-    var project by remember(backend, root) { mutableStateOf<AndroidIncidentRepairProject?>(null) }
-    var error by remember(backend, root) { mutableStateOf<String?>(null) }
-    LaunchedEffect(backend, root) {
+    var project by remember(backend, root, projectEpoch) { mutableStateOf<AndroidIncidentRepairProject?>(null) }
+    var error by remember(backend, root, projectEpoch) { mutableStateOf<String?>(null) }
+    LaunchedEffect(backend, root, projectEpoch) {
         if (root != null) {
             var opened: AndroidIncidentRepairProject? = null
             try {
                 withContext(Dispatchers.IO) {
-                    opened = AndroidIncidentRepairHost.get(context).project(Paths.get(root), backend.agent, scope)
+                    opened = AndroidIncidentRepairHost.get(context).project(Paths.get(root), backend.agent, scope,
+                        applyFactory = (backend as? IdeServicesBackend)?.let { active -> active::incidentPatchApplier })
                 }
                 project = opened
             } catch (cancelled: CancellationException) {

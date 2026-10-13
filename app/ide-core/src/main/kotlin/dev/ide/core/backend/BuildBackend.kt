@@ -21,8 +21,16 @@ internal class BuildBackend(private val ctx: BackendContext) : BuildService {
 
     override val buildState: StateFlow<BuildState> = ctx.engineFlow(BuildState()) { runner(it).buildState }
     override fun runTasks(): List<RunTaskOption> = runner(ctx.services).runTasks()
-    override fun runTask(id: String) = runner(ctx.services).runTask(id)
-    override fun runBuild() = runner(ctx.services).runBuild()
+    override fun runTask(id: String) {
+        val services = ctx.services
+        val release = services.retainSourceOperation()
+        try { runner(services).runTask(id) } finally { release() }
+    }
+    override fun runBuild() {
+        val services = ctx.services
+        val release = services.retainSourceOperation()
+        try { runner(services).runBuild() } finally { release() }
+    }
     override fun stopBuild() = runner(ctx.services).stopBuild()
 
     override val runConsole: StateFlow<RunConsoleUi?> = ctx.engineFlow<RunConsoleUi?>(null) { runner(it).runConsole }

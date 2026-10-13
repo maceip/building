@@ -408,7 +408,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
                     // Publish rather than invalidate directly: resolution artifacts (libraries.json, jars)
                     // are all on disk now, and the hub's LibrariesChanged reaction runs the coalesced
                     // invalidate + re-sync (and feeds the out-of-process engines' hints).
-                    ctx.store.save(); ctx.events.librariesChanged()
+                    ctx.mutateSources { ctx.store.save() }; ctx.events.librariesChanged()
                 }
                 // Mark reconciled when fully resolved OR when the only failures are hard 404s (not transient):
                 // re-walking won't help those, so don't re-resolve every open. A genuine offline/transient
@@ -540,7 +540,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
             changed = true
         }
         if (changed && finalize) {
-            ctx.store.save(); ctx.events.librariesChanged()
+            ctx.mutateSources { ctx.store.save() }; ctx.events.librariesChanged()
         }
         return ModuleAssembly(changed, result.unresolved, result.resolved.size, retriable = result.retriable)
     }
@@ -556,7 +556,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
      * Kotlin dependency) gets an empty partition and rewrites nothing. Leaning on that save left an edit in
      * memory only, and the next open read the old declaration back.
      */
-    private fun persistDeclaredDependencies() = ctx.store.save()
+    private fun persistDeclaredDependencies() = ctx.mutateSources { ctx.store.save() }
 
     /**
      * Resolve the template's declared dependencies in the background — started by the host **once the project
@@ -618,7 +618,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
                     if (asm?.changed == true) changedAny = true
                 }
                 if (changedAny) {
-                    ctx.store.save()
+                    ctx.mutateSources { ctx.store.save() }
                     ctx.events.librariesChanged()
                 }
                 // Mark the declared set reconciled when it resolved completely OR the only failures are hard
@@ -687,7 +687,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
                 if (asm?.changed == true) changedAny = true
             }
             if (changedAny) {
-                ctx.store.save(); ctx.events.librariesChanged()
+                ctx.mutateSources { ctx.store.save() }; ctx.events.librariesChanged()
             }
             // As elsewhere: a transient failure leaves the marker absent (retry next open); a hard-404-only
             // result is marked so it won't re-walk every open (the user can Retry again to force a re-probe).
@@ -733,7 +733,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
             }
             changed = true
         }
-        if (changed) ctx.store.save()
+        if (changed) ctx.mutateSources { ctx.store.save() }
     }
 
     /**
@@ -1090,7 +1090,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
         scope: String,
         exclusions: List<String> = emptyList(),
         variant: String? = null,
-    ): UiAddResult {
+    ): UiAddResult = sourceOperation {
         // A pasted coordinate can carry invisible characters that no repository path can contain; drop them
         // before the string becomes the declared library name. See [sanitizeCoordinate].
         val coordinate = sanitizeCoordinate(rawCoordinate)
@@ -1105,7 +1105,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
             message = "Resolving $coordinate…",
             log = listOf("Resolving $coordinate…")
         )
-        return try {
+        return@sourceOperation try {
             val added = resolveAndAttach(
                 moduleName,
                 coordinate,
@@ -1282,7 +1282,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
             module(module.id).addDependency(PlatformDependency(bom, variant = variant))
             commit()
         }
-        ctx.store.save()
+        ctx.mutateSources { ctx.store.save() }
         return UiAddResult(true, "Imported platform $coordinate", 0)
     }
 
@@ -1377,12 +1377,12 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
         coordinate: String,
         scope: String,
         result: UiAddResult,
-    ): UiAddResult {
-        if (!ctx.store.workspace.projects.any { isExternallyOwned(it) }) return result
-        val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return result
-        val parsed = parseInputCoordinate(coordinate) ?: return result
+    ): UiAddResult = ctx.mutateSources {
+        if (!ctx.store.workspace.projects.any { isExternallyOwned(it) }) return@mutateSources result
+        val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return@mutateSources result
+        val parsed = parseInputCoordinate(coordinate) ?: return@mutateSources result
         val writer = buildFileWriter()
-            ?: return result.copy(
+            ?: return@mutateSources result.copy(
                 message = result.message +
                     ". The build files declare this project's dependencies, so add it there too or it will be " +
                     "dropped on the next sync."
@@ -1391,9 +1391,9 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
             .getOrElse { WriteOutcome.failed(it.message ?: it.javaClass.simpleName) }
         if (!outcome.ok) {
             depsLog.warn("Couldn't declare $coordinate in the build files: ${outcome.message}")
-            return result.copy(message = result.message + ". Couldn't update the build files: ${outcome.message}")
+            return@mutateSources result.copy(message = result.message + ". Couldn't update the build files: ${outcome.message}")
         }
-        return result
+        result
     }
 
     /** True when [project] is bound to a build system whose files own the model (an imported project). */
@@ -1408,12 +1408,12 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
     }
 
     /** Remove the declared library dependency or platform BOM [coordinate] from [moduleName] (false if absent). */
-    fun removeDependency(moduleName: String, coordinate: String): Boolean {
-        val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return false
+    fun removeDependency(moduleName: String, coordinate: String): Boolean = ctx.mutateSources {
+        val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return@mutateSources false
         val entry = module.dependencies.firstOrNull {
             (it is LibraryDependency && it.library.name == coordinate) || (it is PlatformDependency && it.bom.toString() == coordinate) || (it is ModuleDependency && it.target.value == coordinate)
-        } ?: return false
-        val project = ctx.projectOf(module) ?: return false
+        } ?: return@mutateSources false
+        val project = ctx.projectOf(module) ?: return@mutateSources false
         // For a project whose build files own the model, drop the declaration there too; otherwise the next
         // sync re-derives it from those files and the dependency comes back.
         if (entry is LibraryDependency) {
@@ -1430,7 +1430,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
             commit()
         }
         // The commit above published DependenciesChanged; the hub's reaction already invalidated + re-synced.
-        ctx.store.save()
+        ctx.mutateSources { ctx.store.save() }
         // The removed dep is no longer declared → drop any stale reason and refresh the error state.
         unresolvedReasons.remove(coordinate)
         publishDependencyHealth()
@@ -1448,7 +1448,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
                 publishDependencyHealth()
             }
         }
-        return true
+        true
     }
 
     /**
@@ -1720,7 +1720,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
             commit()
         }
         // The commit above published DependenciesChanged; the hub's reaction already invalidated + re-synced.
-        ctx.store.save()
+        ctx.mutateSources { ctx.store.save() }
         return UiAddResult(true, "Added $libName", 1)
     }
 
@@ -1863,7 +1863,7 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
             return UiAddResult(false, "Couldn't add: ${e.message}")
         }
         // The commit above published DependenciesChanged; the hub's reaction already invalidated + re-synced.
-        ctx.store.save()
+        ctx.mutateSources { ctx.store.save() }
         return UiAddResult(true, "Added module dependency on '$targetModule'", 0)
     }
 
@@ -1908,6 +1908,16 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
         }
         edges.keys.toList().forEach(::dfs)
         return cycles.distinctBy { it.toSet() }
+    }
+
+    /** Dependency resolution may suspend; only the lease, never the model lock, spans that lifetime. */
+    private suspend fun <T> sourceOperation(block: suspend () -> T): T {
+        val release = ctx.retainSourceOperation()
+        return try {
+            block()
+        } finally {
+            release()
+        }
     }
 
     override fun dispose() {

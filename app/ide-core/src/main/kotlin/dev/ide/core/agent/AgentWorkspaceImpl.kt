@@ -54,11 +54,21 @@ internal class IdeAgentWorkspace(private val ctx: BackendContext) : AgentWorkspa
      * unanchored relative path lands outside the project and fails with a permission error. Anchoring to
      * [IdeServices.workspaceRoot] keeps the model's workspace-relative paths inside the project folder.
      */
-    private fun path(p: String): Path {
+    private fun path(p: String, current: IdeServices? = ctx.servicesOrNull): Path {
         val raw = Paths.get(p)
         if (raw.isAbsolute) return raw.normalize()
-        val root = ctx.servicesOrNull?.workspaceRoot ?: return raw.normalize()
+        val root = current?.workspaceRoot ?: return raw.normalize()
         return root.resolve(raw).normalize()
+    }
+
+    private suspend fun <T> sourceOperation(block: suspend (IdeServices) -> T): T {
+        val current = engine()
+        val release = current.retainSourceOperation()
+        return try {
+            block(current)
+        } finally {
+            release()
+        }
     }
 
     override fun projectRoot(): String? = ctx.servicesOrNull?.workspaceRoot?.toString()
@@ -161,18 +171,19 @@ internal class IdeAgentWorkspace(private val ctx: BackendContext) : AgentWorkspa
     }
 
     override suspend fun createFile(path: String, content: String): String = ctx.background {
-        val file = path(path)
-        if (Files.exists(file)) throw IllegalStateException("File already exists: $path")
-        file.parent?.let { Files.createDirectories(it) }
-        engine().save(file, content)
-        file.toString()
+        val current = engine()
+        current.mutateSources {
+            val file = path(path)
+            if (Files.exists(file)) throw IllegalStateException("File already exists: $path")
+            current.save(file, content)
+            file.toString()
+        }
     }.also { ctx.bumpFileSystemEpoch() }
 
     override suspend fun writeFile(path: String, content: String) {
         ctx.background {
-            val file = path(path)
-            file.parent?.let { Files.createDirectories(it) }
-            engine().save(file, content)
+            val current = engine()
+            current.mutateSources { current.save(path(path), content) }
         }
         ctx.bumpFileSystemEpoch()
     }
@@ -188,9 +199,11 @@ internal class IdeAgentWorkspace(private val ctx: BackendContext) : AgentWorkspa
     }
 
     override suspend fun createDir(path: String): String = ctx.background {
-        val dir = path(path)
-        Files.createDirectories(dir)
-        dir.toString()
+        engine().mutateSources {
+            val dir = path(path)
+            Files.createDirectories(dir)
+            dir.toString()
+        }
     }.also { ctx.bumpFileSystemEpoch() }
 
     override suspend fun renamePath(path: String, newName: String): String {
@@ -300,11 +313,16 @@ internal class IdeAgentWorkspace(private val ctx: BackendContext) : AgentWorkspa
             ?.let { RenameTargetInfo(it.oldName, it.kind) }
     }
 
-    override suspend fun renameSymbol(path: String, offset: Int, newName: String): RenameResult {
-        val file = path(path)
-        val outcome = ctx.background { engine().rename(file, engine().readCurrentText(file), offset, newName) }
+    override suspend fun renameSymbol(path: String, offset: Int, newName: String): RenameResult = sourceOperation { current ->
+        val file = path(path, current)
+        val outcome = ctx.background {
+            current.mutateSources {
+                check(engine() === current) { "The project changed during the agent operation." }
+                current.rename(file, current.readCurrentText(file), offset, newName)
+            }
+        }
         ctx.bumpFileSystemEpoch()
-        return RenameResult(outcome.success, outcome.message, outcome.occurrences, outcome.filesChanged)
+        RenameResult(outcome.success, outcome.message, outcome.occurrences, outcome.filesChanged)
     }
 
     override suspend fun quickFixes(path: String, line: Int): List<QuickFixInfo> = ctx.background {
@@ -315,45 +333,56 @@ internal class IdeAgentWorkspace(private val ctx: BackendContext) : AgentWorkspa
             .mapIndexed { i, fix -> QuickFixInfo(i, fix.title, fix.kind.name) }
     }
 
-    override suspend fun applyQuickFix(path: String, line: Int, index: Int): String {
-        val file = path(path)
+    override suspend fun applyQuickFix(path: String, line: Int, index: Int): String = sourceOperation { current ->
+        val file = path(path, current)
         val applied = ctx.background {
-            val text = engine().readCurrentText(file)
+            check(engine() === current) { "The project changed during the agent operation." }
+            val text = current.readCurrentText(file)
             val (start, end) = lineRange(text, line)
-            val actions = engine().editorActions(file, text, start, end)
+            val actions = current.editorActions(file, text, start, end)
             if (index !in actions.indices) return@background null
-            // Every file the fix touches, not just this one: a fix that adds an import in another file used
-            // to have that half silently dropped.
-            val byFile = engine().applyEditorAction(file, text, start, end, index)
-            byFile.forEach { (target, edits) -> engine().applyDocumentEdits(target, edits) }
+            // Every file the fix touches, not just the file under the caret.
+            val byFile = current.applyEditorAction(file, text, start, end, index)
+            current.mutateSources {
+                check(engine() === current) { "The project changed during the agent operation." }
+                byFile.forEach { (target, edits) -> current.applyDocumentEdits(target, edits) }
+            }
             actions[index].title to byFile.values.sumOf { it.size }
         } ?: throw IllegalArgumentException("No quick fix at index $index on line $line.")
         ctx.bumpFileSystemEpoch()
-        return "Applied \"${applied.first}\" (${applied.second} edit(s))."
+        "Applied \"${applied.first}\" (${applied.second} edit(s))."
     }
 
-    override suspend fun formatFile(path: String): String {
-        val file = path(path)
+    override suspend fun formatFile(path: String): String = sourceOperation { current ->
+        val file = path(path, current)
         val count = ctx.background {
-            val text = engine().readCurrentText(file)
-            val edits = engine().formatDocument(file, text, FormatStyle())
-            if (edits.isNotEmpty()) engine().applyDocumentEdits(file, edits)
+            check(engine() === current) { "The project changed during the agent operation." }
+            val text = current.readCurrentText(file)
+            val edits = current.formatDocument(file, text, FormatStyle())
+            current.mutateSources {
+                check(engine() === current && current.readCurrentText(file) == text) { "Source changed during formatting." }
+                if (edits.isNotEmpty()) current.applyDocumentEdits(file, edits)
+            }
             edits.size
         }
         ctx.bumpFileSystemEpoch()
-        return if (count == 0) "Already formatted (no changes)." else "Formatted $path ($count edit(s))."
+        if (count == 0) "Already formatted (no changes)." else "Formatted $path ($count edit(s))."
     }
 
-    override suspend fun organizeImports(path: String): String {
-        val file = path(path)
+    override suspend fun organizeImports(path: String): String = sourceOperation { current ->
+        val file = path(path, current)
         val count = ctx.background {
-            val text = engine().readCurrentText(file)
-            val edits = engine().organizeImports(file, text)
-            if (edits.isNotEmpty()) engine().applyDocumentEdits(file, edits)
+            check(engine() === current) { "The project changed during the agent operation." }
+            val text = current.readCurrentText(file)
+            val edits = current.organizeImports(file, text)
+            current.mutateSources {
+                check(engine() === current && current.readCurrentText(file) == text) { "Source changed while organizing imports." }
+                if (edits.isNotEmpty()) current.applyDocumentEdits(file, edits)
+            }
             edits.size
         }
         ctx.bumpFileSystemEpoch()
-        return if (count == 0) "Imports already organized (no changes)." else "Organized imports in $path ($count edit(s))."
+        if (count == 0) "Imports already organized (no changes)." else "Organized imports in $path ($count edit(s))."
     }
 
     // ---- build & dependencies -------------------------------------------------------------------

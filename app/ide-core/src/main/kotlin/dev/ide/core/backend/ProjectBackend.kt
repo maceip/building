@@ -137,7 +137,7 @@ internal class ProjectBackend(private val ctx: BackendContext) : ProjectService 
         val mgr = ctx.manager ?: return false
         iconCache.remove(rootPath)
         return withContext(Dispatchers.IO) {
-            runCatching { mgr.delete(rootPath); true }.getOrDefault(false)
+            runCatching { mgr.env.platform.modelLock.write { mgr.delete(rootPath); true } }.getOrDefault(false)
         }
     }
 
