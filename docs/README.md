@@ -51,7 +51,7 @@ and follow the links into each subsystem.
   launcher and the `codeassist-build` GitHub Action over it.
 - [android-production.md](android-production.md) — production environment variables, signing identity,
   and local verification of signed Android APK and AAB releases.
-- [three-pillar-execution-plan.md](three-pillar-execution-plan.md) — approved execution scope, independent pass/fail gates, current acceptance, and remaining blockers.
+- [three-pillar-execution-plan.md](three-pillar-execution-plan.md) — the single living tracker for Play Store, platform support, and developer SDK/DX: current focus, implementation versus proof, blockers, acceptance checks, and pushed/installed delivery.
 - [developer-workbench.md](developer-workbench.md) — the initial three-area workbench implementation and historical acceptance results.
 - [play-publishing-research.md](play-publishing-research.md) — supported Google Play automation, authorization, and unavoidable Console/account gates.
 - [runtime-platform.md](runtime-platform.md) — APK-delivered Node/npm/Python/dash, distribution modes, workspace copies, and runtime boundaries.

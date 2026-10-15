@@ -1,8 +1,10 @@
 # Android developer runtime
 
+Current priorities, gaps and delivery status are tracked in [the three-pillar tracker](three-pillar-execution-plan.md). This document supplies runtime architecture and scoped test history; it is not a separate completion checklist.
+
 ## Choice and boundaries
 
-The Android workbench uses a small **APK-delivered Android/Bionic runtime pack** and a generic process controller. It does not embed Vivari, pretend to be the JVM `ProgramInterpreter`, or introduce a second virtual filesystem. Node, npm, dash and Python are separate native/interpreted upstream programs, not API shims.
+The Android workbench bundles the **Node/npm Android/Bionic development runtime in every APK**, with Python, dash, development headers, Clang/LLVM, make and an Android sysroot. There is no core-only omission flag or APK-size target. Node, npm, dash and Python are actual upstream native/interpreted programs, not API shims. The separately embedded generated-app engine is not a substitute for this development runtime.
 
 The previous design in `docs/tripple_plaj.md` Part 2 is not an implementation contract. Its Vivari toolchain bridge, zero-copy filesystem opcodes, size estimates and broad language parity claims are not established by the checked sources. The existing Gradle prefix was the simpler technical starting point, but its runtime downloads are not a suitable delivery mechanism for a Play-target runtime.
 
@@ -12,7 +14,7 @@ Current scope:
 - Explicit Run, Stop, stdin lines, stdin EOF, bounded stdout/stderr, exit code, per-project configuration, and loopback preview URL.
 - Run Node and Python from the installed pack; POSIX shell is **dash**, not Bash. Android system tools on PATH are not a complete GNU/Termux userspace.
 - Serve static HTML/CSS/JS with a small read-only HTTP server. No native runtime provisioning is needed for static previews.
-- Explicit npm dependency installation has two distribution modes below. There is no automatic install when opening or running a project.
+- Explicit npm dependency installation uses normal lifecycle scripts; named npm scripts run their pre/post hooks. There is no dependency-free allowlist or forced offline mode. Installation is still an explicit trusted-code action, not automatic on project open.
 - No claim of native Bun, arbitrary npm native addons, manylinux wheels, Rust/Cargo, proc macros, Vite/Next.js, full Bash, Docker or a general Linux environment. A runtime version probe is not ecosystem acceptance.
 
 ## Sources and integration
@@ -35,7 +37,7 @@ A run is **user-trusted code with the application's UID and permissions**, not a
 
 ## APK delivery, provenance and licenses
 
-The staging task selects 27 checksum-pinned Termux packages, not the existing 77-package, 323.34 MiB Gradle bootstrap. Current runtime packages include Node LTS 24.18.0-1, npm 11.20.0, CPython 3.14.6-1, pip 26.2.1 and dash 0.5.13.5. Exact archive paths, lengths and hashes are in the package lock / referenced bootstrap catalog and copied to the generated manifest.
+The staging task selects 49 checksum-pinned Termux packages, including Node LTS 24.18.0-1, npm 11.20.0, CPython 3.14.6-1, pip 26.2.1, dash 0.5.13.5, Clang/LLVM 21.1.8-3, make 4.4.1-1, Android NDK sysroot 30, CMake 4.4.4 and Ninja 1.13.2. pnpm 11.9.0 is additionally bundled from its exact SHA-256/SHA-512-pinned registry archive with its notices; irrelevant Windows/macOS binaries are explicitly excluded. Exact inputs are recorded by the runtime manifest and source locks. The originally 4-KiB-aligned libandroid-spawn dependency is rebuilt from unchanged pinned sources using a pinned NDK to a reproducible 16-KiB artifact, with separate hashes and complete source/build/license provenance.
 
 Metadata source:
 
@@ -44,7 +46,7 @@ Metadata source:
 - Metadata SHA256 `a356d6bf1aa0a291f684e213c8820375a2437bc9d9569ab9fd59fb8e3054ab5f`, matched against the HTTPS Release file dated 12 October 2026. This is HTTPS and checksum validation, **not an independently verified OpenPGP signature**.
 - Pinned source recipe tree https://github.com/termux/termux-packages/tree/3885d8e1577097760b3bc4ee8d247ef367545d8e/packages
 
-Every native ELF is staged as a uniquely named `libdevruntime_*.so` in `jniLibs/arm64-v8a`, including CPython extension modules. Android's installer extracts them into `nativeLibraryDir`; the private prefix contains symlinks to those files. The ZIP contains only interpreted scripts, standard library data, configuration and notices. Bundled scripts whose shebang embeds `/data/data/com.termux/files/usr/` are normalized to `/usr/` so termux-exec maps them into the active private prefix; the manifest records original and staged hashes plus the transformation. No package pre/postinstall scripts execute and no apt database is installed. `.a`, `.o`, headers and development-only data are omitted.
+Executable/shared native ELFs are staged as uniquely named `libdevruntime_*.so` files in `jniLibs/arm64-v8a`, including CPython extension modules. Android's installer extracts them into `nativeLibraryDir`; the private prefix links to those files. The ZIP retains scripts, libraries, headers, static archives, relocatable object files, configuration and notices. Bundled scripts with Termux-absolute shebangs are normalized to `/usr/` for relocation. Debian maintainer scripts do not execute during provisioning and no apt database is installed; this does not suppress user-requested npm lifecycle scripts.
 
 APK assets include `developer-runtime/manifest.json`, `prefix.zip`, and `notices/packages.json`, hash-pinned source recipes, GPL text and distribution notice. Upstream LICENSE/copyright files already present in package contents are retained, including Node/V8, npm's vendored modules and CPython. Licenses are **not uniform**: Node MIT, npm Artistic-2.0 plus vendored notices, Python PSF/custom notices, dash BSD, gdbm/readline GPL-3, CA data MPL-2, and other dependencies retain their own terms.
 
@@ -60,16 +62,16 @@ python3 tools/runtime-pack/build.py --output app/ide-android/build/developer-run
 
 An installed NDK is required for the tiny launcher. The pack task reuses the existing native-helper NDK and never downloads an NDK itself. First staging downloads only the pinned package/recipe inputs; subsequent staging works offline. Host caches are in ignored `tools/runtime-pack/build/`. No device network is used by provisioning.
 
-Observed staged size before APK compression: 123 native files totaling 109,038,544 bytes, plus an 11,692,930-byte data ZIP (after 85 recorded script-header normalizations) and manifest/notices/launcher. These are measured generator outputs, not an APK delta or installed-size promise.
+The current pack has 255 native files plus the interpreted/data archive, pinned notices and source-built provenance. APK build 114 is 438,791,102 bytes (418.464 MiB); there is no size-driven omission of development runtime functionality.
 
-## Play-target versus developer dependency mode
+## Dependency execution and distribution policy
 
 The policy boundary is independent of technical execution:
 
 - Google Play's Device and Network Abuse policy prohibits downloading executable code outside Play, with an interpreter/VM exception exemplified by JavaScript in a WebView/browser. Interpreted JS/Python/Lua loaded at runtime must still prevent policy violations. There is no blanket IDE exemption.
 - APK delivery of the interpreter and native libraries avoids an ambient `.deb` downloader for this runtime. **Hash checking does not make remote native downloads policy compliant.**
-- In the default/Play-target mode, `allowNativeDependencyDownloads=false`. The explicit npm action is offline and currently accepts dependency-free projects only. Arbitrary registry tarballs can contain ELF, `.node` or `.so` payloads even with lifecycle scripts disabled; no unimplemented general pure-JS auditing is claimed.
-- In a developer/sideload build, `BuildConfig.NATIVE_TOOLCHAIN_DOWNLOADS_ENABLED` permits the explicit npm install action. It warns that untrusted and possibly native packages will be downloaded, uses the HTTPS npm registry/strict TLS, and disables automatic lifecycle scripts. It does **not** claim Play approval or Linux/Bionic compatibility. A user can subsequently Run their trusted scripts, including package code; this is not an enforcement sandbox.
+- The former APK-only dependency-free policy and lifecycle suppression have been removed. Every build includes the development runtime; explicit npm installation downloads requested dependencies using HTTPS/strict TLS and executes normal package installation hooks.
+- The install confirmation explains that package scripts run with the application's UID. A dependency can contain JavaScript, a native addon or another executable; bundled compiler tools do not guarantee arbitrary desktop packages work on Android/Bionic. No Play-policy approval is claimed. Distribution-policy work must not silently remove user-requested development capabilities.
 - Pip is bundled for runtime availability but there is no generic pip-install UI or native-wheel compatibility promise.
 - Existing Gradle/toolchain/plugin execution paths require independent app-wide review. Making this runtime APK-delivered does **not** certify the whole APK as Google Play compliant. The legacy automatic Gradle prefix bootstrap should remain disabled; any developer-only setup must be explicit and distribution-gated.
 
@@ -89,7 +91,19 @@ Termux packages have compiled-in prefix assumptions. This implementation relocat
 
 Internal projects run directly. External/shared-storage projects default to an isolated internal disk copy because npm/pnpm depend on links and executable semantics that external Android storage does not reliably provide. Before Run, source files copy inward; `node_modules`, virtual environments, `.git`, `.building` and Python cache directories stay out of that sync. A run never silently overwrites the source workspace. **Sync new outputs** after Stop creates only files that do not already exist in source. Bytes are staged first; commit rechecks existence and uses a create-only hard link (or a non-replacing copy on external filesystems). Existing source files are never overwritten, even when their baseline hash still matches: runtime modifications require manual merging and are reported as conflicts. There is no shared editor write lease, so a hash-check-plus-replace would be unsafe. Deletions never propagate outward. This copy mode rejects project symlinks, caps source data at 128 MiB / 20,000 files, and is not live HMR synchronization. Rerun after editor saves. Imported dependencies should be installed explicitly in the runtime copy.
 
-The shell/console uses pipes, not a PTY; terminal job control, full-screen terminal apps and REPL parity are out of scope. Stop sends TERM then KILL to the session process group. This does not contain malicious programs that detach into a new session or otherwise evade group ownership. Android memory/background/phantom-process restrictions still apply; a process group does not exempt it from those policies. Long-running background service survival is not established by the host tests.
+Regular script runs retain their bounded pipe console. The separate **Terminal** action opens a real controlling PTY with pinned Termux VT parsing/rendering, IME/hardware keys, resize, scrollback, Ctrl-C/Ctrl-D and interactive shell/Node REPL. Each terminal retains its fork-owner thread until process cleanup. PIDfd-based descendant signaling avoids PID-reuse races; older systems without that capability display a cleanup warning. Clipboard paste accepts bounded plain text only and never reads a URI provider on the UI thread. This is still trusted same-UID code, not a sandbox; Android background/phantom-process policies remain applicable.
+
+## Opted-in local runtime incidents
+
+Runtime and terminal failures can enter the existing **Quality → Local incidents** inbox. **Save this workspace's runtime failures locally** is a separate, default-off, device-private consent grant; project files, execution trust and debug-app capture cannot enable it. Turning it off invalidates active capture handles and queued delivery without deleting previously saved incidents. There is no automatic AI or relay sharing.
+
+The adapter accepts only structured metadata: random workspace/session/event identities, the installed IDE and runtime pack identity, runtime kind, stage, fixed failure category, exit code and bounded elapsed time. It never reads stdout/stderr, typed terminal commands, arguments, environment, paths or exception messages into the incident. Host-runtime origin is distinct from authenticated SDK application origin and cannot claim an Android package/build or enter the signed-APK repair path.
+
+`RuntimeSourceSnapshot` hashes bounded saved JavaScript/TypeScript/Python, package/lock/configuration and native-addon source inputs before execution under the versioned `runtime-source-v1` policy. Dependencies, generated outputs, hidden directories and credential filenames are excluded. A hash is **not** an attestation of later edits, internal-copy contents, dependency state or each command typed inside a terminal; unavailable snapshots are marked unavailable rather than invented.
+
+A nonzero process exit is not called a crash or parsed into a test failure. Preparation/launch errors and configuration failures are separate; success and explicit Stop/cancellation do not create incidents. PTY observation covers the owned shell/Node REPL session, not arbitrary commands within it. Missing/nonregular/nonexecutable launch targets are rejected before launching the process-group helper, while a real program exiting 127 remains a normal nonzero outcome. Preflight is not an atomic exec handshake and does not establish dynamic-linker/crash provenance.
+
+The private bounded outbox is committed before inbox delivery. Only exact durable receipts retire entries; restart/resume retries preserve identifiers. Grant generations prevent disable/re-enable from replaying revoked work. Storage uncertainty is visible, and strict reload/fsync—not clearing data—recovers a valid inbox after transient failure. Quota/corruption does not cause silent eviction or a fabricated receipt. Current artifact-specific acceptance remains in the single tracker.
 
 ## Why not Vivari or a minimal JS/Wasm engine by default?
 
@@ -107,7 +121,23 @@ Read-only research found useful but materially different systems:
 
 Vivari remains an optional future WebView-only runtime backend if a validated browser package ecosystem is needed. It is not necessary for the current native process/preview seams.
 
+## Node projects, Gradle and linked folders
+
+Normal import/clone recognizes `package.json` as a Node project without running scripts, installing dependencies or making a fake JVM module. Its sources/configuration appear in the editor. **More → Run Node project** opens Runtime using that same project root; the generic Android/JVM Run toolbar is not Node execution. The importer does not add JavaScript/TypeScript language intelligence. Gradle execution now receives Node/npm/pnpm command wrappers that switch only the child runtime environment, preserving Java's separate prefix/linker state. Real host Gradle Exec and native-addon tests passed; this Android bridge still needs an installed Gradle toolchain for its on-device acceptance test.
+
+SAF-selected folders now have durable read/write grants and an internal linked working root shared by editor and runtime. **Sync with original folder** explicitly pushes changed/new saved files and pulls remote changes using content baselines, retained backups and conflict reporting. Original files are not truncated and deletions are not propagated. Providers must support rename to replace existing files; Android 11+ supplies atomic no-replace inward publication. Save/close buffers before sync and reopen changed files afterward. SAF does not supply cross-process compare-and-swap, and unsupported providers remain explicit failures. The older RuntimeWorkspace new-output-only action remains separate.
+
 ## Validation ledger
+
+**Current physical Pixel verification:** APK `com.tyron.code.dev` **114 / 3.28.4**, SHA-256 `d96f55158991aeea9bc474e56cff73e45870f9d374a3588b155fea9133ace8f8`, pack `termux-arm64-2705683d8ec6379a`, 438,791,102 bytes. All **55 Android acceptance tests passed**, with zero failures/skips: two Hono project flows, 15 terminal tests, 28 sync/provider contract tests, nine runtime checks and one real native-addon build/load test. The two Hono flows independently verified **503 unchanged upstream tests** and **34 owned-application HTTP tests**, after fresh-cache Internet npm installation, production build, upstream publint/pnpm and typechecking. These 537 nested JavaScript tests are not additional Android instrumentation cases.
+
+The actual CMake/Ninja binaries also built a new N-API module on the Pixel and Node loaded it with answer 42. The Android emulator UI was used to open the packaged Hono application as an editable project, invoke Run Node project, open the actual PTY, execute npm ci/build/start, and serve its dashboard. Through the forwarded Android server, browser form handlers created a persisted task and received SSE events; browser native click/screenshot automation was unreliable, so that is not a complete visual/mobile-browser certification. Physical provider tests use fixtures, not every cloud provider. There is no universal npm/native-package, 16-KiB-device or Play-policy guarantee.
+
+**Earlier physical Pixel verification (2026-10-13):** development APK `com.tyron.code.dev` version 109 / 3.27.3 includes pack `termux-arm64-c61680983c81a420`, 37 packages, and normal npm lifecycle behavior. All 10 runtime instrumentation tests passed: Node/npm/Python/shell probes, Node HTTP, package bin shebangs, workers/child processes/crypto, ordinary dependency postinstall and npm pre/post hooks, Python/subprocess/SQLite, output synchronization, static preview, process termination, and an actual source-only N-API addon compiled by node-gyp/Clang/make and loaded by Node with `answer() == 42`. Native-addon installation used a local tarball, not an Internet registry package. The 12 focused runtime JVM tests and seven packaging tests also passed.
+
+APK size: 411,841,406 bytes (392.763 MiB); SHA-256 `e54ad29d6281f8118db6e4a734c9fc7148a7d9b3d05ee2380d9bc348a7dcfef4`. The installer-owned native path is preserved for Node child/fork execution, and compiler wrappers explicitly select the relocated headers, Clang resource directory and linker paths; make uses the bundled shell. This proves the named tests, not every npm package, desktop binary, PTY/REPL behavior, CMake/Ninja support or a 16-KiB device.
+
+The following initial ledger is historical and predates normal npm lifecycle execution and the bundled native compiler toolchain. It must not be used as acceptance for newer runtime builds. Updated physical results are recorded in the current task output; do not treat the old `--ignore-scripts` behavior as the product contract.
 
 Completed on the host:
 
