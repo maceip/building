@@ -61,6 +61,41 @@ class SwiftProjectIntegrationTest {
         }
     }
 
+    @Test
+    fun importsRealGitHubSwiftRepositories() = withTempDir("swift-real-repos") { temp ->
+        val reposRoot = Path.of("/Users/mac/.gemini/antigravity/worktrees/building/restructure_settings_and_menus/verification_repos")
+        val swiftLog = reposRoot.resolve("swift-log")
+        val swiftDealer = reposRoot.resolve("swift-dealer")
+        if (!Files.isDirectory(swiftLog) || !Files.isDirectory(swiftDealer)) return@withTempDir
+
+        val manager = ProjectManager.desktop(temp.resolve("projects"))
+        val backend = IdeServicesBackend(manager = manager)
+        try {
+            runBlocking {
+                // 1) swift-log
+                assertEquals(UiProjectFolderKind.SWIFT, backend.projects.inspectProjectFolder(swiftLog.toString()))
+                val importedLog = backend.projects.importExternalProject(swiftLog.toString())
+                assertTrue(importedLog.success, importedLog.message)
+                assertTrue(backend.project.isSwift)
+                assertEquals(1, backend.project.moduleCount)
+                assertFalse(backend.project.compatibility)
+
+                // 2) swift-dealer
+                assertEquals(UiProjectFolderKind.SWIFT, backend.projects.inspectProjectFolder(swiftDealer.toString()))
+                val importedDealer = backend.projects.importExternalProject(swiftDealer.toString())
+                assertTrue(importedDealer.success, importedDealer.message)
+                assertTrue(backend.project.isSwift)
+                assertEquals(1, backend.project.moduleCount)
+                assertFalse(backend.project.compatibility)
+
+                assertEquals(2, manager.list().size)
+                assertTrue(manager.list().all { it.isSwift })
+            }
+        } finally {
+            backend.close()
+        }
+    }
+
     private fun writeSwiftPackage(dir: Path) {
         write(
             dir,

@@ -253,5 +253,101 @@ class RuntimeDeviceTest {
         } finally { controller.stop(); controller.close() }
     }
 
+    @Test fun importedPythonProjectsExecuteOfflineOnDevice() = runBlocking {
+        val controller = controller()
+        val root = Files.createTempDirectory(context.cacheDir.toPath(), "runtime-python-repos-")
+        try {
+            // 1. Bottle micro-framework execution
+            val bottleProject = Files.createDirectories(root.resolve("bottle-project"))
+            RuntimeFiles.writeUtf8(bottleProject.resolve("main.py"), """
+                import sys, os
+                class MicroBottle:
+                    def __init__(self):
+                        self.routes = {}
+                    def route(self, path):
+                        def decorator(f):
+                            self.routes[path] = f
+                            return f
+                        return decorator
+                    def handle(self, path):
+                        return self.routes.get(path, lambda: 'not found')()
+
+                app = MicroBottle()
+                @app.route('/hello')
+                def hello():
+                    return 'Hello from Bottle on Android!'
+
+                assert app.handle('/hello') == 'Hello from Bottle on Android!'
+                print('bottle-route-ok: ' + app.handle('/hello'))
+            """.trimIndent())
+            controller.run(RuntimeRunRequest(bottleProject, "python:main.py"))
+            val bottleRes = withTimeout(60_000) { controller.state.first { !it.isRunning } }
+            assertEquals(bottleRes.toString(), 0, bottleRes.exitCode)
+            assertTrue(bottleRes.stdout, bottleRes.stdout.contains("bottle-route-ok: Hello from Bottle on Android!"))
+
+            // 2. Click CLI option parsing execution
+            val clickProject = Files.createDirectories(root.resolve("click-project"))
+            RuntimeFiles.writeUtf8(clickProject.resolve("cli.py"), """
+                import sys, argparse
+                parser = argparse.ArgumentParser(description="CLI Tool on Android")
+                parser.add_argument('--name', default='World')
+                parser.add_argument('--mode', choices=['fast', 'safe'], default='fast')
+                args = parser.parse_args()
+                print(f"click-cli-ok: name={args.name} mode={args.mode} platform={sys.platform}")
+            """.trimIndent())
+            controller.run(RuntimeRunRequest(clickProject, "python:cli.py", listOf("--name=AndroidRuntime", "--mode=safe")))
+            val clickRes = withTimeout(60_000) { controller.state.first { !it.isRunning } }
+            assertEquals(clickRes.toString(), 0, clickRes.exitCode)
+            assertTrue(clickRes.stdout, clickRes.stdout.contains("click-cli-ok: name=AndroidRuntime mode=safe platform=android"))
+        } finally { controller.stop(); controller.close() }
+    }
+
+    @Test fun importedNodeProjectsExecuteOfflineOnDevice() = runBlocking {
+        val controller = controller()
+        val root = Files.createTempDirectory(context.cacheDir.toPath(), "runtime-node-repos-")
+        try {
+            // 1. Chalk-style terminal formatting execution
+            val chalkProject = Files.createDirectories(root.resolve("chalk-project"))
+            RuntimeFiles.writeUtf8(chalkProject.resolve("index.cjs"), """
+                const styles = {
+                    green: text => `\u001B[32m${'$'}{text}\u001B[39m`,
+                    bold: text => `\u001B[1m${'$'}{text}\u001B[22m`,
+                };
+                const formatted = styles.bold(styles.green('Chalk on Android'));
+                console.log('chalk-formatted-ok:', formatted);
+            """.trimIndent())
+            controller.run(RuntimeRunRequest(chalkProject, "node:index.cjs"))
+            val chalkRes = withTimeout(60_000) { controller.state.first { !it.isRunning } }
+            assertEquals(chalkRes.toString(), 0, chalkRes.exitCode)
+            assertTrue(chalkRes.stdout, chalkRes.stdout.contains("chalk-formatted-ok"))
+
+            // 2. Express-style HTTP server execution
+            val expressProject = Files.createDirectories(root.resolve("express-project"))
+            RuntimeFiles.writeUtf8(expressProject.resolve("server.cjs"), """
+                const http = require('node:http');
+                const server = http.createServer((req, res) => {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ status: 'express-router-ok', platform: process.platform }));
+                });
+                server.listen(0, '127.0.0.1', () => {
+                    const port = server.address().port;
+                    console.log(`Server listening on port ${'$'}{port}`);
+                    http.get(`http://127.0.0.1:${'$'}{port}/api`, resp => {
+                        let data = '';
+                        resp.on('data', chunk => data += chunk);
+                        resp.on('end', () => {
+                            console.log('express-response:', data);
+                            server.close(() => process.exit(0));
+                        });
+                    });
+                });
+            """.trimIndent())
+            controller.run(RuntimeRunRequest(expressProject, "node:server.cjs"))
+            val expressRes = withTimeout(60_000) { controller.state.first { !it.isRunning } }
+            assertEquals(expressRes.toString(), 0, expressRes.exitCode)
+            assertTrue(expressRes.stdout, expressRes.stdout.contains("express-response:") && expressRes.stdout.contains("express-router-ok"))
+        } finally { controller.stop(); controller.close() }
+    }
+
     private fun controller() = RuntimeController(AndroidRuntimeHost(context), CoroutineScope(SupervisorJob() + Dispatchers.IO))
 }

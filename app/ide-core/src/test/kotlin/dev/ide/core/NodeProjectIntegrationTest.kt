@@ -71,6 +71,39 @@ class NodeProjectIntegrationTest {
         } finally { backend.close(); manager.dispose() }
     }
 
+    @Test
+    fun importsRealGitHubNodeRepositories() = withTempDir("node-real-repos") { temp ->
+        val reposRoot = Path.of("/Users/mac/.gemini/antigravity/worktrees/building/restructure_settings_and_menus/verification_repos")
+        val chalk = reposRoot.resolve("node-chalk")
+        val express = reposRoot.resolve("node-express")
+        if (!Files.isDirectory(chalk) || !Files.isDirectory(express)) return@withTempDir
+
+        val manager = ProjectManager.desktop(temp.resolve("projects"))
+        val backend = IdeServicesBackend(manager = manager)
+        try {
+            runBlocking {
+                // 1) node-chalk
+                assertEquals(UiProjectFolderKind.NODE, backend.projects.inspectProjectFolder(chalk.toString()))
+                val importedChalk = backend.projects.importExternalProject(chalk.toString())
+                assertTrue(importedChalk.success, importedChalk.message)
+                assertTrue(backend.project.isNode)
+                assertEquals(1, backend.project.moduleCount)
+                assertFalse(backend.project.compatibility)
+
+                // 2) node-express
+                assertEquals(UiProjectFolderKind.NODE, backend.projects.inspectProjectFolder(express.toString()))
+                val importedExpress = backend.projects.importExternalProject(express.toString())
+                assertTrue(importedExpress.success, importedExpress.message)
+                assertTrue(backend.project.isNode)
+                assertEquals(1, backend.project.moduleCount)
+                assertFalse(backend.project.compatibility)
+
+                assertEquals(2, manager.list().size)
+                assertTrue(manager.list().all { it.isNode })
+            }
+        } finally { backend.close(); manager.dispose() }
+    }
+
     @Test fun cloneAdoptionAndReopenKeepTheNodeModelAndScriptEditsCanSync() = withTempDir("node-adopt") { temp ->
         val manager = ProjectManager.desktop(temp.resolve("projects"))
         val project = manager.projectsRoot.resolve("cloned-node")

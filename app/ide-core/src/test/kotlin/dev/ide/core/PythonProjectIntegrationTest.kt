@@ -61,6 +61,41 @@ class PythonProjectIntegrationTest {
         }
     }
 
+    @Test
+    fun importsRealGitHubPythonRepositories() = withTempDir("python-real-repos") { temp ->
+        val reposRoot = Path.of("/Users/mac/.gemini/antigravity/worktrees/building/restructure_settings_and_menus/verification_repos")
+        val bottle = reposRoot.resolve("python-bottle")
+        val click = reposRoot.resolve("python-click")
+        if (!Files.isDirectory(bottle) || !Files.isDirectory(click)) return@withTempDir
+
+        val manager = ProjectManager.desktop(temp.resolve("projects"))
+        val backend = IdeServicesBackend(manager = manager)
+        try {
+            runBlocking {
+                // 1) python-bottle (setup.py)
+                assertEquals(UiProjectFolderKind.PYTHON, backend.projects.inspectProjectFolder(bottle.toString()))
+                val importedBottle = backend.projects.importExternalProject(bottle.toString())
+                assertTrue(importedBottle.success, importedBottle.message)
+                assertTrue(backend.project.isPython)
+                assertEquals(1, backend.project.moduleCount)
+                assertFalse(backend.project.compatibility)
+
+                // 2) python-click (pyproject.toml)
+                assertEquals(UiProjectFolderKind.PYTHON, backend.projects.inspectProjectFolder(click.toString()))
+                val importedClick = backend.projects.importExternalProject(click.toString())
+                assertTrue(importedClick.success, importedClick.message)
+                assertTrue(backend.project.isPython)
+                assertEquals(1, backend.project.moduleCount)
+                assertFalse(backend.project.compatibility)
+
+                assertEquals(2, manager.list().size)
+                assertTrue(manager.list().all { it.isPython })
+            }
+        } finally {
+            backend.close()
+        }
+    }
+
     private fun writePythonProject(dir: Path) {
         write(
             dir,
