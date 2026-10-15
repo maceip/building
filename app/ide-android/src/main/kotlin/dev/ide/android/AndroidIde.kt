@@ -689,6 +689,7 @@ object AndroidIde {
 
     /** Log and track one native exit record, with the breadcrumb attached when it is recent enough to describe
      *  this death rather than an earlier one. */
+    @androidx.annotation.RequiresApi(30)
     private fun reportNativeExit(
         exit: android.app.ApplicationExitInfo,
         tomb: dev.ide.platform.NativeTombstone?,

@@ -4,14 +4,11 @@ import dev.ide.vm.*
 
 /** `java.util.regex` over Kotlin's [Regex], whose syntax is Java's on every platform it runs on. */
 internal class PatternState(val source: String, val flags: Int) {
+    // Common Regex represents only IGNORE_CASE/MULTILINE; Java flags LITERAL/COMMENTS/
+    // DOT_MATCHES_ALL/UNIX_LINES/CANON_EQ have no common RegexOption and are dropped here.
     val regex: Regex = Regex(source, buildSet {
         if (flags and 2 != 0) add(RegexOption.IGNORE_CASE)
         if (flags and 8 != 0) add(RegexOption.MULTILINE)
-        if (flags and 16 != 0) add(RegexOption.LITERAL)
-        if (flags and 4 != 0) add(RegexOption.COMMENTS)
-        if (flags and 32 != 0) add(RegexOption.DOT_MATCHES_ALL)
-        if (flags and 1 != 0) add(RegexOption.UNIX_LINES)
-        if (flags and 128 != 0) add(RegexOption.CANON_EQ)
     })
 }
 

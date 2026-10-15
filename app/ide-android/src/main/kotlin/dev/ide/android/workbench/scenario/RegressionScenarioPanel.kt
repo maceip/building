@@ -51,6 +51,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 
 /** Small embeddable Quality-tab/dialog body. No scaffold/navigation, permissions or installed-app automation.
  * [controller] is used for availability and busy checks only; every run owns a NEW isolated controller. */
@@ -66,7 +67,7 @@ fun RegressionScenarioPanel(
     val project = backend.project.rootPath
     val interactive by controller.state.collectAsState()
     var demoRoot by remember(project) { mutableStateOf<Path?>(null) }
-    val root = demoRoot ?: project.takeIf { it.isNotBlank() }?.let { runCatching { Path.of(it) }.getOrNull() }
+    val root = demoRoot ?: project.takeIf { it.isNotBlank() }?.let { runCatching { Paths.get(it) }.getOrNull() }
     var relativePath by remember(project) { mutableStateOf(RegressionScenarioSamples.STATE_SCENARIO) }
     var reviewed by remember(project) { mutableStateOf<ReviewedRegressionScenario?>(null) }
     var selectedTarget by remember(project) { mutableStateOf<String?>(null) }

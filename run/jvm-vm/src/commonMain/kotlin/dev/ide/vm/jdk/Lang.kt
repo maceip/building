@@ -13,7 +13,6 @@ import dev.ide.vm.javaFloatToString
 import dev.ide.vm.nanoTime
 import dev.ide.platform.epochMillis
 import dev.ide.vm.Call
-import kotlin.math.IEEErem
 import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.asin
@@ -428,7 +427,7 @@ private fun dev.ide.vm.NativeClassBuilder.mathMethods() {
     static("floor", "(D)D") { ret(floor(d(0))) }
     static("ceil", "(D)D") { ret(ceil(d(0))) }
     static("rint", "(D)D") { ret(round(d(0))) }
-    static("IEEEremainder", "(DD)D") { ret(d(0).IEEErem(d(2))) }
+    static("IEEEremainder", "(DD)D") { ret(d(0).rem(d(2))) }
     static("round", "(F)I") { val v = f(0); ret(if (v.isNaN()) 0 else floor(v + 0.5f).let { if (it >= Int.MAX_VALUE.toFloat()) Int.MAX_VALUE else if (it <= Int.MIN_VALUE.toFloat()) Int.MIN_VALUE else it.toInt() }) }
     static("round", "(D)J") { val v = d(0); ret(if (v.isNaN()) 0L else floor(v + 0.5).toLong()) }
     static("signum", "(F)F") { ret(sign(f(0))) }

@@ -341,6 +341,8 @@ private fun CharCategory.ordinalJava(): Int = when (this) {
     CharCategory.OTHER_SYMBOL -> 28
     CharCategory.INITIAL_QUOTE_PUNCTUATION -> 29
     CharCategory.FINAL_QUOTE_PUNCTUATION -> 30
+    // Categories added after the Java numbering froze have no Java ordinal; report UNASSIGNED (0).
+    else -> 0
 }
 
 /** Java's replacement syntax (`$1`, `\$`) matches Kotlin's on every platform Kotlin's [Regex] runs on. */

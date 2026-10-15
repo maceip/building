@@ -100,6 +100,7 @@ internal object ResourceContextFactory {
 
     /** API 30+: public `ResourcesLoader`. Augments a configuration-context's resources with the linked apk, and
      *  removes the loader on close so the host app's resources are left untouched. */
+    @androidx.annotation.RequiresApi(30)
     private fun viaResourcesLoader(
         appContext: Context, resourcesAp: File, classLoader: ClassLoader,
         packageName: String, themeName: String?, config: Configuration,

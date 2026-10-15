@@ -22,6 +22,7 @@ import java.io.File
 import java.net.URL
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
 import java.util.zip.ZipFile
 import kotlin.io.path.readText
@@ -160,7 +161,7 @@ class AndroidGradleHost(
 
     override fun libraryPath(): List<Path> {
         val dir = app.applicationInfo.nativeLibraryDir ?: return emptyList()
-        val path = Path.of(dir)
+        val path = Paths.get(dir)
         return if (Files.isDirectory(path)) listOf(path) else emptyList()
     }
 
@@ -252,7 +253,7 @@ class AndroidGradleHost(
         }
         for (info in matches) {
             val apk = info.activityInfo?.applicationInfo?.sourceDir ?: continue
-            val path = Path.of(apk)
+            val path = Paths.get(apk)
             if (NdkPluginTree.containsToolchain(path)) return path
         }
         return null

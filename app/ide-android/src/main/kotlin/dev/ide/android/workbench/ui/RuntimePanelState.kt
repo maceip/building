@@ -21,6 +21,7 @@ import dev.ide.workbench.runtime.RuntimeTarget
 import dev.ide.workbench.runtime.RuntimeWorkspaceMode
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -103,7 +104,7 @@ internal class RuntimePanelState(
                 externalSyncReport = null
                 return
             }
-            load(Path.of(candidate), if (selected != null) preferences.getString("source-$projectKey", "Selected workspace") ?: "Selected workspace" else "Current project")
+            load(Paths.get(candidate), if (selected != null) preferences.getString("source-$projectKey", "Selected workspace") ?: "Selected workspace" else "Current project")
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { loaded = false; error = failure.message ?: "Could not load the workspace." }
         finally { busy = null }
@@ -125,7 +126,7 @@ internal class RuntimePanelState(
     fun select(path: String, description: String) = action("Loading workspace") {
         controller.stop()
         pending = null
-        load(Path.of(path), description)
+        load(Paths.get(path), description)
         preferences.edit().putString("selected-$projectKey", root.toString()).putString("source-$projectKey", description).apply()
         message = if (externalBinding != null) "Linked working copy loaded. Save files locally, then use Sync with original folder to save back. No project code was executed."
             else "Workspace loaded. No project code was executed."
@@ -159,8 +160,8 @@ internal class RuntimePanelState(
         val port = previewPort.trim().let { if (it.isEmpty()) null else it.toIntOrNull() ?: error("Preview port must be a number.") }
         require(port == null || port in 1024..65535) { "Preview port must be between 1024 and 65535." }
         val cwd = workingDirectory.trim()
-        require(cwd.isNotBlank() && !Path.of(cwd).isAbsolute && '\u0000' !in cwd && '\\' !in cwd) { "Working directory must be a relative project directory." }
-        require(!Path.of(cwd).normalize().startsWith("..")) { "Working directory cannot leave the workspace." }
+        require(cwd.isNotBlank() && !Paths.get(cwd).isAbsolute && '\u0000' !in cwd && '\\' !in cwd) { "Working directory must be a relative project directory." }
+        require(!Paths.get(cwd).normalize().startsWith("..")) { "Working directory cannot leave the workspace." }
         return RuntimeProjectConfig(targetId, RuntimeArguments.parse(arguments), runtimeEnvironment(environment), cwd, workspaceMode, port)
     }
 

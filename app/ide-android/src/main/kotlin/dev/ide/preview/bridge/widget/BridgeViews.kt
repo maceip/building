@@ -16,6 +16,7 @@ open class BridgeView : View {
     constructor(context: Context, attrs: AttributeSet?) : super(context)
     constructor(context: Context, attrs: AttributeSet?, defStyleAttr: Int) : super(context)
 
+    @android.annotation.SuppressLint("WrongCall")
     fun renderContent(canvas: android.graphics.Canvas) = onDraw(canvas)
 }
 

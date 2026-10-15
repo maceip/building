@@ -378,6 +378,7 @@ class MainActivity : ComponentActivity() {
      * An app shortcut pressed while nothing in the Compose content has focus. With a focused node the root
      * listener in [CodeAssistApp] already had it; this only sees a key the content left unconsumed.
      */
+    @android.annotation.SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
         super.dispatchKeyEvent(event) || AppKeys.onKey(androidx.compose.ui.input.key.KeyEvent(event))
 
