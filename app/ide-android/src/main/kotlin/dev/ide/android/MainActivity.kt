@@ -348,7 +348,12 @@ class MainActivity : ComponentActivity() {
                 onDispose { registration?.dispose() }
             }
             when {
-                b != null -> CompositionLocalProvider(LocalWorkbenchRuntime provides workbenchRuntime) {
+                b != null -> CompositionLocalProvider(
+                    LocalWorkbenchRuntime provides workbenchRuntime,
+                    dev.ide.ui.ext.LocalSdkManagerTools provides { toolsBackend ->
+                        dev.ide.android.workbench.runtime.AndroidDeveloperTools(toolsBackend)
+                    },
+                ) {
                     val projectEpoch by b.projects.projectEpoch.collectAsState()
                     var lastProjectEpoch by remember(b) { mutableStateOf(projectEpoch) }
                     LaunchedEffect(projectEpoch) {

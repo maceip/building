@@ -1,6 +1,9 @@
 package dev.ide.android.workbench.publish
 
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityNodeInfo
+import dev.ide.ui.ext.ScreenBackRegistry
+import org.junit.Assert.assertEquals
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.SideEffect
@@ -86,6 +89,74 @@ class PlayPublishCompositionTest {
             assertFalse(requireNotNull(state.get()).tokens.hasToken)
             assertFalse(requireNotNull(state.get()).connected)
         }
+    }
+
+    @Test
+    fun bundleAccessAndReleaseStepsAreUsableWithoutADeviceAccount() {
+        var browserRequests = 0
+        val files = object : FileActions by FileActions.None {
+            override val canOpenUrl = true
+            override fun openUrl(url: String) { assertEquals(PLAY_OAUTH_PLAYGROUND_URL, url); browserRequests++ }
+        }
+        ActivityScenario.launch(SpikeComposeActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                activity.setContent { MaterialTheme { PlayPublishPanel(emptyBackend(), files) } }
+            }
+            await { hasText("1 of 4 · Bundle") }
+            assertFalse(hasText("Choose device account"))
+            assertEquals(0, browserRequests)
+            clickText("More")
+            clickText("Access")
+            await { hasText("2 of 4 · Access") && hasText("Access token") }
+            assertFalse("No device-account chooser on opening Access", hasText("Choose device account"))
+            assertTrue(hasText("No token imported"))
+            clickText("Get a token in your browser")
+            await { browserRequests == 1 }
+            assertTrue("Opening a browser never authenticates this app", hasText("No token imported"))
+            clickText("Set up release first")
+            await { hasText("3 of 4 · Release") }
+            scenario.onActivity { assertTrue(ScreenBackRegistry.consumeBack()) }
+            await { hasText("2 of 4 · Access") }
+            scenario.onActivity { assertTrue(ScreenBackRegistry.consumeBack()) }
+            await { hasText("1 of 4 · Bundle") }
+            scenario.onActivity { assertFalse(ScreenBackRegistry.consumeBack()) }
+        }
+    }
+
+    private fun hasText(text: String): Boolean = withUiNode({ it.isVisibleToUser && it.text?.toString() == text }) { true }
+
+    private fun clickText(text: String) {
+        await {
+            val clicked = withUiNode({ it.isVisibleToUser && (it.text?.toString() == text || it.contentDescription?.toString() == text) }) { node ->
+                var current: AccessibilityNodeInfo? = node
+                var parent: AccessibilityNodeInfo? = null
+                try {
+                    while (current != null) {
+                        if (current.isClickable && current.isEnabled && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return@withUiNode true
+                        val next = current.parent
+                        parent?.recycle()
+                        parent = next
+                        current = next
+                    }
+                    false
+                } finally { parent?.recycle() }
+            }
+            if (!clicked) withUiNode({ it.isVisibleToUser && it.isScrollable }) { it.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) }
+            clicked
+        }
+    }
+
+    private fun withUiNode(match: (AccessibilityNodeInfo) -> Boolean, action: (AccessibilityNodeInfo) -> Boolean): Boolean {
+        val root = instrumentation.uiAutomation.rootInActiveWindow ?: return false
+        fun visit(node: AccessibilityNodeInfo): Boolean {
+            if (match(node) && action(node)) return true
+            for (index in 0 until node.childCount) {
+                val child = node.getChild(index) ?: continue
+                try { if (visit(child)) return true } finally { child.recycle() }
+            }
+            return false
+        }
+        return try { visit(root) } finally { root.recycle() }
     }
 
     private fun emptyBackend(): IdeBackend {

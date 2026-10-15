@@ -25,6 +25,6 @@ class RuntimePreferences(private val read: (String) -> String?) {
     fun enabled(feature: RuntimeFeature): Boolean = read(feature.preferenceKey)?.toBooleanStrictOrNull() ?: true
     fun disabledReason(kind: RuntimeKind): String? {
         val feature = RuntimeFeature.forKind(kind)
-        return if (enabled(feature)) null else "${feature.title} is turned off. Enable it in Settings > Runtimes."
+        return if (enabled(feature)) null else "${feature.title} is turned off. Enable it in Settings > SDK Manager."
     }
 }

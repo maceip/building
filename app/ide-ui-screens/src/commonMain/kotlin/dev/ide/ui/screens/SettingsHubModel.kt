@@ -79,7 +79,6 @@ private val HubSlots: List<Pair<HubGroup, List<HubTarget>>> = listOf(
         HubTarget.Page("build"),
         HubTarget.Page("preview"),
         HubTarget.Page("buildRuntime"),
-        HubTarget.Page("runtimes"),
         HubTarget.Tool(HubTool.SdkManager),
         HubTarget.Tool(HubTool.Keystore),
     ),
@@ -100,11 +99,17 @@ private val HubSlots: List<Pair<HubGroup, List<HubTarget>>> = listOf(
 internal fun hubPlacement(pageIds: List<String>): List<Pair<HubGroup, List<HubTarget>>> {
     val offered = pageIds.toSet()
     val slotted = HubSlots.flatMap { it.second }.filterIsInstance<HubTarget.Page>().map { it.id }.toSet()
-    val unslotted = pageIds.filter { it !in slotted }.map { HubTarget.Page(it) }
+    val unslotted = pageIds.filter { it !in slotted && it != "runtimes" }.map { HubTarget.Page(it) }
     return HubSlots.map { (group, targets) ->
         val present = targets.filter { it !is HubTarget.Page || it.id in offered }
         group to if (group == HubGroup.Extensions) present + unslotted else present
     }.filter { it.second.isNotEmpty() }
+}
+
+internal fun screenSettingsGroup(group: dev.ide.ui.ext.ScreenSettingsGroup?): HubGroup = when (group) {
+    dev.ide.ui.ext.ScreenSettingsGroup.BUILD -> HubGroup.Build
+    dev.ide.ui.ext.ScreenSettingsGroup.SYSTEM -> HubGroup.System
+    dev.ide.ui.ext.ScreenSettingsGroup.EXTENSIONS, null -> HubGroup.Extensions
 }
 
 /** What a built-in page holds, shown under its title. Plugin pages have none. */
@@ -140,11 +145,10 @@ class HubSection(val group: HubGroup, val title: String, val entries: List<HubEn
 fun hubSections(pages: List<UiSettingsPage>): List<HubSection> {
     val byId = pages.associateBy { it.id }
     val projectLabel = stringResource(Res.string.settings_scope_project)
-    val contributed = dev.ide.ui.ext.ScreenRegistry.all().filter { it.showInTools }
+    val contributed = dev.ide.ui.ext.ScreenRegistry.all().filter { it.showInTools || it.settingsGroup != null }
     return hubPlacement(pages.map { it.id }).map { (group, originalTargets) ->
-        val targets = if (group == HubGroup.Build) {
-            originalTargets + contributed.map { HubTarget.ContributedScreen(it.id) }
-        } else originalTargets
+        val targets = originalTargets + contributed.filter { screenSettingsGroup(it.settingsGroup) == group }
+            .map { HubTarget.ContributedScreen(it.id) }
         HubSection(
             group = group,
             title = stringResource(group.label),

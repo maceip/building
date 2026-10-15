@@ -23,7 +23,7 @@ class SettingsHubPlacementTest {
             listOf(
                 HubGroup.Editor to listOf("appearance", "Colors", "editor", "CodeStyle", "keymap", "Symbols"),
                 HubGroup.Code to listOf("completion", "analysis"),
-                HubGroup.Build to listOf("buildRuntime", "runtimes", "SdkManager", "Keystore"),
+                HubGroup.Build to listOf("buildRuntime", "SdkManager", "Keystore"),
                 HubGroup.Extensions to listOf("Plugins"),
                 HubGroup.System to listOf("Storage", "privacy"),
             ),
@@ -34,13 +34,27 @@ class SettingsHubPlacementTest {
     @Test
     fun projectPagesJoinBuildOnlyWhenOffered() {
         val build = ids(hubPlacement(appPages + listOf("preview", "build"))).toMap().getValue(HubGroup.Build)
-        assertEquals(listOf("build", "preview", "buildRuntime", "runtimes", "SdkManager", "Keystore"), build)
+        assertEquals(listOf("build", "preview", "buildRuntime", "SdkManager", "Keystore"), build)
     }
 
     @Test
     fun pluginPagesLandInExtensionsAfterPluginsInBackendOrder() {
         val extensions = ids(hubPlacement(listOf("vcs", "appearance", "ai"))).toMap().getValue(HubGroup.Extensions)
         assertEquals(listOf("Plugins", "vcs", "ai"), extensions)
+    }
+
+    @Test
+    fun runtimeControlsHaveOnlyTheSdkManagerHome() {
+        val destinations = ids(hubPlacement(appPages)).flatMap { it.second }
+        assertEquals(0, destinations.count { it == "runtimes" })
+        assertEquals(1, destinations.count { it == "SdkManager" })
+    }
+
+    @Test
+    fun contributedSettingsUseExplicitHomesInsteadOfAllJoiningBuild() {
+        assertEquals(HubGroup.Build, screenSettingsGroup(dev.ide.ui.ext.ScreenSettingsGroup.BUILD))
+        assertEquals(HubGroup.System, screenSettingsGroup(dev.ide.ui.ext.ScreenSettingsGroup.SYSTEM))
+        assertEquals(HubGroup.Extensions, screenSettingsGroup(null))
     }
 
     @Test

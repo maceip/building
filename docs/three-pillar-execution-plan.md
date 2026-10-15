@@ -1,12 +1,18 @@
 # Three-pillar delivery tracker
 
-Updated: **2026-10-14**. This is the single current tracker for **Play Store**, **platform support**, and **developer SDK / developer experience (DX)**. It replaces the scattered status summaries in earlier discussions; technical details remain in the linked documents. The original proposal, [tripple_plaj.md](tripple_plaj.md), and the original execution checklist are historical scope references, not proof of delivery.
+Updated: **2026-10-15**. This is the single current tracker for **Play Store**, **platform support**, and **developer SDK / developer experience (DX)**. It replaces the scattered status summaries in earlier discussions; technical details remain in the linked documents. The original proposal, [tripple_plaj.md](tripple_plaj.md), and the original execution checklist are historical scope references, not proof of delivery.
 
 **Overall: none of the three pillars is production-complete.** Some substantial, explicitly scoped capabilities are implemented and physically verified. Missing integration is recorded as missing—not hidden behind passing component tests or an access blocker.
 
 ## Focus at a glance
 
-Current steering (2026-10-14): complete the build/test checkpoint and prioritize
+**Current user-directed work (2026-10-15): settings and three-pillar UX repair.** The separate Runtimes/Developer workbench settings entries are replaced with existing homes: SDK Manager for bundled tools, Build & Run → Google Play for release preparation, and System → Diagnostics (also reachable from logs) for incidents/recovery. Run project opens the runner directly; setup/packaging cards no longer precede execution. Publishing is Bundle → Access → Release → Review, with existing listing/images unchanged by default. Browser-issued access tokens are a visible alternative to adding a publishing account to Android; direct browser-to-app OAuth and live Google acceptance remain unimplemented/unverified. A task-specific isolated branch, `fix/settings-and-publishing-ux`, contains this work; validation and source-delivery results are recorded below.
+
+**UX acceptance — isolated development build 118 (`1.0.2-settings`, `ai.building.settings.dev`).** The final emulator-5556 run passes **62/62 Android cases**, zero failures/errors/skips, including real touch navigation from the project picker through SDK Manager, optional browser-token access, unauthenticated release preparation, Diagnostics and Back; publishing state/HTTP safeguards; stale account/artifact-attestation reset; runtime preferences and inventory. **78 scoped host tests** pass (eight settings/navigation, 70 publishing/runtime). The first navigation attempts exposed a delayed ad-consent overlay and a page-scroll harness that skipped rows; the corrected harness declines the real overlay and uses partial touch swipes without removing assertions. These are UI/harness corrections, not live Play success.
+
+The tested APK is **437,231,084 bytes (416.976 MiB)**, SHA-256 `1fda73634cdc7c50831541c773032503bd10f1ef2f9915764824311de3e5b123`; test APK SHA-256 `8583a553b16c68e2651727fc9fc6178493ef31137291e08e97b094e50829ced5`. Full runtime pack `termux-arm64-658bbd21bf72da47` retains 49 packages, pnpm, 255 native payloads and 17,183 data files. Current launcher artwork is retained. Evidence: existing session output `call_tUEZAUMEuhNgvO2pQhbHM9wl-stdout.log`, host output `call_7QnNXBsk8M8T7EESdjHYsWq2-stdout.log`, JUnit XML, `build/sdk-manager-118.png`, and `build/play-{bundle,access,release}-118.xml`. The physical USB device is unauthorized, so no phone installation is claimed. No real Google account authorization or Google publishing write was performed. The prior checkout and its unrelated uncommitted changes were not modified.
+
+Previous steering (2026-10-14): complete the build/test checkpoint and prioritize
 the full-app packaging, bundling and configuration pass. iOS signing/provisioning
 and Simulator/emulation work are deferred. The standalone xtool foundation is
 merged into xtool main at `9fb63e9`; Building's Swift project integration remains
@@ -72,13 +78,13 @@ Pixel and live Play acceptance below are not replaced by emulator checks.
 **Outcome:** select an authorized app and artifact, build/sign, prepare the release, confirm the exact write, publish to internal testing, and install the resulting version through Google Play. Manual Google requirements remain explicit.
 
 - [ ] **PLAY-1 — Real account and application authorization.**
-  **Implementation:** native Google authorization, Publisher scope, account selection and short-lived in-memory token handling exist.
-  **Proof:** local/Android safeguards, not a live authorized account flow.
+  **Implementation:** short-lived in-memory tokens and optional native device-account authorization remain. The Access step now exposes browser/computer-issued token import by default, so the owner does not need to add their publishing account to Android. Explicit Check Play access sends a GET only; its receipt is bound to identity/package/track. Browser login by itself is not API authorization, and the supplied label is not verified identity.
+  **Proof:** local/Android safeguards and actual no-account UI navigation, not a live authorized account flow. Google OAuth Playground's custom-scope/manual-exchange instructions are linked, but a grant for the owner's account/public client is not claimed.
   **Missing / blocker:** approved test account, package, OAuth registration, Play permissions, signing identity and setup.
   **Next acceptance:** authorize the intended account and read the intended application's tracks without a live write; show exactly which prerequisites remain.
 
 - [ ] **PLAY-2 — Signed artifact and transactional release preparation.**
-  **Implementation:** signed-AAB preflight, metadata/image checks, resumable upload, edit validation, track preservation, bound confirmations and ambiguous-write handling exist. Internal App Sharing and Data Safety are separately confirmed effects.
+  **Implementation:** signed-AAB preflight, metadata/image checks, resumable upload, edit validation, track preservation, bound confirmations and ambiguous-write handling exist. Four focused UI steps replace the long all-at-once form; listing/image edits are optional. Account/app/upload-certificate attestations reset on identity, package or verified bundle changes. Internal App Sharing and Data Safety remain separately confirmed effects under More.
   **Proof:** real local HTTP exchanges and Android protocol fixtures pass; the signed test fixture is not proof of a Play-valid release.
   **Next acceptance:** prepare and validate the actual approved release artifact; interruption/expiry must not cause a blind duplicate upload or an uncertain commit. Account setup and policy declarations must not be bypassed.
 

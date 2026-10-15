@@ -39,7 +39,7 @@ class RuntimeControllerTest {
                 runner.run(RuntimeRunRequest(temp, target.id))
                 val done = withTimeout(5000) { runner.state.first { !it.isRunning } }
                 assertEquals(RuntimePhase.FAILED, done.phase)
-                assertTrue(done.error.orEmpty().contains("Settings > Runtimes"), done.toString())
+                assertTrue(done.error.orEmpty().contains("Settings > SDK Manager"), done.toString())
                 assertNull(done.workspacePath)
             }
             runner.installDependencies(temp)

@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -95,6 +96,8 @@ fun LogsScreen(
     LaunchedEffect(initialSource) { if (initialSource != null) state.selectSource(initialSource) }
     val clipboard = LocalClipboardManager.current
     val shown = state.shown
+    val navigate = dev.ide.ui.LocalPluginNavigator.current
+    val incidentScreen = dev.ide.ui.ext.ScreenRegistry.find("developer.workbench.diagnostics")
 
     // A log record is machine output read column by column: time, level, source, tag, message, then a
     // stack trace whose indentation carries the frame depth. An RTL locale mirrors that into an order no
@@ -121,6 +124,12 @@ fun LogsScreen(
                     HeaderAction(CaIcons.share, stringResource(Res.string.share)) { state.export(fileActions::share) }
                 }
                 if (onHide != null) HideToolWindowButton(onHide)
+            }
+
+            if (incidentScreen != null) {
+                TextButton(onClick = { navigate(incidentScreen.id) }, modifier = Modifier.padding(horizontal = 8.dp)) {
+                    Text("Incidents & recovery")
+                }
             }
 
             // Search field

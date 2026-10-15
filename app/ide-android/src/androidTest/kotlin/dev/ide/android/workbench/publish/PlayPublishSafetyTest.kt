@@ -110,6 +110,42 @@ class PlayPublishSafetyTest {
     }
 
     @Test
+    fun defaultUpdateKeepsStoreContentAndDoesNotInventPolicyAttestations() {
+        val form = PublishForm()
+        assertFalse(form.updateListing)
+        assertFalse(form.replaceSelectedImageTypes)
+        assertTrue(form.retainExistingReleases)
+        assertEquals("en-US", form.language)
+        assertEquals("", form.title)
+        assertEquals("", form.shortDescription)
+        assertEquals("", form.fullDescription)
+        assertFalse(form.attestations.accountRegisteredAndVerified)
+        assertFalse(form.attestations.appCreatedAndInitializedInConsole)
+        assertFalse(form.attestations.uploadKeyAndPlayAppSigningConfigured)
+        assertFalse(form.attestations.requiredPolicyDeclarationsReviewed)
+        assertFalse(form.attestations.storeListingAndDistributionConfigured)
+        assertFalse(form.attestations.dataSafetyReviewed)
+        assertFalse(form.attestations.productionAccessApproved)
+        expectValidationFailure { validatePublishAttestations(form) }
+    }
+
+    @Test
+    fun preservingAnExistingListingDoesNotBypassAnyRequiredManualCheck() {
+        val form = PublishForm(attestations = basicAttestations())
+        validatePublishAttestations(form) // Existing initialized app; no listing replacement required.
+        for (incomplete in listOf(
+            basicAttestations().copy(accountRegisteredAndVerified = false),
+            basicAttestations().copy(appCreatedAndInitializedInConsole = false),
+            basicAttestations().copy(uploadKeyAndPlayAppSigningConfigured = false),
+        )) {
+            expectValidationFailure { validatePublishAttestations(form.copy(attestations = incomplete)) }
+        }
+        expectValidationFailure { validatePublishAttestations(form.copy(destination = PublishDestination.PRODUCTION, trackId = "production")) }
+        expectValidationFailure { validatePublishAttestations(form.copy(destination = PublishDestination.CLOSED, trackId = "closed-testers")) }
+        assertEquals(basicAttestations(), form.copy(updateListing = true).attestations)
+    }
+
+    @Test
     fun draftIsAStatusAndProductionDraftStillRequiresProductionAttestations() {
         val internalDraft = PublishForm(attestations = basicAttestations())
         validatePublishAttestations(internalDraft)

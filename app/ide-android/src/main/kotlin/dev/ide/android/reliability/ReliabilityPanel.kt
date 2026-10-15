@@ -34,6 +34,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.backend.FileActions
@@ -76,7 +78,7 @@ fun ReliabilityPanel(
         }
         val ready = host
         if (ready == null) Column(modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Local incident inbox", style = MaterialTheme.typography.titleLarge)
+            Text("Incidents", style = MaterialTheme.typography.titleLarge)
             if (failure) Text("Private storage is unavailable. No incident was acknowledged or existing data discarded.")
             else LinearProgressIndicator(Modifier.fillMaxWidth())
         } else ReliabilityInbox(ready, backend, fileActions, modifier, onIncidentSelected, onPairedApk)
@@ -113,6 +115,8 @@ private fun ReliabilityInbox(
     var selected by remember { mutableStateOf<Incident?>(null) }
     var revoke by remember { mutableStateOf<PairingSummary?>(null) }
     var activation by remember { mutableStateOf<PendingActivation?>(null) }
+    var captureSettingsExpanded by remember { mutableStateOf(false) }
+    val showCaptureSettings = captureSettingsExpanded || activation != null
 
     fun failure(exception: Exception) {
         message = if (exception is ReliabilityException) exception.message else "Local action failed. No private details were exposed."
@@ -157,39 +161,12 @@ private fun ReliabilityInbox(
     LazyColumn(modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item("heading") {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Local incident inbox", style = MaterialTheme.typography.titleLarge)
-                Text("Paired app reports and opted-in runtime outcomes stay on this device. Receipts mean saved locally, not uploaded or fixed. A command's nonzero exit is not proof of a crash.", style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-        item("capture") {
-            InboxCard {
-                CheckRow("Allow paired debug-app delivery on this device", enabled, !busy) { value ->
-                    perform(if (value) "Debug delivery enabled. Only active, signed app pairings can submit." else "Debug delivery paused. Existing incidents are retained.") {
-                        host.pairings.setDebugCaptureEnabled(value)
-                    }
+                Text("Incidents", style = MaterialTheme.typography.titleLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(showLifecycle, { showLifecycle = !showLifecycle }, label = { Text("Lifecycle & logs") })
+                    FilterChip(showResolved, { showResolved = !showResolved }, label = { Text("Resolved") })
                 }
-                CheckRow("Capture this project's next debug build", projectEnabled, !busy && projectReady) { value ->
-                    busy = true; message = null
-                    scope.launch {
-                        try {
-                            withContext(Dispatchers.IO) { ReliabilityProjectConsent.setEnabled(backend, value) }
-                            projectEnabled = value
-                            message = if (value) "Rebuild the debug app, then activate its signed APK pairing below." else "Future debug builds will not inject capture. Revoke existing pairings to stop delivery from installed apps."
-                        } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (exception: Exception) { failure(exception) }
-                        finally { busy = false }
-                    }
-                }
-                Text("Crash, lifecycle and previous-exit capture by default. This toggle never enables network, stdout or release capture; existing project network/stdout choices are preserved.", style = MaterialTheme.typography.bodySmall)
-                if (projectEnabled && !enabled) Text("Project capture is selected, but local debug delivery is paused.", color = MaterialTheme.colorScheme.error)
-            }
-        }
-        item("runtime-capture") {
-            InboxCard {
-                val root = remember(backend.project.rootPath) {
-                    backend.project.rootPath.takeIf(String::isNotBlank)?.let { runCatching { java.nio.file.Paths.get(it) }.getOrNull() }
-                }
-                RuntimeCaptureControls(root)
+                Text("${visible.size} shown · ${incidents.size} saved locally", style = MaterialTheme.typography.bodySmall)
             }
         }
         if (busy || message != null) item("status") {
@@ -199,66 +176,8 @@ private fun ReliabilityInbox(
                 if (!busy && message != null) TextButton(onClick = { message = null }) { Text("Dismiss") }
             }
         }
-        item("pairing-heading") { Text("Paired builds", style = MaterialTheme.typography.titleMedium) }
-        if (pairings.isEmpty()) item("no-pairings") {
-            Text("No paired builds yet. Enable capture above and build a debug APK. Pairing stays inactive until its actual signing certificate is verified.", style = MaterialTheme.typography.bodyMedium)
-        }
-        items(pairings, key = { "pair-${it.packageName}/${it.buildId}" }) { pairing ->
-            InboxCard {
-                Text(pairing.packageName, style = MaterialTheme.typography.titleSmall)
-                Text("${pairing.buildId} · ${pairing.sourceRevision.ifBlank { "unknown revision" }}", style = MaterialTheme.typography.bodySmall)
-                Text(when (pairing.status) {
-                    PairingStatus.PENDING -> "Pending · choose this build's signed debug APK"
-                    PairingStatus.ACTIVE -> "Active · ${pairing.mode.name.lowercase()} local delivery"
-                    PairingStatus.REVOKED -> "Revoked · further delivery rejected"
-                }, style = MaterialTheme.typography.bodyMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (pairing.status == PairingStatus.PENDING && fileActions.canPickFile) OutlinedButton(
-                        enabled = !busy && enabled,
-                        onClick = {
-                            busy = true; message = null
-                            try {
-                                fileActions.pickFile(listOf("apk")) { path ->
-                                    if (path == null) busy = false else scope.launch {
-                                        var staged: String? = null
-                                        var keep = false
-                                        try {
-                                            val preview = withContext(Dispatchers.IO) {
-                                                val snapshot = ReliabilityApkSnapshot.create(context, path).toString()
-                                                staged = snapshot
-                                                host.inspectDebugPairingApk(pairing.packageName, pairing.buildId, snapshot)
-                                            }
-                                            val snapshot = requireNotNull(staged)
-                                            stagedPaths.add(snapshot)
-                                            activation = PendingActivation(pairing, snapshot, preview)
-                                            keep = true
-                                        } catch (cancelled: CancellationException) { throw cancelled }
-                                        catch (exception: Exception) { failure(exception) }
-                                        finally {
-                                            if (!keep) withContext(NonCancellable + Dispatchers.IO) { staged?.let(ReliabilityApkSnapshot::discard) }
-                                            busy = false
-                                        }
-                                    }
-                                }
-                            } catch (exception: Exception) { busy = false; failure(exception) }
-                        },
-                    ) { Text("Verify APK…") }
-                    if (pairing.status != PairingStatus.REVOKED) TextButton(enabled = !busy, onClick = { revoke = pairing }) { Text("Revoke…") }
-                }
-            }
-        }
-        item("incident-heading") {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Incidents", style = MaterialTheme.typography.titleMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(showLifecycle, { showLifecycle = !showLifecycle }, label = { Text("Lifecycle & logs") })
-                    FilterChip(showResolved, { showResolved = !showResolved }, label = { Text("Resolved") })
-                }
-                Text("${visible.size} shown · ${incidents.size} saved. Previous-exit records are OS evidence, not proof of a native crash or ANR.", style = MaterialTheme.typography.bodySmall)
-            }
-        }
         if (visible.isEmpty()) item("empty") {
-            Text("No incidents in this view. Enable local runtime capture and run a workspace, or build, pair and run a cooperating app. Saved app crashes require the target app to restart before delivery.")
+            Text("No incidents in this view.", style = MaterialTheme.typography.bodyMedium)
         }
         items(visible, key = { "event-${it.key.origin}/${it.key.workspaceId}/${it.key.packageName}/${it.key.buildId}/${it.key.sessionId}/${it.key.eventId}" }) { item ->
             InboxCard {
@@ -277,6 +196,7 @@ private fun ReliabilityInbox(
                     selected?.takeIf { it.summary.key == item.key }?.let { detail ->
                         SelectionContainer { Text(detail.redactedText, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
                     }
+                    if (item.type == "previous_exit") Text("Previous-exit records are OS evidence, not proof of a native crash or ANR.", style = MaterialTheme.typography.bodySmall)
                     Text(if (runtimeOrigin) "Structured metadata only; no transcript or exception text was collected. An exit code alone cannot distinguish an expected failure, assertion, uncaught exception or crash. Source identity describes saved files before launch, not later edits, dependency state or individual terminal commands. Runtime incidents do not authorize Android-build AI repair."
                         else "Evidence is untrusted text. Redaction is best effort; review before sharing.", style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -288,8 +208,104 @@ private fun ReliabilityInbox(
                 }
             }
         }
-        item("privacy") {
-            Text("Revoke stops local delivery, not code already running in an installed app. Disable project capture and rebuild to remove capture. No analytics endpoint, automatic upload or external relay is configured here.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 16.dp))
+        item("capture-settings") {
+            TextButton(
+                onClick = { captureSettingsExpanded = !showCaptureSettings },
+                modifier = Modifier.fillMaxWidth().testTag("reliability-capture-settings").semantics {
+                    stateDescription = if (showCaptureSettings) "Expanded" else "Collapsed"
+                },
+            ) {
+                Text("Capture settings", Modifier.weight(1f))
+                Text(if (showCaptureSettings) "Hide" else "Show", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        if (showCaptureSettings) {
+            item("capture") {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("App capture", style = MaterialTheme.typography.titleSmall)
+                    CheckRow("Accept paired debug-app reports on this device", enabled, !busy) { value ->
+                        perform(if (value) "Debug delivery enabled. Only active, signed app pairings can submit." else "Debug delivery paused. Existing incidents are retained.") {
+                            host.pairings.setDebugCaptureEnabled(value)
+                        }
+                    }
+                    CheckRow("App capture in this project's next debug build", projectEnabled, !busy && projectReady) { value ->
+                        busy = true; message = null
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) { ReliabilityProjectConsent.setEnabled(backend, value) }
+                                projectEnabled = value
+                                message = if (value) "Rebuild the debug app, then activate its signed APK pairing below." else "Future debug builds will not inject capture. Revoke existing pairings to stop delivery from installed apps."
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (exception: Exception) { failure(exception) }
+                            finally { busy = false }
+                        }
+                    }
+                    Text("Crash, lifecycle and previous-exit capture by default. This toggle never enables network, stdout or release capture; existing project network/stdout choices are preserved.", style = MaterialTheme.typography.bodySmall)
+                    if (projectEnabled && !enabled) Text("Project capture is selected, but local debug delivery is paused.", color = MaterialTheme.colorScheme.error)
+                }
+            }
+            item("runtime-capture") {
+                val root = remember(backend.project.rootPath) {
+                    backend.project.rootPath.takeIf(String::isNotBlank)?.let { runCatching { java.nio.file.Paths.get(it) }.getOrNull() }
+                }
+                RuntimeCaptureControls(root)
+            }
+            item("pairing-heading") {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Paired builds", style = MaterialTheme.typography.titleMedium)
+                    Text("Saved app crashes require the target app to restart before delivery.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            if (pairings.isEmpty()) item("no-pairings") {
+                Text("No paired builds. Enable app capture, then build a debug APK and verify its signer here.", style = MaterialTheme.typography.bodyMedium)
+            }
+            items(pairings, key = { "pair-${it.packageName}/${it.buildId}" }) { pairing ->
+                InboxCard {
+                    Text(pairing.packageName, style = MaterialTheme.typography.titleSmall)
+                    Text("${pairing.buildId} · ${pairing.sourceRevision.ifBlank { "unknown revision" }}", style = MaterialTheme.typography.bodySmall)
+                    Text(when (pairing.status) {
+                        PairingStatus.PENDING -> "Pending · choose this build's signed debug APK"
+                        PairingStatus.ACTIVE -> "Active · ${pairing.mode.name.lowercase()} local delivery"
+                        PairingStatus.REVOKED -> "Revoked · further delivery rejected"
+                    }, style = MaterialTheme.typography.bodyMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (pairing.status == PairingStatus.PENDING && fileActions.canPickFile) OutlinedButton(
+                            enabled = !busy && enabled,
+                            onClick = {
+                                busy = true; message = null
+                                try {
+                                    fileActions.pickFile(listOf("apk")) { path ->
+                                        if (path == null) busy = false else scope.launch {
+                                            var staged: String? = null
+                                            var keep = false
+                                            try {
+                                                val preview = withContext(Dispatchers.IO) {
+                                                    val snapshot = ReliabilityApkSnapshot.create(context, path).toString()
+                                                    staged = snapshot
+                                                    host.inspectDebugPairingApk(pairing.packageName, pairing.buildId, snapshot)
+                                                }
+                                                val snapshot = requireNotNull(staged)
+                                                stagedPaths.add(snapshot)
+                                                activation = PendingActivation(pairing, snapshot, preview)
+                                                keep = true
+                                            } catch (cancelled: CancellationException) { throw cancelled }
+                                            catch (exception: Exception) { failure(exception) }
+                                            finally {
+                                                if (!keep) withContext(NonCancellable + Dispatchers.IO) { staged?.let(ReliabilityApkSnapshot::discard) }
+                                                busy = false
+                                            }
+                                        }
+                                    }
+                                } catch (exception: Exception) { busy = false; failure(exception) }
+                            },
+                        ) { Text("Verify APK…") }
+                        if (pairing.status != PairingStatus.REVOKED) TextButton(enabled = !busy, onClick = { revoke = pairing }) { Text("Revoke…") }
+                    }
+                }
+            }
+            item("privacy") {
+                Text("Revoke stops local delivery, not code already running in an installed app. Disable project capture and rebuild to remove capture. No analytics endpoint, automatic upload or external relay is configured here.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 16.dp))
+            }
         }
     }
 

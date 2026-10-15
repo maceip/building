@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Switch
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -69,16 +69,16 @@ internal fun RuntimeCaptureControls(root: Path?, onOpenInbox: (() -> Unit)? = nu
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Runtime capture for this workspace", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Switch(
                     checked = status?.enabled == true,
                     enabled = root != null && status != null && status?.consentKnown == true && !busy && !failed,
                     onCheckedChange = { if (it) confirm = true else enable(false) },
                     modifier = Modifier.testTag("runtime-capture-toggle"),
                 )
-                Text("Save this workspace's runtime failures locally", style = MaterialTheme.typography.bodyMedium)
             }
-            Text("Separate from execution trust and debug-app capture. Saves structured session outcomes, not terminal output, commands, environment or exception messages. No AI or relay sharing.", style = MaterialTheme.typography.bodySmall)
+            Text("Local only. No output or AI sharing.", style = MaterialTheme.typography.bodySmall)
             if (root == null) Text("Choose a workspace to configure runtime capture.", style = MaterialTheme.typography.bodySmall)
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (failed) Text("Runtime capture storage is unavailable. No capture consent was assumed.", color = MaterialTheme.colorScheme.error)
@@ -91,13 +91,24 @@ internal fun RuntimeCaptureControls(root: Path?, onOpenInbox: (() -> Unit)? = nu
                 LaunchedEffect(update) {
                     if (update.workspaceId != null && update.workspaceId == status?.workspaceId) status = update
                 }
-                if (update.queuedEvents > 0) Text("${update.queuedEvents} structured outcome(s) waiting for durable inbox delivery.", style = MaterialTheme.typography.bodySmall)
                 val localUpdate = update.workspaceId == status?.workspaceId && status?.workspaceId != null
                 val globalOperation = update.workspaceId == null
                 val result = if (localUpdate || globalOperation) update.result else status?.result ?: RuntimeCaptureResult.DISABLED
-                Text(if (globalOperation && result == RuntimeCaptureResult.READY) "No saved runtime outcomes are waiting for delivery." else runtimeCaptureMessage(result), style = MaterialTheme.typography.bodySmall,
-                    color = if (result in setOf(RuntimeCaptureResult.INVALID, RuntimeCaptureResult.QUOTA, RuntimeCaptureResult.ID_CONFLICT, RuntimeCaptureResult.STORAGE_UNAVAILABLE)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
-                if (update.queuedEvents > 0 || result in setOf(RuntimeCaptureResult.RETRY_LATER, RuntimeCaptureResult.STORAGE_UNAVAILABLE, RuntimeCaptureResult.QUOTA, RuntimeCaptureResult.ID_CONFLICT)) TextButton(enabled = !busy, onClick = {
+                // Replay is device-wide; its enabled bit and queue must never describe this workspace's consent.
+                val queued = if (localUpdate || globalOperation) update.queuedEvents else status?.takeIf { it.workspaceId != null }?.queuedEvents ?: 0
+                if (queued > 0) Text(
+                    if (globalOperation) "$queued outcome(s) awaiting inbox delivery across workspaces."
+                    else "$queued outcome(s) awaiting inbox delivery for this workspace.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (result != RuntimeCaptureResult.READY && result != RuntimeCaptureResult.DISABLED) {
+                    val resultMessage = if (globalOperation && result == RuntimeCaptureResult.REVOKED) {
+                        "Pending outcomes from revoked grants were not delivered."
+                    } else runtimeCaptureMessage(result)
+                    Text(if (globalOperation) "Across workspaces: $resultMessage" else resultMessage, style = MaterialTheme.typography.bodySmall,
+                        color = if (result in setOf(RuntimeCaptureResult.INVALID, RuntimeCaptureResult.QUOTA, RuntimeCaptureResult.ID_CONFLICT, RuntimeCaptureResult.STORAGE_UNAVAILABLE)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (queued > 0 || result in setOf(RuntimeCaptureResult.RETRY_LATER, RuntimeCaptureResult.STORAGE_UNAVAILABLE, RuntimeCaptureResult.QUOTA, RuntimeCaptureResult.ID_CONFLICT)) TextButton(enabled = !busy, onClick = {
                     busy = true
                     scope.launch {
                         try {

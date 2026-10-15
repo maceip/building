@@ -2,6 +2,9 @@ package dev.ide.android.workbench
 
 import android.os.SystemClock
 import android.util.Log
+import android.graphics.Rect
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -97,7 +100,7 @@ class WorkbenchNavigationTest {
     }
 
     @Test
-    fun pickerSettingsOpensWorkbenchWithoutAProjectAndBackStillNavigates() {
+    fun pickerSettingsOpensSdkPublishingAndDiagnosticsWithoutAProject() {
         // MainActivity installs its own process-wide handler. Do not leak it into subsequent tests.
         val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
         var backend: IdeBackend? = null
@@ -126,6 +129,7 @@ class WorkbenchNavigationTest {
                         clickVisible("Skip for now") -> false
                         clickVisible("Maybe later") -> false
                         clickVisible("No thanks") -> false
+                        clickVisible("Do not consent") -> false
                         else -> hasVisible("Settings and tools")
                     }
                 }
@@ -140,20 +144,33 @@ class WorkbenchNavigationTest {
                 click("Back", real)
                 awaitUi("back from Keystore Manager", { real }) { hasVisible("Settings") }
 
-                clickAfterScroll("Developer workbench", real)
-                // The hub row has the same title; the three tabs and runtime body prove actual navigation.
-                awaitUi("workbench Runtime destination", { real }) {
-                    hasVisible("Developer workbench") && hasVisible("Runtime") && hasVisible("Quality") &&
-                        hasVisible("Publish") && hasVisible("Ready · no session started")
+                clickAfterScroll("SDK Manager", real)
+                awaitUi("SDK Manager includes bundled tools", { real }) {
+                    hasVisible("SDK Manager") && hasVisible("Node.js") && hasVisible("Python")
                 }
-                click("Quality", real)
-                awaitUi("workbench Quality destination", { real }) { hasVisible("App Quality & Reliability Lab") }
-                click("Publish", real)
-                awaitUi("workbench Publish destination", { real }) { hasVisible("Google Play publishing") }
-                click("Runtime", real)
-                awaitUi("return to Runtime", { real }) { hasVisible("Ready · no session started") }
+                assertFalse("SDK controls must not request a redundant install", hasVisible("Install Node.js") || hasVisible("Install Python"))
                 click("Back", real)
-                awaitUi("back from workbench", { real }) { hasVisible("Settings") && !hasVisible("Runtime") }
+                awaitUi("back from SDK Manager", { real }) { hasVisible("Settings") }
+
+                clickAfterScroll("Google Play", real)
+                awaitUi("artifact-first publishing", { real }) { hasVisible("1 of 4 · Bundle") && hasVisible("Select AAB") }
+                assertFalse("Opening publishing must not open the phone account chooser", hasVisible("Choose the Google account with Play Console access"))
+                click("More", real)
+                click("Access", real)
+                awaitUi("browser-token alternative", { real }) { hasVisible("2 of 4 · Access") && hasVisible("Access token") }
+                assertFalse("Device-account access remains optional", hasVisible("Authorize with Google"))
+                click("Set up release first", real)
+                awaitUi("release preparation without authorization", { real }) { hasVisible("3 of 4 · Release") }
+                click("Back", real)
+                awaitUi("back to access step", { real }) { hasVisible("2 of 4 · Access") }
+                click("Back", real)
+                awaitUi("back to bundle step", { real }) { hasVisible("1 of 4 · Bundle") }
+                click("Back", real)
+                awaitUi("back from Google Play", { real }) { hasVisible("Settings") }
+                clickAfterScroll("Diagnostics", real)
+                awaitUi("existing local incident inbox", { real }) { hasVisible("Diagnostics") && hasVisible("Capture settings") }
+                click("Back", real)
+                awaitUi("back from Diagnostics", { real }) { hasVisible("Settings") }
                 click("Back", real)
                 awaitUi("back to project picker", { real }) { hasVisible("Settings and tools") }
                 assertNoBackendError(real, "completed navigation")
@@ -187,15 +204,37 @@ class WorkbenchNavigationTest {
     }
 
     private fun clickAfterScroll(label: String, backend: IdeBackend) {
-        repeat(16) {
+        for (forward in listOf(false, true)) repeat(24) {
+            if (clickVisible("Do not consent")) { SystemClock.sleep(100); return@repeat }
             assertNoBackendError(backend, "find '$label'")
             if (clickVisible(label)) return
-            withNode({ it.isVisibleToUser && it.isScrollable }) {
-                it.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-            }
-            SystemClock.sleep(200)
+            scrollPartway(forward)
+            SystemClock.sleep(120)
         }
         throw AssertionError("Could not reach '$label'. ${diagnostic(backend)}\nVisible UI: ${visibleLabels()}")
+    }
+
+    private fun scrollPartway(forward: Boolean) {
+        withNode({ it.isVisibleToUser && it.isScrollable }) { node ->
+            val bounds = Rect().also(node::getBoundsInScreen)
+            if (bounds.height() < 100 || bounds.width() < 100) return@withNode false
+            val x = bounds.exactCenterX()
+            val startY = bounds.top + bounds.height() * if (forward) 0.8f else 0.4f
+            val endY = bounds.top + bounds.height() * if (forward) 0.4f else 0.8f
+            val down = SystemClock.uptimeMillis()
+            fun event(action: Int, y: Float) {
+                val touch = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x, y, 0)
+                touch.source = InputDevice.SOURCE_TOUCHSCREEN
+                try { automation.injectInputEvent(touch, true) } finally { touch.recycle() }
+            }
+            event(MotionEvent.ACTION_DOWN, startY)
+            for (step in 1..12) {
+                SystemClock.sleep(16)
+                event(MotionEvent.ACTION_MOVE, startY + (endY - startY) * step / 12f)
+            }
+            event(MotionEvent.ACTION_UP, endY)
+            true
+        }
     }
 
     private fun hasVisible(label: String): Boolean = withNode({ it.matches(label) }) { true }
@@ -261,6 +300,10 @@ class WorkbenchNavigationTest {
         val deadline = SystemClock.uptimeMillis() + timeoutMs
         while (SystemClock.uptimeMillis() < deadline) {
             assertNoBackendError(backend(), stage)
+            if (clickVisible("Do not consent")) {
+                SystemClock.sleep(100)
+                continue
+            }
             if (condition()) {
                 assertNoBackendError(backend(), stage)
                 return

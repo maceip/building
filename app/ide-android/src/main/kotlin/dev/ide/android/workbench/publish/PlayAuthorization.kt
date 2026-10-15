@@ -84,12 +84,19 @@ internal class PlayAuthorizationState(private val clearNativeCache: (String) -> 
         pendingAccount = null
     }
 
+    /** Import is local only: syntax checks do not establish identity, scope, expiry or Play access. */
     fun acceptManual() {
-        require(manualAccountLabel.trim().isNotBlank()) { "Enter an account label for the confirmation screen." }
-        require(!closed)
         val token = manualTokenInput
         manualTokenInput = ""
-        replaceToken(token, "Session token · ${manualAccountLabel.trim()} (identity not verified)", native = false)
+        require(!closed && !authorizing) { "Finish or cancel the current authorization before importing a token." }
+        val label = manualAccountLabel.trim()
+        require(label.isNotBlank() && label.length <= 200 && label.none { it.isISOControl() }) {
+            "Enter a short account label for the confirmation screen. The label is not verified."
+        }
+        rejectNonAccessToken(token.trim())
+        replaceToken(token, "Session token · $label (identity not verified)", native = false)
+        ++generation // A prior native callback must never replace an explicitly imported session.
+        pendingAccount = null
     }
 
     private fun replaceToken(token: String, account: String, native: Boolean) {
@@ -102,7 +109,8 @@ internal class PlayAuthorizationState(private val clearNativeCache: (String) -> 
         nativeAccount = native
         identityKey = if (native) "google:$account" else "manual:${++manualSessionNumber}"
         connected = true
-        // Access tokens usually last one hour. Use a conservative local ceiling; HTTP 401 can expire sooner.
+        // This is only a local retention ceiling, NOT a verified expiry. An imported token may
+        // already be expired; an explicit Play access check (and each later API request) can reject it.
         expiresAtElapsed = SystemClock.elapsedRealtime() + 55 * 60_000L
         error = null
     }
@@ -130,6 +138,15 @@ internal class PlayAuthorizationState(private val clearNativeCache: (String) -> 
     override fun toString(): String = "PlayAuthorizationState(redacted)"
 }
 
+/** Reject recognizable wrong credential types; arbitrary opaque tokens still need a real API check. */
+private fun rejectNonAccessToken(candidate: String) {
+    require(!candidate.startsWith("1/") && !candidate.startsWith("4/") &&
+        !candidate.startsWith("{") && !candidate.startsWith("[") &&
+        !candidate.startsWith("-----BEGIN") &&
+        !Regex("eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+").matches(candidate)
+    ) { "Use only a short-lived OAuth access token, not a refresh token, authorization code, ID token or private key." }
+}
+
 internal data class PlayOAuthRegistration(val packageName: String, val signingSha1: List<String>)
 internal data class PlayNativeAuthorization(
     val state: PlayAuthorizationState,
@@ -143,11 +160,12 @@ internal data class PlayNativeAuthorization(
 internal fun rememberPlayAuthorization(): PlayNativeAuthorization {
     val context = LocalContext.current
     val activity = remember(context) { context.findPublishActivity() }
-    val client = remember(context) { Identity.getAuthorizationClient(context) }
+    // Manual token import must still render if native Google authorization cannot initialize.
+    val client = remember(context) { runCatching { Identity.getAuthorizationClient(context) }.getOrNull() }
     val state = remember(client) {
         PlayAuthorizationState { token ->
             // Clear the Play services cache as well as our memory. A cache-clear failure must never log a token.
-            runCatching { client.clearToken(ClearTokenRequest.builder().setToken(token).build()) }
+            runCatching { client?.clearToken(ClearTokenRequest.builder().setToken(token).build()) }
         }
     }
     var registration by remember(context) { mutableStateOf<PlayOAuthRegistration?>(null) }
@@ -157,7 +175,7 @@ internal fun rememberPlayAuthorization(): PlayNativeAuthorization {
         val account = state.pendingAccount
         val token = result.accessToken
         if (state.closed || attempt != state.generation) {
-            if (token != null) runCatching { client.clearToken(ClearTokenRequest.builder().setToken(token).build()) }
+            if (token != null) runCatching { client?.clearToken(ClearTokenRequest.builder().setToken(token).build()) }
             return
         }
         if (account == null || token.isNullOrBlank() || ANDROID_PUBLISHER_SCOPE !in result.grantedScopes) {
@@ -181,7 +199,8 @@ internal fun rememberPlayAuthorization(): PlayNativeAuthorization {
                 state.error = "Authorization was cancelled. No publishing request was made."
             } else {
                 try {
-                    acceptResult(client.getAuthorizationResultFromIntent(result.data), resolutionAttempt)
+                    val activeClient = client ?: error("Native Google authorization is unavailable.")
+                    acceptResult(activeClient.getAuthorizationResultFromIntent(result.data), resolutionAttempt)
                 } catch (failure: Exception) {
                     state.authorizing = false
                     state.pendingAccount = null
@@ -193,13 +212,20 @@ internal fun rememberPlayAuthorization(): PlayNativeAuthorization {
 
     fun authorizeAccount(account: Account, attempt: Long) {
         if (state.closed || attempt != state.generation) return
+        val activeClient = client
+        if (activeClient == null) {
+            state.authorizing = false
+            state.pendingAccount = null
+            state.error = "Device-account authorization is unavailable. You can still use a browser-issued session access token."
+            return
+        }
         state.pendingAccount = account
         val request = publisherAuthorizationRequest(account)
-        client.authorize(request)
+        activeClient.authorize(request)
             .addOnSuccessListener { result ->
                 if (state.closed || attempt != state.generation) {
                     result.accessToken?.let { token ->
-                        runCatching { client.clearToken(ClearTokenRequest.builder().setToken(token).build()) }
+                        runCatching { client?.clearToken(ClearTokenRequest.builder().setToken(token).build()) }
                     }
                 } else if (result.hasResolution()) {
                     val pending = result.pendingIntent
@@ -252,7 +278,7 @@ internal fun rememberPlayAuthorization(): PlayNativeAuthorization {
     LaunchedEffect(state.connected, state.expiresAtElapsed) {
         if (state.connected) {
             delay((state.expiresAtElapsed - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
-            state.disconnect("This session access token needs renewal. Authorize again; your nonsecret form and edit details remain here.")
+            state.disconnect("This session has reached its local time limit. Import a fresh access token or use the optional device-account method. Your nonsecret form and edit details remain here.")
         }
     }
     DisposableEffect(state, activity) {
@@ -266,8 +292,8 @@ internal fun rememberPlayAuthorization(): PlayNativeAuthorization {
             state.close()
         }
     }
-    return PlayNativeAuthorization(state, activity != null, authorize = {
-        if (!state.closed && !state.authorizing) {
+    return PlayNativeAuthorization(state, activity != null && client != null, authorize = {
+        if (!state.closed && !state.authorizing && activity != null && client != null) {
             state.startAttempt()
             try {
                 val options = AccountPicker.AccountChooserOptions.Builder()

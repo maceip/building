@@ -4,12 +4,12 @@ Research checked against official documentation and the public Android Publisher
 
 ## What is implemented
 
-`services/developer-workbench/.../publish` contains a typed, Android-compatible HTTP client, signed-AAB and image preflight, session access-token provider, fact-based release checklist, resumable upload handling, edit/listing/image/track operations, explicitly confirmed commit, separately confirmed Internal App Sharing and Data Safety operations, and release-status monitoring. Android `workbench/publish` supplies native Google authorization and a scrollable publishing screen.
+`services/developer-workbench/.../publish` contains a typed, Android-compatible HTTP client, signed-AAB and image preflight, session access-token provider, fact-based release checklist, resumable upload handling, edit/listing/image/track operations, explicitly confirmed commit, separately confirmed Internal App Sharing and Data Safety operations, and release-status monitoring. Android exposes **Settings → Build & Run → Google Play** with four steps: **Bundle, Access, Release, Review**. Artifact inspection and release preparation do not require signing in. The existing store listing and images are preserved by default; listing replacement and image changes are explicit opt-ins. Independent sharing/Data safety writes and recovery details remain in More.
 
 The intended path for an existing initialized Play application is:
 
-1. Authorize a Google user with the `androidpublisher` scope, or supply a previously obtained short-lived access token for this session.
-2. Build/select an actual signed AAB, inspect its manifest/signature, review listing text and real image assets, and select a track returned by the API.
+1. Build/select an actual signed AAB and inspect its manifest/signature locally, without account access.
+2. Import a short-lived `androidpublisher` access token or optionally authorize an existing device account; explicitly check read access. Select the release destination and a track returned by the API. Leave the store listing unchanged unless updating it is intentional.
 3. Review the exact package, artifact, account, listing/image changes and track release before staging an edit.
 4. Upload, stage, and validate; inspect the resulting change summary.
 5. Confirm commit separately. The client refuses to cancel an existing review implicitly.
@@ -19,7 +19,11 @@ No live Google write was performed during implementation/testing. Local protocol
 
 ## Authentication and credentials
 
-Use Google's [Android AuthorizationClient](https://developer.android.com/identity/authorization) with the Android package/signing-certificate OAuth registration and the scope `https://www.googleapis.com/auth/androidpublisher`. Identity sign-in alone does not authorize Publisher API calls. The app presents actual installed package/SHA-1 setup details when authorization is not configured.
+The native method uses Google's [Android AuthorizationClient](https://developer.android.com/identity/authorization) and Android account chooser. It only selects device accounts and needs the installed package/signing-certificate OAuth registration. It is now optional, rather than the first blocking screen.
+
+The first-class alternative imports a short-lived user OAuth access token issued in an external browser or on a computer. It does **not** add the Play publishing account to Android. The account label remains unverified; importing syntactically valid text does not establish scope, expiry or permissions. **Check Play access** explicitly performs only `GET applications/{package}/tracks/{track}/releases`; success establishes that read, not account identity or all publishing privileges. Checks are invalidated when the identity/package/track changes. Account, app and upload-certificate attestations also reset when the identity, package or verified bundle changes.
+
+Expandable guidance links to [Google OAuth Playground](https://developers.google.com/oauthplayground/), which documents custom scopes, Online access, authorization-code exchange and short-lived access tokens. The scope is `https://www.googleapis.com/auth/androidpublisher`. No successful grant from its public test client for the owner's account is claimed; Google can reject the scope/account, in which case trusted owner-controlled OAuth tooling is needed. Only the resulting access token belongs in the IDE—not a refresh token, authorization code, client secret or service-account key. Direct browser-to-app OAuth is **not configured**: opening the browser or Console alone does not authorize the API. A registered developer-owned web flow and secure handoff would be separate implementation/setup.
 
 Tokens remain in memory and are cleared when the publishing UI is disposed or disconnected. A token fallback cannot create a refresh token, configure the user's Cloud project, or bypass missing Play permissions. New credentials/account identity invalidate old local confirmations. Native account reauthorization must still match the selected account.
 
@@ -27,7 +31,7 @@ Do not import service-account private keys into the Android IDE. Google explicit
 
 [Embedded controlled WebView OAuth is prohibited](https://developers.google.com/identity/protocols/oauth2/policies). The implementation does not inject Play Console scripts or improvise Android custom-scheme/loopback OAuth redirects. See also [native-app OAuth guidance](https://developers.google.com/identity/protocols/oauth2/native-app).
 
-The workbench stops its interactive runtime before composing publishing. This reduces accidental overlap; it does **not** turn same-UID project execution into a security sandbox. Do not authorize publishing while running untrusted project/build/plugin code.
+The standalone Google Play screen stops its interactive runtime before composing publishing. This reduces accidental overlap; it does **not** turn same-UID project execution into a security sandbox. Do not authorize publishing while running untrusted project/build/plugin code.
 
 ## Corrections to the original draft
 
