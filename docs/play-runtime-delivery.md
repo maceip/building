@@ -58,6 +58,11 @@ Local testing simulates Play transport; the signed split files, integrity checks
 native processes and package managers are real. An internal Play track remains
 necessary to establish actual store delivery.
 
+For the signed store candidate, use the [internal testing preparation workflow](play-internal-testing.md).
+It builds the release application ID with Play delivery, verifies the upload
+signature and actual bundle, and stages Console-ready files separately from this
+debug/local-simulation build.
+
 ### Verified 2026-10-15
 
 ARM64 emulator `emulator-5556`, Android API 36, 4096-byte pages:

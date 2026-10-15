@@ -1,7 +1,11 @@
 plugins { id("com.android.dynamic-feature") }
 
-// Match the base application's dependency conflict rules.
-configurations.matching { it.name.endsWith("CompileClasspath") || it.name.endsWith("RuntimeClasspath") }.configureEach {
+// Match the base application's dependency conflict rules, including the release
+// lint model, which resolves base dependencies on its own checks classpath.
+configurations.matching {
+    it.name.endsWith("CompileClasspath") || it.name.endsWith("RuntimeClasspath") ||
+        it.name.endsWith("LintChecksClasspath")
+}.configureEach {
     exclude(group = "org.jetbrains.kotlin", module = "kotlin-parcelize-runtime")
     exclude(group = "org.jetbrains.kotlin", module = "kotlin-android-extensions-runtime")
     resolutionStrategy.capabilitiesResolution.withCapability("com.google.guava:guava") {

@@ -40,6 +40,12 @@ class AndroidReleaseTest(unittest.TestCase):
             self.assertEqual(build, ":ide-android:bundleRelease" in command)
             self.assertFalse(any("PASSWORD" in arg or "SUPABASE_KEY" in arg for arg in command))
 
+    def test_play_build_selects_delivery_without_changing_default_sideload_mode(self):
+        self.assertIn("-PIDE_RUNTIME_DELIVERY=play", release.gradle_command(True, "play"))
+        self.assertIn("-PIDE_RUNTIME_DELIVERY=bundled", release.gradle_command(True))
+        with self.assertRaises(ValueError):
+            release.gradle_command(True, "unknown")
+
     def test_preflight_normalizes_version_and_clears_disabled_ad_overrides(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

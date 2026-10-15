@@ -177,22 +177,27 @@ def verify_artifact_configuration(artifact, env):
         verify_configuration(json.loads(archive.read(path)), env)
 
 
-def gradle_command(build):
+def gradle_command(build, runtime_delivery="bundled"):
+    if runtime_delivery not in ("bundled", "play"):
+        fail("Runtime delivery must be bundled or play.")
     tasks = [":ide-android:generateReleaseConfiguration"]
     if build:
         tasks += [":ide-android:assembleRelease", ":ide-android:bundleRelease"]
-    # Only this non-secret selector is on the command line. All validated values travel in env.
-    return [str(ROOT / "gradlew"), *tasks, "-PANDROID_RELEASE_CONFIG_SOURCE=environment", "--console=plain"]
+    # Only non-secret selectors are on the command line. All validated values travel in env.
+    return [str(ROOT / "gradlew"), *tasks, "-PANDROID_RELEASE_CONFIG_SOURCE=environment",
+            "-PIDE_RUNTIME_DELIVERY=" + runtime_delivery, "--console=plain"]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env.production")
     parser.add_argument("--build", action="store_true", help="Build and verify signed release APK and AAB files.")
+    parser.add_argument("--runtime-delivery", choices=("bundled", "play"), default="bundled",
+                        help="Use the on-demand Node feature for Play; default keeps offline sideloading bundled.")
     args = parser.parse_args()
     env = environment(args.env_file)
     sdk, fingerprint = preflight(env)
-    subprocess.run(gradle_command(args.build), cwd=ROOT, env=env, check=True)
+    subprocess.run(gradle_command(args.build, args.runtime_delivery), cwd=ROOT, env=env, check=True)
     record = ROOT / "app/ide-android/build/generated/release-configuration/building-release-config.json"
     verify_configuration(json.loads(record.read_text()), env)
     if not args.build:
