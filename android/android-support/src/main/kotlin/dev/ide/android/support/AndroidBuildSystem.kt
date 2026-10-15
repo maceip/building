@@ -24,6 +24,9 @@ import dev.ide.android.support.tasks.GenerateViewBindingTask
 import dev.ide.android.support.tasks.InjectAppLogProviderTask
 import dev.ide.android.support.tasks.InjectCrashlyticsMappingFileIdTask
 import dev.ide.android.support.tasks.InstrumentClassesTask
+import dev.ide.build.engine.androidTestKotlinSourceFiles
+import dev.ide.build.engine.androidTestJavaSourceFiles
+import dev.ide.android.support.tasks.InstrumentationManifestTask
 import dev.ide.android.support.tasks.L8DexTask
 import dev.ide.android.support.tasks.ManifestMergeTask
 import dev.ide.android.support.tasks.MergeJavaResourcesTask
@@ -62,6 +65,13 @@ import dev.ide.android.support.tools.R8Subprocess
 import dev.ide.android.support.tools.ResourceShrink
 import dev.ide.android.support.tools.Shrinker
 import dev.ide.android.support.tools.SigningConfig
+import dev.ide.build.ProgramInterpreter
+import dev.ide.build.ProgramIo
+import dev.ide.build.VariantSelector
+import dev.ide.build.jvm.test.TestJavaCompileTask
+import dev.ide.build.jvm.test.TestKotlinCompileTask
+import dev.ide.build.jvm.test.TestRunTask
+import dev.ide.build.jvm.test.TestSelector
 import dev.ide.build.BuildConfiguration
 import dev.ide.build.BuildContext
 import dev.ide.build.BuildEnv
@@ -230,7 +240,48 @@ class AndroidBuildSystem(
     private fun env(project: Project): BuildEnv =
         DefaultBuildEnv(Paths.get(project.rootDir.path), bootClasspathFor = { compileBootclasspath })
 
-    override fun createBuildGraph(project: Project, request: BuildRequest, ctx: BuildContext): TaskGraph {
+    override fun createBuildGraph(project: Project, request: BuildRequest, ctx: BuildContext): TaskGraph =
+        buildGraph(project, request, ctx, test = null)
+
+    /**
+     * Build an Android [module]'s local unit tests (`src/test`, a KMP module's `commonTest`) against its
+     * [variantName] variant and run them: the module compiles as for any build, then its tests compile against
+     * that output and its classpath, and run on the bytecode VM like a plain JVM module's
+     * ([dev.ide.build.jvm.JavaBuildSystem.createTestGraph]). On device `android.*` calls reach the real
+     * framework; on the desktop they reach `android.jar`'s stubs, as in Gradle without Robolectric.
+     */
+    fun createTestGraph(
+        project: Project,
+        module: Module,
+        variantName: String,
+        selector: TestSelector,
+        interpreter: ProgramInterpreter,
+        programIo: ProgramIo? = null,
+        ctx: BuildContext = BuildContext(env = env(project)),
+    ): TaskGraph = buildGraph(
+        project, BuildRequest(listOf(module.id), VariantSelector(variantName), BuildGoal.COMPILE_ONLY), ctx,
+        test = TestPlan(module.id, selector, interpreter, programIo),
+    )
+
+    /**
+     * Build [module]'s app for [variantName] AND its instrumented test APK (`androidTest` sources), both signed with
+     * the variant's key, for `am instrument` to run on a device: AGP's `assemble<Variant>` plus
+     * `assemble<Variant>AndroidTest`. The test APK is at [signedAndroidTestApkPath], its package [testPackageOf].
+     */
+    fun createAndroidTestGraph(
+        project: Project,
+        module: Module,
+        variantName: String,
+        ctx: BuildContext = BuildContext(env = env(project)),
+    ): TaskGraph = buildGraph(
+        project, BuildRequest(listOf(module.id), VariantSelector(variantName), BuildGoal.ASSEMBLE), ctx,
+        test = null, androidTest = module.id,
+    )
+
+    /** A test run riding a compile-only graph: whose tests, which of them, and what runs them. */
+    private class TestPlan(val module: ModuleId, val selector: TestSelector, val interpreter: ProgramInterpreter, val io: ProgramIo?)
+
+    private fun buildGraph(project: Project, request: BuildRequest, ctx: BuildContext, test: TestPlan?, androidTest: ModuleId? = null): TaskGraph {
         val byId = project.modules.associateBy { it.id }
         val targets = (if (request.targets.isEmpty()) project.modules.map { it.id } else request.targets)
             .mapNotNull { byId[it] }
@@ -254,16 +305,17 @@ class AndroidBuildSystem(
             val targetFacet = target.facets.get(AndroidFacet.KEY) ?: continue
             for (m in moduleClosure(target, byId)) {
                 if (!registered.add(m.id)) continue
-                if (m.facets.get(AndroidFacet.KEY) != null) registerAndroidLibrary(tasks, m, byId, withJar, variant, targetFacet)
+                if (m.facets.get(AndroidFacet.KEY) != null) registerAndroidLibrary(tasks, m, byId, withJar, variant, targetFacet, test)
                 else javaPlugin.registerModule(tasks, m, byId, withJar)   // reuse the Java plugin
             }
             // An `android-lib` TARGET packages an .aar (assembleAar); an `android-app` builds the APK/AAB.
             if (target.type.id == "android-lib") {
-                // The library target isn't in its own moduleClosure — register its build tasks, then the AAR.
-                if (registered.add(target.id)) registerAndroidLibrary(tasks, target, byId, withJar = true, variant, targetFacet)
-                appendAar(tasks, target, variant, targetFacet, config)
+                // The library target isn't in its own moduleClosure — register its build tasks, then the AAR
+                // (not for a test run, which needs the library's classes and nothing packaged).
+                if (registered.add(target.id)) registerAndroidLibrary(tasks, target, byId, withJar = test == null, variant, targetFacet, test)
+                if (test == null) appendAar(tasks, target, variant, targetFacet, config)
             } else {
-                appendApp(tasks, target, variant, request.goal, byId, config)
+                appendApp(tasks, target, variant, request.goal, byId, config, test, androidTest)
             }
         }
         // Contributed build logic (BUILD_PLUGIN_EP) lands after every android/java task is registered, so it
@@ -284,6 +336,8 @@ class AndroidBuildSystem(
         goal: BuildGoal,
         byId: Map<ModuleId, Module>,
         config: BuildConfiguration,
+        test: TestPlan? = null,
+        androidTest: ModuleId? = null,
     ) {
         val facet = app.facets.get(AndroidFacet.KEY) ?: return
         // The module's compileSdk platform when one is installed, else the build's default android.jar, for
@@ -600,6 +654,14 @@ class AndroidBuildSystem(
         // The app's project-scope dex covers both the Java and (when present) the Kotlin output.
         val appProjectClasses = listOf(layout.classes) + if (appHasKotlin) listOf(layout.kotlinClasses) else emptyList()
 
+        if (test != null && test.module == app.id) {
+            registerTests(
+                tasks, app, test, step = ::step, variantConfigs = variant.configurations,
+                mainOutputs = appProjectClasses, kotlinMain = layout.kotlinClasses,
+                compileClasspath = compileClasspath, platform = compileBootclasspath, bootClasspath = bootClasspath,
+                mainTasks = listOf(compile), testRoot = layout.classes.parent, level = level,
+            )
+        }
         if (goal == BuildGoal.COMPILE_ONLY) return
 
         // Hilt: rewrite each `@AndroidEntryPoint`/`@HiltAndroidApp` class to extend its generated `Hilt_`
@@ -924,7 +986,7 @@ class AndroidBuildSystem(
             val bundleResAp = if (shrinkResources) layout.shrunkProtoAp else layout.protoAp
             val packageBundle = step("packageBundle")
             tasks.task(packageBundle, pkgDeps) {
-                BundleTask(packageBundle, bundleResAp, dexDirs, assetsDirs, listOf(layout.mergedNativeLibs), layout.unsignedAab, layout.baseModuleZip, bundler, javaResJars = listOf(layout.mergedJavaRes), artProfile = artProfile)
+                BundleTask(packageBundle, bundleResAp, dexDirs, assetsDirs, listOf(layout.mergedNativeLibs), layout.unsignedAab, layout.baseModuleZip, bundler, javaResJars = listOf(layout.mergedJavaRes), artProfile = artProfile, packaging = facet.packaging)
             }
             val signBundle = step("signBundle")
             tasks.task(signBundle, listOf(packageBundle)) {
@@ -935,11 +997,92 @@ class AndroidBuildSystem(
             return
         }
 
-        tasks.task(pkg, pkgDeps) { PackageApkTask(pkg, layout.resourcesAp, dexDirs, assetsDirs, listOf(layout.mergedNativeLibs), layout.unsignedApk, javaResJars = listOf(layout.mergedJavaRes), artProfile = artProfile) }
+        tasks.task(pkg, pkgDeps) { PackageApkTask(pkg, layout.resourcesAp, dexDirs, assetsDirs, listOf(layout.mergedNativeLibs), layout.unsignedApk, javaResJars = listOf(layout.mergedJavaRes), artProfile = artProfile, packaging = facet.packaging) }
         tasks.task(sign, listOf(pkg)) { SignApkTask(sign, layout.unsignedApk, layout.signedApk, variantSigning, signer) }
         // Top-level lifecycle aggregate (AGP's `assemble<Variant>`): fronts the signed APK.
         val assemble = step("assemble")
         tasks.task(assemble, listOf(sign)) { LifecycleTask(assemble, trackedFiles = listOf(layout.signedApk)) }
+
+        if (androidTest == app.id) {
+            val testRoot = layout.classes.parent.resolve("android-test")
+            val testLibs = AndroidLibraries.resolveInstrumentation(app, layout.explodedAar, variant.configurations)
+            val kotlinOut = testRoot.resolve("kotlin-classes")
+            val javaOut = testRoot.resolve("classes")
+            val testClasspath = (compileClasspath + appProjectClasses + testLibs.compileJars).distinct()
+            val compileTestKotlin = step("compileAndroidTestKotlin")
+            val compileTestJava = step("compileAndroidTestJava")
+            val appCompiles = listOf(compile) + listOfNotNull(compileKotlin.takeIf { appHasKotlin })
+            if (kotlin != null) tasks.task(compileTestKotlin, appCompiles) {
+                TestKotlinCompileTask(
+                    app, compileTestKotlin, bootClasspath, kotlin, plugins,
+                    testClasspath = { testClasspath }, out = kotlinOut, friends = { listOf(layout.kotlinClasses) },
+                    kotlinSources = { androidTestKotlinSourceFiles(app) }, javaSources = { androidTestJavaSourceFiles(app) },
+                )
+            }
+            tasks.task(compileTestJava, appCompiles + listOfNotNull(compileTestKotlin.takeIf { kotlin != null })) {
+                TestJavaCompileTask(
+                    app, compileTestJava, bootClasspath,
+                    testClasspath = { testClasspath + kotlinOut }, out = javaOut, sources = { androidTestJavaSourceFiles(app) },
+                )
+            }
+            // Resources: the test libraries' own (androidx.test's activity themes), linked under the test package.
+            val testPackage = testPackageOf(applicationId)
+            val testNamespace = facet.namespace + ".test"
+            val writeManifest = step("generateAndroidTestManifest")
+            val generatedManifest = testRoot.resolve("generated/AndroidManifest.xml")
+            val mergedTestManifest = testRoot.resolve("merged/AndroidManifest.xml")
+            tasks.task(writeManifest) {
+                InstrumentationManifestTask(
+                    writeManifest, testPackage, applicationId, DEFAULT_TEST_RUNNER,
+                    facet.minSdk, facet.targetSdk, generatedManifest,
+                )
+            }
+            val processTestManifest = step("processAndroidTestManifest")
+            tasks.task(processTestManifest, listOf(writeManifest)) {
+                ManifestMergeTask(
+                    processTestManifest, generatedManifest, testLibs.aarManifests, mapOf("applicationId" to testPackage),
+                    facet.minSdk, facet.targetSdk, mergedTestManifest, testPackage,
+                )
+            }
+            val mergeTestRes = step("mergeAndroidTestResources")
+            tasks.task(mergeTestRes) { MergeResourcesTask(mergeTestRes, testLibs.resDirs, testRoot.resolve("merged-res")) }
+            val compileTestRes = step("compileAndroidTestResources")
+            tasks.task(compileTestRes, listOf(mergeTestRes)) {
+                Aapt2CompileTask(compileTestRes, listOf(testRoot.resolve("merged-res")), testRoot.resolve("compiled-res"), aapt2)
+            }
+            val linkTest = step("linkAndroidTestResources")
+            val testAp = testRoot.resolve("resources.ap_")
+            tasks.task(linkTest, listOf(compileTestRes, processTestManifest)) {
+                Aapt2LinkTask(
+                    linkTest, testRoot.resolve("compiled-res"), mergedTestManifest, androidJar, testNamespace,
+                    testLibs.aarPackages, facet.minSdk, facet.targetSdk, versionCode, versionName,
+                    testRoot.resolve("gen"), testAp, aapt2,
+                )
+            }
+            val testRJar = testRoot.resolve("R.jar")
+            val testR = step("generateAndroidTestRFile")
+            tasks.task(testR, listOf(linkTest)) { GenerateRJarTask(testR, testRoot.resolve("gen"), testRJar) }
+            // Code: the compiled tests in one jar, dexed with the libraries the app does not already carry.
+            val testJar = testRoot.resolve("tests.jar")
+            val jarTests = step("jarAndroidTestClasses")
+            tasks.task(jarTests, listOf(compileTestJava)) { JarTask(jarTests, listOf(kotlinOut, javaOut), testJar) }
+            val dexTests = step("dexAndroidTest")
+            val testDex = testRoot.resolve("dex")
+            tasks.task(dexTests, listOf(jarTests, testR)) {
+                DexExternalLibsTask(dexTests, listOf(testJar, testRJar) + testLibs.dexJars, sdk.androidJar, facet.minSdk, false, testDex, mergeDexer)
+            }
+            val packageTest = step("packageAndroidTest")
+            val unsignedTest = testRoot.resolve("unsigned-androidTest.apk")
+            val signedTest = signedAndroidTestApkPath(app, variant.name)
+            tasks.task(packageTest, listOf(dexTests, linkTest)) {
+                PackageApkTask(packageTest, testAp, listOf(testDex), testLibs.assetsDirs, emptyList(), unsignedTest, packaging = facet.packaging)
+            }
+            // The same key as the app: Android only lets an instrumentation into an app signed like it.
+            val signTest = step("signAndroidTest")
+            tasks.task(signTest, listOf(packageTest)) { SignApkTask(signTest, unsignedTest, signedTest, variantSigning, signer) }
+            val assembleTest = TaskName(":${app.name}:assemble${v}AndroidTest")
+            tasks.task(assembleTest, listOf(signTest, assemble)) { LifecycleTask(assembleTest, trackedFiles = listOf(signedTest)) }
+        }
     }
 
     /**
@@ -948,7 +1091,7 @@ class AndroidBuildSystem(
      * shared `processResources`/`classes`/`jar` lifecycle from the Java plugin. A plain `java-lib` goes
      * straight through [JavaPlugin.registerModule]; this is the android variant of that.
      */
-    private fun registerAndroidLibrary(tasks: TaskContainer, m: Module, byId: Map<ModuleId, Module>, withJar: Boolean, consumerVariant: AndroidVariant, consumerFacet: AndroidFacet) {
+    private fun registerAndroidLibrary(tasks: TaskContainer, m: Module, byId: Map<ModuleId, Module>, withJar: Boolean, consumerVariant: AndroidVariant, consumerFacet: AndroidFacet, test: TestPlan? = null) {
         val classesOut = outputDir(m)
         val buildDir = classesOut.parent
         // Build this dependency lib in the variant matching the app being assembled (build-type + dimension-aware
@@ -1111,6 +1254,77 @@ class AndroidBuildSystem(
             tasks.task(jar, listOf(classes) + listOfNotNull(transformHilt)) {
                 JarTask(jar, if (transformHilt != null) listOf(hiltClasses) else classDirs, jarPath(m))
             }
+        }
+        if (test != null && test.module == m.id) {
+            registerTests(
+                tasks, m, test, step = { TaskName(":${m.name}:$it") }, variantConfigs = configs,
+                mainOutputs = classDirs + buildDir.resolve("resources"), kotlinMain = libKotlin,
+                compileClasspath = classpath.toList() + classesOut, platform = compileBootclasspath, bootClasspath = bootClasspath,
+                mainTasks = listOf(classes), testRoot = classesOut.parent, level = level,
+            )
+        }
+    }
+
+    /**
+     * The test half of a [TestPlan] for [m]: `compileTestKotlin` and `compileTestJava` against the module's
+     * output ([mainOutputs]), what it compiled against ([compileClasspath], the [platform] jar included), and its
+     * test-scoped libraries, into dirs beside the module's own classes under [testRoot]; then `test`, which runs
+     * them on the VM. On device `android.*` is the host's own framework, so the platform stays off the run's
+     * classpath. A host without one (the desktop) interprets `android/` from the platform jar instead, whose stubs
+     * read as defaults (`Build.VERSION.SDK_INT` is 0) and throw on a call, as a Gradle local unit test does.
+     */
+    private fun registerTests(
+        tasks: TaskContainer,
+        m: Module,
+        test: TestPlan,
+        step: (String) -> TaskName,
+        variantConfigs: Set<String>?,
+        mainOutputs: List<Path>,
+        kotlinMain: Path,
+        compileClasspath: List<Path>,
+        platform: List<Path>,
+        bootClasspath: List<Path>,
+        mainTasks: List<TaskName>,
+        testRoot: Path,
+        level: String,
+    ) {
+        val kotlinOut = testRoot.resolve("test-kotlin-classes")
+        val javaOut = testRoot.resolve("test-classes")
+        // Test-scoped jars and module outputs (with their Kotlin siblings). An AAR in test scope is left out:
+        // its classes would need exploding, and a local unit test's libraries are plain jars in practice.
+        val testEntries = m.classpath(DependencyScope.TEST_IMPLEMENTATION, variant = variantConfigs).entries
+        val testModules = testEntries.filter { it.kind == ClasspathEntryKind.MODULE_OUTPUT }.map { Paths.get(it.root.path) }
+        val testLibs = testEntries.filter { it.kind == ClasspathEntryKind.LIBRARY }.map { Paths.get(it.root.path) }
+            .filter { !it.toString().endsWith(".aar") }
+        val testClasspath = (mainOutputs + compileClasspath + testModules + testModules.map { it.resolveSibling("kotlin-classes") } + testLibs).distinct()
+        val compileKotlin = step("compileTestKotlin")
+        val compileJava = step("compileTestJava")
+        val run = step("test")
+        if (kotlin != null) {
+            tasks.task(compileKotlin, mainTasks) {
+                TestKotlinCompileTask(
+                    m, compileKotlin, bootClasspath, kotlin, plugins,
+                    testClasspath = { testClasspath }, out = kotlinOut, friends = { listOf(kotlinMain) },
+                )
+            }
+        }
+        tasks.task(compileJava, mainTasks + listOfNotNull(compileKotlin.takeIf { kotlin != null })) {
+            TestJavaCompileTask(m, compileJava, bootClasspath, testClasspath = { testClasspath + kotlinOut }, out = javaOut)
+        }
+        val platformSet = platform.map { it.toAbsolutePath().normalize() }.toSet()
+        val hostHasAndroid = runCatching { Class.forName("android.os.Build") }.isSuccess
+        tasks.task(run, listOf(compileJava)) {
+            TestRunTask(
+                run, m, test.selector, test.interpreter, test.io,
+                testDirs = { listOf(kotlinOut, javaOut) },
+                runtimeClasspath = {
+                    (listOf(kotlinOut, javaOut) + testClasspath.filter { it.toAbsolutePath().normalize() !in platformSet } +
+                        if (hostHasAndroid) emptyList() else platform)
+                        .filter { Files.isDirectory(it) || Files.isRegularFile(it) }
+                },
+                runnerDir = testRoot.resolve("test-runner"),
+                interpretPrefixes = listOf("kotlin/test/") + if (hostHasAndroid) emptyList() else listOf("android/"),
+            )
         }
     }
 
@@ -1379,11 +1593,13 @@ class AndroidBuildSystem(
      * The source-set names a variant draws from, for resolving a CONVENTIONAL folder under `src/`. Takes the
      * variant's `configurations` (the unfiltered candidate names) rather than its `activeSourceSets`, so a
      * folder is still found for a source set the model never declared at all (`src/debug/jniLibs` in a module
-     * whose only declared set is `main`). `main` is always a candidate.
+     * whose only declared set is `main`). `main` is always a candidate, followed by the variant's shared sets
+     * (see [AndroidVariants.sharedSourceSets]), which are active in every variant but no variant's configuration.
      */
     private fun sourceSetNames(module: Module, variant: AndroidVariant?): Set<String> =
         LinkedHashSet<String>().apply {
             add("main")
+            if (variant != null) addAll(variant.activeSourceSets.map { it.name }.filter { it !in variant.configurations })
             addAll(
                 variant?.configurations
                     ?: module.sourceSets.filter { it.scope != DependencyScope.TEST_IMPLEMENTATION }.map { it.name },
@@ -1501,6 +1717,17 @@ class AndroidBuildSystem(
 
         /** The signed-APK output path for [module] + [variantName] (matches [Layout.signedApk]) — so a host
          *  can locate the artifact to install after an `assemble`. */
+        /** The default instrumentation runner, as AGP's templates set `testInstrumentationRunner`. */
+        const val DEFAULT_TEST_RUNNER = "androidx.test.runner.AndroidJUnitRunner"
+
+        /** The instrumented test APK's package for an app with id [applicationId] (AGP's `testApplicationId`). */
+        fun testPackageOf(applicationId: String): String = "$applicationId.test"
+
+        /** The signed instrumented test APK for [module] + [variantName] (AGP's `outputs/apk/androidTest/<variant>`). */
+        fun signedAndroidTestApkPath(module: Module, variantName: String): Path =
+            buildDir(module).resolve("outputs").resolve("apk").resolve("androidTest").resolve(variantName)
+                .resolve("${module.name}-$variantName-androidTest.apk")
+
         fun signedApkPath(module: Module, variantName: String): Path {
             val buildDir = buildDir(module)
             return buildDir.resolve("outputs").resolve("apk").resolve(variantName).resolve("${module.name}-$variantName.apk")

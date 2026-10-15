@@ -42,8 +42,12 @@ import dev.ide.build.RunWindow
 import dev.ide.build.engine.SimpleTaskContext
 import dev.ide.build.engine.TaskExecutorImpl
 import dev.ide.build.engine.TaskStatus
+import dev.ide.build.engine.hasAndroidTestSources
+import dev.ide.build.engine.hasTestSources
 import dev.ide.build.engine.jarPath
 import dev.ide.build.jvm.JavaBuildSystem
+import dev.ide.build.jvm.test.TestProtocol
+import dev.ide.build.jvm.test.TestSelector
 import dev.ide.core.applog.AppLogEntry
 import dev.ide.gradle.GradleBuildSystem
 import dev.ide.model.BuildSystemId
@@ -55,6 +59,7 @@ import dev.ide.core.perf.MEM_HEARTBEAT_EVERY_SAMPLES
 import dev.ide.core.perf.MEM_SAMPLE_INTERVAL_MS
 import dev.ide.core.perf.MemSample
 import dev.ide.core.perf.PeakHeap
+import dev.ide.core.sdk.BundledAndroidToolchain
 import dev.ide.core.PermissionPolicy
 import dev.ide.core.plugins.PluginProject
 import dev.ide.lang.kotlin.compile.BundledKotlinStdlib
@@ -81,6 +86,7 @@ import dev.ide.ui.backend.BuildState
 import dev.ide.ui.backend.BuildStepUi
 import dev.ide.ui.backend.ConsoleChunk
 import dev.ide.ui.backend.ConsoleChunkKind
+import dev.ide.ui.backend.TestOutput
 import dev.ide.ui.backend.RunConsoleUi
 import dev.ide.ui.backend.RunFrameUi
 import dev.ide.ui.backend.RunPhase
@@ -191,8 +197,9 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
     /**
      * The native Android build. On-device ([ctx.androidTools] non-null) it is the in-process wiring (D8/R8/
      * apksigner in-process, bundled native `aapt2`/`zipalign` from `nativeLibraryDir`, debug keystore from
-     * assets). On the desktop it is the subprocess wiring over a detected SDK, or null when none is
-     * installed (the UI then reports "install an SDK" for assemble tasks).
+     * assets). On the desktop it is the subprocess wiring over an installed SDK; without one, the in-process
+     * wiring over the toolchain the desktop app bundles ([BundledAndroidToolchain]). Null when neither exists
+     * (the UI then reports "install an SDK" for assemble tasks).
      */
 
 
@@ -258,13 +265,30 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                 platformFor = platformJarFor,
             )
         }
-        val sdk =
-            AndroidSdk.findSdkRoot()?.let { AndroidSdk.detect(it) }?.takeIf { it.isComplete() }
-                ?: return@lazy null
+        val installed = BundledAndroidToolchain.installed()
+        if (installed != null) {
+            val signing =
+                DebugKeystore.getOrCreate(ctx.store.rootPath.resolve(".platform/debug.ks"), installed.keytool)
+            return@lazy AndroidBuildSystem.subprocess(
+                installed,
+                signing,
+                bootClasspath = ctx.compileBootClasspath,
+                kotlin = incrementalKotlin,
+                plugins = kotlinCompilerPlugins,
+                generators = sourceGenerators,
+                classTransforms = classTransforms,
+                dexCacheRoot = dexCache,
+                signingResolver = signingResolver,
+                platformFor = platformJarFor,
+            )
+        }
+        // No SDK on this machine: the desktop app's own android.jar + aapt2, with D8 and apksigner in-process
+        // (the desktop launcher bundles both libraries), so a fresh install builds an APK with nothing to set up.
+        val bundled = BundledAndroidToolchain.bundled() ?: return@lazy null
         val signing =
-            DebugKeystore.getOrCreate(ctx.store.rootPath.resolve(".platform/debug.ks"), sdk.keytool)
-        AndroidBuildSystem.subprocess(
-            sdk,
+            DebugKeystore.getOrCreate(ctx.store.rootPath.resolve(".platform/debug.ks"), bundled.keytool)
+        AndroidBuildSystem.inProcess(
+            bundled,
             signing,
             bootClasspath = ctx.compileBootClasspath,
             kotlin = incrementalKotlin,
@@ -707,19 +731,35 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
             )
             add(RunTaskOption("build:${m.name}", "Build ${m.name}", "build"))
         }
-        for (m in ctx.modules().filter { it.type.id == "android-app" && !gradleBound(it) }) {
+
+        // Every module with tests can run them: a console module on its own output, an Android one against its
+        // active variant.
+        for (m in ctx.modules()) {
+            if (hasTestSources(m)) add(RunTaskOption("test:${m.name}", "Test ${m.name}", "test"))
+            // Instrumented tests need a device the IDE drives over adb, so only where the installer can.
+            if (m.type.id == "android-app" && ctx.apkInstaller?.runsInstrumentation == true && hasAndroidTestSources(m)) {
+                add(RunTaskOption("${TestOutput.INSTRUMENTED}:${m.name}", "Instrumented tests · ${m.name}", "test"))
+            }
+        }
+        for (m in ctx.modules().filter { it.type.id == "android-app" }) {
             for (v in AndroidVariants.compute(m)) {
                 val cap = v.name.replaceFirstChar { it.uppercase() }
-                // On device, the android Run builds + installs + launches; on desktop it stops at assemble.
-                if (ctx.apkInstaller != null) add(
-                    RunTaskOption(
-                        "androidRun:${m.name}:${v.name}",
-                        if (PluginProject.isPluginModule(m)) "Install plugin $cap · ${m.name}"
-                        else "Run $cap · ${m.name}",
-                        "android",
+                // On device, the android Run builds + installs + launches. On desktop it does the same onto a
+                // device over adb, one entry per connected device, and the assemble task stays beside them.
+                val installer = ctx.apkInstaller
+                if (installer != null) {
+                    val action = if (PluginProject.isPluginModule(m)) "Install plugin" else "Run"
+                    val targets = if (installer.choosesTarget) installer.targets() else emptyList()
+                    if (targets.isEmpty()) add(
+                        RunTaskOption("androidRun:${m.name}:${v.name}", "$action $cap · ${m.name}", "android")
                     )
-                )
-                else add(
+                    for (t in targets) add(
+                        RunTaskOption(
+                            "androidRun:${m.name}:${v.name}:${t.id}", "$action $cap · ${m.name} · ${t.label}", "android",
+                        )
+                    )
+                }
+                if (installer == null || installer.choosesTarget) add(
                     RunTaskOption(
                         "assemble:${m.name}:${v.name}", "assemble$cap · ${m.name}", "android"
                     )
@@ -821,6 +861,101 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                             instanceMain = target.instance
                         ), "> Run $mainClass", onComplete = ::finalizeRunConsole
                     )
+                }
+
+                id.startsWith("${TestOutput.INSTRUMENTED}:") -> {
+                    // androidTest:<module>[:<target>…]: build the app and its test APK, then run them on a device.
+                    val (moduleName, targets) = TestOutput.parseTaskId(id)!!
+                    val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return fail(
+                        "No module '$moduleName'."
+                    )
+                    if (module.type.id != "android-app") return fail(
+                        "Instrumented tests run inside an app; ${module.name} is not an Android application module."
+                    )
+                    unresolvedBlocker(module)?.let { return fail(it) }
+                    val installer = ctx.apkInstaller?.takeIf { it.runsInstrumentation } ?: return fail(
+                        "Instrumented tests (androidTest) run on a phone or emulator over adb, from the desktop IDE. " +
+                            "Here, run the module's local tests (Test ${module.name})."
+                    )
+                    val android = androidBuild ?: return fail("Android SDK not found.")
+                    val facet = module.facets.get(AndroidFacet.KEY)
+                        ?: return fail("No Android package for '${module.name}'.")
+                    val project = ctx.projectOf(module)
+                        ?: return fail("Internal error: no project for module '${module.name}'.")
+                    val variant = ctx.activeVariant(module)
+                    val appId = AndroidVariants.select(module, variant)
+                        ?.let { AndroidVariants.applicationId(facet, it) } ?: facet.namespace
+                    // The runner selects classes and methods, not one run of a parameterized test.
+                    val selected = targets.map { it.substringBefore('[') }.distinct()
+                    val label = when {
+                        selected.size > 1 -> "${selected.size} tests in ${module.name}"
+                        selected.size == 1 -> selected.single().substringAfterLast('.').replace('#', '.')
+                        else -> "Instrumented tests in ${module.name}"
+                    }
+                    val graph = android.createAndroidTestGraph(project, module, variant, buildContext())
+                    val sessionId = runConsoleSeq.incrementAndGet()
+                    val io = RunProgramIo(sessionId, module.name, label)
+                    currentRunIo = io
+                    _runConsole.value = RunConsoleUi(sessionId, module.name, label)
+                    val args = if (selected.isEmpty()) emptyList() else listOf("class" to selected.joinToString(","))
+                    launch(
+                        module.name, graph, "> Instrumented tests $label · $variant", firstBuildDexBanner(module),
+                        onComplete = ::finalizeRunConsole,
+                    ) { log ->
+                        io.started()
+                        io.stdout(TestProtocol.record(TestOutput.RUN, message = TestOutput.INSTRUMENTED))
+                        val results = InstrumentationResults(io::stdout)
+                        val started = installer.runInstrumentation(
+                            AndroidBuildSystem.signedApkPath(module, variant), appId,
+                            AndroidBuildSystem.signedAndroidTestApkPath(module, variant), AndroidBuildSystem.testPackageOf(appId),
+                            AndroidBuildSystem.DEFAULT_TEST_RUNNER, args, null, log, results::line,
+                        )
+                        val problem = results.finish()
+                        problem?.let { io.stdout("\n$it\n") }
+                        io.exited(if (!started || problem != null || results.failed > 0) 1 else 0)
+                    }
+                }
+
+                id.startsWith("test:") -> {
+                    // test:<module>[:<target>…], targets (newline-separated) being `classFqn` or `classFqn#method`
+                    val (moduleName, targets) = TestOutput.parseTaskId(id)!!
+                    val selectors = targets.map { t ->
+                        if ('#' in t) TestSelector(t.substringBefore('#'), t.substringAfter('#')) else TestSelector(t)
+                    }
+                    val selector = when (selectors.size) {
+                        0 -> TestSelector.ALL
+                        1 -> selectors.single()
+                        else -> TestSelector(anyOf = selectors)
+                    }
+                    val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return fail(
+                        "No module '$moduleName'."
+                    )
+                    unresolvedBlocker(module)?.let { return fail(it) }
+                    val project = ctx.projectOf(module)
+                        ?: return fail("Internal error: no project for module '${module.name}'.")
+                    val label = when {
+                        selectors.size > 1 -> "${selectors.size} tests in ${module.name}"
+                        selector.method != null -> "${selector.classFqn!!.substringAfterLast('.')}.${selector.method}"
+                        selector.classFqn != null -> selector.classFqn!!.substringAfterLast('.')
+                        else -> "Tests in ${module.name}"
+                    }
+                    // A test run is a console run whose program is the generated runner: its result records
+                    // ride the same transcript, and the Run screen splits them out (TestOutput).
+                    val sessionId = runConsoleSeq.incrementAndGet()
+                    val io = RunProgramIo(sessionId, module.name, label)
+                    currentRunIo = io
+                    _runConsole.value = RunConsoleUi(sessionId, module.name, label)
+                    // An Android module's local unit tests build against its active variant's output.
+                    val graph = if (isConsoleRunModule(module)) {
+                        buildSystem.createTestGraph(project, module, selector, ctx.programInterpreter, io)
+                    } else {
+                        val android = androidBuild ?: run {
+                            finalizeRunConsole(succeeded = false)
+                            return fail("Android SDK (platform + build-tools) not found — install one to run an Android module's tests.")
+                        }
+                        android.createTestGraph(project, module, ctx.activeVariant(module), selector, ctx.programInterpreter, io, buildContext())
+                    }
+                    launch(module.name, graph, "> Test $label", onComplete = ::finalizeRunConsole)
                 }
 
                 id.startsWith("assemble:") -> {
@@ -960,7 +1095,10 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                 }
 
                 id.startsWith("androidRun:") -> {
-                    val parts = id.removePrefix("androidRun:").split(":")
+                    // module:variant[:target]. Limit 3, because a target can be a network adb serial
+                    // (`192.168.1.5:5555`) with a colon of its own.
+                    val parts = id.removePrefix("androidRun:").split(":", limit = 3)
+                    val target = parts.getOrNull(2)
                     val module = ctx.modules().firstOrNull { it.name == parts[0] }
                         ?: return fail("No module '${parts[0]}'.")
                     val variant = parts.getOrNull(1) ?: ctx.activeVariant(module)
@@ -1000,7 +1138,7 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                         "> $label $variant · ${module.name}",
                         firstBuildDexBanner(module)
                     ) { log ->
-                        installer.installAndLaunch(apk, launchPkg, log)
+                        installer.installAndLaunch(apk, launchPkg, target, log)
                         if (isPlugin) {
                             log("")
                             log("Installed as a plugin. Plugins load at startup, so this build is not live")

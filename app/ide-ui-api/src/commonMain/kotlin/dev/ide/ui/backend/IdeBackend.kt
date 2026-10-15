@@ -1156,6 +1156,10 @@ data class UiPackagingOptions(
     val jniLibs: UiPackagingRules,
     val defaultResourceExcludes: List<String>,
     val defaultResourceMerges: List<String>,
+    /** AGP's `androidResources.noCompress`: file suffixes (`tflite`, `.bin`) packaged uncompressed. */
+    val noCompress: List<String> = emptyList(),
+    /** The suffixes that are never compressed whatever the module says (images, audio, video, `.tflite`). */
+    val defaultNoCompress: List<String> = emptyList(),
 )
 
 /** The editable glob-pattern lists for one packaging category. [merges] is unused for native libs (binary). */
@@ -1353,6 +1357,12 @@ data class UiCompatibilityInfo(
     val notes: List<String> = emptyList(),
     /** True when a watched build file changed since the last sync, so the model is out of date. */
     val syncNeeded: Boolean = false,
+    /**
+     * For a Kotlin Multiplatform project whose modules could be imported for either Android or the JVM:
+     * which one they are, `"android"` or `"jvm"`. Null when the project has no such choice. Changed with
+     * [ProjectService.setKmpTarget].
+     */
+    val kmpTarget: String? = null,
 )
 
 /**
@@ -1587,8 +1597,9 @@ data class UiLayoutElement(
 /** A go-to-definition target: open [path] and move the caret to [offset]. */
 data class UiDefinition(val path: String, val offset: Int)
 
-/** The source navigation actions the editor offers (Kotlin sources for now). */
-enum class UiNavKind { DECLARATION, IMPLEMENTATION, TYPE_DECLARATION, SUPER }
+/** The source navigation actions the editor offers. [USAGES] lists where the symbol is referenced; [RELATED]
+ *  pairs a layout with the classes that inflate it, and a class with its layouts. */
+enum class UiNavKind { DECLARATION, IMPLEMENTATION, TYPE_DECLARATION, SUPER, USAGES, RELATED }
 
 /** One navigation destination: open [path] at [offset]. [label] names it in the multi-target picker and
  *  [kind] (a lowercase symbol/declaration kind, e.g. "class"/"method") picks its icon. */

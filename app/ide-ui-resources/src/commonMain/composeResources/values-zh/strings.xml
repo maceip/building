@@ -162,6 +162,7 @@
     <string name="no_project_yet">还没有项目哦~新建项目即可开始开发</string>
     <string name="your_projects">你的项目</string>
     <string name="project_kind_android">Android</string>
+    <string name="project_kind_files">文件</string>
     <!-- Short forms for the compact project row, where "4 modules · Android · Opened 2 hours ago"
          does not fit and the "Opened" is carried by the context. -->
     <string name="project_age_just_now">刚刚</string>
@@ -211,6 +212,9 @@
     <string name="your_codeassist_files_content">可使用文件管理器打开该目录管理项目（存放在Projects目录的旧版项目也包含在内），可添加图标、资源文件，或在电脑端编辑文件。</string>
     <string name="open_in_the_file_manager">在文件管理器中打开</string>
     <string name="choose_start_point">选择起始位置</string>
+    <string name="templates_search">搜索模板</string>
+    <string name="templates_all">全部</string>
+    <string name="templates_no_match">没有与“%1$s”匹配的模板。</string>
     <string name="backup">备份</string>
     <string name="delete_project">删除项目</string>
     <string name="delete_project_content">“%1$s” 及其所有文件将被永久删除，无法撤销！要执行删除操作吗？</string>
@@ -271,6 +275,13 @@
     <string name="edview_open_a_file_from_navigator">从导航栏打开文件</string>
     <string name="edview_no_file_open_title">还没打开任何文件</string>
     <string name="edview_no_file_open_hint">在导航栏选择文件即可开始编辑</string>
+    <string name="edview_action_search">全局搜索</string>
+    <string name="edview_action_go_to_file">转到文件</string>
+    <string name="edview_action_recent">最近的文件</string>
+    <string name="edview_action_find">在文件中查找</string>
+    <string name="edview_action_new_file">新建文件</string>
+    <string name="edview_action_project">项目文件</string>
+    <string name="edview_recent_title">最近打开</string>
 
     <!-- tabs (TabsStrip context menu; "Close" reuses the shared `close` string) -->
     <string name="tab_close_others">选择其他</string>
@@ -508,6 +519,9 @@
     <!-- app/banners/editor-screen -->
     <string name="gradle_mode_title">Gradle 兼容模式</string>
     <string name="gradle_resync">重新同步</string>
+    <string name="gradle_kmp_target">多平台目标</string>
+    <string name="gradle_kmp_android">Android</string>
+    <string name="gradle_kmp_jvm">桌面 (JVM)</string>
     <string name="gradle_sync_needed">自上次同步以来构建文件已更改。重新同步以更新项目。</string>
     <string name="gradle_syncing">正在从 Gradle 同步…</string>
     <string name="gradle_convert">转换</string>
@@ -533,6 +547,9 @@
     <string name="library_readonly_source">库源码 · 只读</string>
     <string name="library_readonly_decompiled">已反编译 · 只读</string>
     <string name="editor_large_file_notice">大文件：为控制内存，代码智能功能受限</string>
+    <string name="editor_stale_notice">此文件已在磁盘上更改，其中不包含你未保存的编辑。</string>
+    <string name="editor_stale_reload">重新加载</string>
+    <string name="editor_stale_keep">保留我的</string>
     <string name="library_decompile_java">反编译为 Java</string>
     <string name="structure_title">结构</string>
     <string name="structure_filter">筛选…</string>
@@ -953,6 +970,10 @@
     <string name="palette_hint">运行命令，跳转到文件或符号…</string>
     <string name="palette_type_to_search">输入内容以搜索 %1$s…</string>
     <string name="palette_no_matches">没有匹配项</string>
+    <string name="palette_key_navigate">导航</string>
+    <string name="palette_key_open">打开</string>
+    <string name="palette_key_scope">切换范围</string>
+    <string name="palette_key_close">关闭</string>
 
     <!-- run/preview/edoverlay — reuses copy(shared) -->
     <string name="run_no_active_run">当前没有运行中的任务。</string>
@@ -966,6 +987,18 @@
     <string name="run_building_module">正在构建 %1$s…</string>
     <string name="run_running_module">正在运行 %1$s</string>
     <string name="run_no_output">（无输出）</string>
+    <string name="run_tab_tests">测试</string>
+    <string name="run_tab_output">输出</string>
+    <string name="tests_passed">%1$d 个通过</string>
+    <string name="tests_failed">%1$d 个失败</string>
+    <string name="tests_skipped">%1$d 个跳过</string>
+    <string name="tests_progress">%1$d / %2$d</string>
+    <string name="tests_rerun_failed">重新运行失败的测试</string>
+    <string name="tests_run_one">运行测试</string>
+    <string name="tests_run_class">运行类中的所有测试</string>
+    <string name="tests_none_found">未找到测试</string>
+    <string name="tests_none_in_file">此文件中没有测试</string>
+    <string name="tests_class_failed">类失败：%1$s</string>
     <string name="run_type_input">输入内容后按 Enter…</string>
     <string name="run_send">发送</string>
     <string name="run_end_input_eof">结束输入（EOF）</string>
@@ -1025,6 +1058,9 @@
     <string name="nav_implementations">实现</string>
     <string name="nav_type_declaration">类型声明</string>
     <string name="nav_super">父类</string>
+    <string name="nav_usages">用法</string>
+    <string name="nav_related">相关文件</string>
+    <string name="nav_refactor">重构</string>
     <string name="nav_none">源码中未找到。</string>
     <string name="ctxmenu_actions">操作</string>
     <string name="ctxmenu_intentions">意图</string>
@@ -1393,6 +1429,16 @@
     <string name="modcfg_title_modules">模块</string>
     <string name="modcfg_new_module_action">新建模块</string>
     <string name="modcfg_no_modules">没有模块，点击 + 添加模块。</string>
+    <string name="modcfg_empty_title">还没有模块</string>
+    <string name="modcfg_empty_body">模块是项目中可单独构建的部分：应用、库或功能。</string>
+    <string name="keymap_hint">点击一个快捷键，然后按下新的按键。Esc 取消；Backspace 移除。</string>
+    <string name="keymap_search">搜索命令或按键</string>
+    <string name="keymap_modified">已修改</string>
+    <string name="keymap_reset_all">全部重置</string>
+    <string name="keymap_no_results">没有匹配的命令。</string>
+    <string name="keymap_recording">请按下按键…</string>
+    <string name="keymap_not_set">未设置</string>
+    <string name="keymap_reset">恢复默认</string>
     <string name="modcfg_remove_named">移除 %1$s</string>
     <string name="modcfg_removed">已移除 %1$s</string>
     <string name="modcfg_build_features_android_only">构建功能仅适用于 Android 模块。</string>
@@ -1416,6 +1462,10 @@
     <string name="modcfg_packaging_merge_desc">拼接重复项，而不是移除它们。</string>
     <string name="modcfg_packaging_default_excludes">默认始终排除</string>
     <string name="modcfg_packaging_default_merges">默认始终合并</string>
+    <string name="modcfg_packaging_compression">压缩</string>
+    <string name="modcfg_packaging_no_compress">不压缩</string>
+    <string name="modcfg_packaging_no_compress_desc">在 APK 中以不压缩方式存储的文件后缀（如 tflite 或 .bin），使 AssetManager.openFd() 和内存映射可用。与每个路径的结尾匹配，不区分大小写。</string>
+    <string name="modcfg_packaging_default_no_compress">默认始终不压缩</string>
     <string name="modcfg_manage_keystores">管理密钥库</string>
     <string name="modcfg_keystores_empty">尚无密钥库。请在密钥库管理器中创建一个，以签名发布构建。</string>
     <string name="modcfg_debug_default">debug（默认）</string>
@@ -1959,4 +2009,6 @@
     <string name="block_scope_loading">正在查找此作用域可调用的函数…</string>
     <string name="block_scope_none">此作用域没有可调用的内容。</string>
     <string name="block_lambda_page">Lambda</string>
+    <string name="sdk_platform_tools">平台工具</string>
+    <string name="sdk_platform_tools_desc">adb：“运行”通过它把应用安装并启动到连接此电脑的手机或模拟器上。</string>
 </resources>

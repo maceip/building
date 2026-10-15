@@ -12,6 +12,7 @@ import dev.ide.android.support.AndroidSupport
 import dev.ide.android.support.AndroidViewBindingProvider
 import dev.ide.android.support.ResourceRepositorySource
 import dev.ide.android.support.index.AndroidResourceIndex
+import dev.ide.android.support.index.AndroidResourceRefIndex
 import dev.ide.android.support.metadata.AndroidSdkMetadata
 import dev.ide.block.BLOCK_MAPPING_EP
 import dev.ide.block.impl.JavaBlockMapping
@@ -55,6 +56,7 @@ import dev.ide.core.android.AndroidXmlChecker
 import dev.ide.core.android.AndroidXmlTagChecker
 import dev.ide.core.completion.BufferWordsContributor
 import dev.ide.core.completion.CompletionStats
+import dev.ide.core.completion.MemberUsageIndex
 import dev.ide.core.completion.PluginManifestCompletion
 import dev.ide.core.completion.PostfixContributor
 import dev.ide.core.completion.UserLiveTemplateContributor
@@ -87,6 +89,8 @@ import dev.ide.templates.JavaLibModuleType
 import dev.ide.templates.BUILT_IN_KOTLIN_TEMPLATES
 import dev.ide.core.templates.NotesSampleTemplate
 import dev.ide.core.templates.SwingAppTemplate
+import dev.ide.core.templates.KmpComposeAppTemplate
+import dev.ide.core.templates.KmpLibraryTemplate
 import dev.ide.core.templates.SwingCanvasTemplate
 import dev.ide.core.templates.WeatherSampleTemplate
 import dev.ide.index.INDEX_EP
@@ -102,6 +106,7 @@ import dev.ide.lang.LanguageId
 import dev.ide.lang.completion.COMPLETION_CONTRIBUTOR_EP
 import dev.ide.lang.completion.COMPLETION_WEIGHER_EP
 import dev.ide.lang.completion.CompletionContribution
+import dev.ide.lang.completion.ProjectUsageWeigher
 import dev.ide.lang.completion.StatsWeigher
 import dev.ide.lang.java.JavaLanguageBackend
 import dev.ide.lang.java.index.JavaClassLocatorIndex
@@ -362,14 +367,16 @@ private class JavaSupportPlugin : Plugin {
 /**
  * Gradle compatibility: the [GradleProjectImporter] that reads a Gradle project's scripts into the project
  * model ([PROJECT_IMPORTER_EP]) and the [GradleBuildFileWriter] that writes dependency declarations back into
- * `build.gradle(.kts)` ([BUILD_FILE_WRITER_EP]). Disabling it leaves Gradle folders unrecognized: they open
+ * `build.gradle(.kts)` ([BUILD_FILE_WRITER_EP]), plus the Kotlin Multiplatform Create-Project templates, which
+ * write Gradle projects for that importer. Disabling it leaves Gradle folders unrecognized: they open
  * as empty native workspaces instead of imported projects.
  */
 private class GradleSupportPlugin : Plugin {
     override val manifest = PluginManifest(
         id = "gradle-support", name = "Gradle Support",
         description = "Opens Gradle projects. The static reader is the project until a JDK is installed; " +
-            "the tooling importer then executes the build files, and GradleBuildSystem assembles them.",
+            "the tooling importer then executes the build files, and GradleBuildSystem assembles them. " +
+            "Writes dependency declarations back to build scripts, and adds the Kotlin Multiplatform project templates.",
     )
 
     override fun register(reg: PluginRegistration) {
@@ -385,6 +392,13 @@ private class GradleSupportPlugin : Plugin {
         reg.register(BUILD_FILE_WRITER_EP, GradleBuildFileWriter())
         reg.register(BUILD_FILE_WRITER_EP, GradleBuildFileWriter(BuildSystemId.GRADLE))
         reg.register(BUILD_SYSTEM_EP, GradleBuildSystem())
+        // The Kotlin Multiplatform templates write a Gradle project for the importer above to read in (a
+        // multi-target build has no other shape), so they come and go with it.
+        reg.contributeVia { ext, pid ->
+            val templates = ProjectTemplateRegistry(ext)
+            templates.register(KmpComposeAppTemplate, pid)
+            templates.register(KmpLibraryTemplate, pid)
+        }
     }
 }
 
@@ -398,8 +412,6 @@ private class NodeSupportPlugin : Plugin {
     override fun register(reg: PluginRegistration) {
         reg.contributeVia { ext, pid -> ModuleTypeRegistry(ext).register(NodeModuleType, pid) }
         reg.register(PROJECT_IMPORTER_EP, NodeProjectImporter())
-    }
-}
 
 /**
  * The projectional (block) editor: contributes the Java and Kotlin block decompositions ([JavaBlockMapping],
@@ -646,6 +658,10 @@ private class CompletionBuiltinsPlugin(private val env: ApplicationEnvironment) 
                 env.activeEngine?.completionStats?.countFor(CompletionStats.keyOf(item.label)) ?: 0
             },
         )
+        reg.register(
+            COMPLETION_WEIGHER_EP,
+            ProjectUsageWeigher { item -> env.activeEngine?.memberUsageCount(item.label) ?: 0 },
+        )
     }
 }
 
@@ -678,12 +694,14 @@ internal val BUILT_IN_INDEX_EXTENSIONS: List<dev.ide.index.IndexExtension<*, *>>
     JavaMainIndex,
     KotlinMainIndex,
     AndroidResourceIndex,
+    AndroidResourceRefIndex,
     BinarySubtypeIndex,
     BinaryAnnotationIndex,
     KotlinSourceSubtypeIndex,
     KotlinSourceAnnotationIndex,
     JavaSourceSubtypeIndex,
     JavaSourceAnnotationIndex,
+    MemberUsageIndex,
 )
 
 /** Registers [BUILT_IN_INDEX_EXTENSIONS]. */

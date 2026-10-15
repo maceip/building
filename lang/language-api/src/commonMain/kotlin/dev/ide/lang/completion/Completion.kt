@@ -111,7 +111,37 @@ data class CompletionRelevance(
     /** Producer-computed declaration proximity (lower = closer): locals/parameters, then members, then
      *  project symbols, then library. 0 = no signal, so a backend that doesn't fill it is unaffected. */
     val proximity: Int = 0,
+    /** How commonly this candidate is used on the receiver's type (higher = more common), from
+     *  [MemberPopularity]. 0 = no signal. */
+    val popularity: Int = 0,
+    /** For a member reached through `receiver.`: how far up the receiver's supertypes it is declared, so the
+     *  receiver's own members (0) come before its superclass's (1) and so on. 0 = no signal. */
+    val receiverDistance: Int = 0,
 ) {
+    /** The constructor before [popularity] and [receiverDistance], kept so a plugin compiled against it links. */
+    @Deprecated("Binary compatibility only", level = DeprecationLevel.HIDDEN)
+    constructor(
+        fitsExpectedType: Boolean = false,
+        contextBoost: Boolean = false,
+        callableWeight: Int = 0,
+        inScope: Boolean = true,
+        deprecated: Boolean = false,
+        proximity: Int = 0,
+    ) : this(fitsExpectedType, contextBoost, callableWeight, inScope, deprecated, proximity, 0, 0)
+
+    /** The `copy` before [popularity] and [receiverDistance], for the same reason as the constructor above. */
+    @Deprecated("Binary compatibility only", level = DeprecationLevel.HIDDEN)
+    fun copy(
+        fitsExpectedType: Boolean = this.fitsExpectedType,
+        contextBoost: Boolean = this.contextBoost,
+        callableWeight: Int = this.callableWeight,
+        inScope: Boolean = this.inScope,
+        deprecated: Boolean = this.deprecated,
+        proximity: Int = this.proximity,
+    ): CompletionRelevance = CompletionRelevance(
+        fitsExpectedType, contextBoost, callableWeight, inScope, deprecated, proximity, popularity, receiverDistance,
+    )
+
     companion object {
         /** What the weighers assume for an item whose producer attached no relevance. */
         val NONE = CompletionRelevance()

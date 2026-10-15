@@ -321,11 +321,28 @@ val bundleKotlincResourcesAsset = tasks.register<Copy>("bundleKotlincResourcesAs
 // and `r8-version.properties`. R8 then warns "Could not find the api database at
 // resources/new_api_database.ser" and emits different code than the same version run from the jar. With the
 // resources folded back in, a forked run reproduces a host `java -cp r8.jar` run byte for byte.
+//
+// StAX rides along. R8's resource shrinker (`shrinkResources`) parses every `res/raw/*.xml` keep file with
+// `XMLInputFactory.newInstance()`, and ART has neither the javax.xml.stream API nor an implementation, so a
+// project with one failed the build with "ClassNotFoundException: javax.xml.stream.XMLInputFactory". The
+// standalone API (see :art-compat's generateStaxApiJar for why not the JDK's copy) and aalto are dexed in,
+// with aalto's `META-INF/services` registration, which is how that API's FactoryFinder finds the provider.
 val r8DexTool: Configuration by configurations.creating {
     isCanBeConsumed = false
     isCanBeResolved = true
 }
 dependencies { r8DexTool(libs.android.r8) { isTransitive = false } }
+
+val r8StaxRuntime: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+}
+dependencies {
+    r8StaxRuntime(libs.stax.api)
+    r8StaxRuntime(libs.aalto.xml)
+    r8StaxRuntime(libs.stax2.api)
+}
 
 val bundleR8DexAsset = tasks.register<JavaExec>("bundleR8DexAsset") {
     description = "D8-dex the R8 tool jar, with its resources, into a forked-VM-loadable r8.dex.zip asset."
@@ -338,8 +355,9 @@ val bundleR8DexAsset = tasks.register<JavaExec>("bundleR8DexAsset") {
     // location in the Gradle cache never enters the key. `args` is assembled in doFirst (after Gradle has
     // snapshotted inputs) but is derived entirely from this jar, so it adds nothing to the key.
     inputs.files(r8DexTool).withPropertyName("r8Tool").withNormalizer(ClasspathNormalizer::class)
+    inputs.files(r8StaxRuntime).withPropertyName("staxRuntime").withNormalizer(ClasspathNormalizer::class)
     outputs.file(outZip).withPropertyName("r8DexZip")
-    outputs.cacheIf("r8.dex.zip is a pure function of the pinned r8 jar") { true }
+    outputs.cacheIf("r8.dex.zip is a pure function of the pinned r8 + StAX jars") { true }
     // min-api 26 = the app's minSdk; the forked VM runs on the device's ART (>= 26), and a higher min-api
     // minimises desugaring (r8 is plain Java 8 bytecode), so no `--lib` platform is needed to dex it.
     doFirst {
@@ -350,7 +368,7 @@ val bundleR8DexAsset = tasks.register<JavaExec>("bundleR8DexAsset") {
             "--min-api", "26",
             "--output", dexOnly.absolutePath,
             r8DexTool.singleFile.absolutePath,
-        )
+        ) + r8StaxRuntime.files.map { it.absolutePath }
     }
     // Combine D8's `classes*.dex` with every non-class entry of the source jar into one zip. A classloader
     // built over it then sees both the code and the resources, exactly as one built over the jar does.
@@ -374,6 +392,7 @@ val bundleR8DexAsset = tasks.register<JavaExec>("bundleR8DexAsset") {
             // Everything the jar carries that is not code. The MANIFEST is dropped: it describes the jar, and
             // an inaccurate one on a dex classpath is worse than none.
             copyEntries(r8DexTool.singleFile) { !it.name.endsWith(".class") && it.name != "META-INF/MANIFEST.MF" }
+            r8StaxRuntime.files.forEach { jar -> copyEntries(jar) { it.name.startsWith("META-INF/services/javax.xml.stream.") } }
         }
         dexOnly.delete()
         logger.lifecycle("bundleR8DexAsset: ${out.name} = ${out.length() / (1024 * 1024)}MB (dex + jar resources)")
@@ -440,8 +459,8 @@ android {
         minSdk = 26
         targetSdk = 36
         if (appEngineDelivery != "none" || runtimeDelivery == "play") ndk.abiFilters += setOf("arm64-v8a")
-        // Version identity comes from the release configuration; upstream 3.27.1
-        // (versionCode 107) is the floor the configured values must exceed.
+        // Version identity comes from the release configuration; upstream 3.29.0
+        // (versionCode 109) is the floor the configured values must exceed.
         versionCode = releaseConfig.versionCode
         versionName = releaseConfig.versionName
         // connectedAndroidTest harness (the on-device Kotlin-compiler discovery spike).
@@ -451,6 +470,14 @@ android {
         for (key in listOf("SUPABASE_URL", "SUPABASE_KEY", "JUDGE_URL")) {
             buildConfigField("String", key, releaseConfig.buildConfigFields.getValue(key))
         }
+
+        // Where the store's public files (project zips, screenshots, icons) are mirrored, in Cloudflare R2 (see
+        // supabase/functions/r2-mirror). The app reads there first and falls back to Supabase Storage on any miss,
+        // so blank simply reads Supabase as before. The default is the bucket's r2.dev address until it has a
+        // custom domain (which adds Cloudflare's cache and rate limiting in front of it).
+        val storeMediaUrl = (findProperty("STORE_MEDIA_URL") as String?) ?: System.getenv("STORE_MEDIA_URL")
+            ?: "https://pub-a5be92b9c0b14a86ae36e09cb86f0ffa.r2.dev"
+        buildConfigField("String", "STORE_MEDIA_URL", "\"$storeMediaUrl\"")
 
         // AdMob defaults = Google TEST ids. Debug inherits these as-is; `release` overrides to the real ids
         // below, and `profile` (a local perf build) is forced back to test. The App id reaches the manifest

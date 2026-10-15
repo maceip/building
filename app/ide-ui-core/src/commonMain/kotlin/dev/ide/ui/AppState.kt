@@ -324,15 +324,13 @@ class IdeUiState(
         launch { syncExternalWrites() }
     }
 
-    // Reopen the tabs from the last session with this project; if there were none, land on a sensible first
-    // file so entering the editor shows real code. Then persist tab changes (debounced) so they reopen next
-    // launch: `drop(1)` skips the just-restored state, and `collectLatest` cancels the pending write when
-    // another tab change lands within the debounce window.
+    // Reopen the tabs from the last session with this project. A first open starts on the empty editor, which
+    // offers the ways in, rather than on whichever file a walk of the tree happened to reach first. Then persist
+    // tab changes (debounced) so they reopen next launch: `drop(1)` skips the just-restored state, and
+    // `collectLatest` cancels the pending write when another tab change lands within the debounce window.
     private suspend fun restoreAndPersistTabs() {
         ensureTreeLoaded() // build the real file tree off the main thread before it's shown / walked
-        if (!restoreTabs()) {
-            defaultFile()?.let { node -> node.filePath?.let { open(it, node.name) } }
-        }
+        restoreTabs()
         snapshotFlow {
             // Re-emit when the tab set, the active tab, OR any tab's caret / scroll / view mode changes, so the
             // persisted session records where the user is, not only which files are open.
@@ -396,7 +394,7 @@ class IdeUiState(
 
     /** Which LEFT panel is open (a [LeftPanelId] or a plugin tool-window id), or null when the left sidebar is
      *  collapsed. On desktop this is the docked pane; on mobile it's the panel shown in the push drawer.
-     *  Seeded from the persisted last panel in [init] (desktop opens it; mobile starts collapsed). */
+     *  Starts collapsed; [init] only remembers the persisted last panel for the next time the side is opened. */
     var selectedLeftPanel by mutableStateOf<String?>(null)
     /** The panel to reopen when the left sidebar is toggled back on (survives a collapse). */
     private var lastLeftPanel: String = LeftPanelId.FILES
@@ -475,8 +473,9 @@ class IdeUiState(
         RailDestination.More -> { moreOpen = true }
     }
 
-    // On mobile the console is a space-consuming sheet — start it closed; on desktop it's a persistent pane.
-    var consoleOpen by mutableStateOf(!isMobilePlatform)
+    // Starts closed everywhere: the editor opens with nothing docked around it, and starting a build or run
+    // opens the console when there is output to show.
+    var consoleOpen by mutableStateOf(false)
 
     var paletteOpen by mutableStateOf(false)
 
@@ -555,8 +554,11 @@ class IdeUiState(
      * → [proceedRun]. Otherwise it proceeds straight to [proceedRun].
      */
     fun requestRun(action: () -> Unit) {
-        if (isMobilePlatform && !notifPromptResolved) { notifGate = PendingRun(action); return }
-        proceedRun(action)
+        // Save edited tabs as the run starts, whichever gate it waits on first. The build would flush them
+        // anyway, but behind the tabs' backs: they stayed marked unsaved over a file that matched them.
+        val saveThenRun = { saveAllNow(); action() }
+        if (isMobilePlatform && !notifPromptResolved) { notifGate = PendingRun(saveThenRun); return }
+        proceedRun(saveThenRun)
     }
 
     /**
@@ -666,10 +668,9 @@ class IdeUiState(
         applySettings(backend.settings.settings())
         refreshSymbolKeys()
         loadTreeExpansion()
-        // Restore the last-open left panel: desktop reopens it as a docked pane; mobile starts collapsed but
-        // remembers it for the next time the drawer is toggled on.
+        // Remember the last-open left panel for the next time the side is toggled on. The editor itself opens
+        // with the side collapsed, on desktop as on a phone.
         backend.settings.preference(LEFT_PANEL_PREF)?.let { lastLeftPanel = it }
-        if (!isMobilePlatform) selectedLeftPanel = lastLeftPanel
         // The switch used to live under `sidebar.rightStripe`; carry a hidden stripe over to the Settings key.
         if (backend.settings.preference(RIGHT_STRIPE_PREF) == null && backend.settings.preference(LEGACY_RIGHT_STRIPE_PREF) == "false") {
             setRightStripeShown(false)
@@ -746,6 +747,16 @@ class IdeUiState(
         logsSource = null
     }
 
+    /** Whether a console run's terminal (its output and stdin) is showing in the wide layout's bottom pane, which
+     *  it shares with the build console and the logs. A phone opens the full-screen Run terminal instead. */
+    var runOpen by mutableStateOf(false)
+
+    /** Bring the docked Run terminal to the front of the bottom pane. */
+    fun showRunOutput() {
+        closeLogs()
+        runOpen = true
+    }
+
     /** Whether the indexing-status detail dialog (opened by tapping the top-bar index chip) is showing. */
     var indexDetailOpen by mutableStateOf(false)
 
@@ -765,29 +776,20 @@ class IdeUiState(
      * on [ioDispatcher]; the resulting Compose-state mutations resume on the launching (main) dispatcher.
      */
     suspend fun openSuspend(path: String, name: String) {
-        scope.coroutineContext.ensureActive()
-        currentCoroutineContext().ensureActive()
-        if (focusOpenTab(path)) return
-        val release = backend.editor.retainDocument(path)
-        var installed = false
-        try {
-            val text = withContext(ioDispatcher) {
-                scope.coroutineContext.ensureActive()
-                backend.files.readFile(path)
-            }
-            // Direct suspend callers need the state-lifetime check too: they need not be children of scope.
-            scope.coroutineContext.ensureActive()
-            currentCoroutineContext().ensureActive()
-            // A second tap may have opened it while we read. Release only OUR attempt, never the kept tab.
-            if (focusOpenTab(path)) return
-            backend.editor.updateDocument(path, text)
-            openFiles.add(OpenFile(path, name, text, releaseDocument = release))
-            installed = true
-            activeIndex = openFiles.lastIndex
-            backend.editor.onFileOpened(path) // a genuinely new tab, for plugin events
-        } finally {
-            if (!installed) release()
+        if (focusOpenTab(path)) {
+            // Re-opening is the user saying "show me this file", so give them what is on disk now: a write from
+            // outside the IDE (a file manager copying over it) raises no event, and the tab would keep the old
+            // text until the file was deleted.
+            active?.let { if (syncTabsFromDisk(listOf(it))) analysisEpoch++ }
+            return
         }
+        val text = withContext(ioDispatcher) { backend.files.readFile(path) }
+        // A second tap on the same row may have opened it while we were reading — focus it, don't duplicate.
+        if (focusOpenTab(path)) return
+        backend.editor.documentLoaded(path, text)
+        openFiles.add(OpenFile(path, name, text))
+        activeIndex = openFiles.lastIndex
+        backend.editor.onFileOpened(path) // a genuinely new tab (focus path returned above), for plugin events
     }
 
     /** Focus the already-open tab for [path] if there is one; returns true when it existed. */
@@ -975,6 +977,20 @@ class IdeUiState(
         session.applyEdits(edits, TextRange(mapOffsetThroughEdits(caretBefore, edits)))
     }
 
+    /**
+     * Settle [file]'s divergence from disk by taking the file, for a tab flagged [OpenFile.staleOnDisk]. Applied
+     * as one edit, so undo puts the user's discarded edits back.
+     */
+    fun reloadFromDisk(file: OpenFile) {
+        scope.launch {
+            val disk = readTabText(file.path) ?: return@launch
+            if (file !in openFiles) return@launch
+            file.applyExternalText(disk)
+            backend.editor.documentLoaded(file.path, disk)
+            analysisEpoch++
+        }
+    }
+
     /** Save the active tab (Cmd/Ctrl-S, toolbar). */
     fun saveActive() { active?.let(::save) }
 
@@ -992,7 +1008,7 @@ class IdeUiState(
      * each restored to where the user left it: its view mode, caret, and scroll position. Files that no longer
      * exist on disk are skipped. Returns true when the previous session was HANDLED — either tabs were
      * restored, or the project was opened before and deliberately left with no tabs (a persisted-but-empty
-     * session) — so the caller only falls back to [defaultFile] on a genuine first open (no session yet).
+     * session); false on a genuine first open (no session yet).
      */
     suspend fun restoreTabs(): Boolean {
         val saved = backend.projects.openTabs()
@@ -1039,16 +1055,6 @@ class IdeUiState(
             },
             newActive.coerceAtLeast(0),
         )
-    }
-
-    /** Pick a sensible first file: a `Main.java`, else the first source file in the tree. */
-    fun defaultFile(): TreeNode? {
-        val all = ArrayList<TreeNode>()
-        fun walk(n: TreeNode) { if (n.filePath != null) all.add(n); n.children.forEach(::walk) }
-        walk(tree)
-        return all.firstOrNull { it.name == "Main.java" }
-            ?: all.firstOrNull { it.name.endsWith(".java") }
-            ?: all.firstOrNull()
     }
 
     /** Re-read the workspace tree from the backend (after a file is created/removed), off the main thread. */
@@ -1105,7 +1111,7 @@ class IdeUiState(
                 openFiles[i] = OpenFile(
                     diskPath, name, text, tabId = f.tabId, releaseDocument = openFiles[i].releaseDocument,
                 )
-                backend.editor.updateDocument(diskPath, text)
+                backend.editor.documentLoaded(diskPath, text)
             }
             dedupeTabsByPath()
             loadTree()
@@ -1123,29 +1129,60 @@ class IdeUiState(
      */
     fun syncOpenTabsFromDisk() {
         scope.launch {
-            // openFiles can be mutated (a tab opened/closed) while this suspends on disk I/O, so a captured
-            // index goes stale — re-indexing it threw IndexOutOfBounds in the field. Snapshot the targets, then
-            // write each result back at that exact tab's CURRENT index, skipping it if the tab is gone or has
-            // since been edited (so an external write never clobbers in-progress user edits).
-            for (f in openFiles.toList()) {
-                if (f.readOnly) continue
-                if (f.modified) {
-                    // Reading it costs one file read per edited tab per epoch bump, which buys the only
-                    // signal the user has that their buffer and the file underneath it have parted ways.
-                    val disk = readTabText(f.path)
-                    f.staleOnDisk = disk != null && disk != f.savedText
-                    continue
-                }
-                val text = readTabText(f.path) ?: continue
-                if (text == f.savedText) continue // untouched → preserve session/undo/caret
-                if (f !in openFiles || f.modified) continue
-                f.applyExternalText(text)
-                backend.editor.updateDocument(f.path, text)
-            }
+            syncTabsFromDisk(openFiles.toList())
             // The write can change what other files report as well as its own (an agent renaming a function
             // breaks its callers), so every open tab is re-analyzed, the focused one included.
             analysisEpoch++
         }
+    }
+
+    /**
+     * The app is back in front (the user returns from another app, or to the desktop window). Nothing watches
+     * the project directory, so a file copied over from a file manager or written by a terminal raised no
+     * event while the IDE was away; catch the open tabs and the tree up now. Unlike [syncOpenTabsFromDisk],
+     * this re-analyzes only when a tab actually changed, since most returns change nothing.
+     */
+    fun syncWithDiskOnReturn() {
+        scope.launch {
+            if (syncTabsFromDisk(openFiles.toList())) analysisEpoch++
+            loadTree()
+        }
+    }
+
+    /**
+     * Bring each of [tabs] up to its file on disk; true when any buffer took new text. A clean tab reloads in
+     * place (one undoable edit); an edited one is only marked [OpenFile.staleOnDisk], so outside writes never
+     * clobber the user's work.
+     *
+     * openFiles can be mutated (a tab opened/closed) while this suspends on disk I/O, so a captured index goes
+     * stale — re-indexing it threw IndexOutOfBounds in the field. Each tab is re-checked after its read and
+     * skipped if it is gone or has since been edited.
+     */
+    private suspend fun syncTabsFromDisk(tabs: List<OpenFile>): Boolean {
+        var changed = false
+        for (f in tabs) {
+            if (f.readOnly) continue
+            if (f.modified) {
+                // Reading it costs one file read per edited tab per sync, which buys the only signal the user
+                // has that their buffer and the file underneath it have parted ways.
+                val disk = readTabText(f.path)
+                if (disk != null && disk != f.savedText && disk == f.text) {
+                    // The file already holds the buffer: a build flushed it. That is a save, not a divergence.
+                    f.onSaved(disk)
+                    backend.editor.documentLoaded(f.path, disk)
+                } else {
+                    f.staleOnDisk = disk != null && disk != f.savedText
+                }
+                continue
+            }
+            val text = readTabText(f.path) ?: continue
+            if (text == f.savedText) continue // untouched → preserve session/undo/caret
+            if (f !in openFiles || f.modified) continue
+            f.applyExternalText(text)
+            backend.editor.documentLoaded(f.path, text)
+            changed = true
+        }
+        return changed
     }
 
     /** Read [path]'s disk text off the main thread; null on any I/O error (a deleted/renamed file). */
@@ -1254,7 +1291,7 @@ class IdeUiState(
             openFiles[i] = OpenFile(
                 rebased, name, text, tabId = f.tabId, releaseDocument = openFiles[i].releaseDocument,
             )
-            backend.editor.updateDocument(rebased, text)
+            backend.editor.documentLoaded(rebased, text)
         }
         dedupeTabsByPath()
     }
@@ -1290,7 +1327,7 @@ class IdeUiState(
             if (text == f.savedText) continue
             if (f !in openFiles || f.modified) continue
             f.applyExternalText(text)
-            backend.editor.updateDocument(f.path, text)
+            backend.editor.documentLoaded(f.path, text)
         }
     }
 

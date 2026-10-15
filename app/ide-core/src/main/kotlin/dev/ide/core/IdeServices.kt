@@ -5,6 +5,7 @@ import dev.ide.agent.IncidentPatchReview
 import dev.ide.agent.impl.IncidentDigests
 import dev.ide.core.reliability.IncidentPatchApplier
 import dev.ide.core.reliability.IncidentSourceAccess
+import dev.ide.ui.backend.TestOutput
 import dev.ide.analysis.ACTION_PROVIDER_EP
 import dev.ide.analysis.ANALYZER_EP
 import dev.ide.analysis.AnalysisEvent
@@ -83,16 +84,21 @@ import dev.ide.core.completion.BufferWordsContributor
 import dev.ide.core.completion.CompletionEngine
 import dev.ide.core.completion.CompletionOptions
 import dev.ide.core.completion.CompletionStats
+import dev.ide.core.completion.MemberUsageIndex
 import dev.ide.core.completion.PostfixContributor
 import dev.ide.core.gradle.GradleImport
+import dev.ide.core.gradle.GradleKmp
 import dev.ide.core.perf.MB_BYTES
 import dev.ide.core.perf.MEM_SAMPLE_INTERVAL_MS
 import dev.ide.core.perf.MemSample
 import dev.ide.core.perf.PeakHeap
 import dev.ide.core.project.SampleProject
+import dev.ide.core.sdk.BundledAndroidToolchain
 import dev.ide.core.sdk.SdkManagerService
 import dev.ide.core.sdk.SwingApiStubs
+import dev.ide.core.services.AndroidEditorFeatures
 import dev.ide.core.services.AndroidResourceService
+import dev.ide.core.services.ResourceSwatch
 import dev.ide.core.services.BlockService
 import dev.ide.core.services.BuildService
 import dev.ide.core.services.ComposePreviewService
@@ -248,6 +254,7 @@ import dev.ide.model.impl.ExternalModelApplier
 import dev.ide.model.impl.ModelPersistence
 import dev.ide.model.impl.ProjectModel
 import dev.ide.model.impl.ProjectModelStore
+import dev.ide.model.sync.ProjectImporter
 import dev.ide.model.impl.SdkData
 import dev.ide.model.impl.jdk.CorePlatformProvider
 import dev.ide.model.impl.jdk.JdkSdkProvider
@@ -306,6 +313,7 @@ import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -363,6 +371,10 @@ class IdeServices private constructor(
      *  backend points at this engine on project swap. */
     private val env: ApplicationEnvironment,
 ) : AutoCloseable {
+    // The project-settings cache (see [cachedProjectSettings]), declared first: initializers below read settings.
+    private val projectSettingsLock = Any()
+    private var projectSettingsCache: java.util.Properties? = null
+    private var projectSettingsStamp: List<Any?>? = null
 
     // Phase-0 build-process-isolation instrumentation (docs/build-process-isolation.md): the most recent
     // build/run and project-open heap peaks. [lastBuildPeak] is read by the analytics bridge to attach to
@@ -618,6 +630,7 @@ class IdeServices private constructor(
         override fun sourceRoots(module: Module) = this@IdeServices.sourceRoots(module)
         override fun treeRoots(module: Module) = this@IdeServices.treeRoots(module)
         override fun overlayText(path: Path) = this@IdeServices.openDocuments[path]
+        override fun openDocumentPaths(): Set<Path> = this@IdeServices.openDocuments.keys.toSet()
         override fun flushOpenDocuments() = this@IdeServices.flushOpenDocuments()
         override fun ensureKotlinStdlib() = this@IdeServices.ensureKotlinStdlib()
         override fun parse(file: Path, text: String) = this@IdeServices.parse(file, text)
@@ -632,8 +645,10 @@ class IdeServices private constructor(
             this@IdeServices.analysisUnavailable.add(language)
         }
 
-        override fun removeOverlay(path: Path) = mutateSources {
-            this@IdeServices.openDocuments.remove(path.toAbsolutePath().normalize())
+        override fun removeOverlay(path: Path): String? {
+            val norm = path.toAbsolutePath().normalize()
+            this@IdeServices.diskBaselines.remove(norm)
+            return this@IdeServices.openDocuments.remove(norm)
         }
 
         override fun projectJavaFiles() = this@IdeServices.projectJavaFiles()
@@ -779,6 +794,18 @@ class IdeServices private constructor(
     internal val resources: AndroidResourceService
         get() = store.workspaceContainer.getService(ANDROID_RESOURCE_SERVICE)
 
+    /** Android Go to (declaration variants, usages, related files), Quick Doc, resource rename and gutter
+     *  swatches, over one shared view of the project's resources and sources. */
+    private val androidEditor by lazy {
+        AndroidEditorFeatures(
+            engineContext,
+            sdkMetadata = ::sdkLayoutMetadata,
+            customAttrs = { customAttrsMetadata(it) },
+            // A desktop SDK's platform ships its resources beside android.jar; the device's bundled jar doesn't.
+            frameworkResDir = { previewAndroidJar()?.parent?.resolve("data")?.resolve("res")?.takeIf { Files.isDirectory(it) } },
+        )
+    }
+
     /** WORKSPACE-scoped Java rename refactoring (prepare + apply across the project). */
     internal val refactor: RefactorService
         get() = store.workspaceContainer.getService(REFACTOR_SERVICE)
@@ -900,7 +927,7 @@ class IdeServices private constructor(
             // model/classpath/compilers, never the editor index, so that baseline is left free for the dexer/R8.
             memLog.info("build-only engine: skipping editor index")
         } else if (androidTools != null) {
-            openJob = indexScope.launch {
+            openJob = indexScope.launch(start = CoroutineStart.LAZY) {
                 // Phase-0 build-process-isolation instrumentation (docs/build-process-isolation.md): track the
                 // project-open memory peak so it can be compared against a build's peak.
                 val openPeak = PeakHeap().also { it.record() }
@@ -923,19 +950,13 @@ class IdeServices private constructor(
                 }
             }
         } else {
-            openJob = indexScope.launch {
+            openJob = indexScope.launch(start = CoroutineStart.LAZY) {
                 runIndexPass(IndexPassTrigger.OPEN)
                 memLog.info("after index build: ${MemSample.now().fmt()}")
             }
         }
-        // Arm the event hub's reactions only now: init's own commits (ensureKotlinStdlib) must not trigger
-        // invalidation over fields that are still initializing (a throwing reaction would abort the commit).
-        events.activate()
-        // This is now the active project for app-level extension callbacks that fire outside any service scope
-        // (the command actions, the synthetic-R provider, the XML resource host — all registered once on the
-        // app registry). Set LAST in init, so the engine is fully constructed before it can be resolved as the
-        // active one. The backend re-asserts this on project swap; an engine clears it (if still itself) on close.
-        env.activeEngine = this
+        // The open job is created LAZY and started, with the event hub and the active-engine handoff, by the
+        // `init` at the END of the class: see there.
     }
 
     /** Heap a new allocation could still claim before hitting the cap (`max - used`) — the headroom before an
@@ -1348,6 +1369,21 @@ class IdeServices private constructor(
     // touching disk — true working copies, not flushed buffers.
     private val openDocuments = ConcurrentHashMap<Path, String>()
 
+    /**
+     * Per overlay, the text it and the file on disk last agreed on: what the editor loaded, saved, or took from
+     * disk. An overlay equal to its baseline holds no unsaved edit, so [flushOpenDocuments] leaves its file
+     * alone, whatever the file now holds. Without it the flush wrote every overlay that differed from disk,
+     * which put a stale tab's old text back over a file copied in from outside, and re-created a file deleted
+     * from outside. An overlay with no baseline (registered by [updateDocument] alone) flushes as before.
+     */
+    private val diskBaselines = ConcurrentHashMap<Path, String>()
+
+    /** [text] is both the overlay for [norm] and what its file holds. */
+    private fun putInStep(norm: Path, text: String) {
+        openDocuments[norm] = text
+        diskBaselines[norm] = text
+    }
+
     /** Called by the editor on every change so cross-file analysis sees the latest text. */
     fun updateDocument(file: Path, text: String) = mutateSources {
         val norm = file.toAbsolutePath().normalize()
@@ -1357,6 +1393,16 @@ class IdeServices private constructor(
         // regenerates `R` from the now-buffer-aware resource repository (its fingerprint includes open res
         // buffers). Cheap cache-drops; the lazy repo rebuild is fingerprint-gated (only when content changed).
         if (changed && isResourcePath(norm)) invalidateSyntheticClasses()
+    }
+
+    /**
+     * The editor (re)loaded [file]'s buffer from disk: [text] is what the file holds, so the buffer has no
+     * unsaved edit. The reload after an outside write must say so, or the overlay reads as edited and the next
+     * build's flush writes it back over the file.
+     */
+    fun documentLoaded(file: Path, text: String) {
+        updateDocument(file, text)
+        diskBaselines[file.toAbsolutePath().normalize()] = text
     }
 
     /**
@@ -1375,15 +1421,18 @@ class IdeServices private constructor(
      * either way, and the engine agreeing with what a build would compile is the better of two wrong
      * answers. The tab keeps showing the user's text, and their next keystroke pushes it back here.
      */
-    fun refreshOverlay(file: Path) = mutateSources {
+    fun refreshOverlay(file: Path) {
         val norm = file.toAbsolutePath().normalize()
-        if (!openDocuments.containsKey(norm)) return@mutateSources
+        if (!openDocuments.containsKey(norm)) return
         // A binary/oversized file's overlay is the read-only placeholder FileBackend.readFile handed the
         // editor, not the file's bytes; re-reading it as text would put garbage where the placeholder was.
-        if (isBinaryOnDisk(norm)) return@mutateSources
-        val disk = runCatching { norm.readText() }.getOrNull() ?: return@mutateSources
-        // replace(), not put(): refreshing must never create an overlay for a file nothing has open.
-        if (openDocuments.replace(norm, disk) == disk) return@mutateSources
+        if (isBinaryOnDisk(norm)) return
+        val disk = runCatching { norm.readText() }.getOrNull() ?: return
+        // replace(), not put(): the tab may have been closed between the containsKey and here, and this must
+        // not resurrect an overlay for a file nothing has open.
+        val previous = openDocuments.replace(norm, disk) ?: return
+        diskBaselines[norm] = disk
+        if (previous == disk) return
         if (isResourcePath(norm)) invalidateSyntheticClasses()
     }
 
@@ -1395,9 +1444,10 @@ class IdeServices private constructor(
      * already discards the edit on the UI side, so keeping it here was divergence rather than a working
      * copy.
      */
-    fun documentClosed(file: Path) = mutateSources {
+    fun documentClosed(file: Path) {
         val norm = file.toAbsolutePath().normalize()
-        if (openDocuments.remove(norm) == null) return@mutateSources
+        diskBaselines.remove(norm)
+        if (openDocuments.remove(norm) == null) return
         // Same reason as [updateDocument]: dropping a `res/` buffer changes what the synthetic `R` resolves.
         if (isResourcePath(norm)) invalidateSyntheticClasses()
     }
@@ -1426,6 +1476,7 @@ class IdeServices private constructor(
         val updated = sb.toString()
         updateDocument(path, updated)
         runCatching { path.parent?.let { Files.createDirectories(it) }; path.writeText(updated) }
+            .onSuccess { diskBaselines[path] = updated }
         events.filesMutated(listOf(path), null)
     }
 
@@ -1441,6 +1492,7 @@ class IdeServices private constructor(
         openDocuments[path] = text
         path.parent?.let { Files.createDirectories(it) }
         path.writeText(text)
+        diskBaselines[path] = text
         events.fileChanged(path, text)
     }
 
@@ -1454,10 +1506,16 @@ class IdeServices private constructor(
      * writes when content actually changed. Public so the UI process can flush before a build runs in the
      * separate `:build` daemon — the daemon has no editor buffers of its own, so its own flush is a no-op and
      * it would otherwise compile whatever was last saved to disk (running stale code on an unsaved edit).
+     *
+     * Only a buffer with an unsaved edit (one that differs from its [diskBaselines] entry) is written. A clean
+     * buffer that differs from disk means the FILE changed, from outside the IDE, and the file is newer.
+     * An edited buffer still wins over an outside write: it is what the user sees and is building, and the tab
+     * already flags that the two have diverged.
      */
     fun flushOpenDocuments() = mutateSources {
         for ((path, content) in openDocuments) {
             runCatching {
+                if (diskBaselines[path] == content) return@runCatching
                 // Same guard as save(): an opened binary/oversized file lives in the overlay as placeholder
                 // text (its bytes never differ from that placeholder), so flushing it before a build would
                 // overwrite the real bytes on disk. Skip it — this is the frequent PNG-corruption path.
@@ -1466,6 +1524,7 @@ class IdeServices private constructor(
                     path.parent?.let { Files.createDirectories(it) }
                     path.writeText(content)
                 }
+                diskBaselines[path] = content
             }
         }
     }
@@ -1756,12 +1815,32 @@ class IdeServices private constructor(
     private val inspectionsFile: Path get() = store.rootPath.resolve(".platform/inspections.properties")
 
     /** Read a per-project generic-settings value (the store behind PROJECT-scoped settings pages). */
-    fun projectPref(key: String): String? = loadProps(projectSettingsFile).getProperty(key)
+    fun projectPref(key: String): String? = cachedProjectSettings().getProperty(key)
 
     /** Write a per-project generic-settings value. */
-    fun setProjectPref(key: String, value: String) {
-        val props = loadProps(projectSettingsFile).apply { setProperty(key, value) }
-        storeProps(projectSettingsFile, props, "building project settings")
+    fun setProjectPref(key: String, value: String) = synchronized(projectSettingsLock) {
+        val props = java.util.Properties().apply { putAll(cachedProjectSettings()) }
+        props.setProperty(key, value)
+        projectSettingsCache = props
+        storeProps(projectSettingsFile, props, "CodeAssist project settings")
+        projectSettingsStamp = fileStamp(projectSettingsFile)
+    }
+
+    /** The file's id, modification time and size: what changes when this or another process rewrites it. */
+    private fun fileStamp(file: Path): List<Any?>? = runCatching {
+        val a = Files.readAttributes(file, java.nio.file.attribute.BasicFileAttributes::class.java)
+        listOf(a.fileKey(), a.lastModifiedTime().toMillis(), a.size())
+    }.getOrNull()
+
+    /**
+     * The project settings as last read, re-read only when the file changed. Each project-scoped control on a
+     * Settings page reads one key, and opening and parsing the file per key (often on shared storage, on the
+     * UI thread) made those pages lag. The result is shared: callers must not mutate it.
+     */
+    private fun cachedProjectSettings(): java.util.Properties = synchronized(projectSettingsLock) {
+        val stamp = fileStamp(projectSettingsFile)
+        projectSettingsCache?.takeIf { stamp == projectSettingsStamp }?.let { return it }
+        return loadProps(projectSettingsFile).also { projectSettingsCache = it; projectSettingsStamp = stamp }
     }
 
     // --- active build variant (per module) -----------------------------------------------------
@@ -1946,6 +2025,27 @@ class IdeServices private constructor(
      * declare. Model + persistence only; the caller re-resolves dependencies and re-indexes afterwards.
      */
     internal suspend fun syncFromBuildFiles(): ProjectSyncOutcome = projectSync.sync(SyncReason.MANUAL)
+
+    /**
+     * The target this compatibility-mode project's Kotlin Multiplatform modules are imported for, or null
+     * when no module could be imported as either Android or the JVM. Reads the build scripts.
+     */
+    fun kmpTargetChoice(): GradleKmp.Platform? =
+        if (!isCompatibilityMode()) null else GradleImport.kmpTargetChoice(workspaceRoot)
+
+    /**
+     * Import the multiplatform modules for [platform] from now on, and re-sync. The modules the switch
+     * changes are rebuilt rather than refreshed: a refresh keeps a module's type, merges its source roots and
+     * keeps its facets, so the old target's `androidMain` roots and `[android]` facet would survive it.
+     */
+    internal suspend fun switchKmpTarget(platform: GradleKmp.Platform): ProjectSyncOutcome {
+        fun shapes() = GradleImport.parse(workspaceRoot)?.modules.orEmpty()
+            .associate { it.name to (it.kind to it.kmp?.platform) }
+        val before = shapes()
+        GradleKmp.setPreference(workspaceRoot, platform)
+        val changed = shapes().filter { (name, shape) -> before[name] != shape }.keys
+        return projectSync.sync(SyncReason.MANUAL, recreate = changed)
+    }
 
     /** Convert this compatibility-mode project to a native CodeAssist project (see [GradleImport.convertToNative]).
      *  Pure disk operation — the model is already the source of truth, so nothing needs re-resolving. */
@@ -2435,8 +2535,50 @@ class IdeServices private constructor(
             override val text: String = text
             override val languageId: String? = languageFor(file).id.takeIf { it.isNotBlank() }
         }
-        return decorationCollector.collect(ctx) { providerId, error ->
+        val collected = decorationCollector.collect(ctx) { providerId, error ->
             decorationLog.warn("editor decoration provider '$providerId' failed on $file", error)
+        }
+        val tests = runCatching { testGutterMarks(file, text) }.getOrDefault(emptyList())
+        if (tests.isEmpty()) return collected
+        return dev.ide.plugin.editor.EditorDecorations(collected.ranges, collected.gutter + tests, collected.inlays)
+    }
+
+    /**
+     * Run marks for the tests in [file] when it sits in a test source root of a module that can run tests: one
+     * on each test class (all its tests) and one on each test. A mark's action is the `test:` Run task itself,
+     * prefixed so the editor knows to start it as a run ([TestOutput.GUTTER_ACTION_PREFIX]). An app's `androidTest`
+     * file gets `androidTest:` marks, where instrumented tests can run (the desktop, over adb).
+     */
+    private fun testGutterMarks(file: Path, text: String): List<dev.ide.plugin.editor.GutterMark> {
+        val name = file.fileName?.toString() ?: return emptyList()
+        if (!name.endsWith(".kt") && !name.endsWith(".java")) return emptyList()
+        val target = file.toAbsolutePath().normalize()
+        fun under(roots: List<Path>) = roots.any { target.startsWith(it.toAbsolutePath().normalize()) }
+        var kind = TestOutput.LOCAL
+        val module = modules().firstOrNull { m -> under(dev.ide.build.engine.testSourceRootDirs(m)) }
+            ?: modules().firstOrNull { m ->
+                m.type.id == "android-app" && apkInstaller?.runsInstrumentation == true &&
+                    under(dev.ide.build.engine.androidTestSourceRootDirs(m))
+            }?.also { kind = TestOutput.INSTRUMENTED }
+            ?: return emptyList()
+        val hits = if (name.endsWith(".kt")) {
+            dev.ide.lang.kotlin.index.KotlinTestScan.scan(name, text).map { Triple(it.classFqn, it.method, it.offset) }
+        } else {
+            dev.ide.lang.java.index.JavaTestScan.scan(text).map { Triple(it.classFqn, it.method, it.offset) }
+        }
+        if (hits.isEmpty()) return emptyList()
+        val lineStarts = ArrayList<Int>().apply { add(0); text.forEachIndexed { i, c -> if (c == '\n') add(i + 1) } }
+        return hits.map { (cls, method, offset) ->
+            val line = lineStarts.binarySearch(offset).let { if (it >= 0) it else -it - 2 }
+            val taskId = TestOutput.taskId(module.name, listOf(TestOutput.target(cls, method)), kind)
+            dev.ide.plugin.editor.GutterMark(
+                line = line,
+                iconId = "run",
+                tint = dev.ide.plugin.editor.DecorationTint.Success,
+                tooltip = if (method == null) "Run all tests in ${cls.substringAfterLast('.')}" else "Run $method",
+                actionId = TestOutput.GUTTER_ACTION_PREFIX + taskId,
+                order = 100,
+            )
         }
     }
 
@@ -2481,7 +2623,13 @@ class IdeServices private constructor(
     /** Quick documentation (signature + doc comment) for the symbol at [offset] in [file]'s buffer, or null.
      *  Resolves through the live overlay so cross-file references reach their declaration. */
     fun quickDocAt(file: Path, text: String, offset: Int): dev.ide.lang.resolve.QuickDocInfo? =
-        languageFeatures.quickDocAt(file, text, offset)
+        // An Android attribute or resource (incl. `R.string.x` in code) first: the analyzer would only describe
+        // the generated `R` field.
+        androidEditor.quickDoc.quickDocAt(file, text, offset) ?: languageFeatures.quickDocAt(file, text, offset)
+
+    /** Gutter color/drawable previews for the resource references in [file]'s buffer (res XML or code). */
+    fun resourceSwatches(file: Path, text: String): List<ResourceSwatch> =
+        androidEditor.swatches.swatches(file, text)
 
     /** Diagnostics for [text], bound to [file]'s module (empty if outside the project). */
     fun analyze(file: Path, text: String): AnalysisResult? {
@@ -2646,9 +2794,10 @@ class IdeServices private constructor(
 
     /**
      * Source go-to targets for the symbol at [offset] in [file]'s live buffer ([text]), for the requested
-     * navigation [kind] — Declaration / Implementation(s) / Type Declaration / Super. Kotlin source only;
-     * a [dev.ide.lang.kotlin.NavKind.DECLARATION] that resolves no code symbol falls back to the Android
-     * resource reference under the caret (so ⌘B still jumps `@string/…` / `R.…`). Empty when nothing applies.
+     * navigation [kind]. Code symbols come from the Kotlin analyzer; Android answers the rest: a resource's
+     * every declaration, a class or attribute named in XML, Usages and Related files. A Declaration nothing
+     * else resolves falls back to the resource repository (an unsaved, not yet indexed resource) and then to
+     * plugin declarations. Empty when nothing applies.
      */
     fun navigationTargets(
         file: Path,
@@ -2657,7 +2806,9 @@ class IdeServices private constructor(
         kind: dev.ide.lang.kotlin.NavKind,
     ): List<dev.ide.lang.kotlin.NavTarget> {
         val targets = kotlinEditor.navigationTargets(file, text, offset, kind)
-        if (targets.isNotEmpty() || kind != dev.ide.lang.kotlin.NavKind.DECLARATION) return targets
+        if (targets.isNotEmpty()) return targets
+        val android = androidEditor.navigation.targets(file, text, offset, kind)
+        if (android.isNotEmpty() || kind != dev.ide.lang.kotlin.NavKind.DECLARATION) return android
         return resourceDeclaration(file, text, offset) ?: pluginDeclarations(file, text, offset)
     }
 
@@ -2673,6 +2824,9 @@ class IdeServices private constructor(
         offset: Int,
     ): List<Pair<dev.ide.lang.kotlin.NavKind, List<dev.ide.lang.kotlin.NavTarget>>> {
         val opts = kotlinEditor.navigationOptions(file, text, offset).toMutableList()
+        for ((kind, targets) in androidEditor.navigation.options(file, text, offset)) {
+            if (opts.none { it.first == kind }) opts.add(kind to targets)
+        }
         if (opts.none { it.first == dev.ide.lang.kotlin.NavKind.DECLARATION }) {
             resourceDeclaration(file, text, offset)?.let { opts.add(dev.ide.lang.kotlin.NavKind.DECLARATION to it) }
         }
@@ -2945,20 +3099,22 @@ class IdeServices private constructor(
 
     // ---- rename refactoring ----------------------------------------------------------------------
 
-    /** The renameable symbol under the caret (its current name + a kind label), or null. Java only. */
-    /** The rename target under [offset] in [file]'s buffer (old name + kind), or null when not renameable. */
+    /** The rename target under [offset] in [file]'s buffer (old name + kind), or null when not renameable: an
+     *  Android resource anywhere it is named, else a Java symbol. */
     fun prepareRename(file: Path, text: String, offset: Int): RenameInfo? =
-        refactor.prepareRename(file, text, offset)
+        androidEditor.rename.prepareRename(file, text, offset) ?: refactor.prepareRename(file, text, offset)
 
     /**
-     * Rename the symbol under the caret to [newName] across the whole project: resolve the target, find every
-     * reference (binding-key match; a file-local symbol stays in its own file, otherwise project `.java` files
-     * are pre-filtered by name then parsed), then apply a multi-file edit to disk + the editor overlay. When a
-     * top-level public type whose name matches its file is renamed, the backing `.java` file is renamed too
-     * (its new path is returned so the editor can reopen it). Re-indexes and invalidates analyzers.
+     * Rename the symbol under the caret to [newName] across the whole project. An Android resource renames
+     * everywhere it is named (XML, `R.x.y`, binding classes, its files). Otherwise a Java symbol: resolve the
+     * target, find every reference (binding-key match; a file-local symbol stays in its own file, otherwise
+     * project `.java` files are pre-filtered by name then parsed), then apply a multi-file edit to disk + the
+     * editor overlay. When a top-level public type whose name matches its file is renamed, the backing `.java`
+     * file is renamed too (its new path is returned so the editor can reopen it). Re-indexes and invalidates
+     * analyzers.
      */
-    fun rename(file: Path, text: String, offset: Int, newName: String): RenameOutcome =
-        refactor.rename(file, text, offset, newName)
+    suspend fun rename(file: Path, text: String, offset: Int, newName: String): RenameOutcome =
+        androidEditor.rename.rename(file, text, offset, newName) ?: refactor.rename(file, text, offset, newName)
 
     /** Every reference to the symbol under [offset] in [file]/[text], project-wide, as (file, range) pairs.
      *  Read-only (Java/JDT); empty when the position is not a resolvable symbol. */
@@ -2974,7 +3130,7 @@ class IdeServices private constructor(
     private fun dropOverlaysUnder(root: Path) = mutateSources {
         val r = normPath(root)
         openDocuments.keys.filter { it == r || it.startsWith(r) }
-            .forEach { openDocuments.remove(it) }
+            .forEach { openDocuments.remove(it); diskBaselines.remove(it) }
     }
 
     /** Re-point open-document overlays from [from] (a file or directory) to [to] after a move/rename. */
@@ -2984,6 +3140,7 @@ class IdeServices private constructor(
         for (k in openDocuments.keys.filter { it == f || it.startsWith(f) }) {
             val dest = if (k == f) t else t.resolve(f.relativize(k))
             openDocuments.remove(k)?.let { openDocuments[normPath(dest)] = it }
+            diskBaselines.remove(k)?.let { diskBaselines[normPath(dest)] = it }
         }
     }
 
@@ -3054,8 +3211,9 @@ class IdeServices private constructor(
             val text = openDocuments[key] ?: runCatching { f.readText() }.getOrNull() ?: continue
             val rewrite = (if (isKotlinSource(f)) rewriteKotlinPackage(f, text, newPkg)
             else rewriteJavaPackage(f, text, newPkg)) ?: continue
-            openDocuments[key] = rewrite.updated
             runCatching { f.writeText(rewrite.updated) }
+                .onSuccess { putInStep(key, rewrite.updated) }
+                .onFailure { openDocuments[key] = rewrite.updated }
             if (updateReferences) for (type in rewrite.topLevelNames) {
                 val oldFqn = if (rewrite.oldPkg.isEmpty()) type else "${rewrite.oldPkg}.$type"
                 val newFqn = if (newPkg.isEmpty()) type else "$newPkg.$type"
@@ -3114,8 +3272,9 @@ class IdeServices private constructor(
                 if (isKotlinSource(file)) rewriteKotlinImports(text, renames)
                 else rewriteJavaImports(text, renames)
             if (updated != text) {
-                openDocuments[key] = updated
                 runCatching { file.writeText(updated) }
+                    .onSuccess { putInStep(key, updated) }
+                    .onFailure { openDocuments[key] = updated }
             }
         }
     }
@@ -3647,18 +3806,11 @@ class IdeServices private constructor(
             ?: return ownedPreview(module, repo, fingerprint, themeName, title, text, request, null)
 
         // Resolve against the user's ACTIVE variant (the persisted per-module choice the editor and build
-        // target), not the default — the merged manifest, exploded AARs, resource link caches and dex caches
+        // target), not the default — the exploded AARs, resource link caches and dex caches
         // are all variant-scoped, so the default here made a variant switch invisible to the preview.
         val selectedVariant = AndroidVariants.select(module, activeVariant(module))
             ?: AndroidVariants.defaultVariant(module)
         val variant = selectedVariant?.name ?: "debug"
-        // Relink the live buffer over the project's resources so the preview reflects the edited (or newly
-        // added) layout. The linker self-builds its base from the live res tree, so a prior successful build
-        // is NOT required and edits to other resources show; it falls back internally to the build's flats.
-        val moduleDir = Paths.get(module.dir.path)
-        val manifestPath =
-            AndroidBuildSystem.mergedManifestPath(module, variant)
-                .takeIf { Files.exists(it) } ?: moduleDir.resolve(facet.manifest)
         val resDirs = AndroidResources.resourceDirs(module, store.workspace)
 
         // The runtime library set + the AAR package names, resolved once. Must be the RUNTIME set (what the APK
@@ -3688,8 +3840,7 @@ class IdeServices private constructor(
 
         // Relink the live buffer over the project's resources so the preview reflects the edited (or newly
         // added) layout. The linker self-builds its base from the live res tree, so a prior successful build
-        // is NOT required and edits to other resources show; it falls back internally to the build's flats. It
-        // also generates a preview `R.jar` (app + [extraPackages]) with ids matching the relinked arsc, so the
+        // is NOT required and edits to other resources show. It also generates a preview `R.jar` (app + [extraPackages]) with ids matching the relinked arsc, so the
         // preview no longer depends on a prior build's (id-mismatched, possibly absent) R.jar.
         val linked = previewResourceLinker?.link(
             module,
@@ -3697,13 +3848,25 @@ class IdeServices private constructor(
             resDirs,
             file,
             text,
-            manifestPath,
             facet.namespace,
             facet.minSdk,
             facet.targetSdk,
             extraPackages = extraPackages,
             progress = { _realViewProgress.value = PreviewProgress(it) },
         )
+        // Broken project resources: report them. Rendering the build's last resources.ap_ (or owned rendering)
+        // here would show the layout wrong with no hint why.
+        if (linked != null && linked.resourceErrors.isNotEmpty()) {
+            return LayoutPreviewResult(
+                RenderNode().apply { renderer = PlaceholderRenderer; tag = "real-view" },
+                ProjectPreviewResources(repo, request.density, request.density, night = request.night, themeName = themeName),
+                request.density,
+                request.density,
+                resourceErrors = linked.resourceErrors.map {
+                    dev.ide.preview.ResourceError(it.file?.toString(), it.line, it.message)
+                },
+            )
+        }
         // The resources.ap_ to render against: the live relink, else the build's own, else owned rendering.
         val resourcesAp = linked?.resourcesAp
             ?: AndroidBuildSystem.resourcesApPath(module, variant)
@@ -4171,6 +4334,45 @@ class IdeServices private constructor(
         sourceIndexGeneration.incrementAndGet()
     }
 
+    /**
+     * How many times the project's sources use the member a completion item labeled [label] names, after a `.`
+     * (see [MemberUsageIndex]), for the app-global `platform.projectUsage` weigher. A Kotlin property and its
+     * Java accessors count as one member (`text` also counts `getText`/`setText`, and the reverse), so a Java
+     * project's `setText(...)` calls rank `text` in a Kotlin file. Memoized per [sourceIndexGeneration]:
+     * completion asks for every candidate on every query.
+     */
+    fun memberUsageCount(label: String): Int {
+        val name = label.takeWhile { it.isLetterOrDigit() || it == '_' }
+        if (name.isEmpty()) return 0
+        val gen = sourceIndexGeneration.get()
+        val memo = memberUsageMemo
+        val counts = if (memo.first == gen) memo.second else ConcurrentHashMap<String, Int>().also { memberUsageMemo = gen to it }
+        return memberNameForms(name).sumOf { form ->
+            counts.computeIfAbsent(form) { indexService.exact<Int>(MemberUsageIndex.id, it).sum() }
+        }
+    }
+
+    @Volatile
+    private var memberUsageMemo: Pair<Long, ConcurrentHashMap<String, Int>> = -1L to ConcurrentHashMap()
+
+    /** [name] and the other spellings of the same member: a property's accessors, or an accessor's property. */
+    private fun memberNameForms(name: String): List<String> {
+        fun decap(rest: String) = rest.takeIf { it.isNotEmpty() && it[0].isUpperCase() }?.let { it[0].lowercaseChar() + it.substring(1) }
+        val property = when {
+            name.startsWith("get") -> decap(name.substring(3))
+            name.startsWith("set") -> decap(name.substring(3))
+            else -> null
+        }
+        return when {
+            property != null -> listOf(name, property)
+            name[0].isLowerCase() && !name.startsWith("is") -> {
+                val cap = name[0].uppercaseChar() + name.substring(1)
+                listOf(name, "get$cap", "set$cap")
+            }
+            else -> listOf(name)
+        }
+    }
+
     /** Memoized [sourceCustomViewScan], keyed by [sourceIndexGeneration] — so the XML analyzer's custom-view tag
      *  list reflects a just-saved project `View` subclass WITHOUT an analyzer rebuild, yet completion stays O(1)
      *  between source edits (the [SubtypeIndex] BFS runs only when a source save/resync bumped the generation). */
@@ -4419,10 +4621,10 @@ class IdeServices private constructor(
         else -> dev.ide.preview.ValueFormat.ANY
     }
 
-    /** The `android.jar` for the preview compile — the device's bundled jar, else a detected desktop SDK's. */
+    /** The `android.jar` for the preview compile: the device's bundled jar, else a desktop SDK's or the desktop
+     *  app's own. */
     private fun previewAndroidJar(): Path? =
-        androidTools?.androidJar ?: (AndroidSdk.findSdkRoot()
-            ?.let { AndroidSdk.detect(it) }?.androidJar)
+        androidTools?.androidJar ?: BundledAndroidToolchain.androidJar()
 
     /** The activity/application theme name (raw dotted, sans `@style/`) and window title from the manifest. */
     private fun manifestThemeAndLabel(
@@ -4813,9 +5015,12 @@ class IdeServices private constructor(
             return IdeServices(platform, store, env = env)
         }
 
-        /** An installed Android SDK's `android.jar` as the workspace SDK, or null if none is found. */
+        /** An Android `android.jar` as the workspace SDK (installed or bundled), or null if there is none. */
         private fun detectAndroidSdk(): SdkData? {
-            val sdk = AndroidSdk.findSdkRoot()?.let(AndroidSdk::detect) ?: return null
+            // An installed SDK, else the toolchain the desktop app ships, so a machine with no SDK still opens
+            // Android projects against android.jar rather than the JDK.
+            val sdk = AndroidSdk.findSdkRoot()?.let(AndroidSdk::detect) ?: BundledAndroidToolchain.bundled()
+                ?: return null
             // android.jar omits java.lang.invoke.StringConcatFactory / LambdaMetafactory; ship the build-tools
             // desugar stubs alongside it on the boot classpath so Java ≥ 9 string-concat (`"a" + b`) and
             // lambdas resolve during analysis (and compilation). Compile-only — see AndroidSdk.coreLambdaStubs.
@@ -4938,6 +5143,13 @@ class IdeServices private constructor(
             val templateArgs = TemplateArgs(args)
             template.generate(StoreScaffold(store, languageLevel), templateArgs)
             store.save()
+            // A template may author a foreign build rather than a model (the Kotlin Multiplatform ones write a
+            // Gradle project, which is the only shape a multi-target build has). It then declared no modules,
+            // and the importer that claims what it wrote reads them in, exactly as Import would.
+            if (store.workspace.projects.all { it.modules.isEmpty() }) {
+                ProjectSyncService.importerFor(env.platform.extensions, root)
+                    ?.let { importInto(root, store, it, languageLevel, env) }
+            }
             val services = IdeServices(
                 platform,
                 store,
@@ -4995,6 +5207,21 @@ class IdeServices private constructor(
             val importer = ProjectSyncService.importerFor(env.platform.extensions, root) ?: return false
             val (_, store) = openStore(root, env)
             ensureSdks(store, sdk, root)
+            return importInto(root, store, importer, languageLevel, env)
+        }
+
+        /**
+         * Read [root]'s build files with [importer] into [store] and record the import (marker, repositories,
+         * stamp): what [importExternalProjectAt] does once its store is open, and what [createProjectAt] does
+         * for a template that wrote a foreign build instead of a model.
+         */
+        private fun importInto(
+            root: Path,
+            store: ProjectModelStore,
+            importer: ProjectImporter,
+            languageLevel: LanguageLevel,
+            env: ApplicationEnvironment,
+        ): Boolean {
             val request = SyncRequest(root, NoSyncProgress, SyncReason.IMPORT)
             val outcome = runSync { importer.resolve(request) }
             val rawModel = outcome.model ?: return false
@@ -5048,6 +5275,26 @@ class IdeServices private constructor(
             store.save()
             UnrecognizedProjectMarker.write(root, origin)
         }
+    }
+
+    /**
+     * The last of construction, deliberately after every property: Kotlin runs property initializers and `init`
+     * blocks in source order, so anything that can call back into this engine from ANOTHER thread must not
+     * start before the fields below the first `init` exist. The project-open index pass used to be launched
+     * from that first `init` on `Dispatchers.Default`, and a fast worker reached [runIndexPass] while
+     * [indexSyncMutex] (declared ~200 lines later) was still null: an NPE on `Mutex.lock`.
+     */
+    init {
+        // Arm the event hub's reactions only now: init's own commits (ensureKotlinStdlib) must not trigger
+        // invalidation over fields that are still initializing (a throwing reaction would abort the commit, and a
+        // resync reads fields declared late in the class).
+        events.activate()
+        // This is now the active project for app-level extension callbacks that fire outside any service scope
+        // (the command actions, the synthetic-R provider, the XML resource host — all registered once on the
+        // app registry). Set once the engine is fully constructed, so it can't be resolved half-built. The
+        // backend re-asserts this on project swap; an engine clears it (if still itself) on close.
+        env.activeEngine = this
+        openJob?.start()
     }
 }
 

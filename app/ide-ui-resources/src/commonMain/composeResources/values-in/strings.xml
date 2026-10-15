@@ -101,6 +101,7 @@ Kami tidak pernah mengumpulkan kode, nama file atau proyek Anda, fitur apa yang 
     <string name="no_project_yet">Belum ada proyek. Buat satu untuk memulai.</string>
     <string name="your_projects">Proyek Anda</string>
     <string name="project_kind_android">Android</string>
+    <string name="project_kind_files">File</string>
     <string name="project_opened_just_now">Baru saja dibuka</string>
     <string name="beta_notice">Anda berada di %1$s</string>
     <string name="beta_notice_content">Beberapa fitur mungkin tidak lengkap atau berubah. Kami sangat mengharapkan masukan Anda, beri tahu kami apa yang hilang atau rusak.</string>
@@ -109,6 +110,9 @@ Kami tidak pernah mengumpulkan kode, nama file atau proyek Anda, fitur apa yang 
     <string name="your_codeassist_files_content">Buka folder ini di manajer file mana pun untuk menjelajahi proyek Anda, menambahkan ikon atau aset, atau mengedit dari PC.</string>
     <string name="open_in_the_file_manager">Buka di manajer file</string>
     <string name="choose_start_point">Pilih titik awal.</string>
+    <string name="templates_search">Cari templat</string>
+    <string name="templates_all">Semua</string>
+    <string name="templates_no_match">Tidak ada templat yang cocok dengan “%1$s”.</string>
     <string name="backup">Cadangkan</string>
     <string name="delete_project">Hapus proyek?</string>
     <string name="delete_project_content">“%1$s” dan semua filenya akan dihapus secara permanen. Ini tidak dapat dibatalkan.</string>
@@ -173,6 +177,13 @@ Kami tidak pernah mengumpulkan kode, nama file atau proyek Anda, fitur apa yang 
     <string name="edview_open_a_file_from_navigator">Buka file dari navigator</string>
     <string name="edview_no_file_open_title">Tidak ada file terbuka</string>
     <string name="edview_no_file_open_hint">Pilih file dari navigator untuk mulai mengedit</string>
+    <string name="edview_action_search">Cari di mana saja</string>
+    <string name="edview_action_go_to_file">Buka file</string>
+    <string name="edview_action_recent">File terbaru</string>
+    <string name="edview_action_find">Cari di file</string>
+    <string name="edview_action_new_file">File baru</string>
+    <string name="edview_action_project">File proyek</string>
+    <string name="edview_recent_title">Baru dibuka</string>
     <string name="tab_close_others">Tutup Lainnya</string>
     <string name="tab_close_to_the_right">Tutup ke Kanan</string>
     <string name="tab_close_to_the_left">Tutup ke Kiri</string>
@@ -327,6 +338,9 @@ Kami tidak pernah mengumpulkan kode, nama file atau proyek Anda, fitur apa yang 
     <string name="find_all">Semua</string>
     <string name="gradle_mode_title">Mode kompatibilitas Gradle</string>
     <string name="gradle_resync">Sinkron ulang</string>
+    <string name="gradle_kmp_target">Target multiplatform</string>
+    <string name="gradle_kmp_android">Android</string>
+    <string name="gradle_kmp_jvm">Desktop (JVM)</string>
     <string name="gradle_syncing">Menyinkronkan dari Gradle…</string>
     <string name="sources_not_installed">Sumber platform Android (%1$s) belum terpasang. Diperlukan untuk nama parameter &amp; dokumen android.*.</string>
     <string name="sources_download">Unduh</string>
@@ -442,6 +456,10 @@ Kami tidak pernah mengumpulkan kode, nama file atau proyek Anda, fitur apa yang 
     <string name="palette_hint">Jalankan perintah, lompat ke file atau simbol…</string>
     <string name="palette_type_to_search">Ketik untuk mencari %1$s…</string>
     <string name="palette_no_matches">Tidak ada kecocokan</string>
+    <string name="palette_key_navigate">navigasi</string>
+    <string name="palette_key_open">buka</string>
+    <string name="palette_key_scope">ganti cakupan</string>
+    <string name="palette_key_close">tutup</string>
     <string name="run_no_active_run">Tidak ada proses yang berjalan.</string>
     <string name="run_back">Kembali</string>
     <string name="run_run_again">Jalankan lagi</string>
@@ -453,6 +471,18 @@ Kami tidak pernah mengumpulkan kode, nama file atau proyek Anda, fitur apa yang 
     <string name="run_building_module">Membangun %1$s…</string>
     <string name="run_running_module">Menjalankan %1$s</string>
     <string name="run_no_output">(tidak ada output)</string>
+    <string name="run_tab_tests">Tes</string>
+    <string name="run_tab_output">Output</string>
+    <string name="tests_passed">%1$d lulus</string>
+    <string name="tests_failed">%1$d gagal</string>
+    <string name="tests_skipped">%1$d dilewati</string>
+    <string name="tests_progress">%1$d dari %2$d</string>
+    <string name="tests_rerun_failed">Ulangi yang gagal</string>
+    <string name="tests_run_one">Jalankan tes</string>
+    <string name="tests_run_class">Jalankan semua tes di kelas</string>
+    <string name="tests_none_found">Tidak ada tes ditemukan</string>
+    <string name="tests_none_in_file">Tidak ada tes di file ini</string>
+    <string name="tests_class_failed">Kelas gagal: %1$s</string>
     <string name="run_type_input">Ketik input, tekan Enter…</string>
     <string name="run_send">Kirim</string>
     <string name="run_end_input_eof">Akhiri input (EOF)</string>
@@ -773,6 +803,16 @@ Kami tidak pernah mengumpulkan kode, nama file atau proyek Anda, fitur apa yang 
     <string name="modcfg_title_modules">Modul</string>
     <string name="modcfg_new_module_action">Modul baru</string>
     <string name="modcfg_no_modules">Tidak ada modul. Ketuk + untuk menambahkan satu.</string>
+    <string name="modcfg_empty_title">Belum ada modul</string>
+    <string name="modcfg_empty_body">Modul adalah satu bagian proyek yang dapat di-build: aplikasi, library, atau fitur.</string>
+    <string name="keymap_hint">Klik pintasan, lalu tekan tombol baru. Esc membatalkan; Backspace menghapusnya.</string>
+    <string name="keymap_search">Cari perintah atau tombol</string>
+    <string name="keymap_modified">Diubah</string>
+    <string name="keymap_reset_all">Atur ulang semua</string>
+    <string name="keymap_no_results">Tidak ada perintah yang cocok.</string>
+    <string name="keymap_recording">Tekan tombol…</string>
+    <string name="keymap_not_set">Tidak diatur</string>
+    <string name="keymap_reset">Kembalikan ke default</string>
     <string name="modcfg_remove_named">Hapus %1$s</string>
     <string name="modcfg_removed">Menghapus %1$s</string>
     <string name="modcfg_build_features_android_only">Fitur build hanya berlaku untuk modul Android.</string>
@@ -796,6 +836,10 @@ Kami tidak pernah mengumpulkan kode, nama file atau proyek Anda, fitur apa yang 
     <string name="modcfg_packaging_merge_desc">Gabungkan duplikat alih-alih membuangnya.</string>
     <string name="modcfg_packaging_default_excludes">Selalu dikecualikan secara default</string>
     <string name="modcfg_packaging_default_merges">Selalu digabung secara default</string>
+    <string name="modcfg_packaging_compression">Kompresi</string>
+    <string name="modcfg_packaging_no_compress">Jangan kompres</string>
+    <string name="modcfg_packaging_no_compress_desc">Akhiran file seperti tflite atau .bin yang disimpan tanpa kompresi di APK, agar AssetManager.openFd() dan pemetaan memori berfungsi. Dicocokkan dengan akhir setiap jalur, tanpa membedakan huruf besar/kecil.</string>
+    <string name="modcfg_packaging_default_no_compress">Tidak pernah dikompres secara default</string>
     <string name="modcfg_manage_keystores">Kelola keystore</string>
     <string name="modcfg_keystores_empty">Belum ada keystore. Buat satu di Pengelola Keystore untuk menandatangani build rilis.</string>
     <string name="modcfg_debug_default">debug (default)</string>
@@ -1075,4 +1119,6 @@ Kami tidak pernah mengumpulkan kode, nama file atau proyek Anda, fitur apa yang 
     </plurals>
     <string name="close_project_building">Build masih berjalan.</string>
     <string name="close_project_save_and_close">Simpan &amp; tutup</string>
+    <string name="sdk_platform_tools">Alat platform</string>
+    <string name="sdk_platform_tools_desc">adb, yang dipakai Jalankan untuk memasang dan membuka aplikasi Anda di ponsel atau emulator yang terhubung ke komputer ini.</string>
 </resources>
