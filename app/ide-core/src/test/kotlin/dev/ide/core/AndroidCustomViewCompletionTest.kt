@@ -27,10 +27,12 @@ class AndroidCustomViewCompletionTest {
 
     private fun awaitIndexed(ide: IdeServices, timeoutMs: Long = 180_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
-        // A reindex pass launches async: briefly wait for the pass to start so a stale
+        // A reindex pass launches async: wait for the pass to start so a stale
         // "Indexed" left by the previous pass cannot satisfy this wait before the
         // new pass has indexed anything (the suite-only empty-completion flake).
-        val startDeadline = minOf(deadline, System.currentTimeMillis() + 2_000)
+        // The window is generous because a full-build-loaded machine can take
+        // many seconds to schedule the pass; the overall deadline still bounds hangs.
+        val startDeadline = minOf(deadline, System.currentTimeMillis() + 30_000)
         while (!ide.indexStatus.value.building && System.currentTimeMillis() < startDeadline) Thread.sleep(10)
         while ((ide.indexStatus.value.building || ide.indexStatus.value.message != "Indexed") && System.currentTimeMillis() < deadline) Thread.sleep(50)
     }
