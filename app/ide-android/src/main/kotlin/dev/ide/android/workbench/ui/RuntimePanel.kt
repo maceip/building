@@ -326,7 +326,7 @@ fun RuntimePanel(
                         dev.ide.android.reliability.RuntimeCaptureControls(form.root, onOpenIncidents)
                     }
                     RuntimeDisclosure("Runtime availability", showAvailability, { showAvailability = !showAvailability }, Modifier.testTag("runtime-availability")) {
-                        Text("Checks run only when requested. Choose runtimes in Settings → Runtimes; disabling one keeps its installed files and existing sessions.", style = MaterialTheme.typography.bodySmall)
+                        Text("Checks run only when requested. Manage runtimes in Settings → SDK Manager; disabling one keeps its installed files and existing sessions.", style = MaterialTheme.typography.bodySmall)
                         OutlinedButton(onClick = form::probe, enabled = editable && !form.probing, modifier = Modifier.testTag("runtime-recheck")) { Text(if (form.probing) "Probing…" else "Recheck runtimes") }
                         if (form.probing) LinearProgressIndicator(Modifier.fillMaxWidth())
                         form.probeError?.let { Text("Availability check failed: $it", color = MaterialTheme.colorScheme.error) }
