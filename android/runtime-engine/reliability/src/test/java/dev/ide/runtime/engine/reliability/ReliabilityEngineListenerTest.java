@@ -38,6 +38,8 @@ public class ReliabilityEngineListenerTest {
         listener.onState(value); listener.onState(value); listener.onInputAccepted(42);
         assertEquals(1, sdk.errors.size()); assertEquals(1, sdk.breadcrumbs.size()); assertEquals(42, delegate.input);
         assertEquals(ReliabilityEngineListener.FailureKind.SCRIPT_EXIT, sdk.errors.get(0).kind);
+        assertEquals(EngineSnapshot.Phase.FINISHED, sdk.errors.get(0).stage);
+        assertEquals("app_engine engine=node stage=FINISHED kind=SCRIPT_EXIT", sdk.breadcrumbs.get(0));
         String event = sdk.breadcrumbs.get(0) + sdk.errors.get(0).getMessage();
         for (String forbidden : new String[] {"token", "private", "stderr", "stdout", "secret", "1234", "83"}) assertFalse(event, event.contains(forbidden));
         assertEquals(0, sdk.errors.get(0).getStackTrace().length); assertNull(sdk.errors.get(0).getCause());

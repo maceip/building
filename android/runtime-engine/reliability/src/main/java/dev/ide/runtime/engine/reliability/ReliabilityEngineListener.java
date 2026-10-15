@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 package dev.ide.runtime.engine.reliability;
 
+import android.content.Context;
 import dev.ide.applog.Reliability;
 import dev.ide.runtime.engine.Engine;
 import dev.ide.runtime.engine.EngineClient;
@@ -10,9 +11,12 @@ import java.util.Set;
 
 /** Explicit-consent typed SDK adapter, not automatic capture or a transport.
  *
- * Use new ReliabilityEngineListener(engine, delegate, true) only after the user
- * opts in AND initializes Reliability with its own consent configuration. The
- * default constructor is disabled. Existing SDK revocation/destination/network
+ * Generated apps may use createClient(context, engine, delegate, enableCapture)
+ * after their own Reliability Config has been explicitly enabled, consented and
+ * initialized. It returns both the real client and its listener for revocation.
+ * The factory never initializes the SDK, grants consent, invents app/build identity,
+ * or uses the IDE's SDK. A false flag or uninitialized SDK leaves it disabled.
+ * The default constructor is disabled. Existing SDK revocation/destination/network
  * consent still governs persistence and delivery. This adapter adds no hooks,
  * initializes nothing, requests no permissions, and never exports script text,
  * paths, argv, PID, session IDs, stdout/stderr, exception messages or tokens.
@@ -28,10 +32,33 @@ public final class ReliabilityEngineListener implements EngineClient.Listener {
     public static final class EngineFailure extends RuntimeException {
         public final Engine engine;
         public final FailureKind kind;
-        private EngineFailure(Engine engine, FailureKind kind) {
-            super("engine=" + engine.id + " kind=" + kind.name(), null, false, false);
-            this.engine = engine; this.kind = kind;
+        public final EngineSnapshot.Phase stage;
+        private EngineFailure(Engine engine, FailureKind kind, EngineSnapshot.Phase stage) {
+            super("engine=" + engine.id + " kind=" + kind.name() + " stage=" + stage.name(), null, false, false);
+            this.engine = engine; this.kind = kind; this.stage = stage;
         }
+    }
+
+    /** Main-thread, one-client attachment. Close with the owning Activity/ViewModel. */
+    public static final class Client implements AutoCloseable {
+        public final EngineClient client;
+        public final ReliabilityEngineListener listener;
+        private Client(EngineClient client, ReliabilityEngineListener listener) {
+            this.client = client; this.listener = listener;
+        }
+        @Override public void close() { listener.setCollectionEnabled(false); client.close(); }
+    }
+
+    /**
+     * Explicit optional-SDK integration for the generated app's own process only.
+     * Reliability.isInitialized() verifies the SDK's enabled Config and current consent;
+     * the adapter does not turn either on. Consent granted after creation needs an explicit
+     * setCollectionEnabled(true) or a new client, and never replays earlier failures.
+     */
+    public static Client createClient(Context context, Engine engine, EngineClient.Listener delegate, boolean enableCapture) {
+        ReliabilityEngineListener listener = new ReliabilityEngineListener(engine, delegate,
+                enableCapture && Reliability.isInitialized());
+        return new Client(new EngineClient(context, listener), listener);
     }
 
     interface Sink {
@@ -91,7 +118,7 @@ public final class ReliabilityEngineListener implements EngineClient.Listener {
         }
         if (!sink.enabled()) return;
         // Structured fixed fields only; no raw numeric exit status which user scripts could encode data into.
-        sink.breadcrumb("app_engine engine=" + engine.id + " phase=" + state.phase.name() + " kind=" + kind.name());
-        sink.exception(new EngineFailure(engine, kind));
+        sink.breadcrumb("app_engine engine=" + engine.id + " stage=" + state.phase.name() + " kind=" + kind.name());
+        sink.exception(new EngineFailure(engine, kind, state.phase));
     }
 }

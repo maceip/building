@@ -1,6 +1,7 @@
 package dev.ide.reliability.fixture;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -56,6 +57,11 @@ public final class FixtureActivity extends Activity {
         checkpoint.setOnClickListener(v -> { checkpointDraft(); writeCheckpoint(); });
         Button inspect = button("Inspect durable SDK queue", column);
         inspect.setOnClickListener(v -> writeCheckpoint());
+        Button backup = button("Export / restore selected user data", column);
+        backup.setOnClickListener(v -> {
+            checkpointDraft();
+            startActivity(new Intent(this, FixtureBackupActivity.class));
+        });
         Button crash = button("Crash fixture process", column);
         crash.setOnClickListener(v -> {
             checkpointDraft(); writeCheckpoint();

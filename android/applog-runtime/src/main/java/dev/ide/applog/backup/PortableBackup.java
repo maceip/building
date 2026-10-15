@@ -96,6 +96,18 @@ public final class PortableBackup {
         /** Only a manifest-whitelisted entry is requested. Exclude secrets even when embedded in user data. */
         InputStream openSelectedEntry(BackupManifest.Entry entry) throws Exception;
     }
+    public interface ArchiveSource {
+        /** Open one user-authorized encrypted archive. The SDK owns and closes the returned stream. */
+        InputStream open() throws Exception;
+    }
+    public interface ArchiveDestination {
+        /**
+         * Open a NEW user-authorized document, only after the private encrypted snapshot is complete.
+         * The SDK owns and closes the stream. Stream destinations cannot promise atomic replacement:
+         * a failed/cancelled transfer may leave an incomplete document that the user should discard.
+         */
+        OutputStream open() throws Exception;
+    }
     public interface Importer {
         /** Called only after complete authentication, selection, size and digest validation. */
         Transaction begin(BackupManifest source, BackupManifest target) throws Exception;
@@ -209,6 +221,72 @@ public final class PortableBackup {
             check(cancellation);
             atomicInstall(temporary, target);
         } finally { Files.deleteIfExists(temporary); }
+    }
+
+    /**
+     * Export to a user-selected document without holding the app snapshot during slow provider I/O.
+     * Only encrypted bytes leave the caller's private staging directory. Opening the destination is
+     * deferred until export succeeds; once open, a provider failure may leave an incomplete document.
+     * Call off the UI thread. This method neither selects a document nor grants consent on the user's behalf.
+     */
+    public void exportArchive(ArchiveDestination destination, Path privateStagingDirectory,
+                              BackupManifest manifest, BackupKey key, Snapshot snapshot, Exporter exporter,
+                              Cancellation cancellation) throws Exception {
+        if (destination == null || cancellation == null) throw new IllegalArgumentException("Destination/cancellation required");
+        check(cancellation);
+        requirePrivateDirectory(privateStagingDirectory);
+        Path archive = privateTempFile(privateStagingDirectory, ".backup-transfer-");
+        try {
+            exportArchive(archive, manifest, key, snapshot, exporter, cancellation);
+            check(cancellation);
+            OutputStream opened = destination.open();
+            if (opened == null) throw new IOException("Document provider returned no output stream");
+            try (OutputStream output = opened;
+                 InputStream input = Files.newInputStream(archive, LinkOption.NOFOLLOW_LINKS)) {
+                copyArchive(input, output, cancellation);
+                output.flush();
+            }
+        } finally { Files.deleteIfExists(archive); }
+    }
+
+    /**
+     * Copy a user-selected document to bounded app-private storage, close its provider stream, then run
+     * the same full authentication and transactional restore as the file API. Provider read/close errors
+     * and oversize input fail before any importer callback. No URI, key or document permission is retained.
+     * Call off the UI thread; the caller must explicitly authorize the selected-data replacement first.
+     */
+    public void restoreArchive(ArchiveSource source, Path privateStagingDirectory, BackupManifest selectedTarget,
+                               BackupKey key, Importer importer, Cancellation cancellation) throws Exception {
+        if (source == null || selectedTarget == null || key == null || importer == null || cancellation == null)
+            throw new IllegalArgumentException("Source, selection, key, importer and cancellation required");
+        check(cancellation);
+        requirePrivateDirectory(privateStagingDirectory);
+        Path archive = privateTempFile(privateStagingDirectory, ".backup-transfer-");
+        try {
+            InputStream opened = source.open();
+            if (opened == null) throw new IOException("Document provider returned no input stream");
+            try (InputStream input = opened; OutputStream output = Files.newOutputStream(archive)) {
+                copyArchive(input, output, cancellation);
+            }
+            check(cancellation);
+            restoreArchive(archive, privateStagingDirectory, selectedTarget, key, importer, cancellation);
+        } finally { Files.deleteIfExists(archive); }
+    }
+
+    private void copyArchive(InputStream input, OutputStream output, Cancellation cancellation) throws IOException {
+        byte[] buffer = new byte[CHUNK];
+        long total = 0;
+        try {
+            while (true) {
+                check(cancellation);
+                int count = readProgress(input, buffer);
+                check(cancellation);
+                if (count < 0) break;
+                if (count > limits.maxArchiveBytes - total) throw new IOException("Archive exceeds limit");
+                output.write(buffer, 0, count);
+                total += count;
+            }
+        } finally { Arrays.fill(buffer, (byte) 0); }
     }
 
     /**

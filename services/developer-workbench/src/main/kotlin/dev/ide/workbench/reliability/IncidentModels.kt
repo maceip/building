@@ -15,7 +15,18 @@ object IncidentWire {
     const val MAX_TEXT_CHARS = 24_000
 }
 
-data class IncidentKey(val packageName: String, val buildId: String, val sessionId: String, val eventId: String)
+/** Origin is part of identity, not a user-controlled label in the SDK wire protocol. */
+enum class IncidentOrigin { SDK_APPLICATION, HOST_RUNTIME }
+
+/** The original four-argument SDK constructor stays source-compatible. Runtime keys never invent an app/build. */
+data class IncidentKey(
+    val packageName: String,
+    val buildId: String,
+    val sessionId: String,
+    val eventId: String,
+    val origin: IncidentOrigin = IncidentOrigin.SDK_APPLICATION,
+    val workspaceId: String? = null,
+)
 enum class IncidentState { OPEN, RESOLVED }
 
 /** SDK evidence is untrusted, already redacted text; the host redacts it again before persistence. */
@@ -36,6 +47,8 @@ data class IncidentSummary(
     val preview: String,
     val state: IncidentState,
     val hostRedacted: Boolean,
+    /** Host-only typed context. The nullable exact pre-run hash is authoritative here, not an attestation. */
+    val runtimeContext: HostRuntimeContext? = null,
 )
 
 data class Incident(val summary: IncidentSummary, val redactedText: String)
@@ -96,8 +109,19 @@ internal fun validatePackage(value: String) { if (value.length > 255 || !inciden
 internal fun validateId(value: String) { if (!incidentIdentifier.matches(value)) invalid() }
 internal fun validateRevision(value: String) { if (value.isNotEmpty()) validateId(value) }
 internal fun validateKey(key: IncidentKey) {
-    validatePackage(key.packageName)
-    validateId(key.buildId)
-    validateId(key.sessionId)
-    validateId(key.eventId)
+    when (key.origin) {
+        IncidentOrigin.SDK_APPLICATION -> {
+            if (key.workspaceId != null) invalid()
+            validatePackage(key.packageName)
+            validateId(key.buildId)
+            validateId(key.sessionId)
+            validateId(key.eventId)
+        }
+        IncidentOrigin.HOST_RUNTIME -> {
+            if (key.packageName.isNotEmpty() || key.buildId.isNotEmpty()) invalid()
+            validateRuntimeUuid(key.workspaceId ?: invalid())
+            validateRuntimeUuid(key.sessionId)
+            validateRuntimeUuid(key.eventId)
+        }
+    }
 }

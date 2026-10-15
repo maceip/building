@@ -8,6 +8,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -202,6 +203,193 @@ class PortableBackupTest {
             assertEquals(0, untouched.begins);
         }
         assertStagingRemoved();
+    }
+
+    @Test void documentExportClosesStreamAndReleasesSnapshotBeforeOpeningProvider() throws Exception {
+        Path staging = Files.createDirectory(temp.resolve("documents"));
+        Map<String, byte[]> data = selectedData();
+        AtomicBoolean snapshotHeld = new AtomicBoolean(), closed = new AtomicBoolean();
+        ByteArrayOutputStream document = new ByteArrayOutputStream() {
+            @Override public void close() { closed.set(true); }
+        };
+        try (BackupKey key = BackupKey.passphrase(PASSPHRASE)) {
+            backup.exportArchive(() -> {
+                assertFalse(snapshotHeld.get(), "slow document I/O must not hold the application snapshot");
+                return document;
+            }, staging, manifest(1), key, work -> {
+                snapshotHeld.set(true);
+                try { work.run(); } finally { snapshotHeld.set(false); }
+            }, entry -> {
+                assertTrue(snapshotHeld.get());
+                return new ByteArrayInputStream(data.get(entry.name()));
+            }, PortableBackup.Cancellation.NONE);
+        }
+        assertTrue(closed.get());
+        byte[] archive = document.toByteArray();
+        assertFalse(new String(archive, StandardCharsets.ISO_8859_1).contains("personal note"));
+        AtomicBoolean inputClosed = new AtomicBoolean();
+        AppTransaction destination = new AppTransaction(Collections.singletonMap("previous", bytes("keep")));
+        try (BackupKey key = BackupKey.passphrase(PASSPHRASE)) {
+            backup.restoreArchive(() -> new ByteArrayInputStream(archive) {
+                @Override public void close() { inputClosed.set(true); }
+            }, staging, manifest(1), key, (source, target) -> {
+                assertTrue(inputClosed.get(), "provider close errors must occur before importer callbacks");
+                return destination.begin(source, target);
+            }, PortableBackup.Cancellation.NONE);
+        }
+        assertEquals(1, destination.commits);
+        for (Map.Entry<String, byte[]> entry : data.entrySet())
+            assertArrayEquals(entry.getValue(), destination.live.get(entry.getKey()));
+        assertDirectoryEmpty(staging);
+    }
+
+    @Test void failedOrCancelledPrivateExportNeverOpensDocumentDestination() throws Exception {
+        Path staging = Files.createDirectory(temp.resolve("documents"));
+        AtomicBoolean opened = new AtomicBoolean();
+        PortableBackup.ArchiveDestination provider = () -> { opened.set(true); return new ByteArrayOutputStream(); };
+        try (BackupKey key = BackupKey.passphrase(PASSPHRASE)) {
+            assertThrows(IOException.class, () -> backup.exportArchive(provider, staging, manifest(1), key,
+                    PortableBackup.SnapshotWork::run, entry -> new ByteArrayInputStream(new byte[8193]),
+                    PortableBackup.Cancellation.NONE));
+            assertFalse(opened.get());
+            assertThrows(InterruptedIOException.class, () -> backup.exportArchive(provider, staging, manifest(1), key,
+                    PortableBackup.SnapshotWork::run, entry -> new ByteArrayInputStream(new byte[0]), () -> true));
+            assertFalse(opened.get());
+        }
+        assertDirectoryEmpty(staging);
+    }
+
+    @Test void destinationWriteCloseAndOpenFailuresCleanPrivateArchive() throws Exception {
+        Path staging = Files.createDirectory(temp.resolve("documents"));
+        Map<String, byte[]> data = selectedData();
+        for (String failure : new String[] { "open", "null", "write", "close" }) {
+            AtomicBoolean closed = new AtomicBoolean();
+            PortableBackup.ArchiveDestination provider = () -> {
+                if (failure.equals("open")) throw new IOException("provider open failed");
+                if (failure.equals("null")) return null;
+                return new OutputStream() {
+                    @Override public void write(int value) throws IOException {
+                        if (failure.equals("write")) throw new IOException("provider write failed");
+                    }
+                    @Override public void close() throws IOException {
+                        closed.set(true);
+                        if (failure.equals("close")) throw new IOException("provider close failed");
+                    }
+                };
+            };
+            try (BackupKey key = BackupKey.passphrase(PASSPHRASE)) {
+                assertThrows(IOException.class, () -> backup.exportArchive(provider, staging, manifest(1), key,
+                        PortableBackup.SnapshotWork::run, entry -> new ByteArrayInputStream(data.get(entry.name())),
+                        PortableBackup.Cancellation.NONE), failure);
+            }
+            assertEquals(failure.equals("write") || failure.equals("close"), closed.get());
+            assertDirectoryEmpty(staging);
+        }
+    }
+
+    @Test void providerStreamLimitReadAndCloseFailuresNeverEnterImporter() throws Exception {
+        Path archive = temp.resolve("valid.bkp"), staging = Files.createDirectory(temp.resolve("documents"));
+        try (BackupKey key = BackupKey.passphrase(PASSPHRASE)) { export(archive, key, selectedData()); }
+        byte[] valid = Files.readAllBytes(archive);
+        for (String failure : new String[] { "open", "null", "read", "close", "limit" }) {
+            AtomicBoolean closed = new AtomicBoolean();
+            AppTransaction untouched = new AppTransaction(Collections.singletonMap("previous", bytes("keep")));
+            PortableBackup.ArchiveSource provider = () -> {
+                if (failure.equals("open")) throw new IOException("provider open failed");
+                if (failure.equals("null")) return null;
+                InputStream stream = new ByteArrayInputStream(failure.equals("limit") ? new byte[8193] : valid);
+                return new java.io.FilterInputStream(stream) {
+                    @Override public int read(byte[] b, int off, int len) throws IOException {
+                        if (failure.equals("read")) throw new IOException("provider read failed");
+                        return super.read(b, off, len);
+                    }
+                    @Override public void close() throws IOException {
+                        closed.set(true);
+                        super.close();
+                        if (failure.equals("close")) throw new IOException("provider close failed");
+                    }
+                };
+            };
+            try (BackupKey key = BackupKey.passphrase(PASSPHRASE)) {
+                assertThrows(IOException.class, () -> backup.restoreArchive(provider, staging, manifest(1), key,
+                        untouched, PortableBackup.Cancellation.NONE), failure);
+            }
+            assertEquals(0, untouched.begins);
+            assertEquals(!failure.equals("open") && !failure.equals("null"), closed.get());
+            assertArrayEquals(bytes("keep"), untouched.live.get("previous"));
+            assertDirectoryEmpty(staging);
+        }
+    }
+
+    @Test void cancellationWhileReceivingDocumentClosesProviderWithoutImporterCallbacks() throws Exception {
+        Path staging = Files.createDirectory(temp.resolve("documents"));
+        AtomicBoolean cancelled = new AtomicBoolean(), closed = new AtomicBoolean();
+        AppTransaction untouched = new AppTransaction(Collections.singletonMap("previous", bytes("keep")));
+        PortableBackup.ArchiveSource provider = () -> new ByteArrayInputStream(new byte[128]) {
+            @Override public int read(byte[] b, int off, int length) {
+                int count = super.read(b, off, length);
+                cancelled.set(true);
+                return count;
+            }
+            @Override public void close() { closed.set(true); }
+        };
+        try (BackupKey key = BackupKey.passphrase(PASSPHRASE)) {
+            assertThrows(InterruptedIOException.class, () -> backup.restoreArchive(provider, staging, manifest(1), key,
+                    untouched, cancelled::get));
+        }
+        assertTrue(closed.get());
+        assertEquals(0, untouched.begins);
+        assertDirectoryEmpty(staging);
+    }
+
+    @Test void documentTransferHandlesZeroProgressAndChecksCancellationAfterProviderWrite() throws Exception {
+        Path archive = temp.resolve("valid.bkp"), staging = Files.createDirectory(temp.resolve("documents"));
+        Map<String, byte[]> data = selectedData();
+        try (BackupKey key = BackupKey.passphrase(PASSPHRASE)) { export(archive, key, data); }
+        AppTransaction destination = new AppTransaction(Collections.<String, byte[]>emptyMap());
+        try (BackupKey key = BackupKey.passphrase(PASSPHRASE)) {
+            backup.restoreArchive(() -> new ByteArrayInputStream(Files.readAllBytes(archive)) {
+                @Override public int read(byte[] b, int off, int length) { return 0; }
+            }, staging, manifest(1), key, destination, PortableBackup.Cancellation.NONE);
+        }
+        assertEquals(1, destination.commits);
+        AtomicBoolean cancelled = new AtomicBoolean(), closed = new AtomicBoolean();
+        try (BackupKey key = BackupKey.passphrase(PASSPHRASE)) {
+            assertThrows(InterruptedIOException.class, () -> backup.exportArchive(() -> new ByteArrayOutputStream() {
+                @Override public void write(byte[] b, int off, int length) {
+                    super.write(b, off, length);
+                    cancelled.set(true);
+                }
+                @Override public void close() { closed.set(true); }
+            }, staging, manifest(1), key, PortableBackup.SnapshotWork::run,
+                    entry -> new ByteArrayInputStream(data.get(entry.name())), cancelled::get));
+        }
+        assertTrue(closed.get());
+        assertDirectoryEmpty(staging);
+    }
+
+    @Test void documentWrongKeyOrTamperingStillCannotEnterRestoreTransaction() throws Exception {
+        Path archive = temp.resolve("valid.bkp"), staging = Files.createDirectory(temp.resolve("documents"));
+        try (BackupKey key = BackupKey.passphrase(PASSPHRASE)) { export(archive, key, selectedData()); }
+        byte[] valid = Files.readAllBytes(archive);
+        AppTransaction untouched = new AppTransaction(Collections.singletonMap("previous", bytes("keep")));
+        try (BackupKey wrong = BackupKey.passphrase("a different document passphrase".toCharArray())) {
+            assertThrows(IOException.class, () -> backup.restoreArchive(() -> new ByteArrayInputStream(valid), staging,
+                    manifest(1), wrong, untouched, PortableBackup.Cancellation.NONE));
+        }
+        byte[] tampered = valid.clone();
+        tampered[tampered.length - 1] ^= 1;
+        try (BackupKey key = BackupKey.passphrase(PASSPHRASE)) {
+            assertThrows(IOException.class, () -> backup.restoreArchive(() -> new ByteArrayInputStream(tampered), staging,
+                    manifest(1), key, untouched, PortableBackup.Cancellation.NONE));
+        }
+        assertEquals(0, untouched.begins);
+        assertArrayEquals(bytes("keep"), untouched.live.get("previous"));
+        assertDirectoryEmpty(staging);
+    }
+
+    private static void assertDirectoryEmpty(Path directory) throws IOException {
+        try (java.util.stream.Stream<Path> files = Files.list(directory)) { assertEquals(0, files.count()); }
     }
 
     private byte[] encryptMalformed(BackupKey key, String kind) throws Exception {

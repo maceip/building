@@ -8,6 +8,7 @@ import dev.ide.agent.IncidentSource
 import dev.ide.workbench.reliability.Incident
 import dev.ide.workbench.reliability.IncidentFilter
 import dev.ide.workbench.reliability.IncidentKey
+import dev.ide.workbench.reliability.IncidentOrigin
 import dev.ide.workbench.reliability.IncidentRepository
 import dev.ide.workbench.reliability.IncidentState
 import kotlinx.coroutines.Dispatchers
@@ -39,7 +40,8 @@ class IncidentRepositorySource(
 
     private fun record(incident: Incident): IncidentRecord? {
         val summary = incident.summary
-        if (summary.state != IncidentState.OPEN || summary.type !in TYPES) return null
+        if (summary.key.origin != IncidentOrigin.SDK_APPLICATION || summary.runtimeContext != null ||
+            summary.state != IncidentState.OPEN || summary.type !in TYPES) return null
         val build = registeredBuild(summary.key) ?: return null
         if (build.projectId != projectId || build.packageName != summary.key.packageName ||
             build.buildId != summary.key.buildId || build.sourceRevision != summary.sourceRevision) return null
@@ -59,5 +61,8 @@ class IncidentRepositorySource(
     }
 }
 
-fun IncidentKey.identity() = IncidentIdentity(packageName, buildId, sessionId, eventId)
+fun IncidentKey.identity(): IncidentIdentity {
+    require(origin == IncidentOrigin.SDK_APPLICATION && workspaceId == null) { "A runtime session is not a signed Android application build." }
+    return IncidentIdentity(packageName, buildId, sessionId, eventId)
+}
 fun IncidentIdentity.key() = IncidentKey(packageName, buildId, sessionId, eventId)

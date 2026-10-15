@@ -12,6 +12,7 @@
         android:allowBackup="false"
         android:networkSecurityConfig="@xml/fixture_network_security"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity android:name=".FixtureBackupActivity" android:exported="false" />
         <activity android:name=".FixtureActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

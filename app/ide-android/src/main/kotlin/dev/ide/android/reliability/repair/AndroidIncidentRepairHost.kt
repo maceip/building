@@ -161,6 +161,7 @@ class AndroidIncidentRepairHost private constructor(private val context: Context
     }
 
     private fun registeredBuild(projectId: String, key: IncidentKey): IncidentKnownBuild? {
+        if (key.origin != dev.ide.workbench.reliability.IncidentOrigin.SDK_APPLICATION) return null
         val value = builds.transaction { readBuilds()[buildKey(key.packageName, key.buildId)] as? JsonObject } ?: return null
         fun field(name: String) = value[name]?.jsonPrimitive?.content.orEmpty()
         val hash = field("artifactSha256")
@@ -228,13 +229,28 @@ private class ApprovedLocalLease(private val copyRoot: Path, host: GradleHost, i
         Files.createDirectories(gradleUserHome); Files.createDirectories(tempRoot); Files.createDirectories(home)
         val java = requireNotNull(host.javaHome(image))
         val prefix = requireNotNull(host.prefix())
-        environment = PrefixProbe.environment(prefix, java, host.libraryPath()).toMutableMap().apply {
+        // This lease is acquired only after trusted-local execution consent, on the runner's IO lane.
+        // Provision APK assets before starting Gradle; never download runtime/native tools for repair.
+        val scripts = host.prepareScriptEnvironment()
+        val npmConfig = home.resolve(".npmrc")
+        val npmGlobalConfig = home.resolve(".npm-globalrc")
+        // npm rejects loading the same path as both user and global configuration.
+        for (config in listOf(npmConfig, npmGlobalConfig)) {
+            if (!Files.exists(config, NOFOLLOW_LINKS)) Files.write(config, byteArrayOf())
+        }
+        environment = scripts.applyTo(PrefixProbe.environment(prefix, java, host.libraryPath()).toMutableMap().apply {
             put("HOME", home.toString()); put("TMPDIR", tempRoot.toString())
             put("JAVA_TOOL_OPTIONS", "-Djava.io.tmpdir=$tempRoot -Duser.home=$home")
             put("GRADLE_USER_HOME", gradleUserHome.toString())
             put("GRADLE_RO_DEP_CACHE", host.gradleUserHome().resolve("caches/modules-2").toString())
             put("ANDROID_HOME", host.androidHome().toString()); put("ANDROID_SDK_ROOT", host.androidHome().toString())
-        }.toMap()
+            // npm must not inherit the shared runtime home's user/global registry credentials. The
+            // command bridge respects these caller-owned defaults while retaining bundled gyp tools.
+            put("npm_config_userconfig", npmConfig.toString()); put("npm_config_globalconfig", npmGlobalConfig.toString())
+            put("npm_config_cache", home.resolve("npm-cache").toString())
+            put("npm_config_prefix", home.resolve("npm-global").toString())
+            put("npm_config_offline", "true")
+        })
     }
 
     override fun openClient(host: GradleHost, javaHome: Path): ToolingClient {

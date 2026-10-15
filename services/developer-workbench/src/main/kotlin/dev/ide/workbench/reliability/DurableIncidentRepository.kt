@@ -5,7 +5,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.time.Clock
@@ -19,22 +18,33 @@ class DurableIncidentRepository(
     private data class Stored(val incident: Incident, val payloadHash: String)
     private val lock = Any()
     private var unavailable = false
-    private var records = load()
+    private var records = storage.transaction { load() }
     private val updates = MutableStateFlow(summaries(records))
 
     override fun observe(): StateFlow<List<IncidentSummary>> = updates.asStateFlow()
 
-    override fun list(filter: IncidentFilter): List<IncidentSummary> = synchronized(lock) {
+    /** Explicit recovery after uncertain IO: only a validated, durable read may clear the poisoned state. */
+    fun refresh(): Unit = synchronized(lock) {
+        try {
+            storage.transaction {
+                val loaded = load()
+                records = loaded
+                unavailable = false
+                updates.value = summaries(loaded)
+            }
+        } catch (_: Exception) { unavailable = true; storageFailure() }
+    }
+
+    override fun list(filter: IncidentFilter): List<IncidentSummary> = latest {
         updates.value.asSequence().filter { (filter.packageName == null || it.key.packageName == filter.packageName) &&
             (filter.state == null || it.state == filter.state) }.take(filter.limit).toList()
     }
 
-    override fun read(key: IncidentKey): Incident? = synchronized(lock) { records[key]?.incident }
+    override fun read(key: IncidentKey): Incident? = latest { records[key]?.incident }
 
-    override fun setState(key: IncidentKey, state: IncidentState) = synchronized(lock) {
-        ensureAvailable()
-        val existing = records[key] ?: return@synchronized
-        if (existing.incident.summary.state == state) return@synchronized
+    override fun setState(key: IncidentKey, state: IncidentState) = latest {
+        val existing = records[key] ?: return@latest
+        if (existing.incident.summary.state == state) return@latest
         val next = LinkedHashMap(records)
         next[key] = existing.copy(incident = existing.incident.copy(summary = existing.incident.summary.copy(state = state)))
         commit(next)
@@ -42,15 +52,15 @@ class DurableIncidentRepository(
 
     data class CommitResult(val acceptedKeys: List<IncidentKey>, val newlyStored: List<Incident>)
 
-    /** All-or-nothing batch; identical retries are acknowledged without producing another UI/AI event. */
-    fun accept(events: List<IncomingIncident>): CommitResult = synchronized(lock) {
-        ensureAvailable()
+    /** All-or-nothing SDK batch. Origin cannot be forged even by a direct caller bypassing the wire parser. */
+    fun accept(events: List<IncomingIncident>): CommitResult = latest {
         if (events.isEmpty() || events.size > IncidentWire.MAX_EVENTS) invalid()
         val next = LinkedHashMap(records)
         val added = ArrayList<Incident>()
         val keys = LinkedHashSet<IncidentKey>()
         for (event in events) {
             validate(event)
+            // Do not add origin/workspace to this JSON: v1 SDK fingerprints must remain byte-for-byte stable.
             val fingerprint = digest(eventJson(event).toString())
             val previous = next[event.key]
             if (previous != null) {
@@ -60,7 +70,7 @@ class DurableIncidentRepository(
                 val incident = Incident(
                     IncidentSummary(
                         event.key, event.sourceRevision, event.timestamp, clock.millis(), event.type,
-                        redacted.replace(Regex("\\s+"), " ").trim().take(180), IncidentState.OPEN, redacted != event.redactedText,
+                        preview(redacted), IncidentState.OPEN, redacted != event.redactedText,
                     ),
                     redacted,
                 )
@@ -74,7 +84,35 @@ class DurableIncidentRepository(
         CommitResult(keys.toList(), added.toList())
     }
 
+    /** Host-private typed entry point. Canonical text is generated here; arbitrary runtime logs cannot be supplied. */
+    fun acceptRuntime(events: List<HostRuntimeIncident>): CommitResult = latest {
+        if (events.isEmpty() || events.size > IncidentWire.MAX_EVENTS) invalid()
+        val next = LinkedHashMap(records)
+        val added = ArrayList<Incident>()
+        val keys = LinkedHashSet<IncidentKey>()
+        for (event in events) {
+            validateRuntimeIncident(event)
+            val fingerprint = runtimeFingerprint(event)
+            val previous = next[event.key]
+            if (previous != null) {
+                if (!constantTimeEqual(previous.payloadHash, fingerprint)) throw ReliabilityException(ReliabilityError.ID_CONFLICT)
+            } else {
+                val canonical = canonicalRuntimeText(event)
+                val redacted = scrubIncidentText(canonical)
+                val summary = runtimeSummary(event, redacted, clock.millis(), IncidentState.OPEN, redacted != canonical)
+                val incident = Incident(summary, redacted)
+                next[event.key] = Stored(incident, fingerprint)
+                added += incident
+            }
+            keys += event.key
+        }
+        checkQuotas(next)
+        if (added.isNotEmpty()) commit(next)
+        CommitResult(keys.toList(), added.toList())
+    }
+
     private fun validate(event: IncomingIncident) {
+        if (event.key.origin != IncidentOrigin.SDK_APPLICATION || event.key.workspaceId != null) invalid()
         validateKey(event.key)
         validateRevision(event.sourceRevision)
         if (event.timestamp < 0 || !Regex("[A-Za-z][A-Za-z0-9_.-]{0,63}").matches(event.type) ||
@@ -84,31 +122,37 @@ class DurableIncidentRepository(
     private fun checkQuotas(next: Map<IncidentKey, Stored>) {
         if (next.size > limits.maxEventsTotal) throw ReliabilityException(ReliabilityError.QUOTA)
         var totalBytes = 0L
-        val counts = HashMap<String, Int>()
-        val sizes = HashMap<String, Long>()
+        val counts = HashMap<Pair<IncidentOrigin, String>, Int>()
+        val sizes = HashMap<Pair<IncidentOrigin, String>, Long>()
         for ((key, record) in next) {
+            val owner = key.origin to (if (key.origin == IncidentOrigin.HOST_RUNTIME) key.workspaceId ?: invalid() else key.packageName)
             val bytes = record.incident.redactedText.toByteArray(Charsets.UTF_8).size.toLong()
-            val count = (counts[key.packageName] ?: 0) + 1
-            val appBytes = (sizes[key.packageName] ?: 0L) + bytes
+            val count = (counts[owner] ?: 0) + 1
+            val ownerBytes = (sizes[owner] ?: 0L) + bytes
             totalBytes += bytes
-            if (count > limits.maxEventsPerApp || appBytes > limits.maxTextBytesPerApp || totalBytes > limits.maxTextBytesTotal) {
+            if (count > limits.maxEventsPerApp || ownerBytes > limits.maxTextBytesPerApp || totalBytes > limits.maxTextBytesTotal) {
                 throw ReliabilityException(ReliabilityError.QUOTA)
             }
-            counts[key.packageName] = count
-            sizes[key.packageName] = appBytes
+            counts[owner] = count
+            sizes[owner] = ownerBytes
         }
     }
 
     private fun commit(next: LinkedHashMap<IncidentKey, Stored>) {
         val bytes = buildJsonObject {
-            put("version", 1)
+            put("version", 2)
             put("records", JsonArray(next.values.map { stored ->
                 val item = stored.incident
+                val summary = item.summary
                 buildJsonObject {
-                    put("event", eventJson(IncomingIncident(item.summary.key, item.summary.sourceRevision, item.summary.timestamp, item.summary.type, item.redactedText)))
-                    put("receivedAt", item.summary.receivedAt)
-                    put("state", item.summary.state.name)
-                    put("hostRedacted", item.summary.hostRedacted)
+                    put("origin", summary.key.origin.name)
+                    put("event", when (summary.key.origin) {
+                        IncidentOrigin.SDK_APPLICATION -> eventJson(IncomingIncident(summary.key, summary.sourceRevision, summary.timestamp, summary.type, item.redactedText))
+                        IncidentOrigin.HOST_RUNTIME -> runtimeEventJson(runtimeEvent(summary))
+                    })
+                    put("receivedAt", summary.receivedAt)
+                    put("state", summary.state.name)
+                    put("hostRedacted", summary.hostRedacted)
                     put("payloadHash", stored.payloadHash)
                 }
             }))
@@ -129,28 +173,65 @@ class DurableIncidentRepository(
         if (bytes != null) {
             if (bytes.size > MAX_SNAPSHOT_BYTES) storageFailure()
             val root = reliabilityObject(decodeReliabilityUtf8(bytes), MAX_SNAPSHOT_BYTES)
-            if (root.number("version") != 1L) storageFailure()
+            root.only("version", "records")
+            val version = root.number("version")
+            if (version != 1L && version != 2L) storageFailure()
             val array = root["records"] as? JsonArray ?: storageFailure()
             if (array.size > limits.maxEventsTotal) storageFailure()
             for (element in array) {
                 val value = element.objectValue()
-                val event = parseIncident(value["event"]?.objectValue() ?: storageFailure())
-                validate(event)
+                if (version == 1L) value.only("event", "receivedAt", "state", "hostRedacted", "payloadHash")
+                else value.only("origin", "event", "receivedAt", "state", "hostRedacted", "payloadHash")
+                val origin = if (version == 1L) IncidentOrigin.SDK_APPLICATION else IncidentOrigin.valueOf(value.text("origin"))
                 val hash = value.text("payloadHash")
-                if (!sha256Pattern.matches(hash) || result.containsKey(event.key)) storageFailure()
-                val text = scrubIncidentText(event.redactedText)
-                val summary = IncidentSummary(
-                    event.key, event.sourceRevision, event.timestamp, value.number("receivedAt"), event.type,
-                    text.replace(Regex("\\s+"), " ").trim().take(180), IncidentState.valueOf(value.text("state")),
-                    value.bool("hostRedacted") || text != event.redactedText,
-                )
-                result[event.key] = Stored(Incident(summary, text), hash)
+                if (!sha256Pattern.matches(hash)) storageFailure()
+                val receivedAt = value.number("receivedAt")
+                if (receivedAt < 0) storageFailure()
+                val state = IncidentState.valueOf(value.text("state"))
+                val hostRedacted = value.bool("hostRedacted")
+                val eventValue = value["event"]?.objectValue() ?: storageFailure()
+                val incident = when (origin) {
+                    IncidentOrigin.SDK_APPLICATION -> {
+                        val event = parseIncident(eventValue)
+                        validate(event)
+                        val text = scrubIncidentText(event.redactedText)
+                        Incident(IncidentSummary(event.key, event.sourceRevision, event.timestamp, receivedAt, event.type,
+                            preview(text), state, hostRedacted || text != event.redactedText), text)
+                    }
+                    IncidentOrigin.HOST_RUNTIME -> {
+                        val event = parseRuntimeIncident(eventValue)
+                        if (!constantTimeEqual(hash, runtimeFingerprint(event))) storageFailure()
+                        val canonical = canonicalRuntimeText(event)
+                        val text = scrubIncidentText(canonical)
+                        Incident(runtimeSummary(event, text, receivedAt, state, hostRedacted || text != canonical), text)
+                    }
+                }
+                if (result.put(incident.summary.key, Stored(incident, hash)) != null) storageFailure()
             }
             checkQuotas(result)
         }
         result
     } catch (_: Exception) { storageFailure() }
 
+    /** Always refresh under the storage lock: a second process must not overwrite or ACK stale records. */
+    private fun <T> latest(operation: () -> T): T = synchronized(lock) {
+        ensureAvailable()
+        storage.transaction {
+            try { records = load() } catch (_: Exception) { unavailable = true; storageFailure() }
+            updates.value = summaries(records)
+            operation()
+        }
+    }
+
+    private fun runtimeSummary(event: HostRuntimeIncident, text: String, receivedAt: Long, state: IncidentState, redacted: Boolean) =
+        IncidentSummary(event.key, event.context.sourceRevision.orEmpty(), event.timestamp, receivedAt, "host_runtime",
+            preview(text), state, redacted, event.context)
+
+    private fun runtimeEvent(summary: IncidentSummary) = HostRuntimeIncident(summary.key.workspaceId ?: invalid(),
+        summary.key.sessionId, summary.key.eventId, summary.timestamp, summary.runtimeContext ?: invalid())
+
+    private fun runtimeFingerprint(event: HostRuntimeIncident) = digest("HOST_RUNTIME\n" + runtimeEventJson(event).toString())
+    private fun preview(text: String) = text.replace(Regex("\\s+"), " ").trim().take(180)
     private fun ensureAvailable() { if (unavailable) storageFailure() }
     private fun summaries(values: Map<IncidentKey, Stored>): List<IncidentSummary> = values.values.map { it.incident.summary }
         .sortedWith(compareByDescending<IncidentSummary> { it.receivedAt }.thenByDescending { it.timestamp }.thenBy { it.key.eventId })
@@ -158,6 +239,7 @@ class DurableIncidentRepository(
     companion object { const val MAX_SNAPSHOT_BYTES = 32 * 1_024 * 1_024 }
 }
 
+/** SDK wire v1 and fingerprint encoding. Do not add host-only fields, even with default values. */
 internal fun eventJson(event: IncomingIncident) = buildJsonObject {
     put("eventId", event.key.eventId)
     put("sessionId", event.key.sessionId)

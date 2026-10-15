@@ -33,12 +33,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.backend.FileActions
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.workbench.reliability.Incident
 import dev.ide.workbench.reliability.IncidentKey
+import dev.ide.workbench.reliability.IncidentOrigin
 import dev.ide.workbench.reliability.IncidentState
 import dev.ide.workbench.reliability.IncidentSummary
 import dev.ide.workbench.reliability.PairingStatus
@@ -68,7 +70,7 @@ fun ReliabilityPanel(
         var host by remember { mutableStateOf<ReliabilityHost?>(null) }
         var failure by remember { mutableStateOf(false) }
         LaunchedEffect(context) {
-            try { host = withContext(Dispatchers.IO) { ReliabilityHostProvider.get(context).also { it.repository.observe() } } }
+            try { host = withContext(Dispatchers.IO) { ReliabilityHostProvider.get(context).also { it.pairings.observe(); it.repository.observe(); it.runtimeCapture.replay() } } }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { failure = true }
         }
@@ -140,17 +142,23 @@ private fun ReliabilityInbox(
         }
     }
     LaunchedEffect(selection, incidents) {
-        selected = selection?.let { key -> withContext(Dispatchers.IO) { host.repository.read(key) } }
+        try { selected = selection?.let { key -> withContext(Dispatchers.IO) { host.repository.read(key) } } }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) {
+            selected = null
+            message = "Private incident storage is unavailable. The selected report could not be read; no data was discarded."
+        }
     }
     val visible = incidents.filter {
-        (showResolved || it.state == IncidentState.OPEN) && (showLifecycle || it.type in setOf("fatal_java", "nonfatal_java", "previous_exit"))
+        (showResolved || it.state == IncidentState.OPEN) &&
+            (showLifecycle || it.key.origin == IncidentOrigin.HOST_RUNTIME || it.type in setOf("fatal_java", "nonfatal_java", "previous_exit"))
     }
 
     LazyColumn(modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item("heading") {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Local incident inbox", style = MaterialTheme.typography.titleLarge)
-                Text("Crashes and lifecycle evidence stay on this device. Receipts mean saved locally, not uploaded or fixed.", style = MaterialTheme.typography.bodyMedium)
+                Text("Paired app reports and opted-in runtime outcomes stay on this device. Receipts mean saved locally, not uploaded or fixed. A command's nonzero exit is not proof of a crash.", style = MaterialTheme.typography.bodyMedium)
             }
         }
         item("capture") {
@@ -174,6 +182,14 @@ private fun ReliabilityInbox(
                 }
                 Text("Crash, lifecycle and previous-exit capture by default. This toggle never enables network, stdout or release capture; existing project network/stdout choices are preserved.", style = MaterialTheme.typography.bodySmall)
                 if (projectEnabled && !enabled) Text("Project capture is selected, but local debug delivery is paused.", color = MaterialTheme.colorScheme.error)
+            }
+        }
+        item("runtime-capture") {
+            InboxCard {
+                val root = remember(backend.project.rootPath) {
+                    backend.project.rootPath.takeIf(String::isNotBlank)?.let { runCatching { java.nio.file.Paths.get(it) }.getOrNull() }
+                }
+                RuntimeCaptureControls(root)
             }
         }
         if (busy || message != null) item("status") {
@@ -242,26 +258,32 @@ private fun ReliabilityInbox(
             }
         }
         if (visible.isEmpty()) item("empty") {
-            Text("No incidents in this view. Build, pair and run your app; a later app launch can deliver a crash saved before process death.")
+            Text("No incidents in this view. Enable local runtime capture and run a workspace, or build, pair and run a cooperating app. Saved app crashes require the target app to restart before delivery.")
         }
-        items(visible, key = { "event-${it.key.packageName}/${it.key.buildId}/${it.key.sessionId}/${it.key.eventId}" }) { item ->
+        items(visible, key = { "event-${it.key.origin}/${it.key.workspaceId}/${it.key.packageName}/${it.key.buildId}/${it.key.sessionId}/${it.key.eventId}" }) { item ->
             InboxCard {
-                Column(Modifier.fillMaxWidth().clickable { selection = if (selection == item.key) null else item.key }, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("${item.type.replace('_', ' ')} · ${item.key.packageName}", style = MaterialTheme.typography.titleSmall)
+                val runtimeOrigin = item.key.origin == IncidentOrigin.HOST_RUNTIME
+                Column(Modifier.fillMaxWidth().testTag("incident-${item.key.eventId}").clickable { selection = if (selection == item.key) null else item.key }, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val owner = if (runtimeOrigin) "Workspace ${item.key.workspaceId?.take(8)}" else item.key.packageName
+                    Text("${item.type.replace('_', ' ')} · $owner", style = MaterialTheme.typography.titleSmall)
                     Text("${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.timestamp))} · ${item.state.name.lowercase()}", style = MaterialTheme.typography.bodySmall)
                     Text(item.preview, style = MaterialTheme.typography.bodyMedium)
                 }
                 if (selection == item.key) {
-                    Text("Build ${item.key.buildId} · revision ${item.sourceRevision.ifBlank { "unknown" }}\nSession ${item.key.sessionId}", style = MaterialTheme.typography.bodySmall)
+                    val provenance = if (runtimeOrigin) {
+                        "Host-runtime outcome · workspace ${item.key.workspaceId}\nBefore-run source snapshot: ${item.sourceRevision.ifBlank { "unavailable" }}\nSession ${item.key.sessionId}"
+                    } else "Build ${item.key.buildId} · revision ${item.sourceRevision.ifBlank { "unknown" }}\nSession ${item.key.sessionId}"
+                    Text(provenance, style = MaterialTheme.typography.bodySmall)
                     selected?.takeIf { it.summary.key == item.key }?.let { detail ->
                         SelectionContainer { Text(detail.redactedText, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
                     }
-                    Text("Evidence is untrusted text. Redaction is best effort; review before sharing.", style = MaterialTheme.typography.bodySmall)
+                    Text(if (runtimeOrigin) "Structured metadata only; no transcript or exception text was collected. An exit code alone cannot distinguish an expected failure, assertion, uncaught exception or crash. Source identity describes saved files before launch, not later edits, dependency state or individual terminal commands. Runtime incidents do not authorize Android-build AI repair."
+                        else "Evidence is untrusted text. Redaction is best effort; review before sharing.", style = MaterialTheme.typography.bodySmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(enabled = !busy, onClick = {
                             perform { host.repository.setState(item.key, if (item.state == IncidentState.OPEN) IncidentState.RESOLVED else IncidentState.OPEN) }
                         }) { Text(if (item.state == IncidentState.OPEN) "Mark resolved" else "Reopen") }
-                        if (onIncidentSelected != null) TextButton(enabled = !busy, onClick = { onIncidentSelected(item) }) { Text("Review with AI…") }
+                        if (!runtimeOrigin && onIncidentSelected != null) TextButton(enabled = !busy, onClick = { onIncidentSelected(item) }) { Text("Review with AI…") }
                     }
                 }
             }

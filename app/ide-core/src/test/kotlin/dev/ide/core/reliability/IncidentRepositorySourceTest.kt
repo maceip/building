@@ -4,6 +4,7 @@ import dev.ide.agent.IncidentKnownBuild
 import dev.ide.workbench.reliability.Incident
 import dev.ide.workbench.reliability.IncidentFilter
 import dev.ide.workbench.reliability.IncidentKey
+import dev.ide.workbench.reliability.IncidentOrigin
 import dev.ide.workbench.reliability.IncidentRepository
 import dev.ide.workbench.reliability.IncidentState
 import dev.ide.workbench.reliability.IncidentSummary
@@ -12,10 +13,28 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class IncidentRepositorySourceTest {
+    @Test fun runtimeOriginCannotMasqueradeAsAnAndroidBuildOrInvokeItsRegistry() = runBlocking<Unit> {
+        val key = IncidentKey("fixture.app", "build", "session", "event", IncidentOrigin.HOST_RUNTIME, "workspace")
+        val incident = Incident(IncidentSummary(key, "a".repeat(64), 1, 2, "fatal_java", "forged", IncidentState.OPEN, false), "at fixture.Editor.run(Editor.java:1)")
+        val repository = object : IncidentRepository {
+            override fun list(filter: IncidentFilter) = listOf(incident.summary)
+            override fun read(key: IncidentKey) = incident
+            override fun observe() = MutableStateFlow(listOf(incident.summary))
+            override fun setState(key: IncidentKey, state: IncidentState) = Unit
+        }
+        var consulted = false
+        val source = IncidentRepositorySource(repository, "project") { consulted = true; null }
+        assertTrue(source.list().isEmpty())
+        assertTrue(source.observe().first().isEmpty())
+        assertTrue(!consulted)
+        assertFailsWith<IllegalArgumentException> { key.identity() }
+    }
+
     @Test fun cleanSdkTextIsAdmittedWhenHostRedactedFlagMeansNoChangeWasNeeded() = runBlocking {
         val key = IncidentKey("fixture.app", "build", "session", "event")
         val build = IncidentKnownBuild("project", key.packageName, key.buildId, "debug", "a".repeat(64), "build", "b".repeat(64), true)

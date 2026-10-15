@@ -147,7 +147,10 @@ public final class FixtureStore extends SQLiteOpenHelper {
         }
         JSONObject settings = new JSONObject();
         // Explicit user preference whitelist: no credential, pairing, authentication, or SDK journal data.
-        settings.put("sort", setting("sort")); settings.put("fontScale", setting("fontScale"));
+        // A fresh installation has no rows yet but must still produce a restorable empty snapshot.
+        String sort = setting("sort"), fontScale = setting("fontScale");
+        settings.put("sort", sort == null ? "title" : sort);
+        settings.put("fontScale", fontScale == null ? "1.0" : fontScale);
         result.put("records.json", records.toString().getBytes(StandardCharsets.UTF_8));
         result.put("preferences.json", settings.toString().getBytes(StandardCharsets.UTF_8));
         byte[] bytes = attachment("notes.txt");
@@ -161,9 +164,20 @@ public final class FixtureStore extends SQLiteOpenHelper {
         JSONObject settings = new JSONObject(new String(data.get("preferences.json"), StandardCharsets.UTF_8));
         if (records.length() > 100 || !settings.has("sort") || !settings.has("fontScale"))
             throw new IllegalArgumentException("Invalid fixture domain data");
+        for (int i = 0; i < records.length(); i++) {
+            JSONObject record = records.getJSONObject(i);
+            if (!(record.get("id") instanceof Number) || record.getLong("id") < 1
+                    || !(record.get("title") instanceof String) || !(record.get("body") instanceof String))
+                throw new IllegalArgumentException("Invalid fixture record");
+        }
+        if (!(settings.get("sort") instanceof String) || !(settings.get("fontScale") instanceof String))
+            throw new IllegalArgumentException("Invalid fixture preferences");
         SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
         try {
-            db.delete("records", null, null); db.delete("attachments", null, null); db.delete("settings", null, null);
+            db.delete("records", null, null);
+            // Only the selected attachment/preferences are replaced. Unselected local data, including
+            // any account settings, must not be erased merely because it was excluded from the archive.
+            db.delete("attachments", "name=?", new String[] { "notes.txt" });
             for (int i = 0; i < records.length(); i++) {
                 JSONObject record = records.getJSONObject(i);
                 insertRecord(db, record.getLong("id"), record.getString("title"), record.getString("body"));

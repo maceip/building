@@ -62,9 +62,20 @@ data class PairingApkPreview(val packageName: String, val buildId: String, val s
 
 class ReliabilityHost internal constructor(private val context: Context) {
     private val directory = context.noBackupFilesDir.toPath().resolve("reliability")
-    val pairings = PairingRegistry(EncryptedPairingStorage(context, directory.resolve("pairings.enc")))
+    val pairings by lazy { PairingRegistry(EncryptedPairingStorage(context, directory.resolve("pairings.enc"))) }
     private val durable by lazy { DurableIncidentRepository(androidReliabilityFile(directory.resolve("incidents.json"), DurableIncidentRepository.MAX_SNAPSHOT_BYTES)) }
     val repository: IncidentRepository get() = durable
+    internal val runtimeCapture by lazy {
+        dev.ide.workbench.reliability.HostRuntimeCapture(
+            registryStorage = androidReliabilityFile(directory.resolve("runtime-consent.json"), 512 * 1024),
+            outboxStorage = androidReliabilityFile(directory.resolve("runtime-outbox.json"), 512 * 1024),
+            deliver = { events -> durable.refresh(); durable.acceptRuntime(events) },
+            sourceSnapshot = { root -> dev.ide.workbench.runtime.RuntimeSourceSnapshot.capture(root).revision },
+            identity = dev.ide.workbench.reliability.HostRuntimeIdentity(
+                context.packageName, dev.ide.android.BuildConfig.VERSION_CODE.toLong(), dev.ide.android.BuildConfig.VERSION_NAME,
+            ),
+        )
+    }
     /** Main may attach a mirror; it must not collect these events a second time into the durable inbox. */
     @Volatile var onCommitted: ((List<Incident>) -> Unit)? = null
     internal val receiver by lazy { IncidentReceiver(durable, pairings, onCommitted = { events -> onCommitted?.invoke(events) }) }
