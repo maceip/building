@@ -19,10 +19,12 @@ object GradleToolchain {
         val javaHome = host.javaHome(decision.image)
             ?: throw IllegalStateException("No JDK ${decision.image} image is installed.")
         prepare(projectDir, host, scan, javaHome, decision)
-        if (host.android) probe(host, javaHome)
-        val client = host.openClient(javaHome)
+        val scripts = host.prepareScriptEnvironment()
+        val environment = GradleProcessEnvironment.create(host, javaHome, scripts)
+        if (host.android) probe(host, javaHome, environment)
+        val client = host.openClient(javaHome, environment)
         try {
-            initialize(client, projectDir, host, javaHome)
+            initialize(client, projectDir, host, javaHome, environment)
             val first = fetch(client)
             val known = scan.ndk + scan.buildTools + scan.cmake + scan.platforms
             val discovered = first.ndkVersions + first.buildToolsVersions + first.cmakeVersions + first.platforms
@@ -49,10 +51,12 @@ object GradleToolchain {
         val javaHome = host.javaHome(decision.image)
             ?: throw IllegalStateException("No JDK ${decision.image} image is installed.")
         prepare(projectDir, host, scan, javaHome, decision)
-        if (host.android) probe(host, javaHome)
-        val client = host.openClient(javaHome)
+        val scripts = host.prepareScriptEnvironment()
+        val environment = GradleProcessEnvironment.create(host, javaHome, scripts)
+        if (host.android) probe(host, javaHome, environment)
+        val client = host.openClient(javaHome, environment)
         try {
-            initialize(client, projectDir, host, javaHome)
+            initialize(client, projectDir, host, javaHome, environment)
             val cached = GradleProjectSnapshot.load(projectDir)
             val snapshot = cached?.also { materialize(host, scan, it) } ?: syncWith(client, scan, host)
             val reliabilityArgs = GradleReliabilityInjection.launchArgs(
@@ -87,7 +91,7 @@ object GradleToolchain {
         return parsed
     }
 
-    private fun initialize(client: ToolingClient, projectDir: Path, host: GradleHost, javaHome: Path) {
+    private fun initialize(client: ToolingClient, projectDir: Path, host: GradleHost, javaHome: Path, environment: Map<String, String>) {
         val homes = listOfNotNull(
             host.javaHome(JdkSelection.Image.JDK_17),
             host.javaHome(JdkSelection.Image.JDK_21),
@@ -109,7 +113,7 @@ object GradleToolchain {
                 host.gradleUserHome().resolve("abi-report.txt"),
             ) + cmakeArgs,
             jvmArgs = GradleUserProperties.jvmArgs(host.ramBytes()).split(' '),
-            env = childEnv(host, javaHome),
+            env = environment,
         )
     }
 
@@ -193,11 +197,11 @@ object GradleToolchain {
         }
     }
 
-    private fun probe(host: GradleHost, javaHome: Path) {
+    private fun probe(host: GradleHost, javaHome: Path, environment: Map<String, String>) {
         val prefix = host.prefix() ?: return
         val linker = host.linker() ?: PrefixProbe.linkerFor(null)
-        val java = runProbe(PrefixProbe.javaVersion(linker, javaHome, prefix))
-        val shell = runProbe(PrefixProbe.shellVersion(linker, javaHome, prefix))
+        val java = runProbe(PrefixProbe.javaVersion(linker, javaHome, prefix).copy(env = environment))
+        val shell = runProbe(PrefixProbe.shellVersion(linker, javaHome, prefix).copy(env = environment))
         if (!java.contains("version", ignoreCase = true) || !shell.contains("version", ignoreCase = true)) {
             throw IllegalStateException("The JDK did not print a version through the system linker.\n$java\n$shell")
         }
@@ -205,7 +209,7 @@ object GradleToolchain {
 
     private fun runProbe(command: PrefixProbe.Command): String {
         val process = ProcessBuilder(command.argv)
-            .apply { environment().putAll(command.env); redirectErrorStream(true) }
+            .apply { environment().clear(); environment().putAll(command.env); redirectErrorStream(true) }
             .start()
         val text = process.inputStream.bufferedReader().readText()
         val code = process.waitFor()
@@ -217,18 +221,4 @@ object GradleToolchain {
         return text
     }
 
-    private fun childEnv(host: GradleHost, javaHome: Path): Map<String, String> {
-        val base = if (host.android) {
-            val prefix = host.prefix() ?: error("the Android Gradle host has no prefix")
-            PrefixProbe.environment(prefix, javaHome, host.libraryPath())
-        } else {
-            HashMap(System.getenv())
-        }
-        val env = LinkedHashMap(base)
-        env["JAVA_HOME"] = javaHome.toString()
-        env["ANDROID_HOME"] = host.androidHome().toString()
-        env["ANDROID_SDK_ROOT"] = host.androidHome().toString()
-        env["GRADLE_USER_HOME"] = host.gradleUserHome().toString()
-        return env
-    }
 }

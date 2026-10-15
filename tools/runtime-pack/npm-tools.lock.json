@@ -1,0 +1,24 @@
+{
+  "format": 1,
+  "packages": [
+    {
+      "name": "pnpm",
+      "version": "11.9.0",
+      "url": "https://registry.npmjs.org/pnpm/-/pnpm-11.9.0.tgz",
+      "size": 4603130,
+      "sha256": "2b567aa66026238078ac2e0a33bec3febd60e962987aac697456f3180819b287",
+      "integrity": "sha512-vWgtXQP+Ul73yf1ngMaITR51asTJyf4AxTh4KCQxDc+Q493E9Tg18G3669UIXkGFXgvLs7YN4qxburieUDbwOw==",
+      "license": "MIT and included vendored dependency notices",
+      "source": "https://github.com/pnpm/pnpm/tree/v11.9.0",
+      "bin": { "pnpm": "bin/pnpm.mjs", "pnpx": "bin/pnpx.mjs", "pn": "bin/pnpm.mjs", "pnx": "bin/pnpx.mjs" },
+      "excludedPlatformArtifacts": [
+        "dist/vendor/fastlist-0.3.0-x64.exe",
+        "dist/vendor/fastlist-0.3.0-x86.exe",
+        "dist/node_modules/@reflink/reflink-darwin-arm64/reflink.darwin-arm64.node",
+        "dist/node_modules/@reflink/reflink-darwin-x64/reflink.darwin-x64.node",
+        "dist/node_modules/@reflink/reflink-win32-arm64-msvc/reflink.win32-arm64-msvc.node",
+        "dist/node_modules/@reflink/reflink-win32-x64-msvc/reflink.win32-x64-msvc.node"
+      ]
+    }
+  ]
+}

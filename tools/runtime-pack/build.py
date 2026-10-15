@@ -5,6 +5,7 @@ Network is used ONLY on the build host. Nothing in the Android provisioner fetch
 No archive scripts execute. Only files beneath the exact Termux prefix are admitted.
 """
 import argparse
+import base64
 import concurrent.futures
 import hashlib
 import io
@@ -21,7 +22,7 @@ import zipfile
 
 HERE = Path(__file__).resolve().parent
 PREFIX = "data/data/com.termux/files/usr/"
-EXCLUDED = ("include/", "share/man/", "lib/pkgconfig/", "lib/cmake/", "libexec/installed-tests/")
+EXCLUDED = ("libexec/installed-tests/",)
 
 
 def sha256(data):
@@ -114,7 +115,7 @@ def collect(packages, archives):
         with tarfile.open(fileobj=io.BytesIO(ar_data(archives[package["name"]].read_bytes())), mode="r:*") as tar:
             for entry in tar:
                 name = safe_relative(entry.name)
-                if name is None or entry.isdir() or name.startswith(EXCLUDED) or name.endswith((".a", ".o", ".pyc")):
+                if name is None or entry.isdir() or name.startswith(EXCLUDED) or name.endswith(".pyc"):
                     continue
                 if entry.issym():
                     target = entry.linkname
@@ -149,6 +150,83 @@ def collect(packages, archives):
                     raise ValueError(f"Special file not allowed: {name}")
                 owners[name] = package["name"]
     return files, links, owners
+
+
+def add_npm_tools(files, links, owners, cache, offline):
+    lock = json.loads((HERE / "npm-tools.lock.json").read_bytes())
+    if lock["format"] != 1:
+        raise ValueError("Unsupported npm tool lock")
+    for package in lock["packages"]:
+        cached = cache / (package["sha256"] + ".npm.tgz")
+        if not cached.exists():
+            if offline:
+                raise ValueError(f"Missing offline npm tool: {package['name']}")
+            if not package["url"].startswith("https://registry.npmjs.org/"):
+                raise ValueError("Only exact npm registry tool archives are supported")
+            with urllib.request.urlopen(package["url"], timeout=90) as response:
+                data = response.read(package["size"] + 1)
+        else:
+            data = cached.read_bytes()
+        integrity = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
+        if len(data) != package["size"] or sha256(data) != package["sha256"] or integrity != package["integrity"]:
+            raise ValueError(f"Npm tool integrity mismatch: {package['name']}")
+        if not cached.exists():
+            cached.write_bytes(data)
+        base = "lib/node_modules/" + package["name"] + "/"
+        seen, excluded = set(), set()
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+            for entry in archive:
+                name = entry.name.removeprefix("package/")
+                if not entry.name.startswith("package/") or not name or any(p in ("", ".", "..") for p in name.split("/")) or "\\" in name:
+                    raise ValueError("Invalid npm tool archive path")
+                if entry.isdir():
+                    continue
+                if not entry.isfile() or name in seen or entry.size > 32 * 1024 * 1024:
+                    raise ValueError("Unsupported npm tool archive member")
+                seen.add(name)
+                if name in package.get("excludedPlatformArtifacts", []):
+                    excluded.add(name)
+                    continue
+                target = base + name
+                if target in files or target in links:
+                    raise ValueError("Npm tool collides with a runtime file")
+                files[target] = archive.extractfile(entry).read()
+                owners[target] = package["name"]
+        if excluded != set(package.get("excludedPlatformArtifacts", [])):
+            raise ValueError("Npm tool platform-artifact exclusions changed")
+        for command, target in package["bin"].items():
+            if base + target not in files or "bin/" + command in files or "bin/" + command in links:
+                raise ValueError("Invalid npm tool executable mapping")
+            links["bin/" + command] = base + target
+            owners["bin/" + command] = package["name"]
+        if not any(name.upper().endswith("LICENSE") for name in seen):
+            raise ValueError("Npm tool license missing")
+    return lock["packages"]
+
+
+def add_compiler_wrappers(files, links, owners):
+    compilers = [name for name in files if name.startswith("bin/clang-") and name.removeprefix("bin/clang-").isdigit()]
+    if not compilers:
+        return
+    if len(compilers) != 1:
+        raise ValueError("Expected one pinned Clang development compiler")
+    compiler = compilers[0]
+    major = compiler.removeprefix("bin/clang-")
+    # Installer-owned ELF filenames cannot supply Clang's usual relative sysroot/resource discovery.
+    for name, cxx in (("clang", False), ("clang++", True), ("cc", False), ("c++", True), ("gcc", False), ("g++", True)):
+        arguments = [f'"$PREFIX/{compiler}"', "--driver-mode=g++" if cxx else "--driver-mode=gcc",
+                     "--target=aarch64-linux-android24", '"--sysroot=$PREFIX"',
+                     f'"-resource-dir=$PREFIX/lib/clang/{major}"']
+        if cxx:
+            arguments += ["-isystem", '"$PREFIX/include/c++/v1"']
+        arguments += ["-isystem", '"$PREFIX/include"', "-isystem", '"$PREFIX/include/aarch64-linux-android"',
+                      '"-B$PREFIX/bin"', '"-B$PREFIX/lib"', '"-L$PREFIX/lib"',
+                      "-L/system/lib64", "-L/apex/com.android.runtime/lib64/bionic",
+                      '"--ld-path=$PREFIX/bin/ld.lld"', '"$@"']
+        path = "bin/" + name
+        links.pop(path, None)
+        files[path] = ('#!/system/bin/sh\n: "${PREFIX:?Bundled runtime prefix is required}"\nexec ' + " ".join(arguments) + "\n").encode()
+        owners[path] = "building-runtime (GPL-3.0-or-later)"
 
 
 def find_ndk(explicit):
@@ -235,12 +313,24 @@ def main():
         paths = list(pool.map(lambda p: fetch_package(p, lock["baseUrl"], args.cache, args.offline), packages))
     archives = dict(zip((p["name"] for p in packages), paths))
     files, links, owners = collect(packages, archives)
+    npm_tools = add_npm_tools(files, links, owners, args.cache, args.offline)
+    add_compiler_wrappers(files, links, owners)
     native_dir = output / "jniLibs/arm64-v8a"
     assets = output / "assets/developer-runtime"
     native_dir.mkdir(parents=True, exist_ok=True)
     assets.mkdir(parents=True, exist_ok=True)
     provenance = stage_provenance(packages, assets, args.cache, args.offline)
+    shutil.copyfile(HERE / "npm-tools.lock.json", assets / "notices/npm-tools.lock.json")
     compiler = find_ndk(args.ndk)
+    generated_libraries = []
+    supplemental_notices = None
+    if any(package["name"] == "libandroid-spawn" for package in packages):
+        import build_android_spawn
+        generated = output / "source-built/android-spawn"
+        build_android_spawn.build_library(compiler.parents[5], args.cache, generated, args.offline)
+        generated_libraries.append(build_android_spawn.apply_override(files, owners, generated))
+        shutil.copytree(generated / "notices/libandroid-spawn", assets / "notices/libandroid-spawn", dirs_exist_ok=True)
+        supplemental_notices = build_android_spawn.stage_optional_notices(args.cache, assets, args.offline)
     launcher = native_dir / "libdevruntime-launcher.so"
     subprocess.run([str(compiler), str(HERE / "runtime-launcher.c"), "-Os", "-fPIE", "-pie", "-Wl,-z,max-page-size=16384,-z,common-page-size=16384", "-o", str(launcher)], check=True)
     verify_elf(launcher.read_bytes(), launcher.name)
@@ -253,7 +343,7 @@ def main():
     live_native = {launcher.name}
     with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for name, data in sorted(files.items()):
-            if data.startswith(b"\x7fELF"):
+            if data.startswith(b"\x7fELF") and len(data) >= 18 and struct.unpack_from("<H", data, 16)[0] in (2, 3):
                 alignment = verify_elf(data, name)
                 packaged = "libdevruntime_" + sha256(name.encode())[:20] + ".so"
                 (native_dir / packaged).write_bytes(data)
@@ -272,7 +362,7 @@ def main():
                 zip_entry(archive, name, data)
                 data_manifest.append({"path": name, "sha256": sha256(data), "size": len(data), "executableScript": data.startswith(b"#!"), "originalSha256": original_hash, "transform": transform})
         for name, target in sorted(links.items()):
-            # Symlinks to pruned headers/static libraries are not useful to this execution-only pack.
+            # Omit dangling links while retaining development headers and libraries.
             seen = {name}
             resolved = target
             while resolved in links and resolved not in seen:
@@ -285,7 +375,7 @@ def main():
     for old in native_dir.glob("libdevruntime_*.so"):
         if old.name not in live_native:
             old.unlink()
-    identity = {"format": 1, "abi": lock["abi"], "packages": provenance, "launcherSha256": sha256(launcher.read_bytes()), "payloadSha256": sha256(payload.read_bytes()), "stagingVersion": sha256((HERE / "build.py").read_bytes() + (HERE / "runtime-env.c").read_bytes())}
+    identity = {"format": 1, "abi": lock["abi"], "packages": provenance, "npmTools": npm_tools, "generatedLibraries": generated_libraries, "supplementalNotices": supplemental_notices, "launcherSha256": sha256(launcher.read_bytes()), "payloadSha256": sha256(payload.read_bytes()), "stagingVersion": sha256((HERE / "build.py").read_bytes() + (HERE / "runtime-env.c").read_bytes())}
     manifest = dict(identity, id="termux-arm64-" + sha256(json.dumps(identity, sort_keys=True).encode())[:16],
                     payloadBytes=payload.stat().st_size, native=native, files=data_manifest, links=kept_links,
                     approvedNpmPackages=lock["approvedNpmPackages"], policy=lock["policy"], metadata=lock["metadata"],

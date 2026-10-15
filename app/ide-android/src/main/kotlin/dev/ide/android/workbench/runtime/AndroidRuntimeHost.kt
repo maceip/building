@@ -34,9 +34,6 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
     @Volatile private var installation: RuntimeInstallation? = null
 
     override suspend fun prepare(): RuntimeInstallation = withContext(Dispatchers.IO) {
-        check(dev.ide.android.BuildConfig.DEVELOPER_RUNTIME_PACK_BUNDLED) {
-            "This core installation does not include Node, Python or shell runtimes. Use the engine-inclusive distribution; static previews and native Android builds remain available."
-        }
         installation?.let { return@withContext it }
         installLock.withLock {
             installation?.let { return@withLock it }
@@ -54,7 +51,7 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 Files.createDirectories(prefix)
                 extractAssets(manifest, prefix)
                 materializeLinks(manifest, prefix)
-                // Never run package pre/postinstall scripts. Fresh runtime data only.
+                // Extract runtime-pack data only; provisioning does not execute package-manager hooks.
                 dev.ide.workbench.runtime.RuntimeFiles.writeUtf8(stamp, packId)
             } else {
                 // Installer-owned nativeLibraryDir changes on APK updates; repair only our pack links.
@@ -68,7 +65,7 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
             val relocator = native.resolve("libsdk-exec-prefix.so")
             require(Files.isRegularFile(relocator)) { "APK native prefix helper is missing" }
             val env = linkedMapOf(
-                "PATH" to "$prefix/bin:/system/bin:/system/xbin",
+                "PATH" to "${home.resolve("npm-global/bin")}:$prefix/bin:/system/bin:/system/xbin",
                 "HOME" to userHome.toString(),
                 "PREFIX" to prefix.toString(),
                 "TMPDIR" to temp.toString(),
@@ -79,9 +76,11 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 "LD_PRELOAD" to "$relocator:$prefix/lib/libtermux-exec.so",
                 "TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE" to "force",
                 "TERMUX__PREFIX" to prefix.toString(),
+                "BUILDING_RUNTIME_NATIVE_DIR" to native.toString(),
                 "TERMUX_APP__DATA_DIR" to app.dataDir.absolutePath,
                 "TERMUX_APP__LEGACY_DATA_DIR" to app.dataDir.absolutePath.replaceFirst("/data/user/0/", "/data/data/"),
                 "SHELL" to prefix.resolve("bin/sh").toString(),
+                "MAKEFLAGS" to "SHELL=${prefix.resolve("bin/sh")}",
                 "SSL_CERT_FILE" to prefix.resolve("etc/tls/cert.pem").toString(),
                 "SSL_CERT_DIR" to prefix.resolve("etc/tls/certs").toString(),
                 "NODE_EXTRA_CA_CERTS" to prefix.resolve("etc/tls/cert.pem").toString(),
@@ -94,16 +93,17 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 "npm_config_prefix" to home.resolve("npm-global").toString(),
                 "npm_config_cache" to home.resolve("npm-cache").toString(),
                 "npm_config_script_shell" to prefix.resolve("bin/sh").toString(),
-                "npm_config_ignore_scripts" to "true",
                 "npm_config_audit" to "false",
                 "npm_config_fund" to "false",
                 "npm_config_update_notifier" to "false",
             )
             fun executable(name: String): Path? = prefix.resolve("bin/$name").takeIf { Files.isRegularFile(it) }
-            val approved = manifest.optJSONObject("approvedNpmPackages")
-            val pack = RuntimeInstallation(packId, "arm64-v8a", prefix, executable("node"), prefix.resolve("lib/node_modules/npm/bin/npm-cli.js").takeIf { Files.isRegularFile(it) }, executable("python3"), executable("sh"), env,
-                approved?.keys()?.asSequence()?.associateWith { approved.getString(it) }.orEmpty(),
-                allowNativeDependencyDownloads = dev.ide.android.BuildConfig.NATIVE_TOOLCHAIN_DOWNLOADS_ENABLED)
+            if (Files.isDirectory(prefix.resolve("include/node"))) env["npm_config_nodedir"] = prefix.toString()
+            executable("clang")?.let { env["CC"] = it.toString() }
+            executable("clang++")?.let { env["CXX"] = it.toString() }
+            executable("llvm-ar")?.let { env["AR"] = it.toString() }
+            executable("python3")?.let { env["PYTHON"] = it.toString(); env["npm_config_python"] = it.toString() }
+            val pack = RuntimeInstallation(packId, "arm64-v8a", prefix, executable("node")?.toRealPath(), prefix.resolve("lib/node_modules/npm/bin/npm-cli.js").takeIf { Files.isRegularFile(it) }, executable("python3"), executable("sh"), env)
             installation = pack
             pack
         }
@@ -120,6 +120,10 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
 
     override fun start(command: List<String>, workingDirectory: Path, environment: Map<String, String>): RuntimeChild {
         require(command.isNotEmpty() && java.nio.file.Paths.get(command.first()).isAbsolute) { "Runtime executable must be absolute" }
+        // The launcher exits 126/127 when exec fails; those codes can also be valid project outcomes.
+        val executable = java.nio.file.Paths.get(command.first()).toRealPath()
+        if (!Files.isRegularFile(executable)) throw java.io.IOException("Runtime executable is not a regular file")
+        if (!Files.isExecutable(executable)) throw java.nio.file.AccessDeniedException(executable.toString())
         val launcher = native.resolve("libdevruntime-launcher.so")
         require(Files.isRegularFile(launcher)) { "Runtime launcher is not bundled for this ABI" }
         val pidDirectory = home.resolve("processes")

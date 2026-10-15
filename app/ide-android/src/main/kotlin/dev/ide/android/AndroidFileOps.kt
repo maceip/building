@@ -68,6 +68,10 @@ internal class AndroidFileOps(private val activity: ComponentActivity) {
         copyFileToFreshCache(uri, safeName, importMetadata(uri).size, "import")
     }
 
+    /** Persistent linked working copy, with explicit conflict-safe synchronization back to this SAF tree. */
+    fun openLinkedTree(treeUri: Uri): String =
+        dev.ide.android.workbench.runtime.AndroidExternalWorkspaces(activity).openTree(treeUri).toString()
+
     /**
      * Materialize a SAF folder for the engine, bounded to 512 MiB, 20,000 entries and 64 levels. Exclude
      * regenerable directories but preserve .platform workspace data. Never return a partially read tree.

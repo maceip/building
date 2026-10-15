@@ -394,6 +394,7 @@ object AndroidIde {
         return ProjectManager.onDevice(
             projectsRoot, bootClasspath, nativeLibDir, debugKeystore.toPath(),
             storageRoot = externalHome(context).toPath(),
+            permittedInPlaceRoots = listOf(context.filesDir.toPath().resolve("external-workspaces")),
             legacyDataDirs = legacyDataDirs,
             programInterpreter = programInterpreter,
             deviceApiLevel = Build.VERSION.SDK_INT,

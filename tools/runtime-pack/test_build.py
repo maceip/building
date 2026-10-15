@@ -50,12 +50,32 @@ class RuntimePackTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 build.fetch_package(package, "https://invalid.example/", cache, True)
 
-    def test_lock_is_unique_and_contains_runtime_not_whole_toolchain(self):
+    def test_lock_is_unique_and_contains_the_development_runtime(self):
         _, packages = build.package_specs()
         names = {p["name"] for p in packages}
-        self.assertEqual(27, len(packages))
+        self.assertEqual(len(names), len(packages))
         self.assertTrue({"nodejs-lts", "npm", "python", "dash"} <= names)
-        self.assertFalse({"openjdk-17", "openjdk-21", "clang", "cmake"} & names)
+        self.assertFalse({"openjdk-17", "openjdk-21"} & names)
+
+    def test_compiler_wrappers_relocate_sysroot_and_keep_cpp_mode(self):
+        files = {"bin/clang-21": b"native compiler"}
+        links = {"bin/clang": "bin/clang-21", "bin/clang++": "bin/clang-21"}
+        owners = {"bin/clang-21": "clang"}
+        build.add_compiler_wrappers(files, links, owners)
+        self.assertNotIn("bin/clang", links)
+        self.assertNotIn("bin/clang++", links)
+        for name in ("clang", "clang++", "cc", "c++", "gcc", "g++"):
+            self.assertTrue(files["bin/" + name].startswith(b"#!/system/bin/sh\n"))
+            self.assertIn(b'--sysroot=$PREFIX', files["bin/" + name])
+            self.assertIn(b'-resource-dir=$PREFIX/lib/clang/21', files["bin/" + name])
+            self.assertIn(b'"$@"', files["bin/" + name])
+        self.assertIn(b'--driver-mode=g++', files["bin/clang++"])
+        self.assertLess(files["bin/clang++"].index(b'include/c++/v1'), files["bin/clang++"].index(b'"$PREFIX/include"'))
+        self.assertNotIn(b'include/c++/v1', files["bin/clang"])
+
+    def test_development_inputs_are_not_pruned(self):
+        for name in ("include/node/node_api.h", "lib/libnode.a", "lib/python3.14/config/python.o", "lib/pkgconfig/libnode.pc"):
+            self.assertFalse(name.startswith(build.EXCLUDED), name)
 
 
 if __name__ == "__main__":

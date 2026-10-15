@@ -310,12 +310,48 @@ class GradleBuildSystemTest {
         Files.writeString(it, "fixture")
     }
 
+    @Test
+    fun preparedScriptPathReachesTheToolingProcessAndInitializeExactlyOnceBeforeExecution() = withProject { root, project ->
+        val process = ToolingProcess(":app:android:lintDefaultDebug")
+        var preparations = 0
+        var startedEnvironment: Map<String, String>? = null
+        val previous = GradleEnvironment.host
+        try {
+            GradleEnvironment.host = object : GradleHost by DesktopGradleHost(root.resolve("host")) {
+                override fun initScript(): Path = root.resolve("host/fixture.init.gradle")
+                override fun prepareScriptEnvironment(): GradleScriptEnvironment {
+                    preparations++
+                    assertNull(startedEnvironment, "Prepare commands before starting the tooling JVM")
+                    return GradleScriptEnvironment(listOf(root.resolve("apk-runtime-bridge/bin")))
+                }
+                override fun openClient(javaHome: Path, environment: Map<String, String>): ToolingClient {
+                    assertEquals(1, preparations)
+                    startedEnvironment = environment
+                    return ToolingClient(process)
+                }
+            }
+            val action = action(project, "gradle:lint")
+            assertEquals(TaskResult.Success, runBlocking { session(action).execute(SimpleTaskContext()) })
+            assertEquals(1, preparations)
+            val request = process.requests().single { it["method"] == "initialize" }
+            val parameters = JsonReader.obj(request["params"])!!
+            val initializedEnvironment = JsonReader.obj(parameters["env"])
+            assertEquals(startedEnvironment, initializedEnvironment)
+            val started = assertNotNull(startedEnvironment)
+            assertTrue(started.getValue("PATH").startsWith(root.resolve("apk-runtime-bridge/bin").toString() + java.io.File.pathSeparator))
+            assertEquals(System.getProperty("java.home"), started["JAVA_HOME"])
+        } finally {
+            GradleEnvironment.host = previous
+        }
+    }
+
     private fun withHost(root: Path, process: ToolingProcess, block: () -> Unit) {
         val old = GradleEnvironment.host
         try {
             GradleEnvironment.host = object : GradleHost by DesktopGradleHost(root.resolve("host")) {
                 override fun initScript(): Path = root.resolve("host/fixture.init.gradle")
                 override fun openClient(javaHome: Path) = ToolingClient(process)
+                override fun openClient(javaHome: Path, environment: Map<String, String>) = ToolingClient(process)
             }
             block()
         } finally {

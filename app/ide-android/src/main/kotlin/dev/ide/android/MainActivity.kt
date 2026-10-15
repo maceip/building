@@ -100,7 +100,8 @@ class MainActivity : ComponentActivity() {
         // `SystemBarStyle.dark` here forced light icons even in light mode.
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        workbenchRuntime = RuntimeController(AndroidRuntimeHost(applicationContext), workbenchScope)
+        val runtimeReliability = dev.ide.android.reliability.AndroidRuntimeReliability(applicationContext)
+        workbenchRuntime = RuntimeController(AndroidRuntimeHost(applicationContext), workbenchScope, observer = runtimeReliability.runtimeObserver)
         UiPluginHost.register(WorkbenchUiPlugin)
         // Before extractStream: a sign-in redirect is an ACTION_VIEW with a URI, which would otherwise be
         // taken for a file to import.
@@ -163,21 +164,24 @@ class MainActivity : ComponentActivity() {
                     val (file, cb) = pending ?: return@rememberLauncherForActivityResult
                     cb(if (saved && file.length() > 0) file.absolutePath else null)
                 }
-            // Directory picker (Gradle import): SAF hands back a content:// tree, so copy it into local
-            // storage off the main thread and return that path — the copy can be large, hence the coroutine.
+            // SAF providers are not POSIX filesystems; keep a linked private working copy with explicit sync.
             var pendingPickDir by remember { mutableStateOf<((String?) -> Unit)?>(null) }
             val pickDirLauncher =
                 rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
                     val cb = pendingPickDir
                     pendingPickDir = null
                     if (uri == null) { cb?.invoke(null); return@rememberLauncherForActivityResult }
-                    Toast.makeText(this@MainActivity, "Copying project…", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "Opening linked working copy…", Toast.LENGTH_SHORT).show()
                     hostScope.launch {
-                        val path = runInterruptible(Dispatchers.IO) { fileOps.copyTreeToCache(uri) }
-                        if (path == null) {
-                            Toast.makeText(this@MainActivity, "Couldn't import folder: unreadable, invalid entries, or too large", Toast.LENGTH_LONG).show()
+                        try {
+                            val path = runInterruptible(Dispatchers.IO) { fileOps.openLinkedTree(uri) }
+                            cb?.invoke(path)
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            Toast.makeText(this@MainActivity, failure.message ?: "Couldn't open the linked folder", Toast.LENGTH_LONG).show()
+                            cb?.invoke(null)
                         }
-                        cb?.invoke(path)
                     }
                 }
             // "Save As" export: the user picks a destination (Files/Drive/Downloads); we copy the bytes there.
@@ -442,6 +446,13 @@ class MainActivity : ComponentActivity() {
         val url = pendingAuthRedirect ?: return
         pendingAuthRedirect = null
         store.completeSignIn(url)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        workbenchScope.launch(Dispatchers.IO) {
+            runCatching { dev.ide.android.reliability.AndroidRuntimeReliability(applicationContext).capture.replay() }
+        }
     }
 
     override fun onDestroy() {

@@ -62,6 +62,8 @@ import dev.ide.core.gradle.GradleBuildFileWriter
 import dev.ide.core.gradle.GradleModelImporter
 import dev.ide.core.gradle.GradleProjectImporter
 import dev.ide.core.gradle.GradleToolingImporter
+import dev.ide.core.node.NodeModuleType
+import dev.ide.core.node.NodeProjectImporter
 import dev.ide.gradle.GradleBuildSystem
 import dev.ide.model.BuildSystemId
 import dev.ide.core.services.AndroidResourceService
@@ -214,6 +216,7 @@ object BuiltInPlugins {
         BuiltInPlugin(KotlinSupportPlugin()),
         BuiltInPlugin(KspSupportPlugin(env)),
         BuiltInPlugin(GradleSupportPlugin()),
+        BuiltInPlugin(NodeSupportPlugin()),
         BuiltInPlugin(BlocksPlugin()),
         BuiltInPlugin(AndroidSupportPlugin(codecs)),
         BuiltInPlugin(SamplesPlugin()),
@@ -382,6 +385,19 @@ private class GradleSupportPlugin : Plugin {
         reg.register(BUILD_FILE_WRITER_EP, GradleBuildFileWriter())
         reg.register(BUILD_FILE_WRITER_EP, GradleBuildFileWriter(BuildSystemId.GRADLE))
         reg.register(BUILD_SYSTEM_EP, GradleBuildSystem())
+    }
+}
+
+/** package.json import is static; explicit execution uses the host's existing Runtime workbench. */
+private class NodeSupportPlugin : Plugin {
+    override val manifest = PluginManifest(
+        id = "node-support", name = "Node.js Support", essential = true,
+        description = "Opens package.json projects for editing and explicit npm script/Node file runs in the Runtime workbench.",
+    )
+
+    override fun register(reg: PluginRegistration) {
+        reg.contributeVia { ext, pid -> ModuleTypeRegistry(ext).register(NodeModuleType, pid) }
+        reg.register(PROJECT_IMPORTER_EP, NodeProjectImporter())
     }
 }
 

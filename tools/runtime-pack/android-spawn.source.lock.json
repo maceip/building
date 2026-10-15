@@ -1,0 +1,53 @@
+{
+  "format": 1,
+  "name": "libandroid-spawn",
+  "version": "0.3",
+  "license": "BSD-2-Clause",
+  "sourceRevision": "3885d8e1577097760b3bc4ee8d247ef367545d8e",
+  "sourceTree": "https://github.com/termux/termux-packages/tree/3885d8e1577097760b3bc4ee8d247ef367545d8e/packages/libandroid-spawn",
+  "sourceDescription": "The official recipe skips source extraction and compiles these vendored AOSP-derived files. This is the entire package source directory at this revision. No external archive or patch files exist; source bytes are not modified.",
+  "patches": [],
+  "sources": [
+    {"path":"LICENSE","role":"license","url":"https://raw.githubusercontent.com/termux/termux-packages/3885d8e1577097760b3bc4ee8d247ef367545d8e/packages/libandroid-spawn/LICENSE","size":1318,"sha256":"511ce23b36ca7dd3858570d8ee3054ceed18e12d284f96661d030a82590a5954","gitBlob":"5828550d53c61184c2f5b830d50fab2330f7250f"},
+    {"path":"build.sh","role":"recipe","url":"https://raw.githubusercontent.com/termux/termux-packages/3885d8e1577097760b3bc4ee8d247ef367545d8e/packages/libandroid-spawn/build.sh","size":904,"sha256":"f4b450c8c352b583c0733eb4fe5eba255e0c3ef300902d609f6fe95198ac945b","gitBlob":"089ab076320b9f27787080b08c826b57cfb84324"},
+    {"path":"posix_spawn.cpp","role":"source","url":"https://raw.githubusercontent.com/termux/termux-packages/3885d8e1577097760b3bc4ee8d247ef367545d8e/packages/libandroid-spawn/posix_spawn.cpp","size":11646,"sha256":"5267405b1b14fcbe885bd815d9bd5dde94144dc90b319d6f4be17e47f43bcad3","gitBlob":"1ddc8d43fa1cb3b7c3b08b255f720649c5ef0bba"},
+    {"path":"posix_spawn.h","role":"header","url":"https://raw.githubusercontent.com/termux/termux-packages/3885d8e1577097760b3bc4ee8d247ef367545d8e/packages/libandroid-spawn/posix_spawn.h","size":4769,"sha256":"5cc27528237cf17727709eaab624f20878b71013b2eb265e3a6e6dae1e4294a0","gitBlob":"4220389e9bc4da3470081a78c8e7480b6bf7dbf2"}
+  ],
+  "originalPackage": {"name":"libandroid-spawn","version":"0.3","filename":"pool/main/liba/libandroid-spawn/libandroid-spawn_0.3_aarch64.deb","sha256":"7988fa788ef48ab5da9660443905a2e4099ac36221739d72f5c39acc644b4d1c","size":15216},
+  "replaces": {"path":"lib/libandroid-spawn.so","size":39792,"sha256":"a119e73710fd6dc3bb85dc58df48a9262fa5cb3318c153b9b75c1c3b23fc0e10"},
+  "build": {
+    "target": "aarch64-linux-android24",
+    "sourceDateEpoch": "1767225600",
+    "compileFlags": ["--no-default-config","-std=gnu++17","-Oz","-fPIC","-D_GNU_SOURCE","-D_FORTIFY_SOURCE=2","-fstack-protector-strong","-fdebug-compilation-dir=."],
+    "linkFlags": ["--no-default-config","-shared","-Wl,-soname,libandroid-spawn.so","-Wl,-z,max-page-size=16384,-z,common-page-size=16384","-Wl,-z,relro,-z,now,-z,defs","-Wl,--build-id=sha1"],
+    "stripFlags": ["--strip-unneeded"],
+    "deviations": ["Explicit 16 KB maximum/common page sizes; unchanged source.","Explicit SONAME; no Termux absolute RUNPATH.","NDK API 24, fixed optimization/hardening flags and reproducible paths/environment.","Generated ELF is a distinct source-built artifact, not the original .deb member; original package SHA256 is never reused for it."]
+  },
+  "toolchain": {
+    "host": "darwin-x86_64",
+    "revision": "29.0.13113456-beta1",
+    "compiler": "Android clang 20.0.0 r547379, LLVM b718bcaf8c198c82f3021447d943401e3ab5bd54",
+    "files": [
+      {"path":"source.properties","size":119,"sha256":"28e621fcb42251a296a9c1f2a7361fc47574047b7bba6cf00700cf57e3ddc414"},
+      {"path":"toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang++","size":205,"sha256":"cf489e3486ede2515e94dc69adc641daf2b0f8fd5abe8ad71f475dae5db52976"},
+      {"path":"toolchains/llvm/prebuilt/darwin-x86_64/bin/clang++","size":182082656,"sha256":"41b5cb95a993d657ccfe9e6ae8306b0e8574caf2f8bba8fdc38802e27a516740"},
+      {"path":"toolchains/llvm/prebuilt/darwin-x86_64/bin/ld.lld","size":122026384,"sha256":"43a7aca3c1266238e81ecc62a35a4dd1763c82a9efe4de14dd0606a1bc1b7159"},
+      {"path":"toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip","size":9494464,"sha256":"4ce6e831f01e99a476994cae157bd1f1a245eb3d849dba60411903785e4a1ba6"},
+      {"path":"toolchains/llvm/prebuilt/darwin-x86_64/lib/libc++.dylib","size":2898848,"sha256":"5532eadd885522cf747b32eee96f37e5a77cc6576886920e170216ebacd3df11"},
+      {"path":"toolchains/llvm/prebuilt/darwin-x86_64/lib/libxml2.2.dylib","size":2524976,"sha256":"622c73951991559fd87a8b6444e3cc882e9b0c499c46ce063467b87af24c0e31"}
+    ],
+    "consumedInputs": {"count":134,"sha256":"4d1d48aed524a1657dc12abf26595290577a88fa36f7acf7d1b19bb8cfe00ef0","encoding":"SHA256 of UTF-8 json.dumps(sorted-by-path entries {path,size,sha256}, sort_keys=True, separators=(',', ':')); NDK-relative resolved paths from compiler -MD and linker --dependency-file. Full entries are retained in generated provenance."},
+    "licenses": [
+      {"path":"NOTICE","size":516438,"sha256":"faf0dc52cf6ce9ab09a04b0c074a378dd2565ee1ed9bc1179d83793bcdba012e"},
+      {"path":"NOTICE.toolchain","size":799639,"sha256":"789714a9076571c580cf531bdcebec776a4d889c12c3c1108adafc6e4338710a"}
+    ]
+  },
+  "artifact": {
+    "path": "lib/libandroid-spawn.so",
+    "size": 39184,
+    "sha256": "397ad6effbab41172834c4cd36137c20129c65955b89bb20fdd128f7592fbbde",
+    "soname": "libandroid-spawn.so",
+    "needed": ["libc++_shared.so","libm.so","libdl.so","libc.so"],
+    "publicExports": ["posix_spawn","posix_spawn_file_actions_addclose","posix_spawn_file_actions_adddup2","posix_spawn_file_actions_addopen","posix_spawn_file_actions_destroy","posix_spawn_file_actions_init","posix_spawnattr_destroy","posix_spawnattr_getflags","posix_spawnattr_getpgroup","posix_spawnattr_getschedparam","posix_spawnattr_getschedpolicy","posix_spawnattr_getsigdefault","posix_spawnattr_getsigdefault64","posix_spawnattr_getsigmask","posix_spawnattr_getsigmask64","posix_spawnattr_init","posix_spawnattr_setflags","posix_spawnattr_setpgroup","posix_spawnattr_setschedparam","posix_spawnattr_setschedpolicy","posix_spawnattr_setsigdefault","posix_spawnattr_setsigdefault64","posix_spawnattr_setsigmask","posix_spawnattr_setsigmask64","posix_spawnp"]
+  }
+}

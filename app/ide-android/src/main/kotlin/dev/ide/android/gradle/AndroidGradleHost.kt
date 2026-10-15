@@ -5,6 +5,8 @@ import android.content.Context
 import android.os.Build
 import android.os.Looper
 import dev.ide.gradle.GradleHost
+import dev.ide.gradle.GradleProcessEnvironment
+import dev.ide.gradle.GradleScriptEnvironment
 import dev.ide.gradle.JdkSelection
 import dev.ide.gradle.Prefix
 import dev.ide.gradle.PrefixProbe
@@ -28,7 +30,10 @@ import kotlin.io.path.writeText
  * there (`lib/jvm/java-17-openjdk`, `lib/jvm/java-21-openjdk`), and a copied constant that points
  * somewhere else would not start.
  */
-class AndroidGradleHost(private val context: Context) : GradleHost {
+class AndroidGradleHost(
+    private val context: Context,
+    private val prepareScripts: () -> GradleScriptEnvironment = AndroidGradleRuntimeBridge(context)::prepare,
+) : GradleHost {
 
     private val app = context.applicationContext
     private val files = app.filesDir.toPath()
@@ -138,16 +143,21 @@ class AndroidGradleHost(private val context: Context) : GradleHost {
         return if (Files.isDirectory(path)) listOf(path) else emptyList()
     }
 
-    override fun openClient(javaHome: Path): ToolingClient {
+    override fun prepareScriptEnvironment(): GradleScriptEnvironment {
+        check(Looper.myLooper() != Looper.getMainLooper()) {
+            "The Gradle script environment is prepared off the main thread."
+        }
+        return prepareScripts()
+    }
+
+    override fun openClient(javaHome: Path): ToolingClient =
+        openClient(javaHome, GradleProcessEnvironment.create(this, javaHome, prepareScriptEnvironment()))
+
+    override fun openClient(javaHome: Path, environment: Map<String, String>): ToolingClient {
         check(Looper.myLooper() != Looper.getMainLooper()) {
             "The Gradle tooling JVM is started off the main thread."
         }
-        val prefix = prefix()
-        val env = LinkedHashMap(PrefixProbe.environment(prefix, javaHome, libraryPath()))
-        env["ANDROID_HOME"] = androidHome().toString()
-        env["ANDROID_SDK_ROOT"] = androidHome().toString()
-        env["GRADLE_USER_HOME"] = gradleUserHome().toString()
-        val process = GradleBuildService.acquire(app, javaHome, toolingJar(), env)
+        val process = GradleBuildService.acquire(app, javaHome, toolingJar(), environment)
         return ToolingClient(process)
     }
 

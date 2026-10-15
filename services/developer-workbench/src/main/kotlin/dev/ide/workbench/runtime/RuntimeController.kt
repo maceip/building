@@ -7,7 +7,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.json.*
 import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
@@ -15,7 +14,11 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Application/backend-scoped runner. Opening a project never executes it or installs dependencies. */
-class RuntimeController(private val host: RuntimeHost, scope: CoroutineScope) : AutoCloseable {
+class RuntimeController(
+    private val host: RuntimeHost,
+    scope: CoroutineScope,
+    private val observer: RuntimeObserver = RuntimeObserver.NONE,
+) : AutoCloseable {
     private val workerScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]) + Dispatchers.IO)
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val gate = Mutex()
@@ -23,6 +26,7 @@ class RuntimeController(private val host: RuntimeHost, scope: CoroutineScope) : 
     private val mutableState = MutableStateFlow(RuntimeSessionState())
     val state: StateFlow<RuntimeSessionState> = mutableState.asStateFlow()
     private var job: Job? = null
+    @Volatile private var session: SessionObservation? = null
     @Volatile private var child: RuntimeChild? = null
     @Volatile private var preview: StaticPreviewServer? = null
     @Volatile private var workspace: RuntimeWorkspace? = null
@@ -58,9 +62,8 @@ class RuntimeController(private val host: RuntimeHost, scope: CoroutineScope) : 
         }
         RuntimeProbeReport(installed.packId, installed.abi, probes, listOf(
             "Native runtime bytes are delivered in the APK; provisioning and these probes are offline.",
-            "User-trusted project execution, not a sandbox. Native Bun, Cargo, arbitrary Linux binaries and native npm/pip packages are not supported.",
-            if (installed.allowNativeDependencyDownloads) "Developer distribution: explicit npm installation is allowed with lifecycle scripts disabled; native downloads are not represented as Play compliant."
-            else "APK-only mode: arbitrary npm dependency downloads are disabled; only dependency-free projects install offline.",
+            "User-trusted project execution, not a sandbox. Native addons and downloaded binaries must support Android/Bionic; desktop Linux, Bun and Cargo compatibility is not guaranteed.",
+            "Explicit npm install can download packages and runs lifecycle scripts. npm run also executes pre/post hooks. Only install and run code you trust.",
         ))
     }
 
@@ -69,17 +72,25 @@ class RuntimeController(private val host: RuntimeHost, scope: CoroutineScope) : 
         check(!closed.get()) { "Runtime controller is closed" }
         stopLocked()
         workspace = null
-        mutableState.value = RuntimeSessionState(sessionId = UUID.randomUUID().toString(), phase = RuntimePhase.PREPARING, projectRoot = request.projectRoot)
-        job = workerScope.launch { runProject(request, install = false) }
+        startSession(request, install = false)
     }
 
-    /** Explicit action, never called by detection/open/run. Broad downloads require a developer-only host gate. */
+    /** Explicit trusted action, never called by detection/open/run. npm lifecycle scripts execute normally. */
     suspend fun installDependencies(projectRoot: Path) = gate.withLock {
         check(!closed.get()) { "Runtime controller is closed" }
         stopLocked()
         workspace = null
-        mutableState.value = RuntimeSessionState(sessionId = UUID.randomUUID().toString(), phase = RuntimePhase.PREPARING, projectRoot = projectRoot)
-        job = workerScope.launch { runProject(RuntimeRunRequest(projectRoot, "dependencies:npm"), install = true) }
+        startSession(RuntimeRunRequest(projectRoot, "dependencies:npm"), install = true)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class, DelicateCoroutinesApi::class)
+    private fun startSession(request: RuntimeRunRequest, install: Boolean) {
+        val observation = SessionObservation(UUID.randomUUID(), request.projectRoot)
+        session = observation
+        mutableState.value = RuntimeSessionState(sessionId = observation.sessionId.toString(), phase = RuntimePhase.PREPARING, projectRoot = request.projectRoot)
+        // Enter even for a cancelled parent, then ensureActive in the body. A completion handler could
+        // otherwise call the host's provenance capture synchronously on the caller/main thread.
+        job = workerScope.launch(start = CoroutineStart.ATOMIC) { runProject(request, install, observation) }
     }
 
     fun sendInput(text: String) {
@@ -106,16 +117,20 @@ class RuntimeController(private val host: RuntimeHost, scope: CoroutineScope) : 
     }
 
     private suspend fun stopLocked() {
+        // Record intent before terminate can race awaitExit and look like a project failure.
+        session?.requestStop()
         if (job?.isActive == true) mutableState.update { it.copy(phase = RuntimePhase.STOPPING, acceptsInput = false, previewUrl = null) }
         preview?.close(); preview = null
         child?.let { withContext(NonCancellable) { it.terminate() } }
         job?.cancelAndJoin(); job = null
+        session = null
         child = null
         mutableState.update { if (it.isRunning) it.copy(phase = RuntimePhase.FINISHED, acceptsInput = false, previewUrl = null) else it.copy(previewUrl = null) }
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        session?.requestStop()
         preview?.close(); preview = null
         mutableState.update { it.copy(acceptsInput = false, previewUrl = null) }
         // Independent of Activity/caller cancellation: never abandon native children on close.
@@ -125,13 +140,15 @@ class RuntimeController(private val host: RuntimeHost, scope: CoroutineScope) : 
         }
     }
 
-    private suspend fun runProject(request: RuntimeRunRequest, install: Boolean) {
+    private suspend fun runProject(request: RuntimeRunRequest, install: Boolean, observation: SessionObservation) {
         try {
+            currentCoroutineContext().ensureActive()
             val original = request.projectRoot.toRealPath()
             val config = RuntimeProjects.load(original)
             val target = if (install) RuntimeTarget("dependencies:npm", "Install npm dependencies", RuntimeKind.NPM, "package.json")
                 else RuntimeProjects.targets(original).firstOrNull { it.id == request.targetId } ?: error("Run target no longer exists: ${request.targetId}")
             mutableState.update { it.copy(target = target) }
+            observation.start(original, target)
             val useCopy = config.workspaceMode == RuntimeWorkspaceMode.INTERNAL_COPY || config.workspaceMode == RuntimeWorkspaceMode.AUTO && host.requiresWorkspaceCopy(original)
             val selectedWorkspace = if (useCopy) RuntimeWorkspace(original, host.workspaceCache) else null
             workspace = selectedWorkspace
@@ -144,39 +161,144 @@ class RuntimeController(private val host: RuntimeHost, scope: CoroutineScope) : 
             if (useCopy) append("[Internal workspace copy. Source saves copy in on Run; Sync new outputs after Stop creates new files only. Existing-file changes require manual merge. Dependencies remain private.]\n")
             append("[User-trusted execution; this is not a security sandbox.]\n")
             if (target.kind == RuntimeKind.STATIC) {
+                observation.stage = RuntimeOutcomeStage.LAUNCH
                 val server = StaticPreviewServer(root, target.relativePath)
                 preview = server
+                observation.stage = RuntimeOutcomeStage.PROCESS
                 mutableState.update { it.copy(phase = RuntimePhase.RUNNING, previewUrl = server.url) }
                 append("Preview: ${server.url}\n")
                 awaitCancellation()
             }
             val installed = host.prepare()
+            observation.prepared(installed)
             val env = installed.environment + config.environment
             val args = config.args + request.args
             require(args.size <= 128 && args.all { it.length <= 8192 && !it.contains('\u0000') }) { "Invalid runtime arguments" }
             val command = if (install) dependencyCommand(root, installed) else command(target, root, installed, args)
             append("> ${target.label}\n")
+            observation.stage = RuntimeOutcomeStage.LAUNCH
             val process = host.start(command, cwd, env)
             child = process
+            observation.stage = RuntimeOutcomeStage.PROCESS
             mutableState.update { it.copy(phase = RuntimePhase.RUNNING, acceptsInput = !install, previewUrl = config.previewPort?.let { port -> "http://127.0.0.1:$port/" }) }
             val code = execute(process, { appendStream(it, false) }, stdinOpen = !install, errorOutput = { appendStream(it, true) })
+            observation.exited(code)
             append("\nProcess finished with exit code $code\n")
             mutableState.update { it.copy(phase = if (code == 0) RuntimePhase.FINISHED else RuntimePhase.FAILED, exitCode = code, acceptsInput = false, previewUrl = null, error = if (code == 0) null else "Process exited $code") }
         } catch (cancelled: CancellationException) {
+            observation.failed(cancelled)
             mutableState.update { it.copy(phase = RuntimePhase.FINISHED, acceptsInput = false, previewUrl = null) }
             throw cancelled
         } catch (error: LinkageError) {
+            observation.failed(error)
             val message = "Host API unavailable: ${error.message}"
             append("\n$message\n")
             mutableState.update { it.copy(phase = RuntimePhase.FAILED, acceptsInput = false, previewUrl = null, error = message) }
         } catch (error: Exception) {
+            observation.failed(error)
             val message = error.message ?: error.javaClass.simpleName
             append("\n$message\n")
             mutableState.update { it.copy(phase = RuntimePhase.FAILED, acceptsInput = false, previewUrl = null, error = message) }
+        } catch (error: Throwable) {
+            observation.failed(error)
+            throw error
         } finally {
-            withContext(NonCancellable) { child?.terminate() }
-            child = null
-            preview?.close(); preview = null
+            try {
+                withContext(NonCancellable) { child?.terminate() }
+                child = null
+                preview?.close(); preview = null
+            } catch (error: Throwable) {
+                observation.failed(error)
+                throw error
+            } finally {
+                observation.complete()
+            }
+        }
+    }
+
+    /** Session-local facts; observer code can neither alter them nor escape into execution errors. */
+    private inner class SessionObservation(val sessionId: UUID, private val requestedRoot: Path) {
+        private val startedAt = System.nanoTime()
+        private val started = AtomicBoolean(false)
+        private val finished = AtomicBoolean(false)
+        private var handle = RuntimeSessionObserver.NONE
+        private var kind: RuntimeKind? = null
+        @Volatile var stage = RuntimeOutcomeStage.PREPARE
+        private var stopRequested = false
+        private var classification: RuntimeOutcomeClassification? = null
+        private var exitCode: Int? = null
+        private var exceptionCategory: RuntimeExceptionCategory? = null
+
+        fun start(projectRoot: Path = requestedRoot, target: RuntimeTarget? = null) {
+            if (!started.compareAndSet(false, true)) return
+            kind = target?.kind
+            val descriptor = target?.let {
+                RuntimeObservedTarget(it.kind, it.id.take(256).map { char -> if (char in ' '..'~') char else '_' }.joinToString(""))
+            }
+            handle = try { observer.onSessionStarted(sessionId, projectRoot, kind, descriptor) }
+            catch (_: Throwable) { RuntimeSessionObserver.NONE }
+        }
+
+        fun prepared(installation: RuntimeInstallation) {
+            val metadata = RuntimePreparedMetadata(
+                installation.packId.takeIf { it.length in 1..128 && IDENTITY_TOKEN.matches(it) },
+                installation.abi.takeIf { it.length in 1..32 && IDENTITY_TOKEN.matches(it) },
+            )
+            try { handle.onRuntimePrepared(metadata) } catch (_: Throwable) { }
+        }
+
+        fun requestStop() = synchronized(this) {
+            if (classification == null) stopRequested = true
+        }
+
+        fun exited(code: Int) = synchronized(this) {
+            if (classification == null) {
+                exitCode = code
+                classification = when {
+                    stopRequested -> RuntimeOutcomeClassification.CANCELLED
+                    code == 0 -> RuntimeOutcomeClassification.SUCCESS
+                    else -> RuntimeOutcomeClassification.NONZERO_EXIT
+                }
+            }
+        }
+
+        fun failed(error: Throwable) = synchronized(this) {
+            if (classification == null) {
+                classification = when {
+                    stopRequested -> RuntimeOutcomeClassification.CANCELLED
+                    error is TimeoutCancellationException -> RuntimeOutcomeClassification.TIMEOUT
+                    error is CancellationException -> RuntimeOutcomeClassification.CANCELLED
+                    else -> RuntimeOutcomeClassification.UNEXPECTED_FAILURE
+                }
+                if (classification == RuntimeOutcomeClassification.UNEXPECTED_FAILURE) {
+                    exceptionCategory = when (error) {
+                        is java.io.IOException -> RuntimeExceptionCategory.IO
+                        is SecurityException -> RuntimeExceptionCategory.SECURITY
+                        is IllegalArgumentException, is IllegalStateException -> RuntimeExceptionCategory.INVALID_CONFIGURATION
+                        is LinkageError -> RuntimeExceptionCategory.HOST_API_UNAVAILABLE
+                        else -> RuntimeExceptionCategory.OTHER
+                    }
+                }
+            }
+        }
+
+        fun complete() {
+            if (!finished.compareAndSet(false, true)) return
+            // Resolution/pre-entry failures have no resolved kind: do not parse a caller's target ID.
+            start()
+            val outcome = synchronized(this) {
+                val result = classification ?: if (stopRequested) RuntimeOutcomeClassification.CANCELLED else RuntimeOutcomeClassification.UNEXPECTED_FAILURE
+                RuntimeSessionOutcome(
+                    sessionId = sessionId,
+                    kind = kind,
+                    stage = stage,
+                    classification = result,
+                    exitCode = exitCode,
+                    durationMillis = ((System.nanoTime() - startedAt).coerceAtLeast(0) / 1_000_000).coerceAtMost(RuntimeSessionOutcome.MAX_DURATION_MILLIS),
+                    exceptionCategory = if (result == RuntimeOutcomeClassification.UNEXPECTED_FAILURE) exceptionCategory ?: RuntimeExceptionCategory.OTHER else null,
+                )
+            }
+            try { handle.onSessionFinished(outcome) } catch (_: Throwable) { }
         }
     }
 
@@ -184,20 +306,14 @@ class RuntimeController(private val host: RuntimeHost, scope: CoroutineScope) : 
         RuntimeKind.NODE -> listOf(requireNotNull(installation.node) { "Node is not available" }.toString(), safeProjectPath(root, target.relativePath).toString()) + args
         RuntimeKind.PYTHON -> listOf(requireNotNull(installation.python) { "Python is not available" }.toString(), "-u", safeProjectPath(root, target.relativePath).toString()) + args
         RuntimeKind.SHELL -> listOf(requireNotNull(installation.shell) { "dash is not available" }.toString(), safeProjectPath(root, target.relativePath).toString()) + args
-        RuntimeKind.NPM -> listOf(requireNotNull(installation.node).toString(), requireNotNull(installation.npmCli) { "npm is not available" }.toString(), "--prefix", root.toString(), "--ignore-scripts", "--no-audit", "--no-fund", "run", requireNotNull(target.script), "--") + args
+        RuntimeKind.NPM -> listOf(requireNotNull(installation.node).toString(), requireNotNull(installation.npmCli) { "npm is not available" }.toString(), "--prefix", root.toString(), "--no-audit", "--no-fund", "run", requireNotNull(target.script), "--") + args
         RuntimeKind.STATIC -> error("Static targets do not start a process")
     }
 
     private fun dependencyCommand(root: Path, installation: RuntimeInstallation): List<String> {
-        val manifest = readObject(safeProjectPath(root, "package.json"))
-        if (installation.allowNativeDependencyDownloads) {
-            append("[DEVELOPER DISTRIBUTION ONLY: explicitly installing untrusted npm packages. Native payloads may be downloaded; this is not the Play-target mode. Lifecycle scripts are disabled, but later Run executes user-trusted package code. No Linux/Bionic addon compatibility is promised.]\n")
-        } else RuntimeDependencyPolicy.check(manifest, installation.approvedNpmPackages)
-        val declared = listOf("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
-            .flatMap { field -> (manifest[field] as? JsonObject)?.values.orEmpty() }
-        val entirelyLocal = manifest["workspaces"] == null && declared.all { (it as? JsonPrimitive)?.content?.startsWith("file:") == true }
-        return listOf(requireNotNull(installation.node).toString(), requireNotNull(installation.npmCli).toString(), "--prefix", root.toString(), "install", "--ignore-scripts", "--no-audit", "--no-fund", "--registry=https://registry.npmjs.org/", "--strict-ssl=true") +
-            if (!installation.allowNativeDependencyDownloads || entirelyLocal) listOf("--offline") else emptyList()
+        readObject(safeProjectPath(root, "package.json"))
+        append("[Installing trusted npm dependencies with lifecycle scripts enabled. Packages may download and execute code with this app's permissions. Native addons and binaries must support Android/Bionic.]\n")
+        return listOf(requireNotNull(installation.node) { "Node is not available" }.toString(), requireNotNull(installation.npmCli) { "npm is not available" }.toString(), "--prefix", root.toString(), "install", "--no-audit", "--no-fund")
     }
 
     private fun append(text: String) {
@@ -250,19 +366,7 @@ class RuntimeController(private val host: RuntimeHost, scope: CoroutineScope) : 
 
     companion object {
         const val MAX_TRANSCRIPT = 256 * 1024
+        private val IDENTITY_TOKEN = Regex("[A-Za-z0-9._-]+")
         private val PREVIEW = Regex("http://(?:127\\.0\\.0\\.1|localhost):[0-9]{2,5}(?:/[^\\s\\\"'<>]*)?")
-    }
-}
-
-/** Fail closed: ignore-scripts does not itself prevent a tarball containing executable native code. */
-internal object RuntimeDependencyPolicy {
-    fun check(manifest: JsonObject, approved: Map<String, String>) {
-        val dependencies = listOf("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
-            .flatMap { field -> (manifest[field] as? JsonObject)?.entries.orEmpty() }
-        require(manifest["workspaces"] == null && manifest["bundledDependencies"] == null && manifest["bundleDependencies"] == null) { "Workspace/bundled dependencies are not audited for APK-only mode" }
-        require(dependencies.all { (name, version) -> approved[name] == (version as? JsonPrimitive)?.content }) {
-            "Dependency download blocked in APK-only mode. Arbitrary npm/pip packages may contain native code; --ignore-scripts is not enough. Use a dependency-free project or an APK-delivered audited dependency pack."
-        }
-        require(dependencies.isEmpty()) { "Approved-package installer is not yet available; no dependencies were downloaded" }
     }
 }

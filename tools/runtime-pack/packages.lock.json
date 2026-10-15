@@ -11,7 +11,9 @@
   "bootstrapCatalog": "../../build-system/gradle-build/src/main/resources/dev/ide/gradle/bootstrap-catalog.json",
   "bootstrapPackages": [
     "c-ares", "ca-certificates", "dash", "libc++", "libicu", "libsqlite", "nodejs-lts", "openssl", "resolv-conf", "termux-exec", "zlib",
-    "libandroid-support", "libbz2", "libexpat", "libffi", "liblzma", "ncurses", "zstd"
+    "libandroid-support", "libbz2", "libexpat", "libffi", "liblzma", "ncurses", "zstd",
+    "clang", "libllvm", "llvm", "lld", "libcompiler-rt", "ndk-sysroot", "make", "libxml2", "libandroid-glob", "libiconv",
+    "cmake", "ninja", "libandroid-spawn", "libarchive", "libcurl", "jsoncpp", "libuv", "rhash", "libnghttp2", "libnghttp3", "libngtcp2", "libssh2"
   ],
   "packages": [
     {"name":"npm","version":"11.20.0","filename":"pool/main/n/npm/npm_11.20.0_all.deb","sha256":"a2775653a0626749138ccd6e37a7b63239f36a9e3c62a9e6740818ca4b2d088b","size":2025572,"license":"Artistic-2.0"},
@@ -26,5 +28,5 @@
   ],
   "sourceRecipes": "https://github.com/termux/termux-packages/tree/3885d8e1577097760b3bc4ee8d247ef367545d8e/packages/",
   "approvedNpmPackages": {},
-  "policy": "Runtime-pack native payloads are acquired only at APK build time; device provisioning never downloads native code. No package-manager hooks or apt database are installed. User programs are trusted, not sandboxed. Default APK-only dependency action accepts dependency-free projects only. A separately gated developer/sideload distribution can explicitly install untrusted npm packages with lifecycle scripts disabled; it is not represented as Play compliant."
+  "policy": "Node, npm, Python and the shell are bundled in every APK. Runtime-pack native payloads are acquired at APK build time and provisioned offline. Debian maintainer scripts and the apt database are not installed. Explicit npm dependency installation and named npm scripts use normal lifecycle behavior. User programs and package scripts are trusted code running as the app UID, not sandboxed. Android/Bionic native-package compatibility and Google Play approval are not guaranteed."
 }

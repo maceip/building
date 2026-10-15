@@ -46,7 +46,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import dev.ide.android.BuildConfig
 import dev.ide.ui.backend.FileActions
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.workbench.runtime.RuntimeController
@@ -54,6 +53,12 @@ import dev.ide.workbench.runtime.RuntimeKind
 import dev.ide.workbench.runtime.RuntimePhase
 import dev.ide.workbench.runtime.RuntimeSessionState
 import dev.ide.workbench.runtime.RuntimeWorkspaceMode
+import dev.ide.android.workbench.runtime.HonoProjectInstaller
+import dev.ide.android.workbench.terminal.RuntimeTerminalEntry
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Android screen over an activity-owned controller. Merely entering the screen never runs project code. */
 @Composable
@@ -62,6 +67,8 @@ fun RuntimePanel(
     backend: IdeBackend,
     fileActions: FileActions,
     modifier: Modifier = Modifier,
+    forceProjectRoot: Boolean = false,
+    onOpenIncidents: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
@@ -75,15 +82,32 @@ fun RuntimePanel(
     var showAvailability by rememberSaveable { mutableStateOf(true) }
     var stream by rememberSaveable { mutableStateOf("Combined") }
     var showSyncConfirmation by remember { mutableStateOf(false) }
+    var showExternalSyncConfirmation by remember { mutableStateOf(false) }
     var externalPreview by remember { mutableStateOf<String?>(null) }
-    val developmentDownloads = BuildConfig.NATIVE_TOOLCHAIN_DOWNLOADS_ENABLED
+    var openingProject by remember { mutableStateOf(false) }
 
-    LaunchedEffect(controller, project.rootPath) { form.attachProject(project.rootPath) }
+    fun openWorkspace(path: String, description: String) {
+        if (openingProject) return
+        openingProject = true
+        scope.launch {
+            try {
+                val result = backend.projects.openFolderInPlace(path)
+                if (!result.success) form.showError(result.message)
+                else form.select(path, description)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                form.showError(failure.message ?: "Could not open the workspace")
+            } finally { openingProject = false }
+        }
+    }
+
+    LaunchedEffect(controller, project.rootPath, forceProjectRoot) { form.attachProject(project.rootPath, forceProjectRoot) }
     LaunchedEffect(controller) { form.probe() }
     LaunchedEffect(session.sessionId) { stream = "Combined"; showSyncConfirmation = false; externalPreview = null }
     LaunchedEffect(session.phase) { if (session.phase != RuntimePhase.RUNNING) externalPreview = null }
 
-    val editable = form.busy == null && !session.isRunning
+    val editable = form.busy == null && !session.isRunning && !openingProject
     val target = form.selectedTarget
     val probe = form.report?.runtimes?.firstOrNull { it.kind == target?.kind }
     val unavailable = target != null && target.kind != RuntimeKind.STATIC && probe?.available == false
@@ -110,6 +134,7 @@ fun RuntimePanel(
                         modifier = Modifier.testTag("runtime-stop"),
                     ) { Text(if (session.phase == RuntimePhase.STOPPING) "Stopping…" else "Stop") }
                     TextButton(onClick = form::save, enabled = editable && form.loaded) { Text("Save config") }
+                    RuntimeTerminalEntry(workingDirectory = form.root, enabled = editable && form.loaded)
                 }
                 if (form.busy != null) Text(form.busy.orEmpty(), style = MaterialTheme.typography.bodySmall)
                 if (form.busy != null || session.phase == RuntimePhase.PREPARING) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -140,20 +165,63 @@ fun RuntimePanel(
             item(key = "workspace") {
                 RuntimeSection("Workspace") {
                     Text(form.source.ifBlank { "No workspace selected" }, style = MaterialTheme.typography.labelLarge)
+                    form.nodeProject?.let { node ->
+                        Text("Node.js · ${node.name}", style = MaterialTheme.typography.titleSmall)
+                        Text("${node.manifest.scripts.size} package scripts · ${node.manifest.packageManager ?: "npm"}", style = MaterialTheme.typography.bodySmall)
+                    }
                     SelectionContainer { Text(form.root?.toString() ?: "Choose a folder or create an offline sample.", style = MaterialTheme.typography.bodyMedium) }
-                    if (form.source.startsWith("Selected folder")) {
-                        Text("The Android folder picker imports a local copy. Runtime sync targets that local copy, not the original document-provider folder; it does not write back through SAF.", style = MaterialTheme.typography.bodySmall)
+                    form.externalBinding?.let { binding ->
+                        Text("Linked folder: ${binding.displayName}", style = MaterialTheme.typography.labelMedium)
+                        Text("The editor and runtime use this private working copy. Sync sends saved edits and new files to the original folder and pulls external changes. Conflicting files stay unchanged; no deletions are propagated.", style = MaterialTheme.typography.bodySmall)
+                        OutlinedButton(onClick = { showExternalSyncConfirmation = true }, enabled = editable,
+                            modifier = Modifier.testTag("runtime-sync-original")) { Text("Sync with original folder…") }
+                    }
+                    form.externalSyncReport?.let { report ->
+                        Text(runtimeExternalSyncSummary(report), style = MaterialTheme.typography.bodySmall,
+                            color = if (report.complete) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                        val details = runtimeExternalSyncDetails(report)
+                        if (details.isNotEmpty()) SelectionContainer { Text(details, style = MaterialTheme.typography.bodySmall) }
                     }
                     Text("Runs read saved files. Save editor buffers before starting; opening this screen only detects targets and probes bundled runtimes.", style = MaterialTheme.typography.bodySmall)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = {
                             try {
-                                fileActions.pickDirectory { path -> if (path != null) form.select(path, "Selected folder · local import") }
+                                fileActions.pickDirectory { path -> if (path != null) openWorkspace(path, "Linked folder") }
                             } catch (failure: Exception) { form.showError(failure.message ?: "The folder picker is unavailable.") }
                         }, enabled = editable && fileActions.canPickDirectory) { Text("Choose folder") }
                         if (project.rootPath.isNotBlank()) TextButton(onClick = { form.select(project.rootPath, "Current project") }, enabled = editable) { Text("Use current project") }
                         TextButton(onClick = form::refresh, enabled = editable && form.root != null) { Text("Rescan targets") }
                     }
+                    OutlinedButton(onClick = {
+                        openingProject = true
+                        scope.launch {
+                            try {
+                                val root = withContext(Dispatchers.IO) { HonoProjectInstaller.create(context) }
+                                val result = backend.projects.openFolderInPlace(root.toString())
+                                if (!result.success) form.showError(result.message)
+                                else form.select(root.toString(), "Hono · upstream Node adapter")
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (failure: Exception) {
+                                form.showError(failure.message ?: "Could not create the Hono workspace")
+                            } finally { openingProject = false }
+                        }
+                    }, enabled = editable, modifier = Modifier.fillMaxWidth().testTag("runtime-hono-project")) { Text("Open real Hono project") }
+                    Text("Vendored upstream Hono Node adapter with its source and complete tests. Opening only copies source; dependency installation and scripts run after your explicit actions.", style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = {
+                        openingProject = true
+                        scope.launch {
+                            try {
+                                val root = withContext(Dispatchers.IO) { HonoProjectInstaller.create(context, HonoProjectInstaller.Project.WORKBENCH) }
+                                val result = backend.projects.openFolderInPlace(root.toString())
+                                if (!result.success) form.showError(result.message)
+                                else form.select(root.toString(), "Hono workbench · persistent application")
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (failure: Exception) { form.showError(failure.message ?: "Could not create the Hono application") }
+                            finally { openingProject = false }
+                        }
+                    }, enabled = editable, modifier = Modifier.fillMaxWidth().testTag("runtime-hono-application")) { Text("Open Hono dashboard application") }
+                    Text("A repository-owned Hono application: persistent authenticated CRUD, uploads, validation, streaming events and a browser dashboard. Install dependencies, then choose npm build/start or dev.", style = MaterialTheme.typography.bodySmall)
                     if (!fileActions.canPickDirectory) Text("This host does not provide a folder picker. Use the current project or a sample.", style = MaterialTheme.typography.bodySmall)
                     if (form.trusted) {
                         Text("Execution consent saved for this workspace.", style = MaterialTheme.typography.bodySmall)
@@ -171,6 +239,11 @@ fun RuntimePanel(
                             }
                         }
                     }
+                }
+            }
+            item(key = "runtime-capture") {
+                RuntimeSection("Local failure capture") {
+                    dev.ide.android.reliability.RuntimeCaptureControls(form.root, onOpenIncidents)
                 }
             }
             item(key = "run-config") {
@@ -204,7 +277,7 @@ fun RuntimePanel(
                         Text("Auto may mirror external storage into app-private storage for executable and symlink semantics. Direct runs write to the selected folder and can fail on external storage. An internal copy is not the editor's live files; sync is explicit after stopping.", style = MaterialTheme.typography.bodySmall)
                     }
                     OutlinedButton(onClick = { form.requestRun(install = true) }, enabled = editable && form.loaded && form.hasPackageManifest, modifier = Modifier.testTag("runtime-install")) { Text("Install npm dependencies…") }
-                    Text(if (developmentDownloads) "Developer distribution: explicit npm install may download untrusted packages. Lifecycle scripts stay disabled; native packages may fail. No automatic install, pip installer, or promised Vite/Next.js compatibility." else "APK-only distribution: dependency installation is restricted to the engine's audited policy. Arbitrary npm/pip downloads are not available; unsupported dependencies fail explicitly.", style = MaterialTheme.typography.bodySmall)
+                    Text("Explicit npm install downloads packages and runs their lifecycle scripts, including install/postinstall. npm run executes pre/post hooks normally. Nothing installs automatically. Native addons and downloaded binaries must support Android/Bionic; desktop Linux packages may not work.", style = MaterialTheme.typography.bodySmall)
                 }
             }
             if (session.projectRoot != null) {
@@ -287,7 +360,7 @@ fun RuntimePanel(
                             }
                             report.notes.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
                         } ?: Text(if (form.probing) "Checking installed binaries; availability is not assumed." else "Native runtime availability is unknown. Use Recheck for actual versions and errors.", style = MaterialTheme.typography.bodySmall)
-                        Text("Static preview is served in-app without Node or Python. Shell support is the bundled POSIX shell, not a Linux distribution or full interactive terminal. Bun, Cargo, arbitrary Linux executables, native npm/pip modules, and full desktop toolchain compatibility are not promised.", style = MaterialTheme.typography.bodySmall)
+                        Text("Static preview is served in-app without Node or Python. Regular runs use pipe output; Terminal opens a separate interactive PTY. The bundled POSIX shell is not a Linux distribution. Bun, Cargo, arbitrary Linux executables, and universal native npm/pip or desktop-toolchain compatibility are not promised.", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -317,7 +390,8 @@ fun RuntimePanel(
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(request.root.toString(), style = MaterialTheme.typography.bodySmall)
                     Text("Project code runs as this app's Android UID, with access to its permitted files and network. It is NOT isolated or sandboxed. Run only code you have reviewed and trust.")
-                    if (request.install) Text(if (developmentDownloads) "This developer build may download untrusted npm packages into the execution workspace. Lifecycle scripts are disabled, but dependencies still contain executable code; native modules may fail. The engine controls what is allowed. This does not install pip packages or guarantee Vite/Next.js support." else "This APK-only build applies a strict audited dependency policy and may refuse this project. No arbitrary npm/pip downloads are allowed. Lifecycle scripts remain disabled; the engine reports any refusal explicitly.")
+                    if (request.install) Text("This runs normal npm install in the execution workspace. It may download packages and immediately execute their preinstall/install/postinstall and other lifecycle scripts with this app's permissions. Only install dependencies you trust. Native addons and downloaded binaries need Android/Bionic compatibility; desktop Linux binaries may fail.")
+                    else Text("npm run also executes the script's pre/post hooks. Native addons and downloaded binaries must support Android/Bionic.")
                     Text(if (form.trusted) "Workspace trust is already saved. Dependency installation always requires this separate confirmation." else "Your execution consent is saved for this workspace, so ordinary runs do not ask again. You can revoke it with Forget workspace trust.", style = MaterialTheme.typography.bodySmall)
                 }
             },
@@ -327,9 +401,18 @@ fun RuntimePanel(
     }
     if (showSyncConfirmation) AlertDialog(
         onDismissRequest = { showSyncConfirmation = false }, title = { Text("Sync new runtime outputs?") },
-        text = { Text("Create only new output files in ${session.projectRoot}. Existing source files are NEVER replaced. Runtime modifications to existing files stay in the internal copy and are reported as conflicts requiring manual merge. Dependencies and deletions are not synced. Imported SAF folders are not written back to their original provider.") },
+        text = { Text("Create only new output files in ${session.projectRoot}. Existing source files are NEVER replaced. Runtime modifications to existing files stay in the internal copy and are reported as conflicts requiring manual merge. Dependencies and deletions are not synced. This runtime-output action does not write to document providers; use the separate Sync with original folder action for a linked workspace.") },
         confirmButton = { TextButton(onClick = { showSyncConfirmation = false; form.sync() }, enabled = !session.isRunning && currentSession) { Text("Sync new outputs") } },
         dismissButton = { TextButton(onClick = { showSyncConfirmation = false }) { Text("Cancel") } },
+    )
+    if (showExternalSyncConfirmation) AlertDialog(
+        onDismissRequest = { showExternalSyncConfirmation = false }, title = { Text("Sync with the original folder?") },
+        text = { Text("Save or close editor buffers first and stop running tools. This sends saved local edits/new files to the selected document folder and pulls external changes. Conflicts are reported instead of overwritten. No deletions are propagated. Reopen pulled files before editing them. Providers without safe staging/rename remain unsupported rather than truncating your originals.") },
+        confirmButton = { TextButton(enabled = editable && form.externalBinding != null, onClick = {
+            showExternalSyncConfirmation = false
+            form.syncExternal()
+        }) { Text("Sync saved files") } },
+        dismissButton = { TextButton(onClick = { showExternalSyncConfirmation = false }) { Text("Cancel") } },
     )
     externalPreview?.let { url ->
         AlertDialog(

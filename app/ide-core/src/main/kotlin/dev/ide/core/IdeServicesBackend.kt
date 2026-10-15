@@ -641,6 +641,7 @@ class IdeServicesBackend(
             rootPath = services.workspaceRoot.toString(),
             moduleCount = services.modules().size,
             compatibility = runCatching { services.isCompatibilityMode() }.getOrDefault(false),
+            isNode = services.store.workspace.projects.any { it.buildSystemId == dev.ide.core.node.NodeModuleType.BUILD_SYSTEM },
         )
 
     // ---- Compose preview (LayoutPreviewBackend; aggregator-level, uses the preview lane) ----

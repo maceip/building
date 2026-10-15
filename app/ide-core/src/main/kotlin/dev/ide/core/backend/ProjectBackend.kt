@@ -51,6 +51,7 @@ private const val MAX_PREVIEW_IMAGE_BYTES = 8L * 1024 * 1024
 internal fun ImportableKind.toUi(): UiProjectFolderKind = when (this) {
     ImportableKind.CODE_ASSIST -> UiProjectFolderKind.CODE_ASSIST
     ImportableKind.EXTERNAL -> UiProjectFolderKind.GRADLE
+    ImportableKind.NODE -> UiProjectFolderKind.NODE
     ImportableKind.NONE -> UiProjectFolderKind.UNKNOWN
 }
 
@@ -69,7 +70,7 @@ internal class ProjectBackend(private val ctx: BackendContext) : ProjectService 
      *  lists keyed by `rootPath`, where a repeat throws out of the measure pass instead of drawing twice. */
     override fun projects(): List<ProjectInfo> =
         ctx.manager?.list()
-            ?.map { ProjectInfo(it.name, it.rootPath, it.moduleCount, it.compatibility, it.isAndroid, it.lastOpened, it.unrecognized) }
+            ?.map { ProjectInfo(it.name, it.rootPath, it.moduleCount, it.compatibility, it.isAndroid, it.lastOpened, it.unrecognized, it.isNode) }
             ?.distinctBy { it.rootPath }
             ?: ctx.servicesOrNull?.let {
                 listOf(ProjectInfo(it.projectDisplayName(), it.workspaceRoot.toString(), it.modules().size, runCatching { it.isCompatibilityMode() }.getOrDefault(false)))
@@ -129,6 +130,24 @@ internal class ProjectBackend(private val ctx: BackendContext) : ProjectService 
                 // broken project doesn't silently strand the caller — the picker stays put on a false return.
                 log.error("Couldn't open the project at $rootPath", e)
                 false
+            }
+        }
+    }
+
+    override suspend fun openFolderInPlace(rootPath: String): UiProjectResult {
+        val mgr = ctx.manager ?: return UiProjectResult(false, "Opening a working folder requires a project manager")
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val root = mgr.inPlaceFolder(Paths.get(rootPath))
+                if (ctx.servicesOrNull?.workspaceRoot?.toRealPath() == root) {
+                    return@runCatching UiProjectResult(true, "Project is already open", root.toString())
+                }
+                val next = mgr.openFolderInPlace(root)
+                ctx.swapEngine(next)
+                UiProjectResult(true, "Opened ${next.projectDisplayName()} in place", next.workspaceRoot.toString())
+            }.getOrElse { e ->
+                log.error("Couldn't open working folder at $rootPath", e)
+                UiProjectResult(false, e.message ?: "Could not open the working folder")
             }
         }
     }

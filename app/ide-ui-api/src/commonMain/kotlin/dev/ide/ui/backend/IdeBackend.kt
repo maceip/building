@@ -203,7 +203,7 @@ data class UiProjectResult(val success: Boolean, val message: String, val rootPa
  * a [CODE_ASSIST] workspace is adopted as-is, a [GRADLE] folder still has to choose compatibility vs convert,
  * and [UNKNOWN] is reported rather than silently doing nothing.
  */
-enum class UiProjectFolderKind { CODE_ASSIST, GRADLE, UNKNOWN }
+enum class UiProjectFolderKind { CODE_ASSIST, GRADLE, NODE, UNKNOWN }
 
 // ---- Projects Store DTOs ----
 
@@ -1249,6 +1249,8 @@ data class ProjectInfo(
     /** True when the project was adopted from a folder no build system recognized (a clone), so it holds
      *  files the user can edit but nothing that can be built. See [UiUnrecognizedProject]. */
     val unrecognized: Boolean = false,
+    /** A package.json-owned project: its npm/Node run configuration lives in the Runtime workbench. */
+    val isNode: Boolean = false,
 )
 
 /** Options chosen in the Export-project screen (see [ProjectService.exportProject]). */

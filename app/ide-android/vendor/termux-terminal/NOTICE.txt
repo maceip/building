@@ -1,0 +1,22 @@
+Termux terminal-emulator and TerminalRenderer
+Pinned source: https://github.com/termux/termux-app
+Revision: 5b657c6adf4304e5198951ce815fe0205dcac29c (v0.118.3)
+
+These terminal libraries descend from Terminal Emulator for Android by Jack Palevich
+and contributors, with Termux changes by Fredrik Fornwall and contributors. They are
+Apache License 2.0 exceptions to the upstream app's GPLv3 license, as stated in the
+included UPSTREAM-LICENSE.txt. LICENSE-APACHE-2.0.txt contains the license text.
+All existing source notices are retained. Per-file upstream SHA-256 and paths are
+recorded in upstream.lock.json.
+
+Only VT parser, buffer, colors, Unicode width, key mapping and Canvas renderer are
+vendored. We do not use upstream TerminalSession, JNI, or TerminalView. In particular,
+we do not use its private FileDescriptor reflection. Our app owns the PTY lifecycle
+and public Android input/view integration.
+
+Local adaptations (not upstream):
+- TerminalSessionClient is narrowed to emulator callbacks/logging with no-op defaults,
+  removing references to the excluded upstream TerminalSession.
+- Logger has no global Android Log fallback, so parser tests run on a plain JVM.
+- TerminalEmulator uses java.util.Base64 (public on Android API 26 and JVM) in place
+  of android.util.Base64. Its VT state machine is otherwise unchanged.

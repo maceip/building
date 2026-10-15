@@ -4,6 +4,12 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.ide.android.workbench.runtime.AndroidExternalWorkspaces
+import dev.ide.android.workbench.runtime.ExternalSyncCancelled
+import dev.ide.android.workbench.runtime.ExternalSyncReport
+import dev.ide.android.workbench.runtime.ExternalWorkspaceBinding
+import dev.ide.workbench.runtime.NodeProjectBridge
+import dev.ide.workbench.runtime.NodeProjectRunInfo
 import dev.ide.workbench.runtime.RuntimeController
 import dev.ide.workbench.runtime.RuntimeKind
 import dev.ide.workbench.runtime.RuntimeProbeReport
@@ -22,6 +28,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 
 internal data class RuntimePendingAction(val root: Path, val config: RuntimeProjectConfig, val install: Boolean)
@@ -33,8 +40,10 @@ internal class RuntimePanelState(
     private val scope: CoroutineScope,
 ) {
     private val preferences = context.getSharedPreferences("runtime-workspaces", Context.MODE_PRIVATE)
+    private val externalWorkspaces = AndroidExternalWorkspaces(context)
     private var projectKey = "none"
     private var attachedProject: String? = null
+    private var attachedForceProjectRoot = false
     private var attached = false
     private var operation: Job? = null
     var root by mutableStateOf<Path?>(null); private set
@@ -42,6 +51,7 @@ internal class RuntimePanelState(
     var targets by mutableStateOf<List<RuntimeTarget>>(emptyList()); private set
     var loaded by mutableStateOf(false); private set
     var hasPackageManifest by mutableStateOf(false); private set
+    var nodeProject by mutableStateOf<NodeProjectRunInfo?>(null); private set
     var targetId by mutableStateOf<String?>(null)
     var arguments by mutableStateOf("")
     var environment by mutableStateOf("")
@@ -56,17 +66,20 @@ internal class RuntimePanelState(
     var error by mutableStateOf<String?>(null); private set
     var message by mutableStateOf<String?>(null); private set
     var syncReport by mutableStateOf<RuntimeSyncReport?>(null); private set
+    var externalBinding by mutableStateOf<ExternalWorkspaceBinding?>(null); private set
+    var externalSyncReport by mutableStateOf<ExternalSyncReport?>(null); private set
     var pending by mutableStateOf<RuntimePendingAction?>(null); private set
     var stdin by mutableStateOf("")
     val samples: List<RuntimeSample> = controller.samples()
     val selectedTarget: RuntimeTarget? get() = targets.firstOrNull { it.id == targetId }
 
-    suspend fun attachProject(path: String) {
+    suspend fun attachProject(path: String, forceProjectRoot: Boolean = false) {
         val normalized = path.takeIf { it.isNotBlank() }
-        if (attached && attachedProject == normalized) return
-        val changed = attached && attachedProject != normalized
+        if (attached && attachedProject == normalized && attachedForceProjectRoot == forceProjectRoot) return
+        val changed = attached && (attachedProject != normalized || attachedForceProjectRoot != forceProjectRoot)
         attached = true
         attachedProject = normalized
+        attachedForceProjectRoot = forceProjectRoot
         projectKey = runtimePreferenceKey(normalized ?: "no-project")
         pending = null
         loaded = false
@@ -76,7 +89,7 @@ internal class RuntimePanelState(
             operation = null
             busy = "Loading workspace"
             if (changed) controller.stop()
-            val selected = preferences.getString("selected-$projectKey", null)
+            val selected = if (forceProjectRoot) null else preferences.getString("selected-$projectKey", null)
             val candidate = selected ?: normalized
             if (candidate == null) {
                 root = null
@@ -84,7 +97,10 @@ internal class RuntimePanelState(
                 targets = emptyList()
                 targetId = null
                 hasPackageManifest = false
+                nodeProject = null
                 trusted = false
+                externalBinding = null
+                externalSyncReport = null
                 return
             }
             load(Path.of(candidate), if (selected != null) preferences.getString("source-$projectKey", "Selected workspace") ?: "Selected workspace" else "Current project")
@@ -111,7 +127,8 @@ internal class RuntimePanelState(
         pending = null
         load(Path.of(path), description)
         preferences.edit().putString("selected-$projectKey", root.toString()).putString("source-$projectKey", description).apply()
-        message = "Workspace loaded. No project code was executed."
+        message = if (externalBinding != null) "Linked working copy loaded. Save files locally, then use Sync with original folder to save back. No project code was executed."
+            else "Workspace loaded. No project code was executed."
     }
 
     fun refresh() {
@@ -121,7 +138,8 @@ internal class RuntimePanelState(
             else {
                 targets = controller.targets(current)
                 hasPackageManifest = withContext(Dispatchers.IO) { Files.isRegularFile(current.resolve("package.json")) }
-                if (targets.none { it.id == targetId }) targetId = preferredTarget(targets)?.id
+                nodeProject = withContext(Dispatchers.IO) { NodeProjectBridge.inspect(current) }
+                if (targets.none { it.id == targetId }) targetId = if (nodeProject != null) nodeProject?.selectedTargetId else preferredTarget(targets)?.id
             }
             message = "Run targets refreshed. Unsaved editor buffers are not read; save files before running."
         }
@@ -200,6 +218,39 @@ internal class RuntimePanelState(
         message = null
     }
 
+    /** Only call from the explicit original-folder sync confirmation, never on Run/open/selection. */
+    fun syncExternal() {
+        val current = root ?: return
+        action("Syncing with original folder") {
+            check(!controller.state.value.isRunning) { "Stop the runtime and save editor buffers before syncing with the original folder." }
+            check(externalBinding != null) { "This workspace is not linked to an original folder." }
+            externalSyncReport = null
+            val workerReport = java.util.concurrent.atomic.AtomicReference<ExternalSyncReport?>()
+            try {
+                val result = runInterruptible(Dispatchers.IO) {
+                    try { externalWorkspaces.sync(current).also(workerReport::set) }
+                    catch (cancelled: ExternalSyncCancelled) { workerReport.set(cancelled.report); throw cancelled }
+                }
+                externalSyncReport = result
+                externalBinding = withContext(Dispatchers.IO) { externalWorkspaces.binding(current) }
+                if (result.complete) message = runtimeExternalSyncSummary(result)
+                else error = runtimeExternalSyncSummary(result)
+                if (result.pulled > 0) {
+                    targets = controller.targets(current)
+                    hasPackageManifest = withContext(Dispatchers.IO) { Files.isRegularFile(current.resolve("package.json")) }
+                    nodeProject = withContext(Dispatchers.IO) { NodeProjectBridge.inspect(current) }
+                    if (targets.none { it.id == targetId }) targetId = if (nodeProject != null) nodeProject?.selectedTargetId else preferredTarget(targets)?.id
+                }
+            } catch (cancelled: CancellationException) {
+                var cause: Throwable? = cancelled
+                while (cause != null && cause !is ExternalSyncCancelled) cause = cause.cause
+                externalSyncReport = ((cause as? ExternalSyncCancelled)?.report ?: workerReport.get() ?: ExternalSyncReport()).copy(cancelled = true)
+                error = runtimeExternalSyncSummary(requireNotNull(externalSyncReport))
+                throw cancelled
+            }
+        }
+    }
+
     fun sendInput() {
         try {
             require(stdin.length <= 64 * 1024) { "Input must not exceed 64 KiB." }
@@ -233,9 +284,12 @@ internal class RuntimePanelState(
         source = description
         trusted = false
         hasPackageManifest = false
+        nodeProject = null
         error = null
         message = null
         syncReport = null
+        externalBinding = null
+        externalSyncReport = null
         targets = emptyList()
         targetId = null
         val canonical = withContext(Dispatchers.IO) {
@@ -243,7 +297,8 @@ internal class RuntimePanelState(
             path.toRealPath()
         }
         root = canonical
-        source = description
+        externalBinding = withContext(Dispatchers.IO) { externalWorkspaces.binding(canonical) }
+        source = externalBinding?.let { "Linked working copy · ${it.displayName}" } ?: description
         trusted = preferences.getBoolean("trusted-${runtimePreferenceKey(canonical.toString())}", false)
         val config = controller.config(canonical)
         arguments = RuntimeArguments.format(config.args)
@@ -253,7 +308,9 @@ internal class RuntimePanelState(
         workspaceMode = config.workspaceMode
         hasPackageManifest = withContext(Dispatchers.IO) { Files.isRegularFile(canonical.resolve("package.json")) }
         targets = controller.targets(canonical)
-        targetId = config.targetId?.takeIf { id -> targets.any { it.id == id } } ?: preferredTarget(targets)?.id
+        nodeProject = withContext(Dispatchers.IO) { NodeProjectBridge.inspect(canonical) }
+        targetId = config.targetId?.takeIf { id -> targets.any { it.id == id } }
+            ?: if (nodeProject != null) nodeProject?.selectedTargetId else preferredTarget(targets)?.id
         loaded = true
     }
 

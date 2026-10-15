@@ -1,7 +1,7 @@
 {
   "commit": "3885d8e1577097760b3bc4ee8d247ef367545d8e",
   "baseUrl": "https://raw.githubusercontent.com/termux/termux-packages/3885d8e1577097760b3bc4ee8d247ef367545d8e/packages/",
-  "aliases": {"ncurses-ui-libs":"ncurses","python-ensurepip-wheels":"python"},
+  "aliases": {"ncurses-ui-libs":"ncurses","python-ensurepip-wheels":"python","clang":"libllvm","llvm":"libllvm","lld":"libllvm","libcompiler-rt":"libllvm"},
   "recipes": {
     "c-ares": {"license":"MIT","sha256":"39364f4135281f12c103e20468f8776c4dec2008f268d3cea73c9d17ff3441d3"},
     "ca-certificates": {"license":"MPL-2.0","sha256":"49346cd737c0c8f423f26cb0cb04467f93fb9d69c9c1fb1aff5840a9ea215861"},
@@ -27,6 +27,24 @@
     "libandroid-posix-semaphore": {"license":"MIT","sha256":"ef7431b10b8f6c9e60e0c785e435138f6de39fa2a301a6fe73fabf2948dd6fec"},
     "libcrypt": {"license":"BSD-2-Clause","sha256":"8d3d827030f2d51687dcf7fcb1a7dce8f79730bdbefbd5b90492def19ea43629"},
     "readline": {"license":"GPL-3.0","sha256":"29e24da6099650f92703b2772e9515cfc6004901733b1c8a4dbb3938b85762e3"},
-    "python-pip": {"license":"MIT and vendored notices","sha256":"d183a90da94435a9a91c5b26fc787660fe73c311b9e429005d7796bfd8ce0054"}
+    "python-pip": {"license":"MIT and vendored notices","sha256":"d183a90da94435a9a91c5b26fc787660fe73c311b9e429005d7796bfd8ce0054"},
+    "libllvm": {"license":"Apache-2.0, NCSA","sha256":"55d48a1f31939fb7585ce8320110a6bbe523a28665cb668333eeb56a566e8877"},
+    "make": {"license":"GPL-3.0","sha256":"8a55794717f4ea018324b1bbb8f2dfd549dd054152798c913a40d49f4baf432c"},
+    "ndk-sysroot": {"license":"NCSA","sha256":"a5b6f7f77bd2fcbd6b809ba92b559940321a59e142504ec5e6bc5044b6a96221"},
+    "libxml2": {"license":"MIT","sha256":"52de9d390c6594e2a9bc45b1301a21fadc157b20a7c203d9e4eb3a841b058f7c"},
+    "libandroid-glob": {"license":"BSD 3-Clause","sha256":"d21990594578e13a1b792508e023c9b385fd837c7f2ac0b851ada50a5c953132"},
+    "libiconv": {"license":"LGPL-2.1, GPL-3.0","sha256":"5542ba656ce53cf6c13659afe25c6fe69e254d2b9e05b0d8105f4f4b3dc9cb15"},
+    "cmake": {"license":"BSD 3-Clause","sha256":"36556f15fe7e055c6d4ba10adf580802a1fe50b45f3b8ebb6a75b88cc5b492e4"},
+    "ninja": {"license":"Apache-2.0","sha256":"6a3c1ec0da0494531079bed1604965eb2163e602781ba12be04d3e60ef5cddbe"},
+    "libandroid-spawn": {"license":"BSD 2-Clause","sha256":"f4b450c8c352b583c0733eb4fe5eba255e0c3ef300902d609f6fe95198ac945b"},
+    "libarchive": {"license":"BSD 2-Clause","sha256":"c22a609e59872c8f0e0d3d0fe4a027c6fd8e4bcd79e9e937e219f968ac94f8de"},
+    "libcurl": {"license":"MIT","sha256":"c29eb9e8e2a264902dccfd40c6725ed44ab32d4fd3dbe5d7bddc95806f683697"},
+    "jsoncpp": {"license":"MIT","sha256":"ddd00bd024424d9919e9ce7837c544f4501253b655c88a51288cff10423c0e28"},
+    "libuv": {"license":"MIT, BSD 2-Clause, ISC, BSD 3-Clause","sha256":"5306178facd555b28439aae348d0e561c541cdaace4d04ab1eeec540997b2dfc"},
+    "rhash": {"license":"MIT","sha256":"471c7efe285a2d81169dbc5fcc0e339ab1a47317021057eea8ab0028318c0f1f"},
+    "libnghttp2": {"license":"MIT","sha256":"0860290bcf314619c3744d9ae75ab7c7b20951baf2013e9e04dafc7f29b55447"},
+    "libnghttp3": {"license":"MIT","sha256":"3c36d3fb8a483efaa0252a113f87e283e83f549632bf22562e0e7415e71cb30f"},
+    "libngtcp2": {"license":"MIT","sha256":"622048f19724f9f28c47909be37d94a751c5fd14b6eb33557bf53da26ea7c5ff"},
+    "libssh2": {"license":"BSD 3-Clause","sha256":"222db4a13edf104316a53bc4c57214b9c351e6a816286c63e1850ca07fe75067"}
   }
 }

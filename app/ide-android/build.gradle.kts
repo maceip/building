@@ -487,8 +487,6 @@ val realAdmobNativeUnitsByPlacement = mapOf(
     (findProperty("ADMOB_NATIVE_UNIT_$placement") as String?) ?: System.getenv("ADMOB_NATIVE_UNIT_$placement") ?: default
 }.filterValues { it.isNotBlank() }.entries.joinToString(";") { "${it.key}=${it.value}" }
 
-val developerRuntimePackEnabled = providers.gradleProperty("DEVELOPER_RUNTIME_PACK")
-    .getOrElse("false").toBooleanStrict()
 val appEngineDelivery = providers.gradleProperty("IDE_APP_ENGINE_DELIVERY").getOrElse("none")
 val selectedAppEngine = providers.gradleProperty("IDE_APP_ENGINE").getOrElse("python")
 require(appEngineDelivery in setOf("none", "direct", "play"))
@@ -561,7 +559,7 @@ android {
         buildConfigField("String", "AD_NATIVE_UNIT_IDS", "\"\"")
         buildConfigField("boolean", "ADS_ENABLED", "true")
         buildConfigField("boolean", "NATIVE_TOOLCHAIN_DOWNLOADS_ENABLED", "false")
-        buildConfigField("boolean", "DEVELOPER_RUNTIME_PACK_BUNDLED", developerRuntimePackEnabled.toString())
+        buildConfigField("boolean", "DEVELOPER_RUNTIME_PACK_BUNDLED", "true")
         buildConfigField("String", "APP_ENGINE_DELIVERY", "\"$appEngineDelivery\"")
         buildConfigField("String", "APP_ENGINE", "\"$selectedAppEngine\"")
         resValue("string", "runtime_engine_feature_title", "Embedded app runtime")
@@ -576,6 +574,14 @@ android {
     // Stage the generated assets (kotlin-stdlib.jar, kotlinc-resources.zip) into the merged assets so the
     // on-device compiler can load them. AGP 9 disallows a Provider here, so register the static dirs the
     // tasks write to; ordering is carried by the `preBuild.dependsOn(...)` below (same pattern as aapt2).
+    sourceSets.getByName("main").java.srcDir("vendor/termux-terminal/src")
+    sourceSets.getByName("main").java.srcDir("src/terminal/java")
+    sourceSets.getByName("main").kotlin.directories += "src/terminal/kotlin"
+    sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("runtime-terminal/jniLibs").get().asFile)
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("runtime-terminal/assets").get().asFile)
+    sourceSets.getByName("androidTest").java.srcDir("src/terminalTest/java")
+    sourceSets.getByName("androidTest").kotlin.directories += "src/terminalTest/kotlin"
+    buildTypes.configureEach { proguardFiles("terminal-pty.pro") }
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("android-jar-asset").get().asFile)
     sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("native-sdk-tools/jniLibs").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("native-sdk-tools/assets").get().asFile)
@@ -596,10 +602,9 @@ android {
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("applog-runtime-asset").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("app-engine-sdk-asset").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("gradle-tooling-asset").get().asFile)
-    if (developerRuntimePackEnabled) {
-        sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("developer-runtime-pack/assets").get().asFile)
-        sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("developer-runtime-pack/jniLibs").get().asFile)
-    }
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("hono-project-asset").get().asFile)
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("developer-runtime-pack/assets").get().asFile)
+    sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("developer-runtime-pack/jniLibs").get().asFile)
     sourceSets.getByName("androidTest").assets.srcDir(layout.buildDirectory.dir("vm-spike-asset").get().asFile)
     sourceSets.getByName("androidTest").assets.srcDir(layout.buildDirectory.dir("moshi-libs-asset").get().asFile)
     // The Kotlin-analysis parity corpus and its goldens, staged as test assets so the instrumented suite
@@ -855,6 +860,8 @@ val fetchAndroidBuildTools = tasks.register("fetchAndroidBuildTools") {
 // The tooling fat jar is exec'd, not loaded. Staging it as an asset (and excluding the same bytes
 // from Java resources above) keeps it out of the IDE's dex classpath.
 apply(from = "runtime-pack.gradle.kts")
+apply(from = "terminal-pty.gradle.kts")
+apply(from = "hono-project.gradle.kts")
 
 val stageGradleToolingAsset = tasks.register<Copy>("stageGradleToolingAsset") {
     description = "Stage the Gradle tooling fat jar as an APK asset the host extracts and execs."

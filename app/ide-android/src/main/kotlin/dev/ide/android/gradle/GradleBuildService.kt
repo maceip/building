@@ -70,7 +70,8 @@ class GradleBuildService : Service() {
         val java = javaHome.resolve("bin/java").toString()
         val process = ProcessBuilder(linker, java, "-jar", jar.toString())
             .redirectError(ProcessBuilder.Redirect.PIPE)
-            .apply { environment().putAll(env) }
+            // PrefixProbe already copied only Android system roots. Never inherit provider/API keys.
+            .apply { environment().clear(); environment().putAll(env) }
             .start()
         live.add(process)
         enterForeground("Gradle is running")

@@ -74,6 +74,7 @@ internal class FileBackend(private val ctx: BackendContext) : FileService {
         if (ctx.services.modules().isEmpty()) return allFilesTree()
         val moduleDirs = ctx.services.modules().mapNotNull { ctx.services.moduleRoot(it)?.normalize() }.toSet()
         val moduleNodes = ctx.services.modules().sortedBy { it.name }.map { module ->
+            if (module.type.id == "node") return@map nodeModuleNode(module)
             val moduleDir = ctx.services.moduleRoot(module)
             val children = ArrayList<TreeNode>()
             // The AndroidManifest sits above the source roots, so surface it explicitly (first, like Studio).
@@ -114,6 +115,30 @@ internal class FileBackend(private val ctx: BackendContext) : FileService {
             iconId = "workspace",
             children = moduleNodes + rootFiles,
             dirPath = root.toString(),
+        )
+    }
+
+    /** Node sources are ordinary directories, not Java packages; keep package.json and dot-configs editable. */
+    private fun nodeModuleNode(module: Module): TreeNode {
+        val root = requireNotNull(ctx.services.moduleRoot(module)).toAbsolutePath().normalize()
+        fun children(dir: Path): List<TreeNode> {
+            val entries = runCatching { Files.newDirectoryStream(dir).use { it.toList() } }.getOrDefault(emptyList())
+            val directories = entries.filter {
+                Files.isDirectory(it, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                    it.fileName.toString() !in setOf("node_modules", ".git", ".platform", ".gradle", ".idea", ".pnpm-store")
+            }.sortedBy { it.fileName.toString().lowercase() }
+            val files = entries.filter { Files.isRegularFile(it, java.nio.file.LinkOption.NOFOLLOW_LINKS) }
+                .sortedBy { it.fileName.toString().lowercase() }
+            return directories.map { path ->
+                TreeNode(
+                    id = "dir:$path", name = path.fileName.toString(), kind = NodeKind.Folder,
+                    filePath = null, iconId = "folder", children = children(path), dirPath = path.toString(),
+                )
+            } + files.map { fileNode(it, module) }
+        }
+        return TreeNode(
+            id = "module:${module.name}", name = "Node.js", kind = NodeKind.Module,
+            filePath = null, iconId = "module", children = children(root), dirPath = root.toString(),
         )
     }
 

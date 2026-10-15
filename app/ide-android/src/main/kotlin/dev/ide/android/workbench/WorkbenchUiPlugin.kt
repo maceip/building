@@ -55,6 +55,7 @@ val LocalWorkbenchRuntime = staticCompositionLocalOf<RuntimeController?> { null 
 object WorkbenchUiPlugin : UiPlugin {
     override val id: String = "developer-workbench"
     const val SCREEN_ID = "developer.workbench"
+    const val NODE_SCREEN_ID = "developer.workbench.node"
 
     override fun contributeUi(scope: UiContributionScope) {
         scope.screen(
@@ -63,6 +64,20 @@ object WorkbenchUiPlugin : UiPlugin {
                 toolDescription = "Local runtimes, app quality checks, and Play publishing"
                 toolIconId = "build"
             },
+        )
+        scope.screen(
+            ScreenContribution(NODE_SCREEN_ID, "Run Node project") { WorkbenchScreen(it, forceProjectRoot = true) },
+        )
+        scope.action(
+            SimpleUiAction(
+                id = "ui.runNodeProject",
+                text = "Run Node project",
+                description = "Choose an npm script or Node file from this project's saved Runtime configuration",
+                iconId = "run",
+                places = setOf(UiActionPlaces.MORE_MENU, UiActionPlaces.MAIN_OVERFLOW, UiActionPlaces.TOOL_STRIPE, UiActionPlaces.COMMAND_PALETTE),
+                order = 60,
+                visible = { runCatching { it.backend.project.isNode }.getOrDefault(false) },
+            ) { it.navigate(NODE_SCREEN_ID) },
         )
         scope.action(
             SimpleUiAction(
@@ -93,7 +108,7 @@ object WorkbenchUiPlugin : UiPlugin {
 }
 
 @Composable
-private fun WorkbenchScreen(context: ScreenContext) {
+private fun WorkbenchScreen(context: ScreenContext, forceProjectRoot: Boolean = false) {
     val backend = remember(context.backend) { WorkbenchBackend(context.backend) }
     val appContext = LocalContext.current.applicationContext
     val repairProject = dev.ide.android.reliability.repair.LocalIncidentRepairProject.current
@@ -125,7 +140,7 @@ private fun WorkbenchScreen(context: ScreenContext) {
             ) {
                 TextButton(onClick = context::back) { Text("Back") }
                 Column(Modifier.weight(1f).padding(8.dp)) {
-                    Text("Developer workbench", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(if (forceProjectRoot) "Run Node project" else "Developer workbench", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
                         backend.project.name.ifBlank { "Choose a workspace in a tool below" },
                         style = MaterialTheme.typography.labelMedium,
@@ -147,7 +162,7 @@ private fun WorkbenchScreen(context: ScreenContext) {
             }
             if (tab == 1) {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    TextButton(onClick = { qualitySection = 0 }) { Text("App incidents") }
+                    TextButton(onClick = { qualitySection = 0 }) { Text("Local incidents") }
                     TextButton(onClick = { qualitySection = 3 }) { Text("AI repair") }
                     TextButton(onClick = { qualitySection = 1 }) { Text("Checks") }
                     TextButton(onClick = { qualitySection = 2 }) { Text("Scenarios") }
@@ -155,7 +170,8 @@ private fun WorkbenchScreen(context: ScreenContext) {
             }
             when (tab) {
                 0 -> if (runtime != null) {
-                    RuntimePanel(runtime, backend, context.fileActions, Modifier.weight(1f))
+                    RuntimePanel(runtime, backend, context.fileActions, Modifier.weight(1f), forceProjectRoot = forceProjectRoot,
+                        onOpenIncidents = { tab = 1; qualitySection = 0 })
                 } else {
                     Text("The Android runtime host is unavailable.", Modifier.padding(20.dp))
                 }
@@ -163,6 +179,7 @@ private fun WorkbenchScreen(context: ScreenContext) {
                     ReliabilityPanel(
                         backend, context.fileActions, Modifier.weight(1f),
                         onIncidentSelected = { incident ->
+                            require(incident.key.origin == dev.ide.workbench.reliability.IncidentOrigin.SDK_APPLICATION)
                             selectedIncident = dev.ide.agent.IncidentIdentity(
                                 incident.key.packageName, incident.key.buildId, incident.key.sessionId, incident.key.eventId,
                             )

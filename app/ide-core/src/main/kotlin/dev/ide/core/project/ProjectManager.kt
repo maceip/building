@@ -25,6 +25,7 @@ import dev.ide.core.applog.AppLogChannel
 import dev.ide.core.gradle.GradleImport
 import dev.ide.core.gradle.GradleProjectExport
 import dev.ide.core.notify.UserMessageCenter
+import dev.ide.core.node.NodeModuleType
 import dev.ide.core.plugins.KnownPlugin
 import dev.ide.core.plugins.PluginChanges
 import dev.ide.core.sdk.SdkManagerService
@@ -99,6 +100,8 @@ data class ProjectSummary(
     /** True when the project was adopted from a folder no build system recognized, so the picker can say so
      *  rather than presenting it as a CodeAssist project it is not. */
     val unrecognized: Boolean = false,
+    /** package.json owns this project; it runs through the Node Runtime workbench. */
+    val isNode: Boolean = false,
 )
 
 /** What [ProjectManager.inspectFolder] found in a folder offered for import. */
@@ -109,6 +112,9 @@ enum class ImportableKind {
     /** A foreign build system some [dev.ide.model.sync.ProjectImporter] claims (Gradle today) -- read
      *  statically into a native workspace, so it opens in compatibility mode. */
     EXTERNAL,
+
+    /** A statically read package.json project. No Gradle conversion choice or automatic installation. */
+    NODE,
 
     /** Neither -- the caller should say so rather than silently doing nothing. */
     NONE,
@@ -156,6 +162,9 @@ class ProjectManager private constructor(
     private val pluginSources: List<dev.ide.plugin.external.PluginSource> = emptyList(),
     /** The running IDE's version, checked against an installed plugin's `minHostVersion`. */
     private val hostVersion: String? = null,
+    /** Host-owned private roots for linked folders, laid out as <root>/<binding-id>/project.
+     *  Never read from project files: a repository cannot authorize an arbitrary in-place workspace. */
+    private val permittedInPlaceRoots: List<Path> = emptyList(),
 ) {
     private val log = dev.ide.platform.log.Log.logger("ide.projects")
 
@@ -293,11 +302,15 @@ class ProjectManager private constructor(
         // the home screen, so a throw here (AccessDeniedException, seen in the field) escapes through
         // ProjectBackend.projects into composition and takes the app down before it can draw anything --
         // leaving no way back in. An empty picker is recoverable; a boot loop is not.
+        val prefs = loadPrefs()
         val dirs = runCatching { Files.newDirectoryStream(projectsRoot).use { it.toList() } }
             .onFailure { log.warn("project list: $projectsRoot could not be read", it) }
-            .getOrElse { return emptyList() }
-        val prefs = loadPrefs()
-        return dirs
+            .getOrDefault(emptyList())
+        val linked = prefs.getProperty(IN_PLACE_PROJECTS_PREF).orEmpty().lineSequence()
+            .filter { it.isNotBlank() }
+            .mapNotNull { runCatching { inPlaceFolder(Paths.get(it)) }.getOrNull() }
+            .toList()
+        return (dirs + linked).distinctBy { it.toAbsolutePath().normalize() }
             .filter { runCatching { Files.isDirectory(it) && ModelPersistence.exists(it.toString()) }.getOrDefault(false) }
             .map { dir ->
                 val proj = runCatching { ModelPersistence.load(dir.toString()) }.getOrNull()?.projects?.firstOrNull()
@@ -305,18 +318,21 @@ class ProjectManager private constructor(
                     proj?.name ?: dir.fileName.toString(),
                     dir.toString(),
                     proj?.modules?.size ?: 0,
-                    compatibility = ExternalProjectMarker.exists(dir),
+                    compatibility = ExternalProjectMarker.exists(dir) && proj?.buildSystemId != NodeModuleType.BUILD_SYSTEM.value,
                     isAndroid = proj?.modules?.any { m -> m.facets.any { it.tomlTable == AndroidFacetCodec.tomlTable } } ?: false,
                     lastOpened = prefs.getProperty(openedKey(dir))?.toLongOrNull() ?: 0L,
                     // Same two conditions as IdeServices.isUnrecognizedProject, read without opening the engine.
                     unrecognized = proj?.modules.isNullOrEmpty() && UnrecognizedProjectMarker.exists(dir),
+                    isNode = proj?.buildSystemId == NodeModuleType.BUILD_SYSTEM.value,
                 )
             }
             .sortedWith(compareByDescending<ProjectSummary> { it.lastOpened }.thenBy { it.name.lowercase() })
     }
 
     /** Prefs key holding a project's last-opened timestamp (keyed by its unique workspace directory name). */
-    private fun openedKey(dir: Path): String = "project.opened.${dir.fileName}"
+    private fun openedKey(dir: Path): String =
+        if (dir.toAbsolutePath().normalize().parent == projectsRoot.toAbsolutePath().normalize()) "project.opened.${dir.fileName}"
+        else "project.opened.in-place.${dir.toAbsolutePath().normalize()}"
 
     /**
      * Stamp [dir] as opened *now*, so the picker floats it to the top. Guarded to a direct child of
@@ -325,7 +341,8 @@ class ProjectManager private constructor(
      */
     private fun recordOpened(dir: Path) {
         val normalized = dir.toAbsolutePath().normalize()
-        if (normalized.parent != projectsRoot.toAbsolutePath().normalize()) return
+        if (normalized.parent != projectsRoot.toAbsolutePath().normalize() &&
+            runCatching { inPlaceFolder(normalized) }.isFailure) return
         runCatching { setPreference(openedKey(normalized), System.currentTimeMillis().toString()) }
     }
 
@@ -350,7 +367,15 @@ class ProjectManager private constructor(
 
     fun open(rootPath: String, buildOnly: Boolean = false): IdeServices {
         applyMemoryMode()
-        return IdeServices.openAt(Paths.get(rootPath), sdk(), sharedCachesRoot = homeDir, env = env, buildOnly = buildOnly)
+        val root = Paths.get(rootPath)
+        // Earlier versions adopted package.json clones as UNKNOWN with an empty model. Re-read only that
+        // explicit legacy case; never change a native/Gradle project because somebody added package.json.
+        if (UnrecognizedProjectMarker.exists(root) &&
+            runCatching { ModelPersistence.load(root.toString()).projects.all { it.modules.isEmpty() } }.getOrDefault(false) &&
+            ProjectSyncService.importerFor(env.platform.extensions, root)?.id == NodeModuleType.BUILD_SYSTEM) {
+            if (IdeServices.importExternalProjectAt(root, sdk(), languageLevel, env)) UnrecognizedProjectMarker.clear(root)
+        }
+        return IdeServices.openAt(root, sdk(), sharedCachesRoot = homeDir, env = env, buildOnly = buildOnly)
             // A build-only daemon open isn't a user "access" — don't let a background build reorder the picker.
             .also { if (!buildOnly) recordOpened(Paths.get(rootPath)) }
     }
@@ -392,14 +417,20 @@ class ProjectManager private constructor(
      * import flow). Detection only — nothing is copied or opened. Mirrors the branching in
      * [importExternalProject], so the two can't disagree about what a folder is.
      */
-    fun inspectFolder(dir: Path): ImportableKind = when {
-        !Files.isDirectory(dir) -> ImportableKind.NONE
-        ModelPersistence.exists(dir.toString()) -> ImportableKind.CODE_ASSIST
-        ProjectSyncService.importerFor(env.platform.extensions, dir) != null -> ImportableKind.EXTERNAL
-        else -> ImportableKind.NONE
+    fun inspectFolder(dir: Path): ImportableKind {
+        if (!Files.isDirectory(dir)) return ImportableKind.NONE
+        if (ModelPersistence.exists(dir.toString())) return ImportableKind.CODE_ASSIST
+        val importer = ProjectSyncService.importerFor(env.platform.extensions, dir) ?: return ImportableKind.NONE
+        return if (importer.id == NodeModuleType.BUILD_SYSTEM) ImportableKind.NODE else ImportableKind.EXTERNAL
     }
 
     fun importExternalProject(sourceDir: Path): IdeServices? {
+        // The Android host's linked picker already materialized an authorized private working copy.
+        // Copying it again would disconnect the editor/runtime root from the retained provider binding.
+        // This authority is checked from host constructor roots, never a marker inside the repository.
+        if (isAuthorizedLinkedFolder(sourceDir)) {
+            return runCatching { openWorkingFolder(sourceDir, allowExternalImport = true) }.getOrNull()
+        }
         // Already a CodeAssist workspace: adopt it verbatim. No importer claims such a folder -- there is no
         // foreign build system to translate, the workspace IS the model -- so before this it was rejected as
         // "not an importable Gradle project", and a project folder that had dropped out of the picker (moved
@@ -477,10 +508,82 @@ class ProjectManager private constructor(
         // An importer claiming the folder can still fail on its contents (an unreadable build script). The
         // fallback is the same as for a folder nothing claimed: an editable project beats no project.
         val adopted = kind == ImportableKind.CODE_ASSIST ||
-            (kind == ImportableKind.EXTERNAL && runCatching { adoptProjectInPlace(here) }.getOrDefault(false))
+            (kind in setOf(ImportableKind.EXTERNAL, ImportableKind.NODE) && runCatching { adoptProjectInPlace(here) }.getOrDefault(false))
         if (adopted) return kind
         IdeServices.adoptPlainFolderAt(here, sdk(), sharedCachesRoot = homeDir, env = env, origin = origin)
         return ImportableKind.NONE
+    }
+
+    /**
+     * Open an authorized local working folder without a second import copy. Authorization comes from the
+     * host's constructor paths, not from a file supplied by the repository. Plain folders remain editable;
+     * Node reads package.json only. Other external build systems retain their normal explicit import flow.
+     */
+    fun openFolderInPlace(dir: Path): IdeServices = openWorkingFolder(dir, allowExternalImport = false)
+
+    private fun openWorkingFolder(dir: Path, allowExternalImport: Boolean): IdeServices {
+        val here = inPlaceFolder(dir)
+        if (!ModelPersistence.exists(here.toString())) {
+            when (inspectFolder(here)) {
+                ImportableKind.NODE -> check(IdeServices.importExternalProjectAt(here, sdk(), languageLevel, env)) {
+                    "Could not import package.json. No project scripts were executed."
+                }
+                ImportableKind.NONE -> IdeServices.adoptPlainFolderAt(here, sdk(), sharedCachesRoot = homeDir, env = env)
+                ImportableKind.EXTERNAL -> {
+                    check(allowExternalImport) { "Use the existing project import flow for this build system." }
+                    // Only the explicit normal import reaches this arm. Its existing importer/Gradle
+                    // execution opt-in and caller's conversion choice remain exactly the same.
+                    check(IdeServices.importExternalProjectAt(here, sdk(), languageLevel, env)) { "Could not import the project's build files." }
+                }
+                ImportableKind.CODE_ASSIST -> Unit
+            }
+        }
+        val engine = open(here.toString())
+        if (here.parent != projectsRoot.toRealPath()) {
+            val linked = preference(IN_PLACE_PROJECTS_PREF).orEmpty().lineSequence().filter { it.isNotBlank() }.toMutableSet()
+            linked += here.toString()
+            setPreference(IN_PLACE_PROJECTS_PREF, linked.sorted().joinToString("\n"))
+        }
+        return engine
+    }
+
+    /** Only host-whitelisted linked roots qualify; an ordinary folder import must still copy its source. */
+    internal fun isAuthorizedLinkedFolder(dir: Path): Boolean = runCatching {
+        inPlaceFolder(dir).parent != projectsRoot.toRealPath()
+    }.getOrDefault(false)
+
+    /** Rechecked when opening/listing: a saved recent-project path never grants authority by itself. */
+    internal fun inPlaceFolder(dir: Path): Path {
+        val requested = dir.toAbsolutePath().normalize()
+        require(Files.isDirectory(requested, java.nio.file.LinkOption.NOFOLLOW_LINKS)) { "Working folder is missing or is a symlink." }
+        val real = requested.toRealPath()
+        val projects = projectsRoot.toRealPath()
+        if (requested.parent in setOf(projectsRoot.toAbsolutePath().normalize(), projects) && real.parent == projects) return real
+        for (configured in permittedInPlaceRoots) {
+            val configuredPath = configured.toAbsolutePath().normalize()
+            if (!Files.isDirectory(configuredPath, java.nio.file.LinkOption.NOFOLLOW_LINKS)) continue
+            val canonicalBase = configuredPath.toRealPath()
+            // Host aliases (/var on macOS, /data aliases on Android) and our persisted canonical paths
+            // must name the same approved root. Descendant symlinks are still rejected below.
+            val base = when {
+                requested.startsWith(configuredPath) -> configuredPath
+                requested.startsWith(canonicalBase) -> canonicalBase
+                else -> continue
+            }
+            val relative = base.relativize(requested)
+            if (relative.nameCount != 2 || relative.getName(1).toString() != "project") continue
+            var current = base
+            var safe = true
+            for (segment in relative) {
+                current = current.resolve(segment)
+                if (Files.isSymbolicLink(current) || !Files.isDirectory(current, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    safe = false
+                    break
+                }
+            }
+            if (safe && real == canonicalBase.resolve(relative)) return real
+        }
+        error("Working folder is outside the host-authorized project locations.")
     }
 
     /**
@@ -863,9 +966,14 @@ class ProjectManager private constructor(
         private const val LEGACY_IMPORTED_PREF = "legacy.projects.imported"
         private const val DISABLED_PLUGINS_KEY = "plugins.disabled"
         private const val CONSENTED_PLUGINS_KEY = "plugins.consented"
+        private const val IN_PLACE_PROJECTS_PREF = "projects.in-place"
 
         /** Desktop host: an installed Android SDK if present (so `android.*` resolves), else a detected JDK; Java 17. */
-        fun desktop(projectsRoot: Path, legacyDataDirs: List<Path> = emptyList()): ProjectManager =
+        fun desktop(
+            projectsRoot: Path,
+            legacyDataDirs: List<Path> = emptyList(),
+            permittedInPlaceRoots: List<Path> = emptyList(),
+        ): ProjectManager =
             ProjectManager(
                 projectsRoot,
                 projectsRoot.parent ?: projectsRoot,
@@ -874,6 +982,7 @@ class ProjectManager private constructor(
                 LanguageLevel.JAVA_17,
                 androidTools = null,
                 legacyDataDirs = legacyDataDirs,
+                permittedInPlaceRoots = permittedInPlaceRoots,
             )
 
         /**
@@ -929,6 +1038,8 @@ class ProjectManager private constructor(
             pluginSources: List<dev.ide.plugin.external.PluginSource> = emptyList(),
             /** The running IDE's version, checked against an installed plugin's `minHostVersion`. */
             hostVersion: String? = null,
+            /** Host-private linked workspace roots; only <root>/<binding-id>/project can open in place. */
+            permittedInPlaceRoots: List<Path> = emptyList(),
         ): ProjectManager {
 
 
@@ -961,6 +1072,7 @@ class ProjectManager private constructor(
                 kotlinCompiler = kotlinCompiler,
                 pluginSources = pluginSources,
                 hostVersion = hostVersion,
+                permittedInPlaceRoots = permittedInPlaceRoots,
             )
         }
     }

@@ -35,7 +35,15 @@ interface GradleHost {
     fun linker(): String?
     /** Extra library directories the Gradle process needs (clang's `libLLVM.so`, for example). */
     fun libraryPath(): List<Path> = emptyList()
+    /**
+     * Prepare APK/host-owned script commands on the trusted execution worker, never during project
+     * detection or UI startup. This hook must not download tools or execute project code. Runtime
+     * provisioning errors fail execution rather than silently omitting Node/npm.
+     */
+    fun prepareScriptEnvironment(): GradleScriptEnvironment = GradleScriptEnvironment()
     fun openClient(javaHome: Path): ToolingClient
+    /** Hosts that own the child process apply this exact prepared map before starting the JVM. */
+    fun openClient(javaHome: Path, environment: Map<String, String>): ToolingClient = openClient(javaHome)
 }
 
 /**

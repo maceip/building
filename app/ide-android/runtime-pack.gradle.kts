@@ -6,6 +6,7 @@ val stageDeveloperRuntimePack = tasks.register<Exec>("stageDeveloperRuntimePack"
     val sources = rootProject.file("tools/runtime-pack")
     inputs.files(
         sources.resolve("build.py"), sources.resolve("packages.lock.json"), sources.resolve("recipes.lock.json"), sources.resolve("runtime-launcher.c"), sources.resolve("runtime-env.c"),
+        sources.resolve("build_android_spawn.py"), sources.resolve("android-spawn.source.lock.json"), sources.resolve("optional-notices.lock.json"), sources.resolve("npm-tools.lock.json"),
         rootProject.file("build-system/gradle-build/src/main/resources/dev/ide/gradle/bootstrap-catalog.json"),
     )
     outputs.dir(runtimePackOutput)
@@ -15,6 +16,4 @@ val stageDeveloperRuntimePack = tasks.register<Exec>("stageDeveloperRuntimePack"
     if (gradle.startParameter.isOffline) args("--offline")
 }
 
-if (providers.gradleProperty("DEVELOPER_RUNTIME_PACK").getOrElse("false").toBooleanStrict()) {
-    tasks.named("preBuild").configure { dependsOn(stageDeveloperRuntimePack) }
-}
+tasks.named("preBuild").configure { dependsOn(stageDeveloperRuntimePack) }

@@ -15,7 +15,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.file.Files
 
-/** No dependency installs or remote requests. All native code must already be in the installed APK. */
+/** Offline real-process acceptance, including local npm tarball installation and lifecycle hooks. */
 @RunWith(AndroidJUnit4::class)
 class RuntimeDeviceTest {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
@@ -58,7 +58,7 @@ class RuntimeDeviceTest {
         try {
             val bin = Files.createDirectories(root.resolve("node_modules/.bin"))
             val projectCommand = root.resolve("project-tool.cjs")
-            RuntimeFiles.writeUtf8(projectCommand, "#!/usr/bin/env node\nconsole.log('project-bin-ok');\n")
+            RuntimeFiles.writeUtf8(projectCommand, "#!/usr/bin/env node\nconst child = require('node:child_process').spawnSync(process.execPath, ['-e', \"process.stdout.write('child-from-shebang')\"], { encoding: 'utf8' }); require('node:assert/strict').equal(child.status, 0, child.stderr); require('node:assert/strict').equal(child.stdout, 'child-from-shebang'); console.log('project-bin-ok');\n")
             projectCommand.toFile().setExecutable(true, true)
             Files.createSymbolicLink(bin.resolve("project-tool"), projectCommand)
             RuntimeFiles.writeUtf8(root.resolve("probe.sh"), "set -e\nnpm --version\nnpx --version\n./node_modules/.bin/project-tool\nnode -e 'console.log(process.platform)'\n")
@@ -68,6 +68,49 @@ class RuntimeDeviceTest {
             assertTrue(result.toString(), result.stdout.split("11.20.0").size >= 3)
             assertTrue(result.toString(), result.stdout.contains("project-bin-ok"))
             assertTrue(result.stdout, result.stdout.contains("android"))
+        } finally { controller.stop(); controller.close() }
+    }
+
+    @Test fun nodeCliWorkersChildProcessesAndCryptoWorkOffline() = runBlocking {
+        val controller = controller()
+        val root = Files.createTempDirectory(context.cacheDir.toPath(), "runtime-node-core-test-")
+        try {
+            RuntimeFiles.writeUtf8(root.resolve("core.cjs"), """
+                const assert = require('node:assert/strict');
+                const crypto = require('node:crypto');
+                const { Worker, isMainThread, parentPort } = require('node:worker_threads');
+                const { spawnSync } = require('node:child_process');
+                assert.equal(crypto.createHash('sha256').update('abc').digest('hex'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+                assert.equal(crypto.randomBytes(32).length, 32);
+                if (!isMainThread) {
+                    parentPort.postMessage({ answer: 42, platform: process.platform });
+                } else {
+                    assert.deepEqual(process.argv.slice(2), ['one two', '--flag']);
+                    const child = spawnSync(process.execPath, ['-e', "process.stdout.write('child-ok'); process.stderr.write('child-stderr')"], { encoding: 'utf8', timeout: 10000 });
+                    if (child.error) throw child.error;
+                    assert.equal(child.status, 0, child.stderr);
+                    assert.equal(child.stdout, 'child-ok');
+                    assert.equal(child.stderr, 'child-stderr');
+                    let received = false;
+                    const worker = new Worker(__filename);
+                    const timer = setTimeout(() => { console.error('worker timeout'); process.exit(1); }, 10000);
+                    worker.on('error', error => { console.error(error); process.exit(1); });
+                    worker.on('message', message => {
+                        assert.deepEqual(message, { answer: 42, platform: 'android' });
+                        received = true;
+                    });
+                    worker.on('exit', code => {
+                        clearTimeout(timer);
+                        assert.equal(code, 0);
+                        assert.equal(received, true);
+                        console.log('node-cli-worker-child-crypto-ok');
+                    });
+                }
+            """.trimIndent())
+            controller.run(RuntimeRunRequest(root, "node:core.cjs", listOf("one two", "--flag")))
+            val result = withTimeout(60_000) { controller.state.first { !it.isRunning } }
+            assertEquals(result.toString(), 0, result.exitCode)
+            assertTrue(result.stdout, result.stdout.contains("node-cli-worker-child-crypto-ok"))
         } finally { controller.stop(); controller.close() }
     }
 
@@ -94,13 +137,14 @@ class RuntimeDeviceTest {
         } finally { controller.stop(); controller.close() }
     }
 
-    @Test fun explicitDeveloperNpmInstallUsesARealOfflineDependencyAndSkipsHooks() = runBlocking {
+    @Test fun explicitNpmInstallUsesARealOfflineDependencyAndRunsLifecycleHooks() = runBlocking {
         val controller = controller()
         val root = Files.createTempDirectory(context.cacheDir.toPath(), "runtime-npm-install-test-")
         try {
-            assertTrue("This acceptance runs only in the developer test variant", dev.ide.android.BuildConfig.NATIVE_TOOLCHAIN_DOWNLOADS_ENABLED)
+            // Only this fixture opts into offline mode; production npm must not force it.
+            RuntimeFiles.writeUtf8(root.resolve(".npmrc"), "offline=true\n")
             val fixture = mapOf(
-                "package/package.json" to """{"name":"building-test-dependency","version":"1.0.0","main":"index.js","scripts":{"postinstall":"node -e \"require('fs').writeFileSync('HOOK_RAN','bad')\""}}""",
+                "package/package.json" to """{"name":"building-test-dependency","version":"1.0.0","main":"index.js","scripts":{"postinstall":"node -e \"require('node:fs').writeFileSync('HOOK_RAN','postinstall-ok')\""}}""",
                 "package/index.js" to "module.exports = name => 'Hello ' + name + ' from installed dependency';\n",
             )
             TarArchiveOutputStream(GZIPOutputStream(Files.newOutputStream(root.resolve("fixture.tgz")))).use { tar ->
@@ -110,18 +154,22 @@ class RuntimeDeviceTest {
                     tar.putArchiveEntry(entry); tar.write(bytes); tar.closeArchiveEntry()
                 }
             }
-            RuntimeFiles.writeUtf8(root.resolve("package.json"), """{"name":"offline-install-test","version":"1.0.0","private":true,"dependencies":{"building-test-dependency":"file:fixture.tgz"},"scripts":{"test":"node check.cjs"}}""")
-            RuntimeFiles.writeUtf8(root.resolve("check.cjs"), "console.log(require('building-test-dependency')('Android'));\n")
+            RuntimeFiles.writeUtf8(root.resolve("package.json"), """{"name":"offline-install-test","version":"1.0.0","private":true,"dependencies":{"building-test-dependency":"file:fixture.tgz"},"scripts":{"pretest":"node hook.cjs pretest","test":"node check.cjs","posttest":"node hook.cjs posttest"}}""")
+            RuntimeFiles.writeUtf8(root.resolve("hook.cjs"), "const assert = require('node:assert/strict'); const phase = process.argv[2]; assert.equal(process.env.npm_lifecycle_event, phase); require('node:fs').appendFileSync('hooks.log', phase + '\\n'); console.log('npm-' + phase + '-ok');\n")
+            RuntimeFiles.writeUtf8(root.resolve("check.cjs"), "const fs = require('node:fs'); require('node:assert/strict').equal(fs.readFileSync('hooks.log', 'utf8'), 'pretest\\n'); fs.appendFileSync('hooks.log', 'test\\n'); console.log(require('building-test-dependency')('Android'));\n")
             controller.installDependencies(root)
             val installed = withTimeout(90_000) { controller.state.first { !it.isRunning } }
             assertEquals(installed.toString(), 0, installed.exitCode)
             assertFalse(installed.toString(), installed.workspaceCopy)
             assertTrue(installed.toString(), Files.isRegularFile(root.resolve("package-lock.json")))
-            assertFalse(Files.exists(root.resolve("node_modules/building-test-dependency/HOOK_RAN")))
+            assertEquals("postinstall-ok", RuntimeFiles.readUtf8(root.resolve("node_modules/building-test-dependency/HOOK_RAN")))
             controller.run(RuntimeRunRequest(root, "npm:test"))
             val result = withTimeout(30_000) { controller.state.first { !it.isRunning } }
             assertEquals(result.toString(), 0, result.exitCode)
             assertTrue(result.stdout, result.stdout.contains("Hello Android from installed dependency"))
+            assertTrue(result.stdout, result.stdout.contains("npm-pretest-ok"))
+            assertTrue(result.stdout, result.stdout.contains("npm-posttest-ok"))
+            assertEquals("pretest\ntest\nposttest\n", RuntimeFiles.readUtf8(root.resolve("hooks.log")))
         } finally { controller.stop(); controller.close() }
     }
 

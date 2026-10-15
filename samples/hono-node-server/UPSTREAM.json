@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/honojs/node-server",
+  "revision": "4b47a0d8a5c12ed69a9f8493df69918f62fb61c0",
+  "version": "2.1.5",
+  "license": "MIT",
+  "archiveUrl": "https://api.github.com/repos/honojs/node-server/tarball/4b47a0d8a5c12ed69a9f8493df69918f62fb61c0",
+  "archiveSha256": "97f219efa7124a49e367b6cb41f6a681951cb9b273e069e64b55eb52c09218b7",
+  "upstreamSourceAndTestsModified": false,
+  "localAdditions": ["UPSTREAM.json", "package-lock.json", "BUILDING.md"]
+}

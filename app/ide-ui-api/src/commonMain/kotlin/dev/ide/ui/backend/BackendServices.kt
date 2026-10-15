@@ -707,6 +707,14 @@ interface ProjectService {
     /** Open the existing project rooted at [rootPath]; becomes active (bumps [projectEpoch]). */
     suspend fun openProject(rootPath: String): Boolean = false
 
+    /**
+     * Adopt and open a host-owned working folder without copying it again. The host must authorize its
+     * location (managed projects or a configured private linked-workspace root); a project file cannot.
+     * Node import is static and plain folders remain editable. Never installs dependencies or runs scripts.
+     */
+    suspend fun openFolderInPlace(rootPath: String): UiProjectResult =
+        UiProjectResult(false, "Opening a working folder in place is not supported by this backend")
+
     /** Permanently delete the project rooted at [rootPath] from disk. */
     suspend fun deleteProject(rootPath: String): Boolean = false
 

@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later; repository-owned sample dashboard. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hono Local Workbench</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+</head>
+<body>
+<header><p class="eyebrow">CODEASSIST / OWNED APPLICATION SAMPLE</p><h1>Hono Local Workbench</h1><p>Real Hono. Persistent tasks, checked uploads, and live events. Loopback only.</p></header>
+<main>
+  <section aria-labelledby="session-heading"><h2 id="session-heading">Local session</h2><p>Paste WORKBENCH_TOKEN or the value in your data directory's <code>local-token</code> file. It stays in memory only. This is developer-local authentication, not a production security design.</p>
+    <form id="connect-form"><label>Bearer token<input id="token" type="password" minlength="32" autocomplete="off" required></label><div class="actions"><button type="submit">Connect</button><button type="button" id="disconnect" class="secondary">Disconnect</button><button type="button" id="refresh" class="secondary">Refresh</button></div></form>
+    <p id="status" role="status" aria-live="polite">Not connected</p><pre id="metrics">No status loaded</pre>
+  </section>
+  <div class="columns">
+    <section aria-labelledby="tasks-heading"><h2 id="tasks-heading">Persistent tasks</h2>
+      <form id="task-form"><input id="task-id" type="hidden"><label>Title<input id="title" maxlength="120" required placeholder="What needs doing?"></label><label>Description<textarea id="description" maxlength="4000" rows="3"></textarea></label><label>Tags, comma-separated<input id="tags" placeholder="android, acceptance"></label><label class="check"><input id="done" type="checkbox"> Completed</label><div class="actions"><button type="submit" id="save-task">Create task</button><button type="button" id="cancel-edit" class="secondary">Clear editor</button></div></form>
+      <form id="filter-form" class="actions"><label>Find tasks<input id="search" type="search" maxlength="120" placeholder="Search title, description or tags"></label><button type="submit" class="secondary">Search</button></form>
+      <p id="task-count"></p><ul id="tasks" class="cards"></ul>
+    </section>
+    <section aria-labelledby="files-heading"><h2 id="files-heading">Checked uploads</h2><p>One file, up to 1 MiB: UTF-8 text, JSON, PNG or JPEG. Downloads are attachments; names never become filesystem paths. Image signatures are checked, not decoded or virus-scanned.</p><form id="upload-form"><label>File<input id="file" type="file" accept=".txt,.json,.png,.jpg,.jpeg,text/plain,application/json,image/png,image/jpeg" required></label><button type="submit">Upload and hash</button></form><ul id="uploads" class="cards"></ul></section>
+  </div>
+  <section aria-labelledby="events-heading"><h2 id="events-heading">Live SSE events</h2><p id="stream-status">Disconnected. Connecting opens an authenticated fetch stream; no tokens in URLs.</p><pre id="events" aria-live="polite"></pre></section>
+</main>
+<footer>Repository-owned GPL-3.0-or-later sample, using public hono and @hono/node-server packages. Not upstream application source. Restart with the same data directory to retain your tasks and uploads.</footer>
+</body></html>

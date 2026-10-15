@@ -193,6 +193,11 @@ object PrefixProbe {
             "TERMUX_APP__LEGACY_DATA_DIR" to prefix.parent.parent.toString()
                 .replaceFirst(Regex("^/data/user/0/"), "/data/data/"),
         )
+        // Android system executables need these. Nothing else from the IDE's environment (provider
+        // tokens, proxies, user Gradle options) is inherited by this trusted execution environment.
+        listOf("ANDROID_ROOT", "ANDROID_DATA", "ANDROID_ART_ROOT", "ANDROID_I18N_ROOT", "ANDROID_TZDATA_ROOT").forEach { key ->
+            System.getenv(key)?.let { env[key] = it }
+        }
         val cert = prefix.resolve("etc/tls/cert.pem")
         if (Files.isRegularFile(cert)) env["SSL_CERT_FILE"] = cert.toString()
         return env

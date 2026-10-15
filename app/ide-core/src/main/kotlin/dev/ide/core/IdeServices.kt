@@ -1915,7 +1915,9 @@ class IdeServices private constructor(
      */
     fun isCompatibilityMode(): Boolean {
         if (!projectSync.isExternal()) return false
-        return store.workspace.projects.none { it.buildSystemId == BuildSystemId.GRADLE }
+        return store.workspace.projects.none {
+            it.buildSystemId == BuildSystemId.GRADLE || it.buildSystemId == dev.ide.core.node.NodeModuleType.BUILD_SYSTEM
+        }
     }
 
     /** The notes recorded at import/sync time (what the importer couldn't fully extract). */

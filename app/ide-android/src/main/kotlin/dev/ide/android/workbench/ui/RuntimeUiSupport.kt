@@ -1,5 +1,6 @@
 package dev.ide.android.workbench.ui
 
+import dev.ide.android.workbench.runtime.ExternalSyncReport
 import java.net.URI
 import java.nio.file.Path
 import java.security.MessageDigest
@@ -77,6 +78,30 @@ internal fun runtimePreferenceKey(path: String): String = MessageDigest.getInsta
 
 internal fun runtimeSamePath(first: Path?, second: Path?): Boolean =
     first != null && second != null && first.toAbsolutePath().normalize() == second.toAbsolutePath().normalize()
+
+/** A partial sync is never presented as success, even if some files reached the original folder. */
+internal fun runtimeExternalSyncSummary(report: ExternalSyncReport): String {
+    val counts = "${report.pushed} file(s) saved to the original folder; ${report.pulled} pulled into the working copy."
+    return when {
+        report.cancelled -> "Folder sync cancelled, not complete. $counts Inspect recovery files before retrying."
+        report.failures.isNotEmpty() -> "Folder sync incomplete. $counts ${report.failures.size} failure(s); ${report.conflicts.size} conflict(s)."
+        report.conflicts.isNotEmpty() -> "Folder sync needs a merge. $counts ${report.conflicts.size} conflict(s) kept unchanged on both sides."
+        else -> "Folder sync complete. $counts No deletions were propagated."
+    }
+}
+
+internal fun runtimeExternalSyncDetails(report: ExternalSyncReport): String = buildString {
+    (report.conflicts + report.failures).take(40).forEach { issue ->
+        append(if (issue.path.isBlank()) "Folder" else issue.path).append(": ").append(issue.reason).append('\n')
+    }
+    if (report.conflicts.size + report.failures.size > 40) append("Showing the first 40 issues.\n")
+    if (report.recoveryPaths.isNotEmpty()) {
+        append("Retained recovery files (relative paths are in the original folder; absolute paths are local):\n")
+        report.recoveryPaths.take(40).forEach { append(it).append('\n') }
+        if (report.recoveryPaths.size > 40) append("Showing the first 40 recovery paths.\n")
+    }
+    if (report.pulled > 0) append("Reopen affected editor files before editing further; unsaved editor buffers were not changed.\n")
+}.trim()
 
 /** Also caps a newline-free log so a malicious process cannot hand the text layout an unbounded line. */
 internal fun runtimeVisibleOutput(text: String, maxChars: Int = 32_768, maxLines: Int = 300): String {
