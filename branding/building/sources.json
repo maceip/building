@@ -1,12 +1,10 @@
 {
-  "sourceArchive": "/Users/mac/Downloads/animation-blocks/Archive.zip",
-  "archiveSha256": "0f0b9364e0b27ba0ed2353ebd20ad99d251c893a98d2291b1a307bfc4e9b9fc0",
-  "sourceFile": "/Users/mac/Desktop/Untitled 4 Exports 3/building_app.png",
-  "selectedArtwork": "building_app.png",
+  "sourceFile": "/Users/mac/Downloads/file_0000000043c48230ab61ec37d228652d.png",
+  "selectedArtwork": "file_0000000043c48230ab61ec37d228652d.png",
   "monochromeArtwork": "icon-dark.png (luminance-derived alpha)",
-  "notificationArtwork": "Icon-iOS-ClearDark-1024@1x.png",
+  "notificationArtwork": "power-symbol crop (385,265,870,720) luminance-derived alpha",
   "sourceSha256": {
-    "icon-clear-dark.png": "4d52e93848d761538fbc1df879bd12fcc32b4f954a2c3f10469b6dbfe1d67dad",
-    "icon-dark.png": "306e42192b65580c4b234afd233a395314729f52bdfea5dc88bd0a6d1b54b280"
+    "icon-clear-dark.png": "3e91ea4150a2a044b4e393b135efb65bd7d9951364296e5c8eac778270d42905",
+    "icon-dark.png": "3e91ea4150a2a044b4e393b135efb65bd7d9951364296e5c8eac778270d42905"
   }
 }
