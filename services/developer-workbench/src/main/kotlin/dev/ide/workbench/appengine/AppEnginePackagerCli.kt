@@ -2,6 +2,7 @@
 package dev.ide.workbench.appengine
 
 import java.nio.file.Path
+import java.nio.file.Paths
 
 /** Host/SDK automation entry for the same generator used by the app, never a separate fake fixture. */
 object AppEnginePackagerCli {
@@ -16,9 +17,9 @@ object AppEnginePackagerCli {
         }
         require(arguments[8] == "acknowledge-gpl") { "GPL linking/distribution acknowledgement required" }
         val result = AppEnginePackager().create(AppEnginePackageRequest(
-            sourceRoot = Path.of(arguments[1]), entry = arguments[2], destination = Path.of(arguments[3]),
-            applicationId = arguments[4], label = arguments[5], engine = engine, payloadRoot = Path.of(arguments[6]),
-            runtimeClassesJar = Path.of(arguments[7]), allowUnqualifiedNode = engine == AppEngine.Node,
+            sourceRoot = Paths.get(arguments[1]), entry = arguments[2], destination = Paths.get(arguments[3]),
+            applicationId = arguments[4], label = arguments[5], engine = engine, payloadRoot = Paths.get(arguments[6]),
+            runtimeClassesJar = Paths.get(arguments[7]), allowUnqualifiedNode = engine == AppEngine.Node,
             acknowledgeGplDistribution = true,
         ))
         println("GENERATED_PROJECT=${result.projectRoot}")

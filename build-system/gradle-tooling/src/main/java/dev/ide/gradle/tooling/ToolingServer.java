@@ -163,7 +163,7 @@ public final class ToolingServer {
         // modelOut from projectsEvaluated, so request a configured model before reading that file.
         GradleProject project = operation(connection.model(GradleProject.class)).get();
         if (modelOut.isFile()) {
-            String text = Files.readString(modelOut.toPath(), StandardCharsets.UTF_8);
+            String text = new String(Files.readAllBytes(modelOut.toPath()), StandardCharsets.UTF_8);
             Object parsed = Json.parse(text);
             Map<String, Object> model = Json.obj(parsed);
             if (model == null) throw new IOException("model file was not a JSON object");
@@ -337,7 +337,7 @@ public final class ToolingServer {
         File props = new File(projectDir, "gradle/wrapper/gradle-wrapper.properties");
         if (!props.isFile()) return null;
         try {
-            String text = Files.readString(props.toPath(), StandardCharsets.UTF_8);
+            String text = new String(Files.readAllBytes(props.toPath()), StandardCharsets.UTF_8);
             int idx = text.indexOf("distributionUrl=");
             if (idx < 0) return null;
             String url = text.substring(idx);

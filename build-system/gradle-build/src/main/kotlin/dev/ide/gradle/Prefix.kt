@@ -13,6 +13,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.security.MessageDigest
 
 /**
@@ -134,7 +135,7 @@ object DebUnpacker {
                             val packageRoot = "/" + strip.trim('/') + "/"
                             val target = if (original.startsWith(packageRoot)) {
                                 dest.toAbsolutePath().resolve(original.removePrefix(packageRoot))
-                            } else Path.of(original)
+                            } else Paths.get(original)
                             Files.createSymbolicLink(out, target)
                         }
                         entry.isDirectory -> Files.createDirectories(out)

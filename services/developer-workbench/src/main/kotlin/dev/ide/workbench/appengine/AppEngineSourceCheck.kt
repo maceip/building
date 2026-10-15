@@ -37,7 +37,7 @@ object AppEngineSourceCheck {
             val extension = name.substringAfterLast('.', "").lowercase()
             if (extension !in engine.extensions) continue
             if (Files.size(file) > MAX_SCANNED_BYTES) continue
-            val text = Files.readString(file)
+            val text = String(Files.readAllBytes(file), Charsets.UTF_8)
             when (engine) {
                 AppEngine.Node -> nodeRules.forEach { (pattern, label) ->
                     if (pattern.containsMatchIn(text)) findings += "$name: $label"

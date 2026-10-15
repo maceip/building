@@ -3,6 +3,7 @@ package dev.ide.gradle
 import java.net.JarURLConnection
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
 import kotlin.io.path.writeText
 
@@ -39,7 +40,7 @@ object ToolchainLayout {
             for (name in CLANG_LINKS) {
                 val link = bin.resolve(name)
                 Files.deleteIfExists(link)
-                Files.createSymbolicLink(link, Path.of("clang"))
+                Files.createSymbolicLink(link, Paths.get("clang"))
             }
         }
         if (linker != null && Files.isRegularFile(linker)) {
@@ -143,7 +144,7 @@ object ToolchainLayout {
         val url = ToolchainLayout::class.java.classLoader.getResource(resourceRoot) ?: return
         when (url.protocol) {
             "file" -> {
-                val root = Path.of(url.toURI())
+                val root = Paths.get(url.toURI())
                 if (Files.isDirectory(root)) copyTree(root, dest)
             }
             "jar" -> {

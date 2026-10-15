@@ -24,6 +24,7 @@ import dev.ide.model.ModuleType
 import dev.ide.model.Project
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import kotlin.concurrent.thread
 
 /**
@@ -58,15 +59,15 @@ class GradleBuildSystem : BuildSystem {
 
     override fun actionFor(spec: RunTaskSpec, project: Project, ctx: BuildContext): RunAction? {
         val option = options(project).firstOrNull { it.spec.id == spec.id } ?: return null
-        return action(Path.of(project.rootDir.path), option.goal, option.targets, option.runAfterBuild)
+        return action(Paths.get(project.rootDir.path), option.goal, option.targets, option.runAfterBuild)
     }
 
     /** The host's legacy per-module rows retain their exact goal/variant and opt into Run explicitly. */
     fun actionFor(project: Project, request: BuildRequest, runAfterBuild: Boolean = false): RunAction =
-        action(Path.of(project.rootDir.path), request.goal, targets(project, request), runAfterBuild)
+        action(Paths.get(project.rootDir.path), request.goal, targets(project, request), runAfterBuild)
 
     override fun createBuildGraph(project: Project, request: BuildRequest): TaskGraph =
-        graph(GradleSessionTask(Path.of(project.rootDir.path), request.goal, targets(project, request)))
+        graph(GradleSessionTask(Paths.get(project.rootDir.path), request.goal, targets(project, request)))
 
     override fun createBuildGraph(project: Project, request: BuildRequest, ctx: BuildContext): TaskGraph =
         createBuildGraph(project, request)
@@ -100,7 +101,7 @@ class GradleBuildSystem : BuildSystem {
     )
 
     private fun options(project: Project): List<Option> {
-        val snapshot = GradleProjectSnapshot.load(Path.of(project.rootDir.path))
+        val snapshot = GradleProjectSnapshot.load(Paths.get(project.rootDir.path))
         val all = snapshot?.targets().orEmpty()
         val chosen = choose(all)
         return buildList {
@@ -158,7 +159,7 @@ class GradleBuildSystem : BuildSystem {
 
     private fun targets(project: Project, request: BuildRequest): List<GradleTarget> {
         if (request.goal == BuildGoal.CLEAN && request.targets.isEmpty()) return emptyList()
-        val root = Path.of(project.rootDir.path).toAbsolutePath().normalize()
+        val root = Paths.get(project.rootDir.path).toAbsolutePath().normalize()
         val snapshot = GradleProjectSnapshot.load(root)
         if (snapshot == null) {
             require(request.targets.isEmpty() && request.variant.name in setOf("", "main")) {
@@ -178,7 +179,7 @@ class GradleBuildSystem : BuildSystem {
         if (request.targets.isEmpty()) return listOf(select(all))
         return request.targets.distinct().map { id ->
             val module = project.modules.firstOrNull { it.id == id } ?: error("No module '${id.value}' in this Gradle project.")
-            val dir = Path.of(module.dir.path).toAbsolutePath().normalize()
+            val dir = Paths.get(module.dir.path).toAbsolutePath().normalize()
             // Directories, not display names: nested projects can share a leaf name or remap projectDir.
             val model = snapshot.modules.singleOrNull { root.resolve(it.dir.ifBlank { "." }).normalize() == dir }
                 ?: error("No synced Gradle module for '${module.name}'. Sync the project before building.")
