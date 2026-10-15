@@ -12,6 +12,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PLACEMENTS = (
@@ -20,12 +21,28 @@ PLACEMENTS = (
 )
 
 
+def public_defaults():
+    """The shared file deliberately uses only literal NAME=value lines (no shell/Java escapes)."""
+    values = {}
+    for raw in (ROOT / "config/android-release.properties").read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", key) or key in values or "\\" in value:
+            fail("Invalid public Android configuration; use unique literal NAME=value lines.")
+        if key.startswith("RELEASE_"):
+            fail("Signing values must not appear in public Android configuration.")
+        values[key] = value
+    return values
+
+
 def fail(message):
     raise ValueError(message)
 
 
 def environment(path):
-    values = {}
+    values = public_defaults()
     if path.exists():
         if path.stat().st_mode & 0o077:
             fail(f"Protect the environment file first: chmod 600 {path}")
@@ -64,9 +81,6 @@ def preflight(env):
     missing = [key for key in required if not env.get(key)]
     if missing:
         fail("Missing production values: " + ", ".join(missing))
-    if (ROOT / "keystore.properties").exists():
-        fail("keystore.properties overrides signing environment variables. Use one signing source; "
-             "move that file aside before using this environment-based release command.")
     app_id = env["ANDROID_APPLICATION_ID"]
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+", app_id):
         fail("ANDROID_APPLICATION_ID must be a valid dotted Android application ID.")
@@ -74,6 +88,7 @@ def preflight(env):
         fail("Choose a production application ID rather than the device development ID.")
     if not env["ANDROID_VERSION_CODE"].isdigit() or not 1 <= int(env["ANDROID_VERSION_CODE"]) <= 2100000000:
         fail("ANDROID_VERSION_CODE must be between 1 and 2100000000.")
+    env["ANDROID_VERSION_CODE"] = str(int(env["ANDROID_VERSION_CODE"]))
     if "\n" in env["ANDROID_VERSION_NAME"] or not env["ANDROID_VERSION_NAME"].strip():
         fail("ANDROID_VERSION_NAME must be a nonempty single line.")
     for key in ("SUPABASE_URL", "SUPABASE_KEY", "JUDGE_URL"):
@@ -107,9 +122,12 @@ def preflight(env):
             fail(f"{key} must be an AdMob ID owned by this project.")
         if "3940256099942544" in env[key]:
             fail(f"{key} is a Google test ID, not a production ad unit.")
-    # An explicit empty override avoids the Gradle script's upstream per-placement defaults.
     for placement in PLACEMENTS:
-        env.setdefault("ADMOB_NATIVE_UNIT_" + placement, "")
+        key = "ADMOB_NATIVE_UNIT_" + placement
+        if env["ANDROID_ADS_ENABLED"] == "false":
+            env[key] = ""
+        else:
+            env.setdefault(key, "")
     store = Path(env["RELEASE_STORE_FILE"]).expanduser()
     if not store.is_absolute() or not store.is_file():
         fail("RELEASE_STORE_FILE must point to an existing keystore using an absolute path.")
@@ -142,6 +160,31 @@ def preflight(env):
     return sdk, fingerprint
 
 
+def verify_configuration(record, env):
+    expected = {key: env[key] for key in public_defaults()}
+    if not isinstance(record, dict) or record != expected:
+        # Values can include a public backend key; report only field names, never values.
+        changed = sorted(key for key in set(expected) | set(record if isinstance(record, dict) else {})
+                         if not isinstance(record, dict) or record.get(key) != expected.get(key) or key not in expected)
+        fail("Release configuration differs from preflight: " + ", ".join(changed or ["record format"]))
+
+
+def verify_artifact_configuration(artifact, env):
+    path = ("base/" if artifact.suffix == ".aab" else "") + "assets/building-release-config.json"
+    with zipfile.ZipFile(artifact) as archive:
+        if archive.namelist().count(path) != 1:
+            fail(f"{artifact.name} must contain exactly one public release configuration record.")
+        verify_configuration(json.loads(archive.read(path)), env)
+
+
+def gradle_command(build):
+    tasks = [":ide-android:generateReleaseConfiguration"]
+    if build:
+        tasks += [":ide-android:assembleRelease", ":ide-android:bundleRelease"]
+    # Only this non-secret selector is on the command line. All validated values travel in env.
+    return [str(ROOT / "gradlew"), *tasks, "-PANDROID_RELEASE_CONFIG_SOURCE=environment", "--console=plain"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", type=Path, default=ROOT / ".env.production")
@@ -149,14 +192,16 @@ def main():
     args = parser.parse_args()
     env = environment(args.env_file)
     sdk, fingerprint = preflight(env)
+    subprocess.run(gradle_command(args.build), cwd=ROOT, env=env, check=True)
+    record = ROOT / "app/ide-android/build/generated/release-configuration/building-release-config.json"
+    verify_configuration(json.loads(record.read_text()), env)
     if not args.build:
-        print("Preflight passed. Add --build to exercise signing and verify the release artifacts.")
+        print("Preflight and resolved Gradle configuration passed. Add --build to verify signed artifacts.")
         return
-    subprocess.run([
-        str(ROOT / "gradlew"), ":ide-android:assembleRelease", ":ide-android:bundleRelease", "--console=plain",
-    ], cwd=ROOT, env=env, check=True)
     apk = ROOT / "app/ide-android/build/outputs/apk/release/ide-android-release.apk"
     aab = ROOT / "app/ide-android/build/outputs/bundle/release/ide-android-release.aab"
+    for artifact in (apk, aab):
+        verify_artifact_configuration(artifact, env)
     certs = inspect([str(sdk / "build-tools/36.0.0/apksigner"), "verify", "--print-certs", str(apk)], env)
     if fingerprint not in certs.lower():
         fail("The APK signing certificate differs from the configured keystore.")
@@ -200,6 +245,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, OSError, zipfile.BadZipFile, subprocess.CalledProcessError) as error:
         print(f"Release setup: {error}", file=sys.stderr)
         sys.exit(1)

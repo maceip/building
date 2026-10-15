@@ -11,7 +11,8 @@ import java.net.URI
 import java.net.URL
 import java.nio.file.FileSystems
 import java.nio.file.Files
-import java.util.Properties
+import dev.ide.build.AndroidReleaseConfig
+import dev.ide.build.WriteAndroidReleaseConfig
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -408,50 +409,13 @@ val bundleComposeDrawablesAsset = tasks.register<Copy>("bundleComposeDrawablesAs
     into(layout.buildDirectory.dir("compose-drawables-asset/composeResources/dev.ide.ui.generated.resources/drawable"))
 }
 
-// --- AdMob ids (debug/profile = Google TEST ids; release = your real ids) ------------------------
-// Debug + profile builds ALWAYS use Google's TEST ids: test ads are non-billable and safe to click during
-// development, so there's no risk of an invalid-traffic ban. The release build uses the real ids when supplied
-// via -PADMOB_APP_ID / -PADMOB_NATIVE_UNIT_ID (or the ADMOB_APP_ID / ADMOB_NATIVE_UNIT_ID env vars), falling
-// back to the test ids so a fork builds fine with AdMob unconfigured. The App id reaches the manifest through
-// the `admobAppId` placeholder; the native ad-unit id is a BuildConfig field AndroidAdHost reads. One native
-// ad unit serves every placement that has no unit of its own (see below). OFFICIAL RELEASES MUST SET BOTH real ids.
+// All public defaults and overrides resolve once. The release helper selects its authoritative
+// environment explicitly; ordinary Gradle builds retain property > environment > shared defaults.
+val releaseConfig = AndroidReleaseConfig.from(project)
+val releaseAdsEnabled = releaseConfig.adsEnabled
 val testAdmobAppId = "ca-app-pub-3940256099942544~3347511713"
 val testAdmobNativeUnitId = "ca-app-pub-3940256099942544/2247696110"
-// Google's TEST interstitial unit — the full-screen "long build" ad (AndroidAdHost.showBuildInterstitial).
 val testAdmobInterstitialUnitId = "ca-app-pub-3940256099942544/1033173712"
-// The real ids are baked in as the release defaults (AdMob ids are not secret — they ship inside every APK),
-// and stay overridable so a fork can point ads at its own AdMob account instead of the upstream one.
-val realAdmobAppId = (findProperty("ADMOB_APP_ID") as String?) ?: System.getenv("ADMOB_APP_ID")
-    ?: "ca-app-pub-7523005242346905~2985774451"
-val realAdmobNativeUnitId = (findProperty("ADMOB_NATIVE_UNIT_ID") as String?) ?: System.getenv("ADMOB_NATIVE_UNIT_ID")
-    ?: "ca-app-pub-7523005242346905/7440024785"
-// The real interstitial unit (full-screen "long build" ad). Baked in as the release default like the other
-// ids (AdMob ids aren't secret — they ship in every APK), overridable via -PADMOB_INTERSTITIAL_UNIT_ID or the
-// ADMOB_INTERSTITIAL_UNIT_ID env var so a fork can point at its own AdMob account.
-val realAdmobInterstitialUnitId = (findProperty("ADMOB_INTERSTITIAL_UNIT_ID") as String?)
-    ?: System.getenv("ADMOB_INTERSTITIAL_UNIT_ID")
-    ?: "ca-app-pub-7523005242346905/6735189457"
-val releaseAdsEnabled = providers.gradleProperty("ANDROID_ADS_ENABLED")
-    .orElse(providers.environmentVariable("ANDROID_ADS_ENABLED"))
-    .getOrElse("true").toBooleanStrict()
-// Per-placement native units, keyed by AdPlacement name, so the AdMob report splits native earnings by screen.
-// A placement left blank falls back to the shared native unit above, and several placements may share one
-// unit. Each is overridable via -PADMOB_NATIVE_UNIT_<PLACEMENT> (or the env var of the same name). Reaches
-// AndroidAdHost as AD_NATIVE_UNIT_IDS, `PLACEMENT=unit` pairs joined by `;`.
-val realAdmobNativeUnitsByPlacement = mapOf(
-    "STORE" to "ca-app-pub-7523005242346905/7834378049",
-    "STORE_ITEM" to "ca-app-pub-7523005242346905/7783155586",
-    "PROJECTS" to "ca-app-pub-7523005242346905/4502386125",
-    "LEARN" to "ca-app-pub-7523005242346905/1338175893",
-    "CHALLENGE" to "ca-app-pub-7523005242346905/9563141113",
-    "BUILD_CONSOLE" to "ca-app-pub-7523005242346905/3460767191",
-    "RUN_RESULT" to "ca-app-pub-7523005242346905/5021260875",
-    "SDK_MANAGER" to "ca-app-pub-7523005242346905/6936977775",
-    "SETTINGS" to "ca-app-pub-7523005242346905/7642806352",
-    "SIDEBAR" to "ca-app-pub-7523005242346905/8833522537",
-).mapValues { (placement, default) ->
-    (findProperty("ADMOB_NATIVE_UNIT_$placement") as String?) ?: System.getenv("ADMOB_NATIVE_UNIT_$placement") ?: default
-}.filterValues { it.isNotBlank() }.entries.joinToString(";") { "${it.key}=${it.value}" }
 
 val appEngineDelivery = providers.gradleProperty("IDE_APP_ENGINE_DELIVERY").getOrElse("none")
 val selectedAppEngine = providers.gradleProperty("IDE_APP_ENGINE").getOrElse("python")
@@ -469,54 +433,19 @@ android {
     }
 
     defaultConfig {
-        // The Play Store identity (immutable once published). The Kotlin source package (namespace,
-        // above) stays dev.ide.android — that's an internal build detail, independent of applicationId.
-        // A fork supplies its own identity/version through the production environment.
-        applicationId = providers.gradleProperty("ANDROID_APPLICATION_ID")
-            .orElse(providers.environmentVariable("ANDROID_APPLICATION_ID"))
-            .getOrElse("com.tyron.code")
-        // The real engine (project-model-impl/lang-jdt/...) leans on java.nio.file (Path/Files/walk),
-        // which is API 26+. Targeting 26 keeps it native and avoids core-library desugaring complexity.
+        applicationId = releaseConfig.applicationId
         minSdk = 26
         targetSdk = 36
         if (appEngineDelivery != "none") ndk.abiFilters += setOf("arm64-v8a")
-        // versionCode must exceed the last published release (the previous-codebase app reached ~29).
-        versionCode = providers.gradleProperty("ANDROID_VERSION_CODE")
-            .orElse(providers.environmentVariable("ANDROID_VERSION_CODE"))
-            .getOrElse("106").toInt().also { require(it > 0) { "ANDROID_VERSION_CODE must be positive" } }
-        versionName = providers.gradleProperty("ANDROID_VERSION_NAME")
-            .orElse(providers.environmentVariable("ANDROID_VERSION_NAME"))
-            .getOrElse("3.27.0")
+        versionCode = releaseConfig.versionCode
+        versionName = releaseConfig.versionName
         // connectedAndroidTest harness (the on-device Kotlin-compiler discovery spike).
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // The Supabase project URL + *publishable* key, shared by every feature that talks to it: opt-in
-        // usage analytics (docs/analytics.md) and the Projects Store catalog (supabase/README.md). One pair
-        // of fields rather than per-feature copies, because it is one project and a rotated key has to reach
-        // both at once.
-        //
-        // Overridable per-build via -PSUPABASE_URL / -PSUPABASE_KEY or the SUPABASE_URL / SUPABASE_KEY env
-        // vars, so the endpoint or key can rotate without a code change.
-        //
-        // The publishable key is safe to ship in an open-source client ONLY because row-level security is
-        // what actually gates access: INSERT-only on `events`, and read-approved-rows-only on the `store_*`
-        // tables. An empty URL leaves both features wired but inert (analytics falls back to the no-op
-        // service; the store falls back to the bundled catalog), so a fork can build with no endpoint.
-        // Analytics collection still never happens without the user's explicit consent.
-        val supabaseUrl = (findProperty("SUPABASE_URL") as String?) ?: System.getenv("SUPABASE_URL")
-            ?: "https://lqlpkeummmmglikumotx.supabase.co"
-        val supabaseKey = (findProperty("SUPABASE_KEY") as String?) ?: System.getenv("SUPABASE_KEY")
-            ?: "sb_publishable_5T14bUAG6fOGz47kwYzG7A_25dj3ap4"
-        buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
-        buildConfigField("String", "SUPABASE_KEY", "\"$supabaseKey\"")
-
-        // Where the daily-challenge judge is deployed. Separate from the Supabase pair because it is a
-        // separate service: Supabase holds the problems and the leaderboard, and the judge is the only
-        // thing that compiles and runs a submission. Blank leaves the tab readable and submitting
-        // disabled, which is what a fork with no judge of its own should get.
-        val judgeUrl = (findProperty("JUDGE_URL") as String?) ?: System.getenv("JUDGE_URL")
-            ?: "https://codeassist-judge.vercel.app"
-        buildConfigField("String", "JUDGE_URL", "\"$judgeUrl\"")
+        // Empty service values disable their integration. Escaping is shared with the release record.
+        for (key in listOf("SUPABASE_URL", "SUPABASE_KEY", "JUDGE_URL")) {
+            buildConfigField("String", key, releaseConfig.buildConfigFields.getValue(key))
+        }
 
         // AdMob defaults = Google TEST ids. Debug inherits these as-is; `release` overrides to the real ids
         // below, and `profile` (a local perf build) is forced back to test. The App id reaches the manifest
@@ -577,28 +506,17 @@ android {
     sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("experimental/kotlin-syntax/testData"))
     sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("lang/lang-kotlin/parity"))
 
-    // Release signing, never committed. Resolution order per field: keystore.properties (gitignored,
-    // alongside this build script) → Gradle property (-PRELEASE_*) → env var (RELEASE_*). With no keystore
-    // the release build is left unsigned — fine for Play, which re-signs with the managed app key (you
-    // upload an AAB signed with your upload key). See keystore.properties.example.
+    // In helper mode, signing uses the same authoritative environment preflight checked.
+    // Ordinary builds retain legacy keystore.properties > property > environment precedence.
+    // An unconfigured release remains unsigned for local build validation, not store upload.
     signingConfigs {
-        val keystoreProps = Properties().apply {
-            val f = rootProject.file("keystore.properties")
-            if (f.exists()) f.inputStream().use { load(it) }
-        }
-        // storeFile is resolved relative to the repo root so a relative path in keystore.properties works
-        // regardless of where Gradle is invoked from.
-        fun signingValue(key: String, prop: String, env: String): String? =
-            keystoreProps.getProperty(key) ?: (findProperty(prop) as String?) ?: System.getenv(env)
-
-        val storePath = signingValue("storeFile", "RELEASE_STORE_FILE", "RELEASE_STORE_FILE")
-        val storeFileResolved = storePath?.let { rootProject.file(it) }
-        if (storeFileResolved != null && storeFileResolved.exists()) {
+        val storeFileResolved = releaseConfig.signingValue("RELEASE_STORE_FILE")?.let { rootProject.file(it) }
+        if (storeFileResolved != null && storeFileResolved.isFile) {
             create("release") {
                 storeFile = storeFileResolved
-                storePassword = signingValue("storePassword", "RELEASE_STORE_PASSWORD", "RELEASE_STORE_PASSWORD")
-                keyAlias = signingValue("keyAlias", "RELEASE_KEY_ALIAS", "RELEASE_KEY_ALIAS")
-                keyPassword = signingValue("keyPassword", "RELEASE_KEY_PASSWORD", "RELEASE_KEY_PASSWORD")
+                storePassword = releaseConfig.signingValue("RELEASE_STORE_PASSWORD")
+                keyAlias = releaseConfig.signingValue("RELEASE_KEY_ALIAS")
+                keyPassword = releaseConfig.signingValue("RELEASE_KEY_PASSWORD")
             }
         }
     }
@@ -615,12 +533,10 @@ android {
             // download size becomes a concern.
             isMinifyEnabled = false
             signingConfig = signingConfigs.findByName("release")
-            // The shipped build serves real AdMob ads (falls back to test ids if none were configured).
-            buildConfigField("boolean", "ADS_ENABLED", releaseAdsEnabled.toString())
-            manifestPlaceholders["admobAppId"] = if (releaseAdsEnabled) realAdmobAppId else ""
-            buildConfigField("String", "AD_NATIVE_UNIT_ID", "\"${if (releaseAdsEnabled) realAdmobNativeUnitId else ""}\"")
-            buildConfigField("String", "AD_INTERSTITIAL_UNIT_ID", "\"${if (releaseAdsEnabled) realAdmobInterstitialUnitId else ""}\"")
-            buildConfigField("String", "AD_NATIVE_UNIT_IDS", "\"${if (releaseAdsEnabled) realAdmobNativeUnitsByPlacement else ""}\"")
+            manifestPlaceholders["admobAppId"] = releaseConfig.values.getValue("ADMOB_APP_ID")
+            for ((key, value) in releaseConfig.buildConfigFields) {
+                buildConfigField(if (key == "ADS_ENABLED") "boolean" else "String", key, value)
+            }
         }
         // A release-like, non-debuggable build that's still installable locally (signed with the debug key).
         // Use this — never `debug` — to judge runtime/typing/recomposition performance: a `debuggable` app
@@ -763,6 +679,22 @@ android {
         // app carries ~130 MB of dex — storing that would roughly double the download.
         noCompress += setOf("jar", "zip")
     }
+}
+
+// The release verifier checks this record in BOTH the APK and AAB. It contains only public values,
+// and its task compares them with final AGP variant/BuildConfig fields before packaging.
+androidComponents.onVariants(androidComponents.selector().withBuildType("release")) { variant ->
+    val output = variant.outputs.single()
+    val record = tasks.register<WriteAndroidReleaseConfig>("generateReleaseConfiguration") {
+        values.set(releaseConfig.values)
+        applicationId.set(variant.applicationId)
+        versionCode.set(output.versionCode)
+        versionName.set(output.versionName)
+        buildConfigFields.set(requireNotNull(variant.buildConfigFields).map { fields -> fields.mapValues { it.value.value.toString() } })
+        admobAppId.set(variant.manifestPlaceholders.map { it["admobAppId"].toString() })
+        outputDirectory.set(layout.buildDirectory.dir("generated/release-configuration"))
+    }
+    variant.sources.assets?.addGeneratedSourceDirectory(record, WriteAndroidReleaseConfig::outputDirectory)
 }
 
 // --- on-device native aapt2 ----------------------------------------------------------------------

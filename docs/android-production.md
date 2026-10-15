@@ -1,7 +1,7 @@
 # Android production builds
 
-The local entry point is `python3 tools/android-release.py`. It validates an explicit release
-environment; `--build` builds and verifies both the signed APK and the signed AAB without publishing.
+The local entry point is `python3 tools/android-release.py`. It validates the release environment
+and the resolved Gradle variant; `--build` builds and verifies both the signed APK and the signed AAB without publishing.
 The ordinary debug build continues to work without production credentials.
 
 ## Signing identity
@@ -18,7 +18,8 @@ the first upload; no off-machine backup has been created by the local setup.
 
 For a new app, choose your own `ANDROID_APPLICATION_ID`. The upstream ID `com.tyron.code` already
 belongs to a published app. Updating it requires that app's existing signing setup; a newly generated
-key cannot replace it. The development install on the connected Pixel uses `com.tyron.code.dev`.
+key cannot replace it. The default development identity is `ai.building.dev`. Existing
+`com.tyron.code.dev` installs retain their separate data; this change does not migrate or uninstall them.
 
 For Google Play, use a separate upload key and Play App Signing. For APK downloads, keep the same
 app-signing key for every update. If Play and direct-download builds must update each other, supply
@@ -41,10 +42,21 @@ python3 tools/android-release.py
 python3 tools/android-release.py --build
 ```
 
-The environment file is ignored by Git and is parsed as data, not executed as a shell script. Exported
-environment variables take precedence. The helper prints the public certificate fingerprint, never
-passwords. `keystore.properties` is another signing mechanism supported by Gradle; the helper refuses
-to combine it with environment-based signing because that file takes precedence in the build script.
+Public defaults live in [`config/android-release.properties`](../config/android-release.properties):
+the Building application identity and version, disabled ads, and empty remote service settings. This
+file is shared by Gradle and the helper. It contains no signing credentials. Change a default version
+there instead of editing the Gradle script and release example separately.
+
+The helper resolves **exported environment > environment file > shared defaults**. The private file
+is ignored by Git and parsed as data, never executed as a shell script. The helper then selects
+`-PANDROID_RELEASE_CONFIG_SOURCE=environment`; Gradle uses exactly those resolved environment values
+for identity, version, backend/ad settings, and signing. Gradle properties and `keystore.properties`
+cannot override this mode. Passwords travel only through the process environment, never command-line
+arguments or the public configuration record. Preflight prints the public certificate fingerprint.
+
+Ordinary Gradle builds resolve **Gradle property > environment > shared defaults**, and do not load
+`.env.production`. Their signing retains **keystore.properties > Gradle property > environment** for
+compatibility. Without signing credentials, ordinary release builds produce unsigned local artifacts.
 
 The four signing variables are `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`,
 and `RELEASE_KEY_PASSWORD`. Use the same store/key password for a PKCS12 keystore. Preflight validates
@@ -52,12 +64,24 @@ the store password and private-key alias; the signed build also exercises the ke
 
 Set `ANDROID_VERSION_CODE` above the previous production release. Set `ANDROID_VERSION_NAME` to the
 display version. The helper verifies the resulting APK's package, version, certificate, and
-non-debuggable status, then verifies the AAB signature.
+non-debuggable status, then verifies the AAB signature. Both artifacts contain
+`assets/building-release-config.json` (under `base/` in the AAB). Its generation checks the final AGP
+release identity, version, BuildConfig fields, and AdMob manifest ID. The helper compares every public
+field in both packaged records with the preflight environment, including backend URLs and ad units.
+The record contains only client settings already embedded in the app, never keystore credentials.
+
+To inspect the ordinary Gradle resolution without compiling the app:
+
+```sh
+./gradlew :ide-android:generateReleaseConfiguration
+```
+
+The output is `app/ide-android/build/generated/release-configuration/building-release-config.json`.
+The same task runs automatically during release asset packaging.
 
 ## Client services and secrets
 
-The existing release defaults point at the upstream project's accounts. The release helper requires
-explicit values instead:
+Shared defaults leave remote integrations disabled. Enable them with this project's client settings:
 
 - `SUPABASE_URL` and `SUPABASE_KEY`: both empty disables the remote backend. Otherwise use your own
   URL and a **public publishable/anon key**. A server secret or service-role key must never enter an APK.
@@ -66,8 +90,8 @@ explicit values instead:
   and advertising permissions. The local production configuration uses this setting. Debug keeps test ads.
 - `ADMOB_APP_ID`, `ADMOB_NATIVE_UNIT_ID`, `ADMOB_INTERSTITIAL_UNIT_ID`: required project-owned IDs only
   when release advertising is explicitly enabled.
-- `ADMOB_NATIVE_UNIT_<PLACEMENT>`: optional overrides. The helper supplies empty values for unset
-  placements so they use your shared unit rather than the upstream account.
+- `ADMOB_NATIVE_UNIT_<PLACEMENT>`: optional overrides. Unset placements use the shared native unit.
+  Disabling ads clears all release ad IDs consistently in Gradle and the helper.
 - `app/ide-android/google-services.json`: optional Firebase client config for this package ID. Without
   it, push is disabled. Register the appropriate signing certificate with Firebase when configuring it.
 

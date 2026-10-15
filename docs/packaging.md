@@ -62,10 +62,12 @@ uses a 4 GiB override. Hosts can explicitly override
 `org.gradle.jvmargs` and `org.gradle.workers.max` for their capacity.
 
 Debug builds append `.dev` to the configured application ID unless it already ends
-in `.dev`; the default install identity is `com.tyron.code.dev`. Release identity
-and credentials remain separately configured. Version code/name are controlled by
-`ANDROID_VERSION_CODE` and `ANDROID_VERSION_NAME` Gradle properties or environment
-variables; packaging verification does not publish or sign an iPhone application.
+in `.dev`; the default install identity is `ai.building.dev`. Public release defaults
+live in `config/android-release.properties`, shared by Gradle and the release helper.
+Ordinary builds accept Gradle-property/environment overrides; the release helper selects
+an authoritative environment and verifies its public configuration inside both APK and
+AAB. Signing credentials remain private. See [production configuration](android-production.md).
+Packaging verification does not publish or sign an iPhone application.
 
 AGP's native packaging/stripping uses pinned NDK `27.3.13750724`, also installed by
 the APK CI workflow. Source-built Android SDK helpers and the development runtime

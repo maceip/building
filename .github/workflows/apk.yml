@@ -46,6 +46,12 @@ jobs:
           mkdir -p ~/.gradle
           echo "kotlin.incremental=false" >> ~/.gradle/gradle.properties
 
+      - name: Verify release configuration resolution
+        run: |
+          python3 -m unittest discover -s tools -p 'test_android_release.py'
+          ./gradlew -p buildSrc test --console=plain
+          ./gradlew :ide-android:generateReleaseConfiguration --console=plain
+
       # Debug-only packaging fits 4 GiB; full local APK+AAB builds use the larger project default.
       - name: Build debug APK
         run: ./gradlew :ide-android:assembleDebug -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8" --console=plain --stacktrace
