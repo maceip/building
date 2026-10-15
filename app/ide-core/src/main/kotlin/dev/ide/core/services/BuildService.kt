@@ -930,6 +930,14 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                     val module = ctx.modules().firstOrNull { it.name == moduleName } ?: return fail(
                         "No module '$moduleName'."
                     )
+                    // A Gradle-owned project keeps its original request: same as build:/assemble:/bundle:,
+                    // a legacy test: id delegates with its goal preserved instead of running natively.
+                    // No-op on native projects (delegateToGradle returns false there).
+                    if (delegateToGradle(
+                            module, BuildGoal.TEST,
+                            id.substringAfter(':').split(':').getOrNull(1) ?: ctx.activeVariant(module),
+                        )
+                    ) return
                     unresolvedBlocker(module)?.let { return fail(it) }
                     val project = ctx.projectOf(module)
                         ?: return fail("Internal error: no project for module '${module.name}'.")
