@@ -437,6 +437,8 @@ android {
         minSdk = 26
         targetSdk = 36
         if (appEngineDelivery != "none") ndk.abiFilters += setOf("arm64-v8a")
+        // Version identity comes from the release configuration; upstream 3.27.1
+        // (versionCode 107) is the floor the configured values must exceed.
         versionCode = releaseConfig.versionCode
         versionName = releaseConfig.versionName
         // connectedAndroidTest harness (the on-device Kotlin-compiler discovery spike).
