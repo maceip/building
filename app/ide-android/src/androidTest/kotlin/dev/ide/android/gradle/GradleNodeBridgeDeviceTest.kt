@@ -29,7 +29,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 @RunWith(AndroidJUnit4::class)
 class GradleNodeBridgeDeviceTest {
     @Test(timeout = 240_000)
-    fun installedGradleExecUsesBundledNodeNpmAndNativeDependencyTools() = runBlocking(Dispatchers.IO) {
+    fun installedGradleExecUsesBundledNodeNpmAndNativeDependencyTools() {
+        runBlocking(Dispatchers.IO) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val installed = InstrumentationRegistry.getArguments().getString("installedGradle")
             ?: error("Pass installedGradle for an already installed local Gradle distribution; this test never downloads one")
@@ -162,6 +163,7 @@ class GradleNodeBridgeDeviceTest {
             watchdog.cancel(true)
             executor.shutdownNow()
             client.close()
+        }
         }
     }
 }
