@@ -325,6 +325,7 @@ internal class SettingsBackend(private val ctx: BackendContext) : SettingsServic
         val project = page.scope == SettingsScope.PROJECT
         val controls =
             if (page.id == BuiltInSettingsPages.BUILD_RUNTIME) buildRuntimeControls()
+            else if (page.id == dev.ide.core.agent.AgentBackend.AI_PAGE) aiSettingsControls(page, project)
             else page.controls().map { toUiControl(page.id, it, project) }
         return UiSettingsPage(
             id = page.id,
@@ -334,6 +335,31 @@ internal class SettingsBackend(private val ctx: BackendContext) : SettingsServic
             controls = controls,
             inspectionsSection = BuiltInSettingsPages.isInspectionsPage(page),
         )
+    }
+
+    private fun aiSettingsControls(page: SettingsPage, project: Boolean): List<UiSettingControl> {
+        val selectedProvider = readSetting(page.id, "provider", project) ?: "anthropic"
+        val providerKeys = setOf(
+            "antigravityKey", "anthropicKey", "openaiKey", "museKey",
+            "mimoKey", "geminiKey", "openrouterKey",
+            "gatewayKey", "gatewayBaseUrl", "gatewayModel",
+        )
+        val activeKeys = when (selectedProvider) {
+            "antigravity" -> setOf("antigravityKey")
+            "openai" -> setOf("openaiKey")
+            "gemini" -> setOf("geminiKey")
+            "muse" -> setOf("museKey")
+            "mimo" -> setOf("mimoKey")
+            "openrouter" -> setOf("openrouterKey")
+            "gateway" -> setOf("gatewayBaseUrl", "gatewayKey", "gatewayModel")
+            else -> setOf("anthropicKey")
+        }
+        return page.controls().filter { c ->
+            if (c.key in providerKeys) c.key in activeKeys
+            else true
+        }.map { c ->
+            toUiControl(page.id, c, project)
+        }
     }
 
     /**
@@ -356,7 +382,7 @@ internal class SettingsBackend(private val ctx: BackendContext) : SettingsServic
         val out = ArrayList<UiSettingControl>()
         out += UiSettingControl.Toggle(
             BuiltInSettingsPages.SEPARATE_PROCESS, "Build in a separate process",
-            "Run builds and your program in an isolated process so an out-of-memory crash can't take down the IDE. Off = build in-process (uses less memory, no isolation). Needs notification permission (the isolated process shows a progress notification); without it, builds run in-process. Takes effect the next time you open a project.",
+            "Run builds in an isolated process to protect the IDE from memory crashes.",
             sepOn, false, null,
         )
 
@@ -366,18 +392,18 @@ internal class SettingsBackend(private val ctx: BackendContext) : SettingsServic
         if (ctx.separateProcessBuildsSupported) {
             out += UiSettingControl.Action(
                 BuiltInSettingsPages.BUILD_NOTIFICATIONS, "Build notifications",
-                "Show a progress notification while a build or your program runs in the separate process. Required for isolated builds; if it's off, builds run inside the app.",
+                "Show progress notifications during background builds. Required for isolated builds.",
                 "Enable", false, false, null,
             )
         }
 
         val modeDesc = when {
             mode == BuiltInSettingsPages.R8_MODE_INPROCESS ->
-                "R8 runs inside the IDE, capped at this app's memory limit (~$appHeapMb MB). Pick Forked VM to give R8 more by running it in a separate VM."
+                "R8 runs inside the IDE process (~$appHeapMb MB). Switch to Forked VM for large apps."
             ceiling == 0 ->
-                "This device can't run R8 in a separate VM, so it runs in-process (~$appHeapMb MB). Large apps may run out of memory; there's nothing to tune here."
+                "Separate VM execution is unavailable on this device; R8 runs in-process (~$appHeapMb MB)."
             else ->
-                "Forked VM (default) runs R8 in a separate VM with more memory than this app's ~$appHeapMb MB limit, so large apps don't run out of memory; it falls back to in-process if the device can't. Android only."
+                "Forked VM runs R8 in a separate VM with extra heap memory to prevent out-of-memory crashes on large apps."
         }
         out += UiSettingControl.Choice(
             BuiltInSettingsPages.R8_MODE, "R8 execution", modeDesc, mode,
@@ -412,9 +438,9 @@ internal class SettingsBackend(private val ctx: BackendContext) : SettingsServic
         val offHeap = (ctx.manager?.preference(settingKey(pid, BuiltInSettingsPages.DEX_OFFHEAP_MB))?.trim()?.toIntOrNull()
             ?: BuiltInSettingsPages.DEX_OFFHEAP_MB_DEFAULT).coerceIn(2, 64)
         val offHeapDesc = if (forkable)
-            "On a clean build the dexer turns your whole project (and large libraries) into Dalvik bytecode — heavy work that normally runs inside the IDE. When one of those steps is at least this big, it's moved to the separate VM instead (the same one R8 uses), keeping it off the IDE's ~$appHeapMb MB heap. Lower = safer on low-memory devices but more short-lived VMs (slightly slower); higher = fewer VMs but more pressure on the IDE. Small edits always stay in-process."
+            "Dex heavy dependencies in a separate VM when step size exceeds this threshold to save IDE memory."
         else
-            "Moves large dexing steps off the IDE's heap into a separate VM on a clean build. Inactive while R8 execution is In-process (or the device can't fork a VM) — everything dexes in-process then."
+            "Moves large dex steps off-heap into a separate VM. Inactive while running in-process."
         out += UiSettingControl.Slider(
             BuiltInSettingsPages.DEX_OFFHEAP_MB, "Off-heap dexing threshold",
             offHeapDesc, offHeap, 2, 64, 2, "MB", true, dexGroup,
@@ -424,16 +450,16 @@ internal class SettingsBackend(private val ctx: BackendContext) : SettingsServic
             ?: BuiltInSettingsPages.DEX_MERGE_BATCH_DEFAULT).coerceIn(1000, 20000)
         out += UiSettingControl.Slider(
             BuiltInSettingsPages.DEX_MERGE_BATCH, "Dex merge batch size",
-            "On a very large app the final dexing step merges classes in batches so it doesn't need all of them in memory at once. Smaller batches keep that memory low (good for low-memory devices) but make the APK slightly larger (less shared compression across classes); larger batches pack tighter but need more memory per merge. Most apps never reach this — it only kicks in past a few thousand classes.",
+            "Number of classes merged per batch during final dexing. Smaller batches use less RAM.",
             mergeBatch, 1000, 20000, 1000, "classes", true, dexGroup,
         )
 
         val forkConc = (ctx.manager?.preference(settingKey(pid, BuiltInSettingsPages.DEX_FORK_CONCURRENCY))?.trim()?.toIntOrNull()
             ?: BuiltInSettingsPages.DEX_FORK_CONCURRENCY_DEFAULT).coerceIn(0, 4)
         val forkConcDesc = if (forkable)
-            "How many of these separate dexing VMs may run at once. The dex merge splits across a few of them, so several libraries dex in parallel instead of one at a time. 0 = automatic (chosen from your device's free memory and the VM heap above). Higher is faster on devices with plenty of RAM but commits more memory at once; lower (or 0) is safer on tight devices. Takes effect the next time the build starts."
+            "Max parallel dexing VMs. 0 chooses automatically based on available device RAM."
         else
-            "Caps how many separate dexing VMs run at once. Inactive while R8 execution is In-process (or the device can't fork a VM) — everything dexes in-process then."
+            "Caps concurrent dexing VMs. Inactive while running in-process."
         out += UiSettingControl.Slider(
             BuiltInSettingsPages.DEX_FORK_CONCURRENCY, "Max concurrent dex forks",
             forkConcDesc, forkConc, 0, 4, 1, null, true, dexGroup,

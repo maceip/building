@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -226,20 +227,15 @@ private fun SymbolMacroEditorBody(
                 IconButtonCa(CaIcons.close, stringResource(Res.string.close), onClose)
             }
 
-            // Symbols | Macros tab toggle.
+            // Symbols, Macros, Global, and This Project chips on one row.
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 TabChip(stringResource(Res.string.symed_symbols), tab == SymEditorTab.Symbols) { tab = SymEditorTab.Symbols }
                 TabChip(stringResource(Res.string.symed_tab_macros), tab == SymEditorTab.Macros) { tab = SymEditorTab.Macros }
-            }
-
-            // Scope segmented toggle + hint (shared by both tabs — a scope holds both symbols and macros).
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+                Spacer(Modifier.width(6.dp))
                 ScopeChip(stringResource(Res.string.symed_scope_global), scope == CustomizationService.GLOBAL, enabled = true) {
                     scope = CustomizationService.GLOBAL
                 }
@@ -306,32 +302,7 @@ private fun SymbolMacroEditorBody(
                         }
                     }
                 }
-                // Symbol actions: reset · add-action · suggest · presets. FlowRow so they wrap onto another line
-                // on a narrow screen instead of squishing (the "suggest from file" chip used to get crushed).
-                FlowRow(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    ActionChip(stringResource(Res.string.symed_reset), CaIcons.refresh) { replaceSymbols(backend.customize.defaultSymbols()) }
-                    AddActionChip(existing = items.mapNotNull { it.action }.toSet()) { action, label ->
-                        items.add(UiSymbolKey(label = label, insert = "", pinned = true, action = action)); commitSymbols()
-                    }
-                    state.active?.path?.let { path ->
-                        ActionChip(stringResource(Res.string.symed_suggest), CaIcons.sparkle) {
-                            val extra = backend.customize.suggestSymbols(path, items.toList())
-                            if (extra.isNotEmpty()) { items.addAll(extra); commitSymbols() }
-                        }
-                    }
-                    PresetsChip { keys -> replaceSymbols(keys) }
-                }
             } else {
-                // Add-a-macro row.
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-                    ActionChip(stringResource(Res.string.symed_add_macro), CaIcons.plus, accent = true) {
-                        macroEdit = MacroEdit(null, UiMacro(abbreviation = "", template = ""))
-                    }
-                }
                 if (macros.isEmpty()) {
                     EmptyHint(stringResource(Res.string.symed_macros_empty))
                 } else {
@@ -361,13 +332,30 @@ private fun SymbolMacroEditorBody(
                 }
             }
 
-            // Shared footer: export / import the whole scope set (symbols + macros).
+            // Unified bottom row: Reset to defaults, Add action key, Presets, (Suggest), Copy, Download on one row.
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Spacer(Modifier.weight(1f))
+                if (tab == SymEditorTab.Symbols) {
+                    ActionChip(stringResource(Res.string.symed_reset), CaIcons.refresh) { replaceSymbols(backend.customize.defaultSymbols()) }
+                    AddActionChip(existing = items.mapNotNull { it.action }.toSet()) { action, label ->
+                        items.add(UiSymbolKey(label = label, insert = "", pinned = true, action = action)); commitSymbols()
+                    }
+                    PresetsChip { keys -> replaceSymbols(keys) }
+                    state.active?.path?.let { path ->
+                        ActionChip(stringResource(Res.string.symed_suggest), CaIcons.sparkle) {
+                            val extra = backend.customize.suggestSymbols(path, items.toList())
+                            if (extra.isNotEmpty()) { items.addAll(extra); commitSymbols() }
+                        }
+                    }
+                } else {
+                    ActionChip(stringResource(Res.string.symed_add_macro), CaIcons.plus, accent = true) {
+                        macroEdit = MacroEdit(null, UiMacro(abbreviation = "", template = ""))
+                    }
+                }
+                Spacer(Modifier.weight(1f, fill = false))
                 val exported = stringResource(Res.string.symed_exported)
                 IconButtonCa(CaIcons.copy, stringResource(Res.string.symed_export), onClick = {
                     clipboard.setText(AnnotatedString(backend.customize.exportScope(scope)))
@@ -719,7 +707,13 @@ private fun FieldLabel(text: String) {
 }
 
 /** The languages the macro editor offers (id → display label). Empty selection = every language. */
-private val LANG_OPTIONS: List<Pair<String, String>> = listOf("java" to "Java", "kotlin" to "Kotlin", "xml" to "XML")
+private val LANG_OPTIONS: List<Pair<String, String>> = listOf(
+    "java" to "Java",
+    "kotlin" to "Kotlin",
+    "python" to "Python",
+    "typescript" to "TypeScript",
+    "xml" to "XML",
+)
 
 /** A preset menu chip: replaces the current list with a shipped starter set (default / Kotlin / XML). */
 @Composable
@@ -1031,5 +1025,7 @@ private class SnippetHighlight(
 private val PRESETS: List<Pair<String, List<String>>> = listOf(
     "Java / Kotlin" to listOf("{", "}", "(", ")", ";", "=", ".", ",", "\"", "'", ":", "<", ">", "/", "*", "[", "]", "+", "-", "&", "|", "!", "?", "@", "_"),
     "Kotlin extras" to listOf("->", "?.", "?:", "::", "..", "==", "!=", "&&", "||", "{", "}", "(", ")", "=", ".", ",", "\"", "$", "<", ">"),
+    "Python" to listOf(":", "(", ")", "[", "]", "=", "==", "!=", "\"", "'", "#", "->", ",", ".", "+", "-", "*", "/", "%", "<", ">", "_"),
+    "TypeScript / JS" to listOf("=>", "===", "!==", "?.", "??", "{", "}", "(", ")", "[", "]", ":", ";", "=", ".", ",", "\"", "'", "`", "$", "<", ">"),
     "XML" to listOf("<", ">", "/", "=", "\"", "'", ":", "@", "+", ".", "-", "_", "?", "#"),
 )

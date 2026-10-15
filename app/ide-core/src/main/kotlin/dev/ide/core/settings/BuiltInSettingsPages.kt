@@ -274,7 +274,7 @@ object BuiltInSettingsPages {
             ),
             SettingControl.Toggle(
                 PREVIEW_ISOLATE, "Render in a separate process",
-                "Render the @Preview in the :preview OS process instead of the IDE, so a runaway recomposition or crash can't take down the IDE. Falls back to the in-process renderer for @PreviewParameter / locale previews and on any remote failure. Turn off to always render in-process (more interactive, but a preview crash can affect the IDE).",
+                "Render previews in an isolated process to protect the IDE from crashes.",
                 default = true, group = "Preview process",
             ),
         )
@@ -301,7 +301,7 @@ object BuiltInSettingsPages {
         listOf(
             SettingControl.Choice(
                 LOW_MEMORY_MODE, "Low memory mode",
-                "Use smaller caches, skip background warm-ups, and free memory whenever the IDE leaves the screen, so the system is less likely to close it. Auto turns this on for devices with little memory. Takes effect the next time you open a project.",
+                "Use smaller caches and conserve memory on devices with limited RAM.",
                 default = dev.ide.platform.DeviceMemory.MODE_AUTO,
                 options = listOf(
                     SettingControl.Choice.Option(dev.ide.platform.DeviceMemory.MODE_AUTO, "Auto"),
@@ -311,12 +311,12 @@ object BuiltInSettingsPages {
             ),
             SettingControl.Toggle(
                 SEPARATE_PROCESS, "Build in a separate process",
-                "Run builds and your program in an isolated process so an out-of-memory crash can't take down the IDE. Off = build in-process (uses less memory, no isolation). Takes effect the next time you open a project.",
+                "Run builds in an isolated process to protect the IDE from out-of-memory crashes.",
                 default = true,
             ),
             SettingControl.Toggle(
                 INJECT_APP_LOG, "Forward app logs",
-                "On a debug build, inject a small log bridge into your app so its logs (logcat, println, crashes) stream to the Logcat tab. Debug builds only — release builds are never modified. Applies on the next build.",
+                "Stream app logcat and console output to the Logcat tab on debug builds.",
                 default = true,
             ),
             // The Build Runtime page's R8 controls are rendered dynamically by SettingsBackend (the slider's
@@ -350,7 +350,7 @@ object BuiltInSettingsPages {
             ),
             SettingControl.Choice(
                 KOTLINC_MODE, "Kotlin compiler execution",
-                "Keep a Kotlin compiler VM running alongside the IDE so compiles get more memory than the app is allowed and don't compete with the editor. Off = compile inside the IDE process. Applies on the next build.",
+                "Run the Kotlin compiler in a dedicated worker process with separate memory.",
                 default = KOTLINC_MODE_DEFAULT,
                 options = listOf(
                     SettingControl.Choice.Option(KOTLINC_MODE_FORKED, "Compiler VM"),
@@ -359,12 +359,12 @@ object BuiltInSettingsPages {
             ),
             SettingControl.IntSlider(
                 KOTLINC_MAX_HEAP, "Kotlin compiler VM heap",
-                "Memory the Kotlin compiler VM may use. The device may grant less, in which case the largest heap it can back is used.",
+                "Maximum heap memory allocated for the Kotlin compiler worker.",
                 default = KOTLINC_MAX_HEAP_DEFAULT, min = 768, max = 4096, step = 128, unit = "MB",
             ),
             SettingControl.IntSlider(
                 KOTLINC_WORKERS, "Kotlin compiler VMs",
-                "How many Kotlin compiler VMs run at once. Each stays resident for the session, so raise this only for a project whose modules compile in parallel.",
+                "Concurrent Kotlin compiler workers for parallel module compilation.",
                 default = KOTLINC_WORKERS_DEFAULT, min = 1, max = 3, step = 1, advanced = true,
             ),
         )

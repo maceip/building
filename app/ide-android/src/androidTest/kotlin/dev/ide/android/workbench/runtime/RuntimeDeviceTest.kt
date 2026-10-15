@@ -29,7 +29,40 @@ class RuntimeDeviceTest {
             assertTrue(report.toString(), report.npm?.available == true)
             assertTrue(report.toString(), report.python?.available == true)
             assertTrue(report.toString(), report.shell?.available == true)
+            assertTrue(report.toString(), report.xtool?.available == true)
         } finally { controller.close() }
+    }
+
+    @Test fun swiftAndXtoolProbeAndExecutionWorkOffline() = runBlocking {
+        val controller = controller()
+        val parent = Files.createTempDirectory(context.cacheDir.toPath(), "runtime-swift-test-")
+        try {
+            val project = Files.createDirectories(parent.resolve("SwiftApp"))
+            RuntimeFiles.writeUtf8(project.resolve("Package.swift"), """
+                // swift-tools-version: 5.9
+                import PackageDescription
+
+                let package = Package(
+                    name: "SwiftApp",
+                    targets: [
+                        .executableTarget(name: "SwiftApp", path: "Sources")
+                    ]
+                )
+            """.trimIndent())
+            val sources = Files.createDirectories(project.resolve("Sources"))
+            RuntimeFiles.writeUtf8(sources.resolve("main.swift"), """
+                print("Hello from Swift and XTool on Android!")
+            """.trimIndent())
+
+            val targets = controller.targets(project)
+            assertTrue(targets.toString(), targets.any { it.kind == RuntimeKind.XTOOL })
+
+            // Test execution through controller
+            controller.run(RuntimeRunRequest(project, "xtool:build", listOf("--version")))
+            val result = withTimeout(60_000) { controller.state.first { !it.isRunning } }
+            assertEquals(result.toString(), 0, result.exitCode)
+            assertTrue(result.stdout, result.stdout.contains("xtool") || result.transcript.contains("xtool"))
+        } finally { controller.stop(); controller.close() }
     }
 
     @Test fun nodeHttpNpmAndStopAreRealOfflineProcesses() = runBlocking {

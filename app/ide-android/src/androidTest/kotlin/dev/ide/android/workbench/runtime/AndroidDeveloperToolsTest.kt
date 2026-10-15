@@ -35,8 +35,13 @@ class AndroidDeveloperToolsTest {
         assertEquals("pip 25.9.1", inventory.tool(RuntimeFeature.PYTHON)?.secondary)
         assertEquals("0.5.12-3", inventory.tool(RuntimeFeature.SHELL)?.version)
         assertNull(inventory.tool(RuntimeFeature.STATIC))
+        assertNull(inventory.tool(RuntimeFeature.XTOOL))
         val changed = parseDeveloperRuntimeInventory(manifest.replace("24.9.1-2", "30.1.0"))
         assertEquals("30.1.0", changed.tool(RuntimeFeature.NODE)?.version)
+        val xtoolManifest = """{"format":1,"packages":[{"name":"swift","version":"6.4.1"},{"name":"xtool","version":"0.1.0"}]}"""
+        val xtoolInv = parseDeveloperRuntimeInventory(xtoolManifest)
+        assertEquals("6.4.1", xtoolInv.tool(RuntimeFeature.XTOOL)?.version)
+        assertEquals("xtool 0.1.0", xtoolInv.tool(RuntimeFeature.XTOOL)?.secondary)
     }
 
     @Test fun missingPackagesDoNotInventInstalledCapabilitiesOrVersions() {

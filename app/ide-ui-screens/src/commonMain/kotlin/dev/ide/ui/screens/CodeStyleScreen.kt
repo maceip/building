@@ -77,6 +77,8 @@ import dev.ide.ui.generated.resources.codestyle_keep_at_most_desc
 import dev.ide.ui.generated.resources.codestyle_kotlin_note
 import dev.ide.ui.generated.resources.codestyle_lang_java
 import dev.ide.ui.generated.resources.codestyle_lang_kotlin
+import dev.ide.ui.generated.resources.codestyle_lang_python
+import dev.ide.ui.generated.resources.codestyle_lang_typescript
 import dev.ide.ui.generated.resources.codestyle_language
 import dev.ide.ui.generated.resources.codestyle_language_desc
 import dev.ide.ui.generated.resources.codestyle_line_width
@@ -87,6 +89,8 @@ import dev.ide.ui.generated.resources.codestyle_preset_android
 import dev.ide.ui.generated.resources.codestyle_preset_custom
 import dev.ide.ui.generated.resources.codestyle_preset_google
 import dev.ide.ui.generated.resources.codestyle_preset_kotlin_official
+import dev.ide.ui.generated.resources.codestyle_preset_pep8
+import dev.ide.ui.generated.resources.codestyle_preset_standard
 import dev.ide.ui.generated.resources.codestyle_preview
 import dev.ide.ui.generated.resources.codestyle_preview_no_project
 import dev.ide.ui.generated.resources.codestyle_reformat_on_save
@@ -110,15 +114,17 @@ import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
 
 internal const val LANG_JAVA = "java"
-private const val LANG_KOTLIN = "kotlin"
+internal const val LANG_KOTLIN = "kotlin"
+internal const val LANG_PYTHON = "python"
+internal const val LANG_TYPESCRIPT = "typescript"
 internal const val PRESET_CUSTOM = "custom"
 internal const val FORMAT_ON_SAVE_KEY = "settings.codeStyle.formatOnSave"
 
 /**
- * The dedicated Code Style screen: a per-language formatting profile (Java / Kotlin), a preset, the detailed
- * options grouped by category, and a live preview that runs the real formatter on a fixed sample as you tune.
- * Java honors every option; the Kotlin re-indenter honors only indentation / tabs / blank-lines, so the
- * Java-only groups are hidden on the Kotlin tab.
+ * The dedicated Code Style screen: a per-language formatting profile (Java / Kotlin / Python / TypeScript),
+ * a preset, the detailed options grouped by category, and a live preview that runs the real formatter on a
+ * fixed sample as you tune. Java honors every option; the Kotlin re-indenter honors only indentation / tabs /
+ * blank-lines; Python honors indentation, line length and comments; TypeScript honors all C-family rules.
  *
  * The live preview runs the real formatter, which needs an open project's engine; with [hasProject] false
  * (the screen reached from the project picker's hub) it's disabled and the card shows a hint instead. Editing
@@ -131,7 +137,17 @@ fun CodeStyleScreen(backend: IdeBackend, hasProject: Boolean, onBack: () -> Unit
     val state = rememberCodeStyleScreenState(backend, hasProject)
     val display = state.display
     val javaOnly = state.javaOnly
+    val hasBraces = state.hasBraces
+    val isPython = state.language == LANG_PYTHON
+    val isTypeScript = state.language == LANG_TYPESCRIPT
     val custom = state.custom
+
+    val languageOptions = buildList {
+        add(LANG_JAVA to stringResource(Res.string.codestyle_lang_java))
+        add(LANG_KOTLIN to stringResource(Res.string.codestyle_lang_kotlin))
+        if (state.pythonAvailable) add(LANG_PYTHON to stringResource(Res.string.codestyle_lang_python))
+        if (state.nodeAvailable) add(LANG_TYPESCRIPT to stringResource(Res.string.codestyle_lang_typescript))
+    }
 
     ExpressiveScaffold(title = stringResource(Res.string.codestyle_title), onBack = onBack) { innerPadding ->
         Column(
@@ -141,7 +157,7 @@ fun CodeStyleScreen(backend: IdeBackend, hasProject: Boolean, onBack: () -> Unit
             SettingsCard(null) {
                 SettingsChoiceRow(
                     stringResource(Res.string.codestyle_language), stringResource(Res.string.codestyle_language_desc), state.language,
-                    listOf(LANG_JAVA to stringResource(Res.string.codestyle_lang_java), LANG_KOTLIN to stringResource(Res.string.codestyle_lang_kotlin)),
+                    languageOptions,
                 ) { state.selectLanguage(it) }
                 SettingsDivider()
                 SettingsChoiceRow(
@@ -156,9 +172,15 @@ fun CodeStyleScreen(backend: IdeBackend, hasProject: Boolean, onBack: () -> Unit
 
             PreviewCard(state.preview, state.language, hasProject)
 
-            if (!javaOnly) {
+            if (state.language == LANG_KOTLIN) {
                 Text(
                     stringResource(Res.string.codestyle_kotlin_note),
+                    color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            } else if (isPython) {
+                Text(
+                    "Python formatting manages indentation, line width, and comments according to PEP 8 standards.",
                     color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(horizontal = 4.dp),
                 )
@@ -167,17 +189,21 @@ fun CodeStyleScreen(backend: IdeBackend, hasProject: Boolean, onBack: () -> Unit
             if (custom) {
                 SettingsCard(stringResource(Res.string.codestyle_indentation)) {
                     SettingsSliderRow(stringResource(Res.string.codestyle_indent_size), stringResource(Res.string.codestyle_indent_size_desc), display.indentSize, 1, 8, 1, null) { state.edit { copy(indentSize = it) } }
-                    if (javaOnly) {
+                    if (javaOnly || isTypeScript) {
                         SettingsDivider()
                         SettingsSliderRow(stringResource(Res.string.codestyle_continuation_indent), stringResource(Res.string.codestyle_continuation_indent_desc), display.continuationIndent, 1, 16, 1, null) { state.edit { copy(continuationIndent = it) } }
+                    }
+                    if (javaOnly || isTypeScript || isPython) {
                         SettingsDivider()
                         SettingsSliderRow(stringResource(Res.string.codestyle_line_width), stringResource(Res.string.codestyle_line_width_desc), display.maxLineLength, 60, 200, 10, null) { state.edit { copy(maxLineLength = it) } }
                     }
-                    SettingsDivider()
-                    SettingsToggleRow(stringResource(Res.string.codestyle_indent_with_tabs), stringResource(Res.string.codestyle_indent_with_tabs_desc), display.useTabs) { state.edit { copy(useTabs = it) } }
+                    if (!isPython) {
+                        SettingsDivider()
+                        SettingsToggleRow(stringResource(Res.string.codestyle_indent_with_tabs), stringResource(Res.string.codestyle_indent_with_tabs_desc), display.useTabs) { state.edit { copy(useTabs = it) } }
+                    }
                 }
 
-                if (javaOnly) {
+                if (javaOnly || isTypeScript) {
                     SettingsCard(stringResource(Res.string.codestyle_wrapping_and_braces)) {
                         SettingsChoiceRow(stringResource(Res.string.codestyle_brace_placement), null, display.braceStyle, listOf("endOfLine" to stringResource(Res.string.codestyle_brace_end_of_line), "nextLine" to stringResource(Res.string.codestyle_brace_next_line))) { state.edit { copy(braceStyle = it) } }
                         SettingsDivider()
@@ -191,33 +217,34 @@ fun CodeStyleScreen(backend: IdeBackend, hasProject: Boolean, onBack: () -> Unit
                     }
                 }
 
-                // Inline spacing. The first five rules are honored by Kotlin too (token-level rewriting); the
-                // rest need Java's full formatter, so they are Java-only.
-                SettingsCard(stringResource(Res.string.codestyle_spaces)) {
-                    SettingsToggleRow(stringResource(Res.string.codestyle_within_parens), stringResource(Res.string.codestyle_within_parens_desc), display.spaceWithinParens) { state.edit { copy(spaceWithinParens = it) } }
-                    SettingsDivider()
-                    SettingsToggleRow(stringResource(Res.string.codestyle_after_comma), stringResource(Res.string.codestyle_after_comma_desc), display.spaceAfterComma) { state.edit { copy(spaceAfterComma = it) } }
-                    SettingsDivider()
-                    SettingsToggleRow(stringResource(Res.string.codestyle_around_operators), stringResource(Res.string.codestyle_around_operators_desc), display.spaceAroundOperators) { state.edit { copy(spaceAroundOperators = it) } }
-                    SettingsDivider()
-                    SettingsToggleRow(stringResource(Res.string.codestyle_before_brace), stringResource(Res.string.codestyle_before_brace_desc), display.spaceBeforeBrace) { state.edit { copy(spaceBeforeBrace = it) } }
-                    SettingsDivider()
-                    SettingsToggleRow(stringResource(Res.string.codestyle_around_lambda_arrow), stringResource(Res.string.codestyle_around_lambda_arrow_desc), display.spaceAroundLambdaArrow) { state.edit { copy(spaceAroundLambdaArrow = it) } }
-                    if (javaOnly) {
+                // Inline spacing
+                if (!isPython) {
+                    SettingsCard(stringResource(Res.string.codestyle_spaces)) {
+                        SettingsToggleRow(stringResource(Res.string.codestyle_within_parens), stringResource(Res.string.codestyle_within_parens_desc), display.spaceWithinParens) { state.edit { copy(spaceWithinParens = it) } }
                         SettingsDivider()
-                        SettingsToggleRow(stringResource(Res.string.codestyle_before_parens), stringResource(Res.string.codestyle_before_parens_desc), display.spaceBeforeParens) { state.edit { copy(spaceBeforeParens = it) } }
+                        SettingsToggleRow(stringResource(Res.string.codestyle_after_comma), stringResource(Res.string.codestyle_after_comma_desc), display.spaceAfterComma) { state.edit { copy(spaceAfterComma = it) } }
                         SettingsDivider()
-                        SettingsToggleRow(stringResource(Res.string.codestyle_before_semicolon), stringResource(Res.string.codestyle_before_semicolon_desc), display.spaceBeforeSemicolon) { state.edit { copy(spaceBeforeSemicolon = it) } }
+                        SettingsToggleRow(stringResource(Res.string.codestyle_around_operators), stringResource(Res.string.codestyle_around_operators_desc), display.spaceAroundOperators) { state.edit { copy(spaceAroundOperators = it) } }
                         SettingsDivider()
-                        SettingsToggleRow(stringResource(Res.string.codestyle_around_ternary), stringResource(Res.string.codestyle_around_ternary_desc), display.spaceAroundTernary) { state.edit { copy(spaceAroundTernary = it) } }
+                        SettingsToggleRow(stringResource(Res.string.codestyle_before_brace), stringResource(Res.string.codestyle_before_brace_desc), display.spaceBeforeBrace) { state.edit { copy(spaceBeforeBrace = it) } }
                         SettingsDivider()
-                        SettingsToggleRow(stringResource(Res.string.codestyle_after_type_cast), stringResource(Res.string.codestyle_after_type_cast_desc), display.spaceAfterTypeCast) { state.edit { copy(spaceAfterTypeCast = it) } }
+                        SettingsToggleRow(stringResource(Res.string.codestyle_around_lambda_arrow), stringResource(Res.string.codestyle_around_lambda_arrow_desc), display.spaceAroundLambdaArrow) { state.edit { copy(spaceAroundLambdaArrow = it) } }
+                        if (javaOnly) {
+                            SettingsDivider()
+                            SettingsToggleRow(stringResource(Res.string.codestyle_before_parens), stringResource(Res.string.codestyle_before_parens_desc), display.spaceBeforeParens) { state.edit { copy(spaceBeforeParens = it) } }
+                            SettingsDivider()
+                            SettingsToggleRow(stringResource(Res.string.codestyle_before_semicolon), stringResource(Res.string.codestyle_before_semicolon_desc), display.spaceBeforeSemicolon) { state.edit { copy(spaceBeforeSemicolon = it) } }
+                            SettingsDivider()
+                            SettingsToggleRow(stringResource(Res.string.codestyle_around_ternary), stringResource(Res.string.codestyle_around_ternary_desc), display.spaceAroundTernary) { state.edit { copy(spaceAroundTernary = it) } }
+                            SettingsDivider()
+                            SettingsToggleRow(stringResource(Res.string.codestyle_after_type_cast), stringResource(Res.string.codestyle_after_type_cast_desc), display.spaceAfterTypeCast) { state.edit { copy(spaceAfterTypeCast = it) } }
+                        }
                     }
                 }
 
                 SettingsCard(stringResource(Res.string.codestyle_blank_lines)) {
                     SettingsSliderRow(stringResource(Res.string.codestyle_keep_at_most), stringResource(Res.string.codestyle_keep_at_most_desc), display.blankLinesToKeep, 0, 5, 1, null) { state.edit { copy(blankLinesToKeep = it) } }
-                    if (javaOnly) {
+                    if (javaOnly || isTypeScript) {
                         SettingsDivider()
                         SettingsSliderRow(stringResource(Res.string.codestyle_after_imports), null, display.blankLinesAfterImports, 0, 5, 1, null) { state.edit { copy(blankLinesAfterImports = it) } }
                         SettingsDivider()
@@ -231,7 +258,7 @@ fun CodeStyleScreen(backend: IdeBackend, hasProject: Boolean, onBack: () -> Unit
                     }
                 }
 
-                if (javaOnly) {
+                if (javaOnly || isTypeScript || isPython) {
                     SettingsCard(stringResource(Res.string.codestyle_comments)) {
                         SettingsToggleRow(stringResource(Res.string.codestyle_format_comments), stringResource(Res.string.codestyle_format_comments_desc), display.formatComments) { state.edit { copy(formatComments = it) } }
                         SettingsDivider()
@@ -265,7 +292,12 @@ private fun PreviewCard(preview: String, language: String, hasProject: Boolean) 
                 } else if (preview.isEmpty()) {
                     Text("…", color = MaterialTheme.colorScheme.outline, style = Ide.type.codeSmall)
                 } else {
-                    val codeLang = if (language == LANG_KOTLIN) CodeLanguage.Kotlin else CodeLanguage.Java
+                    val codeLang = when (language) {
+                        LANG_KOTLIN -> CodeLanguage.Kotlin
+                        LANG_PYTHON -> CodeLanguage.Python
+                        LANG_TYPESCRIPT -> CodeLanguage.TypeScript
+                        else -> CodeLanguage.Java
+                    }
                     val syntax = Ide.colors.syntax
                     val highlighted = remember(preview, codeLang, syntax) { highlight(preview, codeLang, syntax) }
                     Text(
@@ -284,6 +316,15 @@ private fun presetOptions(language: String): List<Pair<String, String>> = when (
     LANG_KOTLIN -> listOf(
         "kotlin_official" to stringResource(Res.string.codestyle_preset_kotlin_official),
         "android" to stringResource(Res.string.codestyle_preset_android),
+        PRESET_CUSTOM to stringResource(Res.string.codestyle_preset_custom),
+    )
+    LANG_PYTHON -> listOf(
+        "pep8" to stringResource(Res.string.codestyle_preset_pep8),
+        PRESET_CUSTOM to stringResource(Res.string.codestyle_preset_custom),
+    )
+    LANG_TYPESCRIPT -> listOf(
+        "standard" to stringResource(Res.string.codestyle_preset_standard),
+        "google" to stringResource(Res.string.codestyle_preset_google),
         PRESET_CUSTOM to stringResource(Res.string.codestyle_preset_custom),
     )
     else -> listOf(
@@ -309,5 +350,7 @@ internal fun displayStyle(style: UiCodeStyle): UiCodeStyle =
 private fun presetDefaults(preset: String): UiCodeStyle = when (preset) {
     "android" -> UiCodeStyle(preset = "android", indentSize = 4, continuationIndent = 8)
     "kotlin_official" -> UiCodeStyle(preset = "kotlin_official", indentSize = 4, continuationIndent = 8)
+    "pep8" -> UiCodeStyle(preset = "pep8", indentSize = 4, continuationIndent = 4, maxLineLength = 88)
+    "standard" -> UiCodeStyle(preset = "standard", indentSize = 2, continuationIndent = 4, maxLineLength = 100)
     else -> UiCodeStyle(preset = "google", indentSize = 2, continuationIndent = 4)
 }

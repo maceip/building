@@ -80,6 +80,8 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 "TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE" to "force",
                 "TERMUX__PREFIX" to prefix.toString(),
                 "BUILDING_RUNTIME_NATIVE_DIR" to native.toString(),
+                "XTOOL_RUNTIME_NATIVE_DIR" to native.toString(),
+                "SOURCEKIT_TOOLCHAIN_PATH" to prefix.toString(),
                 "TERMUX_APP__DATA_DIR" to app.dataDir.absolutePath,
                 "TERMUX_APP__LEGACY_DATA_DIR" to app.dataDir.absolutePath.replaceFirst("/data/user/0/", "/data/data/"),
                 "SHELL" to prefix.resolve("bin/sh").toString(),
@@ -106,7 +108,8 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
             executable("clang++")?.let { env["CXX"] = it.toString() }
             executable("llvm-ar")?.let { env["AR"] = it.toString() }
             executable("python3")?.let { env["PYTHON"] = it.toString(); env["npm_config_python"] = it.toString() }
-            val pack = RuntimeInstallation(packId, "arm64-v8a", prefix, executable("node")?.toRealPath(), prefix.resolve("lib/node_modules/npm/bin/npm-cli.js").takeIf { Files.isRegularFile(it) }, executable("python3"), executable("sh"), env)
+            val xtoolBin = executable("xtool") ?: native.resolve("xtool").takeIf { Files.isRegularFile(it) }
+            val pack = RuntimeInstallation(packId, "arm64-v8a", prefix, executable("node")?.toRealPath(), prefix.resolve("lib/node_modules/npm/bin/npm-cli.js").takeIf { Files.isRegularFile(it) }, executable("python3"), executable("sh"), env, xtoolBin)
             installation = pack
             pack
         }

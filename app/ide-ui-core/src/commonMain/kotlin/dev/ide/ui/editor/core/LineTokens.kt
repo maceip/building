@@ -135,6 +135,34 @@ internal val AIDL_KEYWORDS = setOf(
     "void", "boolean", "byte", "char", "int", "long", "float", "double", "true", "false",
 )
 
+internal val PYTHON_KEYWORDS = setOf(
+    "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del",
+    "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in",
+    "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while",
+    "with", "yield", "True", "False", "None", "self", "cls",
+)
+
+internal val TYPESCRIPT_KEYWORDS = setOf(
+    "abstract", "any", "as", "async", "await", "boolean", "break", "case", "catch", "class",
+    "const", "constructor", "continue", "debugger", "declare", "default", "delete", "do",
+    "else", "enum", "export", "extends", "false", "finally", "for", "from", "function",
+    "get", "if", "implements", "import", "in", "instanceof", "interface", "is", "keyof",
+    "let", "module", "namespace", "never", "new", "null", "number", "of", "package",
+    "private", "protected", "public", "readonly", "require", "return", "set", "static",
+    "string", "super", "switch", "symbol", "this", "throw", "true", "try", "type",
+    "typeof", "undefined", "unknown", "var", "void", "while", "with", "yield",
+)
+
+internal val SWIFT_KEYWORDS = setOf(
+    "associatedtype", "class", "deinit", "enum", "extension", "fileprivate", "func", "import",
+    "init", "inout", "internal", "let", "open", "operator", "private", "precedencegroup",
+    "protocol", "public", "rethrows", "static", "struct", "subscript", "typealias", "var",
+    "break", "case", "catch", "continue", "default", "defer", "do", "else", "fallthrough",
+    "for", "guard", "if", "in", "repeat", "return", "throw", "switch", "where", "while",
+    "as", "Any", "false", "is", "nil", "self", "Self", "super", "true", "try", "throws",
+    "async", "await", "actor", "some", "isolated", "nonisolated", "consuming", "borrowing", "macro",
+)
+
 private fun isPunct(c: Char) = c in "{}()[];,.<>=+-*\\/%&|!?:^~@"
 
 private fun isBracket(c: Char) = c in "{}()[]"
@@ -191,7 +219,9 @@ fun styleLine(line: String, entryState: Int, language: CodeLanguage): StyledLine
     when (language.profile.syntax) {
         SyntaxFamily.PLAIN -> StyledLine.EMPTY
         SyntaxFamily.XML -> styleXmlLine(line, entryState)
-        SyntaxFamily.HASH_COMMENT -> styleProguardLine(line)
+        SyntaxFamily.HASH_COMMENT ->
+            if (language.id == "python") stylePythonLine(line, entryState)
+            else styleProguardLine(line)
         SyntaxFamily.MARKDOWN -> styleMarkdownLine(line, entryState)
         SyntaxFamily.C_FAMILY ->
             if (language == CodeLanguage.Kotlin) styleKotlinLine(line, entryState)
@@ -359,6 +389,71 @@ private fun styleProguardLine(line: String): StyledLine {
                 if (line[start].isUpperCase()) spans.add(LineSpan(start, i, TokenType.TYPE))
             }
             c in "{}()[];,*" -> { spans.add(LineSpan(i, i + 1, TokenType.PUNCT)); i++ }
+            else -> i++
+        }
+    }
+    return StyledLine(spans, LexState.CODE)
+}
+
+/** Python line styling: `#` comments, single/double/triple quoted strings, keywords, numbers, `@` decorators. */
+private fun stylePythonLine(line: String, entryState: Int): StyledLine {
+    val n = line.length
+    val spans = ArrayList<LineSpan>(8)
+    var i = 0
+    while (i < n) {
+        val c = line[i]
+        when {
+            c == '#' -> {
+                spans.add(LineSpan(i, n, TokenType.COMMENT))
+                return StyledLine(spans, LexState.CODE)
+            }
+            c == '"' || c == '\'' -> {
+                val start = i
+                val triple = i + 2 < n && line[i + 1] == c && line[i + 2] == c
+                if (triple) {
+                    i += 3
+                    val close = line.indexOf(if (c == '"') "\"\"\"" else "'''", i)
+                    if (close < 0) {
+                        spans.add(LineSpan(start, n, TokenType.STRING))
+                        return StyledLine(spans, LexState.CODE)
+                    }
+                    i = close + 3
+                } else {
+                    i++
+                    while (i < n && line[i] != c) { if (line[i] == '\\') i++; i++ }
+                    if (i < n) i++
+                }
+                spans.add(LineSpan(start, i.coerceAtMost(n), TokenType.STRING))
+            }
+            c.isDigit() -> {
+                val start = i; i++
+                while (i < n && (line[i].isLetterOrDigit() || line[i] == '.' || line[i] == '_')) i++
+                spans.add(LineSpan(start, i, TokenType.NUMBER))
+            }
+            c == '@' -> {
+                val start = i; i++
+                while (i < n && (line[i].isLetterOrDigit() || line[i] == '_' || line[i] == '.')) i++
+                spans.add(LineSpan(start, i, TokenType.ANNOTATION))
+            }
+            c.isLetter() || c == '_' -> {
+                val start = i; i++
+                while (i < n && (line[i].isLetterOrDigit() || line[i] == '_')) i++
+                val word = line.substring(start, i)
+                val type = when {
+                    word in PYTHON_KEYWORDS -> keywordType(word)
+                    else -> {
+                        var j = i
+                        while (j < n && (line[j] == ' ' || line[j] == '\t')) j++
+                        when {
+                            j < n && line[j] == '(' -> TokenType.FUNC
+                            word[0].isUpperCase() -> TokenType.TYPE
+                            else -> null
+                        }
+                    }
+                }
+                if (type != null) spans.add(LineSpan(start, i, type))
+            }
+            isPunct(c) -> { spans.add(LineSpan(i, i + 1, punctType(c))); i++ }
             else -> i++
         }
     }

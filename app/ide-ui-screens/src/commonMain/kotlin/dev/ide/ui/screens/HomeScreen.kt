@@ -37,8 +37,6 @@ import dev.ide.ui.HomeTab
 import dev.ide.ui.components.AppNavBar
 import dev.ide.ui.components.NavDestination
 import dev.ide.ui.generated.resources.Res
-import dev.ide.ui.generated.resources.home_challenges
-import dev.ide.ui.generated.resources.home_learn
 import dev.ide.ui.generated.resources.home_store
 import dev.ide.ui.generated.resources.projects
 import dev.ide.ui.icons.CaSymbols
@@ -72,16 +70,14 @@ fun HomeScreen(
     onSelectTab: (HomeTab) -> Unit,
     projectsContent: @Composable () -> Unit,
     storeContent: @Composable () -> Unit,
-    learnContent: @Composable () -> Unit,
-    challengesContent: @Composable () -> Unit,
+    learnContent: @Composable () -> Unit = {},
+    challengesContent: @Composable () -> Unit = {},
     projectCount: Int? = null,
     sidebarFooter: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val destinations = listOf(
         NavDestination(HomeTab.Projects.name, stringResource(Res.string.projects), CaSymbols.folderOpen),
         NavDestination(HomeTab.Store.name, stringResource(Res.string.home_store), CaSymbols.travelExplore),
-        NavDestination(HomeTab.Learn.name, stringResource(Res.string.home_learn), CaSymbols.school),
-        NavDestination(HomeTab.Challenges.name, stringResource(Res.string.home_challenges), CaSymbols.bolt),
     )
     // Matched against the entries rather than `valueOf`, which THROWS on an id that is not a tab name. The
     // navigation speaks in strings, so any id that does not round-trip (a destination another build
@@ -99,8 +95,7 @@ fun HomeScreen(
                 when (t) {
                     HomeTab.Projects -> projectsContent()
                     HomeTab.Store -> storeContent()
-                    HomeTab.Learn -> learnContent()
-                    HomeTab.Challenges -> challengesContent()
+                    else -> projectsContent()
                 }
             }
         }

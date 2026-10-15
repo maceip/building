@@ -12,11 +12,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -28,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -37,9 +42,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.components.BottomSheet
+import dev.ide.ui.components.CaDropdownMenu
 import dev.ide.ui.components.CenteredDialog
 import dev.ide.ui.components.ColorPickerDialog
 import dev.ide.ui.components.ExpressiveScaffold
+import dev.ide.ui.icons.CaSymbols
+import dev.ide.ui.theme.Symbol
 import dev.ide.ui.components.SettingsActionRow
 import dev.ide.ui.components.SettingsCard
 import dev.ide.ui.components.SettingsChoiceRow
@@ -91,6 +99,7 @@ import dev.ide.ui.theme.colors.AttributeStyle
 import dev.ide.ui.theme.colors.ColorAttribute
 import dev.ide.ui.theme.colors.ColorAttributes
 import dev.ide.ui.theme.colors.ColorSchemeStore
+import dev.ide.ui.theme.colors.ColorKeys
 import dev.ide.ui.theme.colors.EditorColorScheme
 import dev.ide.ui.theme.colors.ResolvedColorScheme
 import dev.ide.ui.theme.colors.toArgbLong
@@ -151,18 +160,103 @@ fun ColorSchemeScreen(
         }
     }
 
-    ExpressiveScaffold(title = stringResource(Res.string.colors_title), onBack = onBack) { innerPadding ->
+    ExpressiveScaffold(
+        title = stringResource(Res.string.colors_title),
+        onBack = onBack,
+        large = false,
+        actions = {
+            var menuOpen by remember { mutableStateOf(false) }
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Symbol(CaSymbols.moreVert, contentDescription = "More options", tint = MaterialTheme.colorScheme.onSurface)
+                }
+                CaDropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(Res.string.colors_duplicate)) },
+                        onClick = { menuOpen = false; duplicating = true },
+                    )
+                    if (!state.scheme.builtIn) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(Res.string.colors_rename)) },
+                            onClick = { menuOpen = false; renaming = true },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text(stringResource(Res.string.colors_copy)) },
+                        onClick = {
+                            menuOpen = false
+                            clipboard.setText(AnnotatedString(state.exportJson()))
+                            notice = SchemeNotice.Copied
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(Res.string.colors_paste)) },
+                        onClick = { menuOpen = false; pasting = true },
+                    )
+                    if (onImportFile != null) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(Res.string.colors_import)) },
+                            onClick = {
+                                menuOpen = false
+                                onImportFile { json ->
+                                    notice = state.import(json)?.let { SchemeNotice.Imported(it) } ?: SchemeNotice.ImportFailed
+                                }
+                            },
+                        )
+                    }
+                    if (onExportFile != null) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(Res.string.colors_export)) },
+                            onClick = {
+                                menuOpen = false
+                                onExportFile("${state.scheme.id}.colors.json", state.exportJson())
+                            },
+                        )
+                    }
+                    if (!state.scheme.builtIn) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(Res.string.colors_reset)) },
+                            onClick = { menuOpen = false; state.resetVariant() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(Res.string.colors_delete), color = MaterialTheme.colorScheme.error) },
+                            onClick = { menuOpen = false; confirmDelete = true },
+                        )
+                    }
+                }
+            }
+        },
+    ) { innerPadding ->
         Column(
             Modifier.fillMaxSize().padding(innerPadding).verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             SettingsCard(null) {
-                SettingsChoiceRow(
-                    stringResource(Res.string.colors_scheme),
-                    stringResource(Res.string.colors_scheme_desc),
-                    state.scheme.id,
-                    state.schemes.map { it.id to it.name },
-                ) { state.select(it) }
+                // Two compact rows of themes with live preview swatches
+                val row1 = ArrayList<EditorColorScheme>()
+                val row2 = ArrayList<EditorColorScheme>()
+                state.schemes.forEachIndexed { i, s ->
+                    if (i % 2 == 0) row1.add(s) else row2.add(s)
+                }
+                Column(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row1.forEach { scheme ->
+                            ThemeBentoCard(scheme, isSelected = scheme.id == state.scheme.id, isDark = isDark) {
+                                state.select(scheme.id)
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        row2.forEach { scheme ->
+                            ThemeBentoCard(scheme, isSelected = scheme.id == state.scheme.id, isDark = isDark) {
+                                state.select(scheme.id)
+                            }
+                        }
+                    }
+                }
 
                 val forked = state.forkedInto
                 when {
@@ -170,49 +264,6 @@ fun ColorSchemeScreen(
                     state.scheme.builtIn -> Notice(stringResource(Res.string.colors_builtin_notice, state.scheme.name))
                 }
                 notice?.let { Notice(noticeText(it)) }
-
-                SettingsDivider()
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ActionChip(stringResource(Res.string.colors_duplicate), Modifier.weight(1f)) { duplicating = true }
-                    if (!state.scheme.builtIn) {
-                        ActionChip(stringResource(Res.string.colors_rename), Modifier.weight(1f)) { renaming = true }
-                    }
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ActionChip(stringResource(Res.string.colors_copy), Modifier.weight(1f)) {
-                        clipboard.setText(AnnotatedString(state.exportJson()))
-                        notice = SchemeNotice.Copied
-                    }
-                    ActionChip(stringResource(Res.string.colors_paste), Modifier.weight(1f)) { pasting = true }
-                }
-                if (onImportFile != null || onExportFile != null) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        onImportFile?.let { pick ->
-                            ActionChip(stringResource(Res.string.colors_import), Modifier.weight(1f)) {
-                                pick { json ->
-                                    notice = state.import(json)
-                                        ?.let { SchemeNotice.Imported(it) } ?: SchemeNotice.ImportFailed
-                                }
-                            }
-                        }
-                        onExportFile?.let { export ->
-                            ActionChip(stringResource(Res.string.colors_export), Modifier.weight(1f)) {
-                                export("${state.scheme.id}.colors.json", state.exportJson())
-                            }
-                        }
-                    }
-                }
-                if (!state.scheme.builtIn) {
-                    SettingsDivider()
-                    SettingsActionRow(
-                        stringResource(Res.string.colors_reset), null,
-                        stringResource(Res.string.colors_reset), destructive = false,
-                    ) { state.resetVariant() }
-                    SettingsActionRow(
-                        stringResource(Res.string.colors_delete), null,
-                        stringResource(Res.string.delete), destructive = true,
-                    ) { confirmDelete = true }
-                }
             }
 
             SettingsCard(stringResource(Res.string.colors_preview)) {
@@ -575,6 +626,62 @@ private fun SampleTab(label: String, selected: Boolean, onClick: () -> Unit) {
             color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
+private fun ThemeBentoCard(
+    scheme: EditorColorScheme,
+    isSelected: Boolean,
+    isDark: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(Ca.radius.control)
+    val variant = scheme.variant(isDark)
+    val bgColor = variant[ColorKeys.EDITOR_BACKGROUND]?.background
+        ?: if (isDark) Color(0xFF1E1E1E) else Color(0xFFFFFFFF)
+    val keywordColor = variant[ColorKeys.KEYWORD]?.foreground
+        ?: if (isDark) Color(0xFFCC7832) else Color(0xFF0033B3)
+    val functionColor = variant[ColorKeys.FUNCTION]?.foreground
+        ?: if (isDark) Color(0xFFFFC66D) else Color(0xFF00627A)
+    val stringColor = variant[ColorKeys.STRING]?.foreground
+        ?: if (isDark) Color(0xFF6A8759) else Color(0xFF067D17)
+
+    val borderColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+    val borderWidth = if (isSelected) 2.dp else 1.dp
+    val cardBg = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f) else MaterialTheme.colorScheme.surfaceContainerHigh
+
+    Row(
+        Modifier
+            .clip(shape)
+            .background(cardBg)
+            .border(borderWidth, borderColor, shape)
+            .clickable(remember { MutableInteractionSource() }, null, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        // Mini preview palette swatch: background tile with 3 colored dots
+        Box(
+            Modifier
+                .size(width = 28.dp, height = 20.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(bgColor)
+                .border(0.5.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(4.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(4.dp).background(keywordColor, CircleShape))
+                Box(Modifier.size(4.dp).background(functionColor, CircleShape))
+                Box(Modifier.size(4.dp).background(stringColor, CircleShape))
+            }
+        }
+        Text(
+            scheme.name,
+            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
         )
     }
 }

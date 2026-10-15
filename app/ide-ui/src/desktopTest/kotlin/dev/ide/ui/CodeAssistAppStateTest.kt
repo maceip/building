@@ -522,7 +522,7 @@ class CodeAssistAppStateTest {
         val app = appState(backend)
         advanceUntilIdle()
 
-        app.selectHomeTab(HomeTab.Learn)
+        app.selectHomeTab(HomeTab.Store)
         assertTrue(app.canNavigateBack)
         app.navigateBack()
         assertEquals(HomeTab.Projects, app.homeTab)
@@ -710,6 +710,21 @@ class CodeAssistAppStateTest {
         advanceUntilIdle()
         assertFalse(app.showImportSourceChoice)
         assertEquals(Screen.Editor, app.screen)
+    }
+
+    @Test
+    fun importSourceChoiceCanBeDismissedByBack() = runTest {
+        val backend = settled(folderKind = UiProjectFolderKind.CODE_ASSIST)
+        val app = appState(backend, PickingActions("/external/my-project", pickDir = true, pickFile = true))
+        advanceUntilIdle()
+
+        app.requestProjectImport()
+        assertTrue(app.showImportSourceChoice, "both sources available — the entry must ask which")
+        assertTrue(app.canNavigateBack, "open import choice dialog must intercept back")
+
+        app.navigateBack()
+        assertFalse(app.showImportSourceChoice, "back dismisses the import choice dialog")
+        assertEquals(Screen.Projects, app.screen)
     }
 
     /** With only one source there is nothing to ask, so the entry goes straight to that picker. */

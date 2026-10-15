@@ -242,7 +242,11 @@ fun ChatDrawer(
     Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         Column(Modifier.fillMaxSize()) {
             val headerModels = models.ifEmpty { cfg.providers.firstOrNull { it.id == cfg.selectedProvider }?.models ?: emptyList() }
-            val onPickModel: (String) -> Unit = { backend.agent.setModel(it); cfg = backend.agent.config() }
+            val onPickModel: (String, String) -> Unit = { providerId, modelId ->
+                backend.agent.selectProvider(providerId)
+                backend.agent.setModel(modelId)
+                cfg = backend.agent.config()
+            }
             val onPickEffort: (String) -> Unit = { backend.agent.setEffort(it); cfg = backend.agent.config() }
             val onCycleMode = {
                 backend.agent.setPermissionMode(nextMode(cfg.mode))
@@ -257,7 +261,7 @@ fun ChatDrawer(
                         models = headerModels,
                         open = modelMenuOpen,
                         onOpen = { modelMenuOpen = it },
-                        onPick = onPickModel,
+                        onPickModel = onPickModel,
                         onManageProviders = { showProviders = true },
                     )
                 },
@@ -462,7 +466,7 @@ private fun ChatHeader(
     models: List<UiAgentModel>,
     modelMenuOpen: Boolean,
     onModelMenu: (Boolean) -> Unit,
-    onPickModel: (String) -> Unit,
+    onPickModel: (String, String) -> Unit,
     onPickEffort: (String) -> Unit,
     onManage: () -> Unit,
     onHistory: () -> Unit,
@@ -490,7 +494,7 @@ private fun ChatHeader(
                 models = models,
                 open = modelMenuOpen,
                 onOpen = onModelMenu,
-                onPick = onPickModel,
+                onPickModel = onPickModel,
                 onManageProviders = onManage,
             )
         }
@@ -600,18 +604,26 @@ private fun ModelPicker(
     models: List<UiAgentModel>,
     open: Boolean,
     onOpen: (Boolean) -> Unit,
-    onPick: (String) -> Unit,
+    onPickModel: (String, String) -> Unit,
     onManageProviders: (() -> Unit)? = null,
 ) {
-    val provider = cfg.providers.firstOrNull { it.id == cfg.selectedProvider }
-    val current = cfg.model.ifBlank { provider?.defaultModel ?: "" }
+    val activeProvider = cfg.providers.firstOrNull { it.id == cfg.selectedProvider }
+    val current = cfg.model.ifBlank { activeProvider?.defaultModel ?: "" }
     val modelName = models.firstOrNull { it.id == current }?.displayName
-        ?: current.ifBlank { provider?.displayName ?: "" }
-    val label = if (provider != null && !modelName.equals(provider.displayName, ignoreCase = true)) {
-        "${provider.displayName} · $modelName"
+        ?: current.ifBlank { activeProvider?.displayName ?: "" }
+    val label = if (activeProvider != null && !modelName.equals(activeProvider.displayName, ignoreCase = true)) {
+        "${activeProvider.displayName} · $modelName"
     } else {
         modelName
     }
+
+    // Configured providers: have an API key or gateway URL/model, or fall back to selected provider
+    val configured = cfg.providers.filter { p ->
+        p.apiKey.isNotBlank() || (p.id == "gateway" && (cfg.gatewayBaseUrl.isNotBlank() || cfg.gatewayModel.isNotBlank()))
+    }.ifEmpty {
+        listOfNotNull(activeProvider ?: cfg.providers.firstOrNull())
+    }
+
     Box {
         Row(
             Modifier.clip(RoundedCornerShape(Ca.radius.pill)).clickable { onOpen(true) },
@@ -623,20 +635,66 @@ private fun ModelPicker(
             Icon(CaIcons.chevronDown, null, Modifier.size(12.dp).rotate(chevron), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         CaDropdownMenu(expanded = open, onDismissRequest = { onOpen(false) }) {
-            models.forEach { model ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            model.displayName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (model.id == current) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (model.id == current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            configured.forEachIndexed { idx, p ->
+                val isCurrentProvider = p.id == cfg.selectedProvider
+                val providerModels = if (isCurrentProvider && models.isNotEmpty()) models else p.models
+                if (configured.size > 1) {
+                    if (idx > 0) {
+                        Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)))
+                    }
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                p.displayName.uppercase(),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        },
+                        enabled = false,
+                        onClick = {},
+                    )
+                }
+                if (providerModels.isEmpty()) {
+                    val fallbackId = if (p.id == "gateway") cfg.gatewayModel.ifBlank { "custom" } else p.defaultModel
+                    val fallbackName = if (p.id == "gateway") cfg.gatewayModel.ifBlank { "Custom gateway" } else p.displayName
+                    val isSelected = isCurrentProvider && (current.isBlank() || current == fallbackId)
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                fallbackName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            )
+                        },
+                        trailingIcon = if (isSelected) {
+                            { Icon(CaIcons.check, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) }
+                        } else null,
+                        onClick = { onPickModel(p.id, fallbackId); onOpen(false) },
+                    )
+                } else {
+                    providerModels.forEach { model ->
+                        val isSelected = isCurrentProvider && model.id == current
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    model.displayName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                )
+                            },
+                            trailingIcon = if (isSelected) {
+                                { Icon(CaIcons.check, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) }
+                            } else null,
+                            onClick = { onPickModel(p.id, model.id); onOpen(false) },
                         )
-                    },
-                    onClick = { onPick(model.id); onOpen(false) },
-                )
+                    }
+                }
             }
             if (onManageProviders != null) {
+                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)))
                 DropdownMenuItem(
                     text = { Text(stringResource(Res.string.chat_manage_keys), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) },
                     leadingIcon = { Icon(CaIcons.key, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) },

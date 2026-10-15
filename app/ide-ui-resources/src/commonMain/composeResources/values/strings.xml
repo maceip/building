@@ -1467,6 +1467,8 @@ We never collect your code, file or project names, which features you use, or an
     <string name="codestyle_language_desc">Each language keeps its own profile</string>
     <string name="codestyle_lang_java">Java</string>
     <string name="codestyle_lang_kotlin">Kotlin</string>
+    <string name="codestyle_lang_python">Python</string>
+    <string name="codestyle_lang_typescript">TypeScript</string>
     <string name="codestyle_style">Style</string>
     <string name="codestyle_style_desc">A preset starting point; changing any option below switches to Custom</string>
     <string name="codestyle_reformat_on_save">Reformat on save</string>
@@ -1525,6 +1527,8 @@ We never collect your code, file or project names, which features you use, or an
     <string name="codestyle_preview_no_project">Open a project to preview formatting.</string>
     <string name="codestyle_preset_kotlin_official">Kotlin official</string>
     <string name="codestyle_preset_android">Android</string>
+    <string name="codestyle_preset_pep8">PEP 8</string>
+    <string name="codestyle_preset_standard">Standard / Prettier</string>
     <string name="codestyle_preset_custom">Custom</string>
     <string name="codestyle_preset_google">Google</string>
     <string name="codestyle_wrap_never">Never</string>
@@ -1661,9 +1665,9 @@ We never collect your code, file or project names, which features you use, or an
     <string name="set_build_conflict_fail">Fail on conflict</string>
     <!-- Build Runtime (titles/options/buttons + static descriptions; device-specific descriptions stay backend-English) -->
     <string name="set_br_separate">Build in a separate process</string>
-    <string name="set_br_separate_desc">Run builds and your program in an isolated process so an out-of-memory crash can't take down the IDE. Off = build in-process (uses less memory, no isolation). Needs notification permission (the isolated process shows a progress notification); without it, builds run in-process. Takes effect the next time you open a project.</string>
+    <string name="set_br_separate_desc">Run builds in an isolated process to protect the IDE from out-of-memory crashes. Requires notification permission.</string>
     <string name="set_br_notif">Build notifications</string>
-    <string name="set_br_notif_desc">Show a progress notification while a build or your program runs in the separate process. Required for isolated builds; if it's off, builds run inside the app.</string>
+    <string name="set_br_notif_desc">Show build progress notifications. Required for isolated background builds.</string>
     <string name="set_br_notif_btn">Enable</string>
     <string name="set_br_r8mode">R8 execution</string>
     <string name="set_br_r8mode_forked">Forked VM</string>
@@ -1671,11 +1675,11 @@ We never collect your code, file or project names, which features you use, or an
     <string name="set_br_r8heap">R8 forked-VM heap</string>
     <string name="set_br_dexoff">Off-heap dexing threshold</string>
     <string name="set_br_dexbatch">Dex merge batch size</string>
-    <string name="set_br_dexbatch_desc">On a very large app the final dexing step merges classes in batches so it doesn't need all of them in memory at once. Smaller batches keep that memory low (good for low-memory devices) but make the APK slightly larger (less shared compression across classes); larger batches pack tighter but need more memory per merge. Most apps never reach this — it only kicks in past a few thousand classes.</string>
+    <string name="set_br_dexbatch_desc">Batch class merging during dexing to conserve memory on large projects. Smaller batches use less RAM.</string>
     <string name="set_br_dexfork">Max concurrent dex forks</string>
     <!-- Privacy &amp; Data -->
     <string name="set_privacy_analytics">Share performance analytics</string>
-    <string name="set_privacy_analytics_desc">Anonymous performance metrics only — never your code or file names</string>
+    <string name="set_privacy_analytics_desc">Anonymous stability and performance metrics only — never your code or files</string>
     <string name="set_privacy_clear">Clear caches</string>
     <string name="set_privacy_clear_desc">Free regenerable dependency / language / preview caches (never source)</string>
     <string name="set_privacy_clear_btn">Clear</string>

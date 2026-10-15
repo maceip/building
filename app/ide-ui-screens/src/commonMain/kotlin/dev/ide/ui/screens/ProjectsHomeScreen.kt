@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import dev.ide.ui.platform.touchInput
+import dev.ide.ui.platform.PlatformBackHandler
 import dev.ide.ui.generated.resources.home_account
 import dev.ide.ui.generated.resources.home_search_projects
 import dev.ide.ui.generated.resources.home_no_match
@@ -84,7 +85,6 @@ import dev.ide.ui.components.CountFilterChip
 import dev.ide.ui.components.dashedBorder
 import dev.ide.ui.components.Eyebrow
 import dev.ide.ui.components.MonoChip
-import dev.ide.ui.components.PrimaryActionButton
 import dev.ide.ui.components.SquareToneButton
 import dev.ide.ui.components.SupportingOnContainer
 import dev.ide.ui.components.TonalTile
@@ -244,6 +244,9 @@ fun ProjectsHomeScreen(
         }
     }
 
+    PlatformBackHandler(enabled = sheet != null) { sheet = null }
+    PlatformBackHandler(enabled = pendingDelete != null) { pendingDelete = null }
+
     BoxWithConstraints(modifier.fillMaxSize()) {
     if (maxWidth >= ProjectsWideBreakpoint) {
         WideProjectsHome(
@@ -306,13 +309,14 @@ fun ProjectsHomeScreen(
                     bell = bell,
                 )
             }
-            item("actions") {
-                HomeActions(
-                    onNewProject = onNewProject,
-                    onClone = onCloneRepository,
-                    onImportProject = onImportProject ?: {},
-                    canImport = onImportProject != null,
-                )
+            if (onCloneRepository != null || onImportProject != null) {
+                item("actions") {
+                    HomeActions(
+                        onClone = onCloneRepository,
+                        onImportProject = onImportProject ?: {},
+                        canImport = onImportProject != null,
+                    )
+                }
             }
             item("segments") {
                 SegmentRow(
@@ -365,7 +369,6 @@ fun ProjectsHomeScreen(
         HomeSheet.Account -> AccountSheet(
             onDismiss = { sheet = null },
             storagePath = storagePath,
-            onOpenHub = onOpenHub?.let { { sheet = null; it() } },
             onOpenInFiles = onOpenInFiles?.let { { sheet = null; it() } },
             onBackup = onBackup?.let { { sheet = null; it() } },
             onSubmitSuggestions = onSubmitSuggestions?.let { { sheet = null; it() } },
@@ -452,7 +455,6 @@ private fun HomeHeader(
  */
 @Composable
 private fun HomeActions(
-    onNewProject: () -> Unit,
     onClone: (() -> Unit)?,
     onImportProject: () -> Unit,
     canImport: Boolean,
@@ -462,26 +464,22 @@ private fun HomeActions(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        PrimaryActionButton(
-            label = stringResource(Res.string.home_new_project),
-            glyph = CaSymbols.add,
-            onClick = onNewProject,
-            modifier = Modifier.weight(1f),
-        )
         if (onClone != null) {
             HeaderButton(
                 glyph = CaSymbols.forkRight,
                 label = stringResource(Res.string.home_clone_repository),
                 primary = false,
+                modifier = Modifier.weight(1f),
                 onClick = onClone,
             )
         }
         if (canImport) {
-            SquareToneButton(
+            HeaderButton(
                 glyph = CaSymbols.folderOpen,
-                contentDescription = stringResource(Res.string.home_import_project),
+                label = stringResource(Res.string.home_import_project),
+                primary = false,
+                modifier = Modifier.weight(1f),
                 onClick = onImportProject,
-                size = 40.dp,
             )
         }
     }
@@ -848,7 +846,6 @@ private fun ResumeCard(project: ProjectInfo, now: Long, onOpen: () -> Unit) {
 private fun AccountSheet(
     onDismiss: () -> Unit,
     storagePath: String?,
-    onOpenHub: (() -> Unit)?,
     onOpenInFiles: (() -> Unit)?,
     onBackup: (() -> Unit)?,
     onSubmitSuggestions: (() -> Unit)?,
@@ -857,12 +854,8 @@ private fun AccountSheet(
     onStarOnGitHub: (() -> Unit)?,
 ) {
     SheetScaffold(onDismiss, stringResource(Res.string.home_account_title), subtitle = storagePath) {
-        if (onOpenHub != null) SheetAction(CaSymbols.settings, stringResource(Res.string.home_settings_tools), onOpenHub)
         if (onOpenInFiles != null) SheetAction(CaSymbols.folderOpen, stringResource(Res.string.home_open_in_files), onOpenInFiles)
         if (onBackup != null) SheetAction(CaSymbols.storage, stringResource(Res.string.home_backup), onBackup)
-        if (onStarOnGitHub != null) SheetAction(CaSymbols.star, stringResource(Res.string.home_star_github), onStarOnGitHub)
-        if (onJoinDiscord != null) SheetAction(CaSymbols.apartment, stringResource(Res.string.join_the_community), onJoinDiscord)
-        if (onSponsor != null) SheetAction(CaSymbols.bolt, stringResource(Res.string.home_sponsor), onSponsor)
         if (onSubmitSuggestions != null) SheetAction(CaSymbols.rateReview, stringResource(Res.string.home_feedback), onSubmitSuggestions)
     }
 }
@@ -1152,7 +1145,6 @@ private fun WideProjectsHome(
                 if (onCloneRepository != null) {
                     HeaderButton(CaSymbols.forkRight, stringResource(Res.string.home_clone_repository), primary = false, onClick = onCloneRepository)
                 }
-                HeaderButton(CaSymbols.add, stringResource(Res.string.home_new_project), primary = true, onClick = onNewProject)
                 if (onOpenHub != null) {
                     SquareToneButton(
                         glyph = CaSymbols.settings,
@@ -1221,17 +1213,23 @@ private fun WideProjectsHome(
 
 /** A compact header button: filled for the primary action, outlined for the others. */
 @Composable
-private fun HeaderButton(glyph: Char, label: String, primary: Boolean, onClick: () -> Unit) {
+private fun HeaderButton(
+    glyph: Char,
+    label: String,
+    primary: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
     val content: @Composable RowScope.() -> Unit = {
         Symbol(glyph, contentDescription = null, size = 18.dp)
         Spacer(Modifier.width(8.dp))
-        Text(label, maxLines = 1, style = MaterialTheme.typography.labelLarge)
+        Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
     }
     val padding = PaddingValues(start = 14.dp, end = 18.dp)
     if (primary) {
-        Button(onClick = onClick, contentPadding = padding, modifier = Modifier.height(40.dp), content = content)
+        Button(onClick = onClick, contentPadding = padding, modifier = modifier.height(40.dp), content = content)
     } else {
-        OutlinedButton(onClick = onClick, contentPadding = padding, modifier = Modifier.height(40.dp), content = content)
+        OutlinedButton(onClick = onClick, contentPadding = padding, modifier = modifier.height(40.dp), content = content)
     }
 }
 

@@ -98,8 +98,19 @@ class RuntimeControllerTest {
         val settings = RuntimePreferences { if (it == RuntimeFeature.NODE.preferenceKey) "false" else null }
         assertNotNull(settings.disabledReason(RuntimeKind.NODE))
         assertNotNull(settings.disabledReason(RuntimeKind.NPM))
-        for (kind in listOf(RuntimeKind.PYTHON, RuntimeKind.SHELL, RuntimeKind.STATIC)) assertNull(settings.disabledReason(kind))
+        for (kind in listOf(RuntimeKind.PYTHON, RuntimeKind.SHELL, RuntimeKind.STATIC, RuntimeKind.XTOOL)) assertNull(settings.disabledReason(kind))
         assertTrue(RuntimePreferences { null }.enabled(RuntimeFeature.NODE))
+    }
+
+    @Test fun xtoolPreferenceGovernsXtoolRuntime() {
+        val disabled = RuntimePreferences { if (it == RuntimeFeature.XTOOL.preferenceKey) "false" else null }
+        assertNotNull(disabled.disabledReason(RuntimeKind.XTOOL))
+        for (kind in listOf(RuntimeKind.NODE, RuntimeKind.NPM, RuntimeKind.PYTHON, RuntimeKind.SHELL, RuntimeKind.STATIC)) {
+            assertNull(disabled.disabledReason(kind))
+        }
+        val enabled = RuntimePreferences { null }
+        assertTrue(enabled.enabled(RuntimeFeature.XTOOL))
+        assertNull(enabled.disabledReason(RuntimeKind.XTOOL))
     }
 
     @Test fun detectionAndConfigAreReadOnlyUntilExplicitSave() = runBlocking<Unit> {
@@ -115,6 +126,18 @@ class RuntimeControllerTest {
             controller.saveConfig(temp, config)
             assertEquals(config, controller.config(temp))
             assertThrows(IllegalArgumentException::class.java) { RuntimeProjects.save(temp, config.copy(environment = mapOf("LD_PRELOAD" to "/evil"))) }
+        } finally { controller.close() }
+    }
+
+    @Test fun swiftPackageDetection() = runBlocking<Unit> {
+        RuntimeFiles.writeUtf8(temp.resolve("Package.swift"), "// swift-tools-version: 6.0\nimport PackageDescription\n")
+        RuntimeFiles.writeUtf8(temp.resolve("App.swift"), "import SwiftUI\n")
+        val controller = controller()
+        try {
+            val targetIds = controller.targets(temp).map { it.id }.toSet()
+            assertTrue(targetIds.contains("xtool:build"))
+            assertTrue(targetIds.contains("xtool:test"))
+            assertTrue(targetIds.contains("xtool:App.swift"))
         } finally { controller.close() }
     }
 

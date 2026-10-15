@@ -51,6 +51,8 @@ data class CodeStyleSettings(
         PRESET_GOOGLE -> FormatStyle.GOOGLE
         PRESET_ANDROID -> FormatStyle.ANDROID
         PRESET_KOTLIN_OFFICIAL -> KOTLIN_OFFICIAL
+        PRESET_PEP8 -> PEP8
+        PRESET_STANDARD -> STANDARD
         else -> FormatStyle(
             styleId = PRESET_CUSTOM,
             indentSize = indentSize,
@@ -86,10 +88,14 @@ data class CodeStyleSettings(
     companion object {
         const val LANG_JAVA = "java"
         const val LANG_KOTLIN = "kotlin"
+        const val LANG_PYTHON = "python"
+        const val LANG_TYPESCRIPT = "typescript"
 
         const val PRESET_GOOGLE = "google"
         const val PRESET_ANDROID = "android"
         const val PRESET_KOTLIN_OFFICIAL = "kotlin_official"
+        const val PRESET_PEP8 = "pep8"
+        const val PRESET_STANDARD = "standard"
         const val PRESET_CUSTOM = "custom"
 
         const val BRACE_END_OF_LINE = "endOfLine"
@@ -111,9 +117,17 @@ data class CodeStyleSettings(
         /** Kotlin official style: 4-space indent, 8-space continuation. */
         val KOTLIN_OFFICIAL = FormatStyle(styleId = PRESET_KOTLIN_OFFICIAL, indentSize = 4, continuationIndent = 8, tabWidth = 4)
 
-        /** The default profile for [languageId]: Java = Google (2-space), Kotlin = official (4-space). */
+        /** Python PEP 8 style: 4-space indent, 88-char line length. */
+        val PEP8 = FormatStyle(styleId = PRESET_PEP8, indentSize = 4, continuationIndent = 4, tabWidth = 4, maxLineLength = 88)
+
+        /** TypeScript Standard / Prettier style: 2-space indent, 100-char line length. */
+        val STANDARD = FormatStyle(styleId = PRESET_STANDARD, indentSize = 2, continuationIndent = 4, tabWidth = 2, maxLineLength = 100)
+
+        /** The default profile for [languageId]. */
         fun default(languageId: String): CodeStyleSettings = when (languageId) {
             LANG_KOTLIN -> CodeStyleSettings(preset = PRESET_KOTLIN_OFFICIAL, indentSize = 4, continuationIndent = 8)
+            LANG_PYTHON -> CodeStyleSettings(preset = PRESET_PEP8, indentSize = 4, continuationIndent = 4, maxLineLength = 88)
+            LANG_TYPESCRIPT -> CodeStyleSettings(preset = PRESET_STANDARD, indentSize = 2, continuationIndent = 4, maxLineLength = 100)
             else -> CodeStyleSettings(preset = PRESET_GOOGLE)
         }
 

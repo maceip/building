@@ -7,6 +7,9 @@ import androidx.compose.ui.text.font.FontStyle
 import dev.ide.ui.editor.core.AIDL_KEYWORDS
 import dev.ide.ui.editor.core.JAVA_KEYWORDS
 import dev.ide.ui.editor.core.KOTLIN_KEYWORDS
+import dev.ide.ui.editor.core.PYTHON_KEYWORDS
+import dev.ide.ui.editor.core.SWIFT_KEYWORDS
+import dev.ide.ui.editor.core.TYPESCRIPT_KEYWORDS
 import dev.ide.ui.ext.EditorLanguageProfile
 import dev.ide.ui.ext.EditorLanguageRegistry
 import dev.ide.ui.ext.SyntaxFamily
@@ -48,6 +51,27 @@ class CodeLanguage(val profile: EditorLanguageProfile) {
                 blockCommentOpen = "/*", blockCommentClose = "*/",
             )
         )
+        val Python = CodeLanguage(
+            EditorLanguageProfile(
+                id = "python", suffixes = listOf(".py", ".pyw"), syntax = SyntaxFamily.HASH_COMMENT,
+                keywords = PYTHON_KEYWORDS, lineComment = "#",
+            )
+        )
+        val TypeScript = CodeLanguage(
+            EditorLanguageProfile(
+                id = "typescript", suffixes = listOf(".ts", ".tsx", ".js", ".jsx"), syntax = SyntaxFamily.C_FAMILY,
+                keywords = TYPESCRIPT_KEYWORDS, lineComment = "//",
+                blockCommentOpen = "/*", blockCommentClose = "*/",
+            )
+        )
+        val Swift = CodeLanguage(
+            EditorLanguageProfile(
+                id = "swift", suffixes = listOf(".swift"), syntax = SyntaxFamily.C_FAMILY,
+                keywords = SWIFT_KEYWORDS, lineComment = "//",
+                blockCommentOpen = "/*", blockCommentClose = "*/",
+                directivePrefix = "#",
+            )
+        )
         val Xml = CodeLanguage(
             EditorLanguageProfile(
                 id = "xml", suffixes = listOf(".xml"), syntax = SyntaxFamily.XML,
@@ -83,8 +107,8 @@ class CodeLanguage(val profile: EditorLanguageProfile) {
 
 /** The profiles the shell ships. Registered once into [EditorLanguageRegistry] by [ensureEditorLanguages]. */
 private val BUILT_IN_EDITOR_LANGUAGES: List<CodeLanguage> =
-    listOf(CodeLanguage.Java, CodeLanguage.Kotlin, CodeLanguage.Xml, CodeLanguage.Aidl,
-        CodeLanguage.Proguard, CodeLanguage.Markdown)
+    listOf(CodeLanguage.Java, CodeLanguage.Kotlin, CodeLanguage.Python, CodeLanguage.TypeScript,
+        CodeLanguage.Swift, CodeLanguage.Xml, CodeLanguage.Aidl, CodeLanguage.Proguard, CodeLanguage.Markdown)
 
 private var builtInsRegistered = false
 
@@ -140,8 +164,10 @@ fun highlight(text: String, language: CodeLanguage, syntax: SyntaxColors): Annot
         while (i < n) {
             val c = text[i]
             when {
-                c == '/' && i + 1 < n && text[i + 1] == '/' -> {
-                    val start = i; i += 2
+                (c == '#' && (language.id == "python" || language.profile.lineComment == "#")) ||
+                (c == '/' && i + 1 < n && text[i + 1] == '/') -> {
+                    val start = i
+                    if (c == '/') i += 2 else i++
                     while (i < n && text[i] != '\n') i++
                     addStyle(SpanStyle(color = syntax.comment, fontStyle = FontStyle.Italic), start, i)
                 }
@@ -170,7 +196,7 @@ fun highlight(text: String, language: CodeLanguage, syntax: SyntaxColors): Annot
                 }
                 c == '@' -> {
                     val start = i; i++
-                    while (i < n && (text[i].isLetterOrDigit() || text[i] == '_')) i++
+                    while (i < n && (text[i].isLetterOrDigit() || text[i] == '_' || text[i] == '.')) i++
                     addStyle(SpanStyle(color = syntax.annotation), start, i)
                 }
                 c.isLetter() || c == '_' || c == '$' -> {
@@ -178,7 +204,7 @@ fun highlight(text: String, language: CodeLanguage, syntax: SyntaxColors): Annot
                     while (i < n && (text[i].isLetterOrDigit() || text[i] == '_' || text[i] == '$')) i++
                     val word = text.substring(start, i)
                     val color = when {
-                        word in LEGACY_SCANNER_KEYWORDS -> syntax.keyword
+                        word in language.profile.keywords || word in LEGACY_SCANNER_KEYWORDS -> syntax.keyword
                         else -> {
                             var j = i
                             while (j < n && (text[j] == ' ' || text[j] == '\t')) j++

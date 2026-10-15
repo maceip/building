@@ -9,6 +9,8 @@ object CodeStyleSamples {
 
     fun forLanguage(languageId: String): String = when (languageId) {
         CodeStyleSettings.LANG_KOTLIN -> KOTLIN
+        CodeStyleSettings.LANG_PYTHON -> PYTHON
+        CodeStyleSettings.LANG_TYPESCRIPT -> TYPESCRIPT
         else -> JAVA
     }
 
@@ -41,6 +43,36 @@ object CodeStyleSamples {
         }
         return out
         }
+        }
+    """.trimIndent()
+
+    private val PYTHON = """
+        import math
+        # A greeter.
+        class Sample:
+            def __init__(self, name: str):
+                self.name = name
+
+            def greet(self, who: list[str], times: int) -> str:
+                out = ""
+                for i in range(times):
+                    out += f"{self.name} greets {who[0]} #{i}\n"
+                return out
+    """.trimIndent()
+
+    private val TYPESCRIPT = """
+        import { useState } from "react";
+        /** A greeter. */
+        export class Sample {
+            constructor(private readonly name: string) {}
+
+            greet(who: string[], times: number): string {
+                let out = "";
+                for (let i = 0; i < times; i++) {
+                    out += `${'$'}{this.name} greets ${'$'}{who[0]} #${'$'}{i}\n`;
+                }
+                return out;
+            }
         }
     """.trimIndent()
 }

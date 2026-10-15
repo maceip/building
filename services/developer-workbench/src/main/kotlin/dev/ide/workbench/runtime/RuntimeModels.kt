@@ -6,7 +6,7 @@ import java.nio.file.Path
 import java.util.UUID
 
 /** These are app-private, user-trusted processes, NOT a security sandbox. */
-enum class RuntimeKind { NODE, NPM, PYTHON, SHELL, STATIC }
+enum class RuntimeKind { NODE, NPM, PYTHON, SHELL, STATIC, XTOOL }
 enum class RuntimePhase { IDLE, PREPARING, RUNNING, STOPPING, FINISHED, FAILED }
 enum class RuntimeWorkspaceMode { AUTO, DIRECT, INTERNAL_COPY }
 
@@ -137,6 +137,7 @@ data class RuntimeProbeReport(
     val npm: RuntimeProbe? get() = runtimes.firstOrNull { it.kind == RuntimeKind.NPM }
     val python: RuntimeProbe? get() = runtimes.firstOrNull { it.kind == RuntimeKind.PYTHON }
     val shell: RuntimeProbe? get() = runtimes.firstOrNull { it.kind == RuntimeKind.SHELL }
+    val xtool: RuntimeProbe? get() = runtimes.firstOrNull { it.kind == RuntimeKind.XTOOL }
 }
 
 data class RuntimeSyncReport(val copied: Int, val conflicts: List<String> = emptyList())
@@ -152,6 +153,7 @@ data class RuntimeInstallation(
     val python: Path?,
     val shell: Path?,
     val environment: Map<String, String>,
+    val xtool: Path? = null,
 )
 
 /** The Android implementation owns installer paths and process-group termination. */

@@ -246,7 +246,6 @@ fun EditorTopBar(
             // IntelliJ's project widget: the project's tile beside its name. The phone's bar has no room for it.
             if (!compact) ProjectTile(projectName, size = 24.dp, radius = 6.dp)
             // The name takes the flexible middle and truncates — the right-hand cluster keeps its size.
-            // Tapping the project name when [onBack] is available also triggers switching/closing the project.
             Text(
                 projectName,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -254,9 +253,7 @@ fun EditorTopBar(
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .then(if (onBack != null) Modifier.clip(RoundedCornerShape(Ca.radius.sm)).clickable(onClick = onBack) else Modifier),
+                modifier = Modifier.weight(1f),
             )
             if (compatibilityMode) CompatModeChip(compact = compact, onClick = onCompatClick)
             IndexStatusChip(indexStatus, compact = compact, onClick = onIndexClick)

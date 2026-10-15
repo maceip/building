@@ -558,6 +558,7 @@ private fun runtimeKindLabel(kind: RuntimeKind): String = when (kind) {
     RuntimeKind.PYTHON -> "Python"
     RuntimeKind.SHELL -> "POSIX shell"
     RuntimeKind.STATIC -> "Static web"
+    RuntimeKind.XTOOL -> "Swift & iOS"
 }
 
 private fun runtimePhaseLabel(state: RuntimeSessionState): String {

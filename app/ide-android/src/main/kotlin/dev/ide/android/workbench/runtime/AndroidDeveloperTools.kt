@@ -180,6 +180,7 @@ internal val RuntimeFeature.toolTitle: String
         RuntimeFeature.PYTHON -> "Python"
         RuntimeFeature.SHELL -> "Shell"
         RuntimeFeature.STATIC -> "Static preview"
+        RuntimeFeature.XTOOL -> "Swift & iOS (xtool)"
     }
 
 internal data class DeveloperToolInventory(val version: String, val secondary: String? = null) {
@@ -197,6 +198,9 @@ internal data class DeveloperRuntimeInventory(val packages: Map<String, String>,
         RuntimeFeature.PYTHON -> packages["python"]?.let { DeveloperToolInventory(it, packages["python-pip"]?.let { pip -> "pip $pip" }) }
         RuntimeFeature.SHELL -> (packages["dash"] ?: packages["bash"])?.let { DeveloperToolInventory(it) }
         RuntimeFeature.STATIC -> null // App-owned server, not a package with an invented version.
+        RuntimeFeature.XTOOL -> (packages["swift"] ?: packages["xtool"])?.let { version ->
+            DeveloperToolInventory(version, packages["xtool"]?.takeIf { packages.containsKey("swift") }?.let { "xtool $it" })
+        }
     }
 }
 

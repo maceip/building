@@ -9,11 +9,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import dev.ide.ui.backend.IdeBackend
+import dev.ide.ui.backend.TreeNode
 import dev.ide.ui.backend.UiCodeStyle
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * State and intents for the Code Style screen: the language being edited, its persisted profile, and the
@@ -37,12 +40,38 @@ internal class CodeStyleScreenState(
     var preview: String by mutableStateOf("")
         private set
 
+    var pythonAvailable: Boolean by mutableStateOf(false)
+        private set
+
+    var nodeAvailable: Boolean by mutableStateOf(false)
+        private set
+
     /** The profile as the controls show it (a preset resolves to its concrete values). */
     val display: UiCodeStyle get() = displayStyle(style)
     val javaOnly: Boolean get() = language == LANG_JAVA
+    val hasBraces: Boolean get() = language != LANG_PYTHON
     val custom: Boolean get() = style.preset == PRESET_CUSTOM
 
     init {
+        // Detect whether Python and TypeScript runtimes or files are available
+        scope.launch {
+            val pyPref = backend.settings.preference("settings.runtimes.python")
+            val nodePref = backend.settings.preference("settings.runtimes.node")
+            var hasPyFiles = false
+            var hasNodeFiles = false
+            if (hasProject) {
+                runCatching {
+                    withContext(Dispatchers.Default) {
+                        val tree = backend.files.fileTree()
+                        hasPyFiles = tree.containsSuffixes(listOf(".py", ".pyw"))
+                        hasNodeFiles = tree.containsSuffixes(listOf(".ts", ".tsx", ".js", ".jsx"))
+                    }
+                }
+            }
+            pythonAvailable = (pyPref == "true") || hasPyFiles
+            nodeAvailable = (nodePref == "true") || hasNodeFiles
+        }
+
         // Load the persisted profile when the language changes.
         scope.launch {
             snapshotFlow { language }.collect { style = backend.settings.codeStyle(it) }
@@ -79,6 +108,12 @@ internal class CodeStyleScreenState(
         formatOnSave = value
         backend.settings.setPreference(FORMAT_ON_SAVE_KEY, value.toString())
     }
+}
+
+private fun TreeNode.containsSuffixes(suffixes: List<String>): Boolean {
+    val nameLower = name.lowercase()
+    if (suffixes.any { nameLower.endsWith(it) }) return true
+    return children.any { it.containsSuffixes(suffixes) }
 }
 
 @Composable

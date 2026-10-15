@@ -323,7 +323,7 @@ class CodeAssistAppState(
      *  exits the app as usual. */
     val canNavigateBack: Boolean
         get() = screen != Screen.Projects || homeTab != HomeTab.Projects || showOnboarding || showMigration ||
-            showAnalytics
+            showAnalytics || showImportSourceChoice || showImportModeChoice
 
     // Session resume across a process kill: the project that was on screen last run (captured up-front, before
     // any bridge runs, so the tracking below cannot clear it before the resume reads it) and whether resume is
@@ -420,6 +420,10 @@ class CodeAssistAppState(
     }
 
     fun selectHomeTab(tab: HomeTab) {
+        if (tab == HomeTab.Learn || tab == HomeTab.Challenges) {
+            homeTab = HomeTab.Projects
+            return
+        }
         homeTab = tab
     }
 
@@ -749,11 +753,11 @@ class CodeAssistAppState(
         screen = Screen.ChallengePlayer
     }
 
-    /** Leaves the solve screen for the Challenges tab, re-reading the day so a new result shows. */
+    /** Leaves the solve screen for the Projects tab. */
     fun exitChallenge() {
         challengeEpoch++
         screen = Screen.Projects
-        homeTab = HomeTab.Challenges
+        homeTab = HomeTab.Projects
     }
 
     fun openChallengeBoard(date: String = "") {
@@ -763,7 +767,7 @@ class CodeAssistAppState(
 
     fun exitChallengeBoard() {
         screen = Screen.Projects
-        homeTab = HomeTab.Challenges
+        homeTab = HomeTab.Projects
     }
 
     /** Re-reads the Challenges tab, after a sign-in or a pull to refresh. */
@@ -1015,6 +1019,8 @@ class CodeAssistAppState(
      */
     fun navigateBack() {
         when {
+            showImportSourceChoice -> dismissImportSourceChoice()
+            showImportModeChoice -> dismissImportModeChoice()
             showOnboarding -> dismissOnboarding()
             showMigration -> dismissMigration()
             showAnalytics -> setAnalyticsConsent(false)

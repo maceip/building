@@ -111,75 +111,87 @@ internal object AgentSettingsPage : SettingsPage {
         SettingControl.Choice(
             key = "provider",
             title = "Provider",
-            description = "Which AI provider the agent uses.",
+            description = "Active AI provider. Switch providers and models directly in chat.",
             default = "anthropic",
             options = listOf(
-                SettingControl.Choice.Option("antigravity", "Antigravity"),
                 SettingControl.Choice.Option("anthropic", "Anthropic (Claude)"),
-                SettingControl.Choice.Option("openai", "OpenAI (GPT-6.1 Sol)"),
+                SettingControl.Choice.Option("openai", "OpenAI"),
+                SettingControl.Choice.Option("gemini", "Google Gemini"),
+                SettingControl.Choice.Option("antigravity", "Antigravity"),
+                SettingControl.Choice.Option("openrouter", "OpenRouter"),
                 SettingControl.Choice.Option("muse", "Meta Muse"),
                 SettingControl.Choice.Option("mimo", "Xiaomi MiMo"),
-                SettingControl.Choice.Option("gemini", "Google Gemini"),
-                SettingControl.Choice.Option("openrouter", "OpenRouter"),
                 SettingControl.Choice.Option("gateway", "Custom gateway"),
             ),
         ),
         SettingControl.Text(
-            key = "antigravityKey",
-            title = "Antigravity token / key",
-            description = "OAuth token (<token> or <token>|<projectId>) or Google AI key for Antigravity.",
-            placeholder = "ya29... or 1//...",
-        ),
-        SettingControl.Text(
             key = "anthropicKey",
             title = "Anthropic API key",
-            description = "Used when the provider is Anthropic.",
+            description = "Used when Anthropic is selected.",
             placeholder = "sk-ant-...",
         ),
         SettingControl.Text(
             key = "openaiKey",
             title = "OpenAI API key",
-            description = "Used when the provider is OpenAI (GPT-6.1 Sol, GPT-5, etc.).",
+            description = "Used when OpenAI is selected.",
             placeholder = "sk-...",
+        ),
+        SettingControl.Text(
+            key = "geminiKey",
+            title = "Gemini API key",
+            description = "Used when Google Gemini is selected.",
+        ),
+        SettingControl.Text(
+            key = "antigravityKey",
+            title = "Antigravity token / key",
+            description = "OAuth token or Google AI key for Antigravity.",
+            placeholder = "ya29... or 1//...",
+        ),
+        SettingControl.Text(
+            key = "openrouterKey",
+            title = "OpenRouter API key",
+            description = "Used when OpenRouter is selected.",
+            placeholder = "sk-or-...",
         ),
         SettingControl.Text(
             key = "museKey",
             title = "Meta Muse API key",
-            description = "Used when the provider is Meta Muse (Muse Spark 1.3, Muse Wonder, Muse Glimmer).",
+            description = "Used when Meta Muse is selected.",
             placeholder = "muse-...",
         ),
         SettingControl.Text(
             key = "mimoKey",
             title = "Xiaomi MiMo API key",
-            description = "Used when the provider is Xiaomi MiMo (MiMo V2.6 Pro, Flash, UltraSpeed).",
+            description = "Used when Xiaomi MiMo is selected.",
             placeholder = "mimo-...",
         ),
         SettingControl.Text(
-            key = "geminiKey",
-            title = "Gemini API key",
-            description = "Used when the provider is Google Gemini.",
+            key = "gatewayBaseUrl",
+            title = "Gateway base URL",
+            description = "OpenAI-compatible endpoint (Ollama, LM Studio, LiteLLM, vLLM).",
+            placeholder = "http://localhost:11434/v1",
         ),
         SettingControl.Text(
-            key = "openrouterKey",
-            title = "OpenRouter API key",
-            description = "Used when the provider is OpenRouter.",
-            placeholder = "sk-or-...",
+            key = "gatewayKey",
+            title = "Gateway API key",
+            description = "API key for custom gateway (optional for local models).",
+            placeholder = "sk-...",
+        ),
+        SettingControl.Text(
+            key = "gatewayModel",
+            title = "Gateway model",
+            description = "Model identifier to request from custom gateway.",
+            placeholder = "llama3.2",
         ),
         SettingControl.Text(
             key = "model",
-            title = "Model",
-            description = "Optional. Leave blank to use the newest model that suits your key (on Gemini, the " +
-                "current Flash, which the free tier supports). Picking a model in the chat overrides this for " +
-                "that provider.",
+            title = "Model override",
+            description = "Optional model override. Leave blank to use provider default, or switch directly in chat.",
         ),
         SettingControl.Choice(
             key = "reasoningEffort",
             title = "Reasoning effort",
-            description = "How hard the model thinks, and the main cost lever after caching: routine work is " +
-                "much cheaper at Low or Medium and rarely worse, while High and above earn their cost on real " +
-                "coding tasks. Mandatory-reasoning models (GPT-6.1 Sol, Meta Muse Spark) automatically clamp " +
-                "None/Minimal to their lowest supported effort and route over /v1/responses or /v1/messages when " +
-                "combined with tools.",
+            description = "Thinking effort for reasoning models. Lower is faster; higher is best for complex coding.",
             default = AgentBackend.REASONING_EFFORT_DEFAULT,
             options = listOf(
                 SettingControl.Choice.Option(AgentBackend.REASONING_EFFORT_DEFAULT, "Default"),
@@ -195,34 +207,25 @@ internal object AgentSettingsPage : SettingsPage {
         SettingControl.Toggle(
             key = "webSearch",
             title = "Web search",
-            description = "Let the agent search the web when the provider supports it (Anthropic and Gemini). " +
-                "The web_fetch and http_request tools work regardless.",
+            description = "Allow the agent to search the web when supported by the provider.",
             default = true,
         ),
         SettingControl.Toggle(
             key = "mcpServer",
             title = "MCP server",
-            description = "Expose the agent's tools over MCP on port " + AgentBackend.MCP_PORT +
-                " (Streamable HTTP). Connect from a desktop client with \"adb forward tcp:" + AgentBackend.MCP_PORT +
-                " tcp:" + AgentBackend.MCP_PORT + "\" then add a remote MCP server at \"http://127.0.0.1:" +
-                AgentBackend.MCP_PORT + "/mcp\". Warning: any client that can reach the port can edit the open " +
-                "project, without further permission prompts. Applies on the next launch.",
+            description = "Expose agent tools over MCP on port " + AgentBackend.MCP_PORT + " (Streamable HTTP).",
             default = false,
         ),
         SettingControl.Toggle(
             key = AgentBackend.FTP_PREF,
             title = "FTP server",
-            description = "An anonymous upload inbox on 127.0.0.1:" + CodeAssistMcpServer.DEFAULT_FTP_PORT +
-                ": files sent to it land in the open project's assets/ folder. Any app on this device can " +
-                "write to it while it runs. Reach it from a computer with \"adb forward tcp:" +
-                CodeAssistMcpServer.DEFAULT_FTP_PORT + " tcp:" + CodeAssistMcpServer.DEFAULT_FTP_PORT +
-                "\" and the same for port " + (CodeAssistMcpServer.DEFAULT_FTP_PORT + 1) + ".",
+            description = "Anonymous local upload inbox on port " + CodeAssistMcpServer.DEFAULT_FTP_PORT + " saving to assets/.",
             default = false,
         ),
         SettingControl.IntSlider(
             key = "maxTokens",
             title = "Max response tokens",
-            description = "Upper bound on the tokens the model may generate in a single response.",
+            description = "Maximum output tokens per response.",
             default = AgentBackend.DEFAULT_MAX_TOKENS,
             min = 1024,
             max = 32768,
@@ -233,7 +236,7 @@ internal object AgentSettingsPage : SettingsPage {
         SettingControl.IntSlider(
             key = "maxIterations",
             title = "Max tool iterations",
-            description = "How many tool-call rounds the agent may take in one turn before it must stop.",
+            description = "Maximum tool-call rounds per turn.",
             default = AgentBackend.DEFAULT_MAX_ITERATIONS,
             min = 1,
             max = 100,
@@ -243,9 +246,7 @@ internal object AgentSettingsPage : SettingsPage {
         SettingControl.IntSlider(
             key = "rpm",
             title = "Requests per minute",
-            description = "Pace the agent to stay under your provider's per-minute request limit, waiting " +
-                "between steps instead of being rejected. 0 learns the limit from the provider's own errors, " +
-                "which suits most free tiers.",
+            description = "Pace requests to stay under rate limits (0 = automatic).",
             default = 0,
             min = 0,
             max = 120,
@@ -255,31 +256,13 @@ internal object AgentSettingsPage : SettingsPage {
         ),
         SettingControl.IntSlider(
             key = "tpmK",
-            title = "Input tokens per minute",
-            description = "The same pacing for a per-minute token limit, in thousands of tokens. 0 learns it.",
+            title = "Tokens per minute (K)",
+            description = "Pace token usage to stay under rate limits in thousands of tokens (0 = automatic).",
             default = 0,
             min = 0,
             max = 4000,
             step = 10,
             unit = "K",
-            advanced = true,
-        ),
-        SettingControl.Text(
-            key = "gatewayKey",
-            title = "Gateway API key",
-            description = "Used when the provider is Custom gateway.",
-            advanced = true,
-        ),
-        SettingControl.Text(
-            key = "gatewayBaseUrl",
-            title = "Gateway base URL",
-            description = "An OpenAI-compatible endpoint (OpenRouter, LiteLLM, or self-hosted).",
-            advanced = true,
-        ),
-        SettingControl.Text(
-            key = "gatewayModel",
-            title = "Gateway model",
-            description = "The model name to request from the custom gateway.",
             advanced = true,
         ),
     )

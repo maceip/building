@@ -6,6 +6,7 @@ enum class RuntimeFeature(val key: String, val title: String, val description: S
     PYTHON("python", "Python", "Run Python projects. Other enabled tools can still use Python as a build dependency."),
     SHELL("shell", "Shell and terminal", "Run shell scripts and open interactive shell sessions. Other enabled tools can still use a shell internally."),
     STATIC("static", "Static web preview", "Preview HTML projects using the built-in local web server."),
+    XTOOL("xtool", "Swift & iOS (xtool)", "Build and compile SwiftPM packages and iOS applications on device."),
     ;
 
     val preferenceKey: String get() = "settings.$PAGE_ID.$key"
@@ -17,6 +18,7 @@ enum class RuntimeFeature(val key: String, val title: String, val description: S
             RuntimeKind.PYTHON -> PYTHON
             RuntimeKind.SHELL -> SHELL
             RuntimeKind.STATIC -> STATIC
+            RuntimeKind.XTOOL -> XTOOL
         }
     }
 }

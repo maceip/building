@@ -50,6 +50,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import dev.ide.ui.platform.PlatformBackHandler
 import dev.ide.ui.theme.Ca
 import dev.ide.ui.theme.Motion
 import kotlinx.coroutines.launch
@@ -79,6 +80,7 @@ fun BottomSheet(
     heightFraction: Float = 0.6f,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    PlatformBackHandler(enabled = visible, onBack = onDismiss)
     Box(Modifier.fillMaxSize()) {
         AnimatedVisibility(
             visible = visible,
@@ -232,6 +234,7 @@ fun CenteredDialog(
     onDismiss: () -> Unit,
     content: @Composable () -> Unit,
 ) {
+    PlatformBackHandler(enabled = visible, onBack = onDismiss)
     // `imePadding()` keeps a centered dialog above the soft keyboard (recenters into the space left over)
     // — a no-op inside the app root's consumed IME inset, load-bearing for dialogs overlaid outside it.
     Box(Modifier.fillMaxSize().imePadding()) {

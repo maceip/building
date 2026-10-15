@@ -39,7 +39,7 @@ class RuntimeController(
 
     suspend fun probe(): RuntimeProbeReport = withContext(Dispatchers.IO) {
         check(!closed.get()) { "Runtime controller is closed" }
-        val kinds = listOf(RuntimeKind.NODE, RuntimeKind.NPM, RuntimeKind.PYTHON, RuntimeKind.SHELL)
+        val kinds = listOf(RuntimeKind.NODE, RuntimeKind.NPM, RuntimeKind.PYTHON, RuntimeKind.SHELL, RuntimeKind.XTOOL)
         if (kinds.all { host.disabledReason(it) != null }) {
             return@withContext RuntimeProbeReport("Not prepared", "", kinds.map {
                 RuntimeProbe(it, false, error = host.disabledReason(it))
@@ -52,6 +52,7 @@ class RuntimeController(
             RuntimeKind.NPM to installed.npmCli?.let { cli -> installed.node?.let { listOf(it.toString(), cli.toString(), "--version") } },
             RuntimeKind.PYTHON to installed.python?.let { listOf(it.toString(), "-c", "import sys,ssl,sqlite3,ctypes,readline; print(sys.version.split()[0])") },
             RuntimeKind.SHELL to installed.shell?.let { listOf(it.toString(), "-c", "printf 'dash ready\\n'") },
+            RuntimeKind.XTOOL to (installed.xtool ?: installed.prefix.resolve("bin/xtool").takeIf { Files.isRegularFile(it) })?.let { listOf(it.toString(), "--version") },
         )
         val probes = commands.map { (kind, command) ->
             val disabled = host.disabledReason(kind)
@@ -60,7 +61,16 @@ class RuntimeController(
             else {
                 val output = StringBuilder()
                 try {
-                    val process = host.start(command, installed.prefix.parent, installed.environment)
+                    val env = if (kind == RuntimeKind.XTOOL) {
+                        val xtoolLib = installed.prefix.resolve("lib/xtool").takeIf { Files.isDirectory(it) }?.toString()
+                        val swiftRuntime = installed.prefix.resolve("lib/swift-runtime").takeIf { Files.isDirectory(it) }?.toString()
+                        val swiftHost = installed.prefix.resolve("lib/swift/host").takeIf { Files.isDirectory(it) }?.toString()
+                        val swiftCompiler = installed.prefix.resolve("lib/swift/host/compiler").takeIf { Files.isDirectory(it) }?.toString()
+                        val baseLd = installed.environment["LD_LIBRARY_PATH"] ?: ""
+                        val xtoolLd = listOfNotNull(xtoolLib, swiftRuntime, swiftHost, swiftCompiler, baseLd.takeIf { it.isNotBlank() }).joinToString(":")
+                        installed.environment + ("LD_LIBRARY_PATH" to xtoolLd)
+                    } else installed.environment
+                    val process = host.start(command, installed.prefix.parent, env)
                     val code = withTimeout(30_000) { execute(process, { text -> synchronized(output) { if (output.length < 8192) output.append(text.take(8192 - output.length)) } }, stdinOpen = false) }
                     RuntimeProbe(kind, code == 0, output.toString().trim(), if (code == 0) null else "Probe exited $code")
                 } catch (e: TimeoutCancellationException) { RuntimeProbe(kind, false, output.toString().trim(), "Probe timed out after 30 seconds") }
@@ -184,7 +194,16 @@ class RuntimeController(
             }
             val installed = host.prepare()
             observation.prepared(installed)
-            val env = installed.environment + config.environment
+            val baseEnv = installed.environment + config.environment
+            val env = if (target.kind == RuntimeKind.XTOOL) {
+                val xtoolLib = installed.prefix.resolve("lib/xtool").takeIf { Files.isDirectory(it) }?.toString()
+                val swiftRuntime = installed.prefix.resolve("lib/swift-runtime").takeIf { Files.isDirectory(it) }?.toString()
+                val swiftHost = installed.prefix.resolve("lib/swift/host").takeIf { Files.isDirectory(it) }?.toString()
+                val swiftCompiler = installed.prefix.resolve("lib/swift/host/compiler").takeIf { Files.isDirectory(it) }?.toString()
+                val baseLd = baseEnv["LD_LIBRARY_PATH"] ?: ""
+                val xtoolLd = listOfNotNull(xtoolLib, swiftRuntime, swiftHost, swiftCompiler, baseLd.takeIf { it.isNotBlank() }).joinToString(":")
+                baseEnv + ("LD_LIBRARY_PATH" to xtoolLd)
+            } else baseEnv
             val args = config.args + request.args
             require(args.size <= 128 && args.all { it.length <= 8192 && !it.contains('\u0000') }) { "Invalid runtime arguments" }
             val command = if (install) dependencyCommand(root, installed) else command(target, root, installed, args)
@@ -322,6 +341,17 @@ class RuntimeController(
         RuntimeKind.SHELL -> listOf(requireNotNull(installation.shell) { "dash is not available" }.toString(), safeProjectPath(root, target.relativePath).toString()) + args
         RuntimeKind.NPM -> listOf(requireNotNull(installation.node).toString(), requireNotNull(installation.npmCli) { "npm is not available" }.toString(), "--prefix", root.toString(), "--no-audit", "--no-fund", "run", requireNotNull(target.script), "--") + args
         RuntimeKind.STATIC -> error("Static targets do not start a process")
+        RuntimeKind.XTOOL -> {
+            val xtoolExe = installation.xtool ?: installation.prefix.resolve("bin/xtool").takeIf { Files.isRegularFile(it) }
+            val swiftExe = installation.prefix.resolve("bin/swift").takeIf { Files.isRegularFile(it) }
+            if (target.script != null) {
+                val exe = requireNotNull(xtoolExe ?: swiftExe) { "xtool is not available" }
+                listOf(exe.toString()) + target.script.split(" ").filter { it.isNotBlank() } + args
+            } else {
+                val exe = requireNotNull(swiftExe ?: xtoolExe) { "Swift runtime is not available" }
+                listOf(exe.toString(), safeProjectPath(root, target.relativePath).toString()) + args
+            }
+        }
     }
 
     private fun dependencyCommand(root: Path, installation: RuntimeInstallation): List<String> {

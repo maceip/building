@@ -16,4 +16,16 @@ val stageDeveloperRuntimePack = tasks.register<Exec>("stageDeveloperRuntimePack"
     if (gradle.startParameter.isOffline) args("--offline")
 }
 
-tasks.named("preBuild").configure { dependsOn(stageDeveloperRuntimePack) }
+val stageXtoolRuntimePack = tasks.register<Exec>("stageXtoolRuntimePack") {
+    group = "build setup"
+    description = "Stage Swift and XTool runtime into the developer runtime pack."
+    val sources = rootProject.file("tools/runtime-pack")
+    inputs.file(sources.resolve("stage_xtool.py"))
+    dependsOn(stageDeveloperRuntimePack)
+    commandLine("python3", sources.resolve("stage_xtool.py"), "--pack-dir", runtimePackOutput.get().asFile)
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(stageDeveloperRuntimePack)
+    dependsOn(stageXtoolRuntimePack)
+}

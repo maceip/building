@@ -47,9 +47,14 @@ internal object RuntimeProjects {
                 }
             }
         }
+        val swiftPackage = root.resolve("Package.swift")
+        if (Files.isRegularFile(swiftPackage)) {
+            result += RuntimeTarget("xtool:build", "xtool build", RuntimeKind.XTOOL, "Package.swift", "dev build --ipa")
+            result += RuntimeTarget("xtool:test", "xtool test", RuntimeKind.XTOOL, "Package.swift", "test")
+        }
         Files.walk(root, 3).use { files ->
             files.filter { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
-                .filter { p -> p.toString().let { !it.contains("/node_modules/") && !it.contains("/.git/") && !it.contains("/.venv/") && !it.contains("/.building/") } }
+                .filter { p -> p.toString().let { !it.contains("/node_modules/") && !it.contains("/.git/") && !it.contains("/.venv/") && !it.contains("/.building/") && !it.contains("/.build/") } }
                 .limit(500).sorted().forEach { p ->
                     val relative = root.relativize(p).toString().replace('\\', '/')
                     val kind = when (p.fileName.toString().substringAfterLast('.', "").lowercase()) {
@@ -57,10 +62,17 @@ internal object RuntimeProjects {
                         "py" -> RuntimeKind.PYTHON
                         "sh" -> RuntimeKind.SHELL
                         "html", "htm" -> RuntimeKind.STATIC
+                        "swift" -> RuntimeKind.XTOOL
                         else -> null
                     }
                     if (kind != null) {
-                        val prefix = when (kind) { RuntimeKind.NODE -> "node"; RuntimeKind.PYTHON -> "python"; RuntimeKind.SHELL -> "shell"; else -> "static" }
+                        val prefix = when (kind) {
+                            RuntimeKind.NODE -> "node"
+                            RuntimeKind.PYTHON -> "python"
+                            RuntimeKind.SHELL -> "shell"
+                            RuntimeKind.XTOOL -> "xtool"
+                            else -> "static"
+                        }
                         result += RuntimeTarget("$prefix:$relative", "${if (kind == RuntimeKind.STATIC) "Preview" else prefix} $relative", kind, relative)
                     }
                 }
