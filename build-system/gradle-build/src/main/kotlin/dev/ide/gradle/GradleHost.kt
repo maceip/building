@@ -24,9 +24,16 @@ interface GradleHost {
     /** Additional SDK files, including installed native executables and Java stubs. */
     fun buildToolsExtras(): Map<String, Path> = emptyMap()
     fun clangDriver(): Path?
+    /** The GNU linker binary (`libld-gnu-lld.so`). Installed as `ld.lld`, because that filename selects the flavor. */
+    fun lld(): Path? = null
     fun toolchainOut(): Path?
     /** Return true when the host installs a complete native SDK instead of a legacy alias. */
     fun installNdk(revision: String): Boolean = false
+    /**
+     * Copy any missing arm64 API-level libraries into this NDK tree. The editor zip ships one
+     * API level; a project whose minSdk is another level needs the rest. The default does nothing.
+     */
+    fun installSysrootExtras(ndkRoot: Path, minSdk: Int?) {}
     fun cmake(): Path?
     fun cmakeVersion(): String? = null
     fun ninja(): Path?

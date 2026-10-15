@@ -2,12 +2,18 @@ package dev.ide.android.gradle
 
 import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Looper
+import dev.ide.android.AndroidIde
+import dev.ide.android.plugins.ApkPluginSource
+import dev.ide.gradle.Arm64Sysroot
 import dev.ide.gradle.GradleHost
 import dev.ide.gradle.GradleProcessEnvironment
 import dev.ide.gradle.GradleScriptEnvironment
 import dev.ide.gradle.JdkSelection
+import dev.ide.gradle.NdkPluginTree
 import dev.ide.gradle.Prefix
 import dev.ide.gradle.PrefixProbe
 import dev.ide.gradle.NdkPackages
@@ -110,9 +116,24 @@ class AndroidGradleHost(
 
     override fun clangDriver(): Path? = native("libllvmtools.so")
 
+    override fun lld(): Path? = native("libld-gnu-lld.so")
+
     override fun toolchainOut(): Path? {
-        val out = files.resolve("ndk-toolchain")
-        return if (Files.isDirectory(out)) out else null
+        val unpacked = NdkPluginTree.unpacked(AndroidIde.appHomeDir(app).toPath())
+        if (NdkPluginTree.isReady(unpacked)) return unpacked
+        val staged = files.resolve("ndk-toolchain")
+        if (NdkPluginTree.isReady(staged)) return staged
+        val apk = ndkPluginApk() ?: return null
+        NdkPluginTree.unpackFromApk(apk, staged)
+        return staged.takeIf { NdkPluginTree.isReady(it) }
+    }
+
+    override fun installSysrootExtras(ndkRoot: Path, minSdk: Int?) {
+        if (minSdk == null || Arm64Sysroot.apiDirPresent(ndkRoot, minSdk)) return
+        val cache = files.resolve("arm64-sysroot")
+        Arm64Sysroot.ensure(cache, Arm64Sysroot.catalog()) { url, dest -> downloadTo(url, dest) }
+        val sysroot = ndkRoot.resolve("toolchains/llvm/prebuilt/linux-x86_64/sysroot")
+        Arm64Sysroot.overlay(sysroot, cache)
     }
 
     override fun installNdk(revision: String): Boolean {
@@ -218,6 +239,33 @@ class AndroidGradleHost(
     private fun prefixBin(name: String): Path? {
         val path = prefix().resolve("bin").resolve(name)
         return if (Files.isRegularFile(path) || Files.isSymbolicLink(path)) path else null
+    }
+
+    private fun ndkPluginApk(): Path? {
+        val matches = try {
+            app.packageManager.queryIntentActivities(
+                Intent(ApkPluginSource.PLUGIN_ACTION),
+                PackageManager.GET_META_DATA,
+            )
+        } catch (_: Throwable) {
+            return null
+        }
+        for (info in matches) {
+            val apk = info.activityInfo?.applicationInfo?.sourceDir ?: continue
+            val path = Path.of(apk)
+            if (NdkPluginTree.containsToolchain(path)) return path
+        }
+        return null
+    }
+
+    private fun downloadTo(url: String, dest: Path) {
+        val connection = URL(url).openConnection()
+        connection.connectTimeout = 30_000
+        connection.readTimeout = 10 * 60 * 1000
+        Files.createDirectories(dest.parent)
+        connection.getInputStream().use { input ->
+            Files.newOutputStream(dest).use { output -> input.copyTo(output) }
+        }
     }
 
     private fun fetch(url: String): ByteArray {

@@ -312,6 +312,16 @@ def abiReport = {
     if (fromProp != null && !fromProp.toString().isEmpty()) return fromProp.toString()
     return System.getenv("DEV_IDE_ABI_REPORT")
 }()
+def useCmakeFallback = {
+    def fromProp = gradle.startParameter.projectProperties["dev.ide.cmake.fallback"]
+    if (fromProp != null && fromProp.toString() == "true") return true
+    return System.getenv("DEV_IDE_CMAKE_FALLBACK") == "true"
+}()
+def pinnedCmakeVersion = {
+    def fromProp = gradle.startParameter.projectProperties["dev.ide.cmake.version"]
+    if (fromProp != null && !fromProp.toString().isEmpty()) return fromProp.toString()
+    return System.getenv("DEV_IDE_CMAKE_VERSION")
+}()
 
 def readNames = { value ->
     def names = []
@@ -408,15 +418,17 @@ def pointAtJava = { t ->
 
 def applyCmake = { p ->
     def ver = gradle.startParameter.projectProperties["dev.ide.cmake.version"]
-    if (ver == null && System.getenv("DEV_IDE_CMAKE_FALLBACK") != "true") return
-    if (ver == null) ver = System.getenv("DEV_IDE_CMAKE_VERSION")
+    if (ver == null && !useCmakeFallback) return
+    if (ver == null) ver = pinnedCmakeVersion
     if (ver == null || ver.isEmpty()) return
     def android = null
     try { android = p.extensions.findByName("android") } catch (Throwable ignored) {}
     if (android == null) return
     try {
         def cmake = android.externalNativeBuild.cmake
-        if (cmake.path == null) return
+        def cmakePath = "configured"
+        try { cmakePath = cmake.path } catch (Throwable ignored) {}
+        if (cmakePath == null) return
         def current = cmake.version
         if (current != null && current.toString() != ver) {
             p.logger.lifecycle("Building: using Android-host CMake ${ver} (project requested ${current})")
