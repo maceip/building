@@ -31,7 +31,11 @@ import androidx.compose.material3.Text
 import dev.ide.ui.components.CircularProgressIndicator
 import dev.ide.ui.components.ExpressiveScaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -47,8 +51,8 @@ import dev.ide.ui.components.CenteredDialog
 import dev.ide.ui.components.IconButtonCa
 import dev.ide.ui.components.LinearProgressIndicator
 import dev.ide.ui.components.pressScale
+import dev.ide.ui.ext.LocalSdkManagerTools
 import dev.ide.ui.generated.resources.Res
-import dev.ide.ui.generated.resources.back
 import dev.ide.ui.generated.resources.cancel
 import dev.ide.ui.generated.resources.install
 import dev.ide.ui.generated.resources.refresh
@@ -64,9 +68,6 @@ import dev.ide.ui.generated.resources.sdk_downloads
 import dev.ide.ui.generated.resources.sdk_installed
 import dev.ide.ui.generated.resources.sdk_jdk
 import dev.ide.ui.generated.resources.sdk_jdk_android_runtime
-import dev.ide.ui.generated.resources.sdk_jdk_android_runtime_desc
-import dev.ide.ui.generated.resources.sdk_jdk_downloading
-import dev.ide.ui.generated.resources.sdk_jdk_no_sources
 import dev.ide.ui.generated.resources.sdk_jdk_sources
 import dev.ide.ui.generated.resources.sdk_jdk_sources_available
 import dev.ide.ui.generated.resources.sdk_jdk_version
@@ -80,8 +81,6 @@ import dev.ide.ui.generated.resources.sdk_no_packages
 import dev.ide.ui.generated.resources.sdk_platforms
 import dev.ide.ui.generated.resources.sdk_platforms_desc
 import dev.ide.ui.generated.resources.sdk_resume
-import dev.ide.ui.generated.resources.sdk_sources_documentation
-import dev.ide.ui.generated.resources.sdk_sources_documentation_desc
 import dev.ide.ui.icons.CaIcons
 import dev.ide.ui.platform.touchInput
 import dev.ide.ui.theme.Ca
@@ -111,7 +110,7 @@ fun SdkManagerScreen(backend: IdeBackend, onBack: () -> Unit) {
             }
         },
     ) { innerPadding ->
-        Column(Modifier.fillMaxSize().padding(innerPadding).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Column(Modifier.fillMaxSize().padding(innerPadding).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             state.status?.let { st ->
                 val failed = st is SdkStatus.LoadFailed
                 val text = when (st) {
@@ -120,16 +119,6 @@ fun SdkManagerScreen(backend: IdeBackend, onBack: () -> Unit) {
                 }
                 Text(text, style = MaterialTheme.typography.bodyMedium, color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
             }
-            // Purpose: the sources power editor docs; platforms (below) are what modules compile against.
-            Card {
-                Text(stringResource(Res.string.sdk_sources_documentation), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    stringResource(Res.string.sdk_sources_documentation_desc),
-                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
             // Active / recent downloads queue.
             if (progress.downloads.isNotEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -147,64 +136,77 @@ fun SdkManagerScreen(backend: IdeBackend, onBack: () -> Unit) {
                 }
             }
 
-            // JDK sources
-            SectionHeader(stringResource(Res.string.sdk_jdk))
-            Card {
-                if (jdk?.androidRuntime == true) {
-                    // ART reports java.home /apex/com.android.art + java.version 0 — it is the Android runtime,
-                    // not a JDK. Label it plainly (no bogus "JDK 0", no /apex path) and point at the JDK-source
-                    // download below, which is the meaningful action here (java.* docs for the bundled toolchain).
-                    Text(stringResource(Res.string.sdk_jdk_android_runtime), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                } else {
-                    Text(stringResource(Res.string.sdk_jdk_version, jdk?.version ?: "?"), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                    jdk?.home?.takeIf { it.isNotEmpty() }?.let {
-                        Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
+            // Platform tools join this column; the host never needs a nested screen or scaffold.
+            val platformTools = LocalSdkManagerTools.current
+            if (platformTools != null) platformTools(backend) else SdkRuntimeSettings(backend)
+
+            SdkDisclosure(stringResource(Res.string.sdk_jdk), "Sources for editor documentation") {
+                Card {
+                    if (jdk?.androidRuntime == true) {
+                        Text(stringResource(Res.string.sdk_jdk_android_runtime), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                        Text("Not a JDK installation. Sources below add java.* documentation.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else if (jdk != null) {
+                        Text(stringResource(Res.string.sdk_jdk_version, jdk.version), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                        jdk.home.takeIf { it.isNotEmpty() }?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
+                        }
+                    } else {
+                        Text("JDK information unavailable", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                }
-                Spacer(Modifier.height(8.dp))
-                if (jdk?.srcZip != null) {
-                    StatusTag(CaIcons.check, stringResource(Res.string.sdk_jdk_sources_available), Ide.colors.run)
-                } else {
-                    // ART: explain why there's no JDK and what the buttons do; JVM: the generic no-sources prompt.
-                    val noSources = if (jdk?.androidRuntime == true) stringResource(Res.string.sdk_jdk_android_runtime_desc)
-                                    else stringResource(Res.string.sdk_jdk_no_sources)
-                    Text(noSources, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(10.dp))
-                    // FlowRow so the buttons wrap onto another line on a narrow phone instead of clipping.
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (jdk?.srcZip != null) {
+                        Spacer(Modifier.height(8.dp))
+                        StatusTag(CaIcons.check, stringResource(Res.string.sdk_jdk_sources_available), Ide.colors.run)
+                    } else {
                         for (feature in listOf(17, 21)) {
-                            val downloading = "jdk-$feature" in activeIds
-                            PillButton(
-                                if (downloading) stringResource(Res.string.sdk_jdk_downloading, feature) else stringResource(Res.string.sdk_jdk_sources, feature),
-                                if (downloading) null else CaIcons.download,
-                                accent = true, enabled = !downloading,
-                            ) { state.downloadJdkSources(feature) }
+                            Spacer(Modifier.height(8.dp))
+                            RowDivider()
+                            Row(
+                                Modifier.fillMaxWidth().defaultMinSize(minHeight = 56.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(stringResource(Res.string.sdk_jdk_sources, feature), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                                val downloading = "jdk-$feature" in activeIds
+                                PillButton(
+                                    if (downloading) stringResource(Res.string.sdk_downloading) else stringResource(Res.string.install),
+                                    if (downloading) null else CaIcons.download,
+                                    accent = true, enabled = !downloading,
+                                ) { state.downloadJdkSources(feature) }
+                            }
                         }
                     }
                 }
             }
 
-            // Android platforms: the android.jar a module's compileSdk compiles and completes against.
-            val platforms = state.packages.filter { it.category == "PLATFORMS" }
-            if (platforms.isNotEmpty()) {
-                SectionHeader(stringResource(Res.string.sdk_platforms))
-                Text(stringResource(Res.string.sdk_platforms_desc), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                PackageList(platforms.sortedWith(compareByDescending<UiSdkPackage> { platformOrder(it.path) }), state, activeIds)
-            }
-
-            // Android platform sources (the documentation payload). Build tooling is bundled, never downloaded.
-            val sources = state.packages.filter { it.category != "PLATFORMS" }
-            SectionHeader(stringResource(Res.string.sdk_android_sources))
+            // Keep loading and failures visible even while package lists are collapsed.
             if (state.loading && state.packages.isEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
                     Text(stringResource(Res.string.sdk_loading_packages), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-            } else if (sources.isEmpty()) {
-                Text(stringResource(Res.string.sdk_no_packages), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline)
-            } else {
-                PackageList(sources.sortedByDescending { it.path }, state, activeIds)
             }
+            val platforms = state.packages.filter { it.category == "PLATFORMS" }
+            SdkDisclosure(stringResource(Res.string.sdk_platforms), "${platforms.count { it.installed }} installed · ${platforms.size} available") {
+                Text(stringResource(Res.string.sdk_platforms_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (platforms.isNotEmpty()) {
+                    PackageList(platforms.sortedWith(compareByDescending<UiSdkPackage> { platformOrder(it.path) }), state, activeIds)
+                } else if (!state.loading) {
+                    Text(stringResource(Res.string.sdk_no_packages), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                }
+            }
+
+            val sources = state.packages.filter { it.category != "PLATFORMS" }
+            SdkDisclosure(stringResource(Res.string.sdk_android_sources), "${sources.count { it.installed }} installed · Documentation") {
+                if (sources.isNotEmpty()) {
+                    PackageList(sources.sortedByDescending { platformOrder(it.path) }, state, activeIds)
+                } else if (!state.loading) {
+                    Text(stringResource(Res.string.sdk_no_packages), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                }
+            }
+            Text(
+                "Platforms provide compile APIs; sources add editor documentation, not runtimes. Downloads continue after you leave this page.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             // A native ad at the foot of this browse/download surface — dead time behind the download bars.
             AdSlot(AdPlacement.SDK_MANAGER)
@@ -212,6 +214,28 @@ fun SdkManagerScreen(backend: IdeBackend, onBack: () -> Unit) {
     }
     state.licensePrompt?.let { prompt ->
         LicenseDialog(prompt, onAccept = state::acceptLicense, onDecline = state::declineLicense)
+    }
+}
+
+@Composable
+private fun SdkDisclosure(title: String, summary: String, content: @Composable () -> Unit) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            Modifier.fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(Ca.radius.md))
+                .clickable { expanded = !expanded }
+                .defaultMinSize(minHeight = 60.dp).padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                SectionHeader(title)
+                Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Icon(if (expanded) CaIcons.chevronDown else CaIcons.chevronRight, if (expanded) "Collapse $title" else "Expand $title", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (expanded) content()
     }
 }
 

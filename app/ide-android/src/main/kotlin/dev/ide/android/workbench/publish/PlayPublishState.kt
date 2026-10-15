@@ -45,6 +45,7 @@ internal enum class PublishDestination(val label: String) {
 internal data class PublishForm(
     val packageName: String = "",
     val language: String = "en-US",
+    val updateListing: Boolean = false,
     val title: String = "",
     val shortDescription: String = "",
     val fullDescription: String = "",
@@ -83,7 +84,8 @@ internal data class PublishStageReview(
     val identityKey: String,
     val edit: PlayEdit,
     val artifact: AabArtifact,
-    val listing: PlayListing,
+    val listing: PlayListing?,
+    val imageLanguage: String,
     val images: List<ImageAsset>,
     val previousTrack: PlayTrack,
     val replacementTrack: PlayTrack,
@@ -91,6 +93,8 @@ internal data class PublishStageReview(
     val privacyPolicyUrl: String,
 )
 
+/** A successful read, not identity verification or proof of permission to upload/commit. */
+internal data class PublishAccessCheck(val identityKey: String, val packageName: String, val trackId: String)
 internal data class PublishRecoveryEdit(val edit: PlayEdit, val accountLabel: String)
 internal data class PublishDataSafetyFile(val fileName: String, val draft: DataSafetyDraft, val sha256: String)
 
@@ -100,7 +104,18 @@ internal class PlayPublishState(
     private val scope: CoroutineScope,
     private val clientFactory: (PlayAccessTokenProvider) -> PlayPublisherClient = { PlayPublisherClient(it) },
 ) : AutoCloseable {
-    var form by mutableStateOf(PublishForm())
+    private var currentForm by mutableStateOf(PublishForm())
+    var form: PublishForm
+        get() = currentForm
+        set(value) {
+            val packageChanged = currentForm.packageName.trim() != value.packageName.trim()
+            if (packageChanged || accessTrack(currentForm) != accessTrack(value)) checkedAccess = null
+            currentForm = if (packageChanged) value.copy(attestations = PlayAccountAttestations()) else value
+        }
+    private var checkedAccess by mutableStateOf<PublishAccessCheck?>(null)
+    private var checkedAccessGeneration = -1L
+    val accessCheck: PublishAccessCheck? get() = checkedAccess?.takeIf(::matchesAccessCheck)
+    val accessChecked: Boolean get() = accessCheck != null
     var artifact by mutableStateOf<AabArtifact?>(null)
         private set
     var images by mutableStateOf<List<ImageAsset>>(emptyList())
@@ -140,18 +155,35 @@ internal class PlayPublishState(
     internal var operationJob: Job? = null
         private set
     private var client: PlayPublisherClient? = null
-    private var clientIdentity = ""
-    private var clientAccount = ""
+    private var clientIdentity = auth.identityKey.takeIf { auth.connected }.orEmpty()
+    private var clientAccount = auth.accountLabel.takeIf { auth.connected }.orEmpty()
     private var closed = false
     private var mutationInFlight = false
     val locked: Boolean get() = busy != null || stagedReview != null
 
     fun clearFeedback() { error = null; feedback = null }
     fun removeImage(asset: ImageAsset) { if (!locked) images = images - asset }
-    fun clearArtifact() { if (!locked && edit == null) artifact = null }
+    fun clearArtifact() {
+        if (!locked && edit == null) {
+            artifact = null
+            form = form.copy(attestations = PlayAccountAttestations())
+        }
+    }
+
+    private fun accessTrack(value: PublishForm): String = value.trackId.trim().ifBlank { "internal" }
+
+    private fun matchesAccessCheck(checked: PublishAccessCheck): Boolean =
+        auth.connected && !auth.authorizing && auth.tokens.hasToken &&
+            checked.identityKey == auth.identityKey && checkedAccessGeneration == auth.generation &&
+            checked.packageName == form.packageName.trim() && checked.trackId == accessTrack(form)
+
+    private fun clearStaleAccessCheck() {
+        if (checkedAccess?.let(::matchesAccessCheck) != true) checkedAccess = null
+    }
 
     /** Native renewal of the exact same selected account is safe; arbitrary token replacement is not. */
     fun synchronizeIdentity() {
+        clearStaleAccessCheck()
         if (!auth.connected || clientIdentity == auth.identityKey) return
         check(busy == null) { "Cannot change publishing account while an operation is running." }
         edit?.let { recoveryEdits = recoveryEdits + PublishRecoveryEdit(it, clientAccount) }
@@ -159,6 +191,7 @@ internal class PlayPublishState(
         client = null
         clientIdentity = auth.identityKey
         clientAccount = auth.accountLabel
+        form = form.copy(attestations = PlayAccountAttestations())
         clearEditState()
         releases = null
         internalSharing = null
@@ -166,6 +199,7 @@ internal class PlayPublishState(
     }
 
     private fun api(): PlayPublisherClient {
+        clearStaleAccessCheck()
         if (!auth.connected || auth.authorizing || !auth.tokens.hasToken) publishInvalid("Finish authorizing a Google Play account or provide a fresh session access token first.")
         if (clientIdentity != auth.identityKey) {
             // Account controls are disabled during operations; also enforce at the service boundary.
@@ -174,6 +208,7 @@ internal class PlayPublishState(
             client = null
             clientIdentity = auth.identityKey
             clientAccount = auth.accountLabel
+            form = form.copy(attestations = PlayAccountAttestations())
             clearEditState()
         }
         return client ?: clientFactory(auth.tokens).also { client = it }
@@ -182,8 +217,14 @@ internal class PlayPublishState(
     fun inspectBundle(path: String) = perform("Verifying signed release bundle", cancelAllowed = true) {
         val expected = form.packageName.trim().takeIf { it.isNotBlank() }
         val verified = withContext(Dispatchers.IO) { PlayPreflight.inspectAab(File(path), expected) }
+        val previous = artifact
+        val changed = previous == null || previous.packageName != verified.packageName ||
+            previous.sha256 != verified.sha256 || previous.uploadCertificateSha256 != verified.uploadCertificateSha256
         artifact = verified
-        form = form.copy(packageName = verified.packageName)
+        form = form.copy(
+            packageName = verified.packageName,
+            attestations = if (changed) PlayAccountAttestations() else form.attestations,
+        )
         feedback = "Verified the AAB signature, manifest, package, version and SHA-256 locally. Upload-key registration and Play policy eligibility still need human review."
     }
 
@@ -235,8 +276,9 @@ internal class PlayPublishState(
         val verified = artifact ?: publishInvalid("Select and verify a release AAB first.")
         if (current.packageName != form.packageName.trim() || verified.packageName != current.packageName) publishInvalid("The app, edit and verified bundle package names must match.")
         validatePublishAttestations(form)
-        val listing = form.listing()
-        PlayPreflight.validateListing(listing)
+        val listing = if (form.updateListing) form.listing().also(PlayPreflight::validateListing) else null
+        val imageLanguage = form.language.trim()
+        if (images.isNotEmpty()) PlayPreflight.validateLanguage(imageLanguage)
         if (form.releaseName.codePointCount(0, form.releaseName.length) > 50) publishInvalid("Use a release name of at most 50 characters.")
         val oldTrack = tracks.firstOrNull { it.track == form.trackId } ?: publishInvalid("Choose a track ID returned by Google. Create missing closed tracks in Play Console, then refresh.")
         if (oldTrack.releases.any { verified.versionCode in it.versionCodes }) publishInvalid("This version code is already on the selected track. Build a new version; this screen does not blindly re-upload existing versions.")
@@ -244,7 +286,19 @@ internal class PlayPublishState(
         if (form.trackId.substringAfterLast(':') == "internal" && release.status !in setOf(PlayReleaseStatus.DRAFT, PlayReleaseStatus.COMPLETED)) publishInvalid("Use draft or completed for the internal testing track; staged percentages are not offered there.")
         val target = oldTrack.copy(releases = (if (form.retainExistingReleases) oldTrack.releases else emptyList()) + release)
         PlayPreflight.validateTrack(target)
-        return PublishStageReview(auth.accountLabel, auth.identityKey, current, verified, listing, images.toList(), oldTrack, target, form.replaceSelectedImageTypes, form.privacyPolicyUrl.trim())
+        return PublishStageReview(
+            accountLabel = auth.accountLabel,
+            identityKey = auth.identityKey,
+            edit = current,
+            artifact = verified,
+            listing = listing,
+            imageLanguage = imageLanguage,
+            images = images.toList(),
+            previousTrack = oldTrack,
+            replacementTrack = target,
+            replaceImageTypes = form.replaceSelectedImageTypes,
+            privacyPolicyUrl = form.privacyPolicyUrl.trim(),
+        )
     }
 
     /** Called only after the user has reviewed the immutable artifact/listing/track snapshot. */
@@ -260,11 +314,11 @@ internal class PlayPublishState(
         commitPreview = null
         resultUncertain = false
         active.uploadBundle(review.edit, review.artifact)
-        active.updateListing(review.edit, review.listing)
+        review.listing?.let { active.updateListing(review.edit, it) }
         if (review.replaceImageTypes) {
-            review.images.map { it.type }.distinct().forEach { active.deleteImages(review.edit, review.listing.language, it) }
+            review.images.map { it.type }.distinct().forEach { active.deleteImages(review.edit, review.imageLanguage, it) }
         }
-        review.images.forEach { active.uploadImage(review.edit, review.listing.language, it) }
+        review.images.forEach { active.uploadImage(review.edit, review.imageLanguage, it) }
         active.updateTrack(review.edit, review.replacementTrack)
         stagedCompletely = true
         feedback = "All confirmed changes are staged in edit ${review.edit.id}. Nothing has been committed. Validate the edit, review the final confirmation, and commit only when ready."
@@ -298,6 +352,22 @@ internal class PlayPublishState(
         if (edit?.id == target.id && edit?.packageName == target.packageName) clearEditState()
         recoveryEdits = recoveryEdits.filterNot { it.edit.id == target.id && it.edit.packageName == target.packageName }
         feedback = "Google confirmed deletion of edit ${target.id}. This does not undo an already committed release, an internal-sharing upload, or a Data safety submission."
+    }
+
+    /** Explicit GET only: no edit creation, upload, declaration, or account-identity assertion. */
+    fun checkAccess() = perform("Checking Play API read access", cancelAllowed = true) {
+        checkedAccess = null
+        val checked = PublishAccessCheck(auth.identityKey, form.packageName.trim(), accessTrack(form))
+        val generation = auth.generation
+        val active = api()
+        active.listReleases(checked.packageName, checked.trackId)
+        if (!auth.connected || auth.authorizing || !auth.tokens.hasToken || auth.identityKey != checked.identityKey ||
+            auth.generation != generation || form.packageName.trim() != checked.packageName || accessTrack(form) != checked.trackId) {
+            publishInvalid("The session, app, or track changed. Check API access again.")
+        }
+        checkedAccessGeneration = generation
+        checkedAccess = checked
+        feedback = "Play API read access works for ${checked.packageName} / ${checked.trackId}. This does not verify identity, upload/commit permission, or policy approval. No edit was created."
     }
 
     fun monitorReleases() = perform("Reading release lifecycle", cancelAllowed = true) {
@@ -378,6 +448,7 @@ internal class PlayPublishState(
                 throw cancelled
             } catch (failure: Exception) {
                 if (failure is PlayPublishingException && failure.kind == PlayErrorKind.AUTHORIZATION) {
+                    checkedAccess = null
                     auth.disconnect("Google rejected or expired this token. Authorize again. The nonsecret form and current edit are retained; no write is retried automatically.")
                 }
                 if (mutation && (failure !is PlayPublishingException || failure.kind in setOf(PlayErrorKind.NETWORK, PlayErrorKind.PROTOCOL, PlayErrorKind.UNCERTAIN_RESULT))) {
@@ -405,6 +476,7 @@ internal class PlayPublishState(
 
     override fun close() {
         closed = true
+        checkedAccess = null
         if (mutationInFlight) resultUncertain = true
         operationJob?.cancel()
         client?.close()

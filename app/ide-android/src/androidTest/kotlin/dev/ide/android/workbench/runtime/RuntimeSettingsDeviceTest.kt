@@ -42,7 +42,7 @@ class RuntimeSettingsDeviceTest {
         RuntimeKind.entries.forEach { assertNull(host.disabledReason(it)) }
         save(context, false)
         RuntimeKind.entries.forEach {
-            assertTrue(host.disabledReason(it).orEmpty().contains("Settings > Runtimes"))
+            assertTrue(host.disabledReason(it).orEmpty().contains("Settings > SDK Manager"))
             assertEquals(host.disabledReason(it), AndroidRuntimeHost(context).disabledReason(it))
         }
         save(context, true)

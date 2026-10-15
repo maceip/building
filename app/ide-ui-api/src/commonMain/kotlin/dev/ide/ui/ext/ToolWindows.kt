@@ -163,6 +163,8 @@ object ScreenArgumentHandoff {
     fun take(): Any? = pending.also { pending = null }
 }
 
+enum class ScreenSettingsGroup { BUILD, SYSTEM, EXTENSIONS }
+
 /** A top-level screen reachable by [id] (e.g. from an action's `Navigate(id)` effect / `UiActionHost`). */
 class ScreenContribution(
     val id: String,
@@ -170,6 +172,7 @@ class ScreenContribution(
     val content: @Composable (ScreenContext) -> Unit,
 ) {
     var showInTools: Boolean = false
+    var settingsGroup: ScreenSettingsGroup? = null
     var toolDescription: String? = null
     var toolIconId: String? = null
 }
