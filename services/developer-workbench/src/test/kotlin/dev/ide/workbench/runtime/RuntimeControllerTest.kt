@@ -22,6 +22,86 @@ import java.util.concurrent.atomic.AtomicInteger
 class RuntimeControllerTest {
     @TempDir lateinit var temp: Path
 
+    @Test fun disabledTargetsAndInstallNeverProvisionOrCopyWorkspace() = runBlocking<Unit> {
+        RuntimeFiles.writeUtf8(temp.resolve("main.sh"), "echo kept")
+        RuntimeFiles.writeUtf8(temp.resolve("main.py"), "print('kept')")
+        RuntimeFiles.writeUtf8(temp.resolve("main.js"), "console.log('kept')")
+        RuntimeFiles.writeUtf8(temp.resolve("index.html"), "kept")
+        RuntimeFiles.writeUtf8(temp.resolve("package.json"), """{"scripts":{"start":"node main.js"}}""")
+        RuntimeProjects.save(temp, RuntimeProjectConfig(workspaceMode = RuntimeWorkspaceMode.INTERNAL_COPY))
+        val settings = RuntimePreferences { "false" }
+        val host = object : RuntimeHost by fixtureHost(prepareFails = true) {
+            override fun disabledReason(kind: RuntimeKind) = settings.disabledReason(kind)
+        }
+        val runner = controller(host = host)
+        try {
+            for (target in runner.targets(temp)) {
+                runner.run(RuntimeRunRequest(temp, target.id))
+                val done = withTimeout(5000) { runner.state.first { !it.isRunning } }
+                assertEquals(RuntimePhase.FAILED, done.phase)
+                assertTrue(done.error.orEmpty().contains("Settings > Runtimes"), done.toString())
+                assertNull(done.workspacePath)
+            }
+            runner.installDependencies(temp)
+            val done = withTimeout(5000) { runner.state.first { !it.isRunning } }
+            assertTrue(done.error.orEmpty().contains("Node.js"), done.toString())
+            assertFalse(Files.exists(host.workspaceCache))
+            assertEquals("echo kept", RuntimeFiles.readUtf8(temp.resolve("main.sh")))
+            assertTrue(runner.probe().runtimes.all { !it.available })
+        } finally { runner.stop(); runner.close() }
+    }
+
+    @Test fun settingsAreLiveAndDoNotKillAnExistingSession() = runBlocking<Unit> {
+        val enabled = AtomicBoolean(true)
+        val settings = RuntimePreferences { enabled.get().toString() }
+        val host = object : RuntimeHost by fixtureHost() {
+            override fun disabledReason(kind: RuntimeKind) = settings.disabledReason(kind)
+        }
+        RuntimeFiles.writeUtf8(temp.resolve("main.sh"), "echo ready; read value; echo \"\$value\"")
+        val runner = controller(host = host)
+        try {
+            runner.run(RuntimeRunRequest(temp, "shell:main.sh"))
+            withTimeout(5000) { runner.state.first { it.stdout.contains("ready") } }
+            enabled.set(false)
+            runner.sendInput("finished")
+            val finished = withTimeout(5000) { runner.state.first { !it.isRunning } }
+            assertEquals(0, finished.exitCode)
+            assertTrue(finished.stdout.contains("finished"))
+            runner.run(RuntimeRunRequest(temp, "shell:main.sh"))
+            assertTrue(withTimeout(5000) { runner.state.first { !it.isRunning } }.error.orEmpty().contains("turned off"))
+            enabled.set(true)
+            runner.run(RuntimeRunRequest(temp, "shell:main.sh"))
+            withTimeout(5000) { runner.state.first { it.stdout.contains("ready") } }
+            runner.sendInput("enabled again")
+            assertEquals(0, withTimeout(5000) { runner.state.first { !it.isRunning } }.exitCode)
+        } finally { runner.stop(); runner.close() }
+    }
+
+    @Test fun disableDuringPreparationPreventsLaunch() = runBlocking<Unit> {
+        var enabled = true
+        val settings = RuntimePreferences { enabled.toString() }
+        val base = fixtureHost()
+        val host = object : RuntimeHost by base {
+            override fun disabledReason(kind: RuntimeKind) = settings.disabledReason(kind)
+            override suspend fun prepare(): RuntimeInstallation = base.prepare().also { enabled = false }
+            override fun start(command: List<String>, workingDirectory: Path, environment: Map<String, String>): RuntimeChild = error("Must not launch")
+        }
+        RuntimeFiles.writeUtf8(temp.resolve("main.sh"), "echo forbidden")
+        val runner = controller(host = host)
+        try {
+            runner.run(RuntimeRunRequest(temp, "shell:main.sh"))
+            assertTrue(withTimeout(5000) { runner.state.first { !it.isRunning } }.error.orEmpty().contains("turned off"))
+        } finally { runner.stop(); runner.close() }
+    }
+
+    @Test fun nodeAndNpmShareOnePreferenceWithoutDisablingOtherTools() {
+        val settings = RuntimePreferences { if (it == RuntimeFeature.NODE.preferenceKey) "false" else null }
+        assertNotNull(settings.disabledReason(RuntimeKind.NODE))
+        assertNotNull(settings.disabledReason(RuntimeKind.NPM))
+        for (kind in listOf(RuntimeKind.PYTHON, RuntimeKind.SHELL, RuntimeKind.STATIC)) assertNull(settings.disabledReason(kind))
+        assertTrue(RuntimePreferences { null }.enabled(RuntimeFeature.NODE))
+    }
+
     @Test fun detectionAndConfigAreReadOnlyUntilExplicitSave() = runBlocking<Unit> {
         RuntimeFiles.writeUtf8(temp.resolve("package.json"), """{"scripts":{"dev":"node server.js","test":"node tests.js"}}""")
         RuntimeFiles.writeUtf8(temp.resolve("server.js"), "console.log('hello')")

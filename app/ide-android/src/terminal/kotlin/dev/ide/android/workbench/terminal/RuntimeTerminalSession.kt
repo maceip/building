@@ -6,6 +6,8 @@ import com.termux.terminal.TerminalOutput
 import com.termux.terminal.TerminalSessionClient
 import dev.ide.android.workbench.runtime.AndroidRuntimeHost
 import dev.ide.workbench.runtime.RuntimeInstallation
+import dev.ide.workbench.runtime.RuntimeKind
+import dev.ide.workbench.runtime.requireEnabled
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -112,6 +114,8 @@ class RuntimeTerminalSession(
             try {
                 currentCoroutineContext().ensureActive()
                 if (stopping.get()) { observation.cancelled(); return@launch }
+                val kind = if (program == Program.NODE) RuntimeKind.NODE else RuntimeKind.SHELL
+                host.requireEnabled(kind)
                 val installation = host.prepare()
                 observation.runtimePrepared(TerminalRuntimeIdentity(installation.packId, installation.abi))
                 currentCoroutineContext().ensureActive()
@@ -127,6 +131,7 @@ class RuntimeTerminalSession(
                 currentCoroutineContext().ensureActive()
                 if (stopping.get()) { observation.cancelled(); return@launch }
                 observation.launching()
+                host.requireEnabled(kind)
                 if (!RuntimePty.supportsSessionCleanup()) mutableStatus.update { it.copy(cleanupWarning = CLEANUP_WARNING) }
                 var size = desiredSize.get()
                 forkThread = Thread.currentThread()

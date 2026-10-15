@@ -5,7 +5,7 @@ import kotlin.test.assertEquals
 
 class SettingsHubPlacementTest {
 
-    private val appPages = listOf("appearance", "editor", "completion", "analysis", "buildRuntime", "privacy", "keymap")
+    private val appPages = listOf("appearance", "editor", "completion", "analysis", "buildRuntime", "runtimes", "privacy", "keymap")
 
     private fun ids(placement: List<Pair<HubGroup, List<HubTarget>>>) = placement.map { (group, targets) ->
         group to targets.map { t ->
@@ -23,7 +23,7 @@ class SettingsHubPlacementTest {
             listOf(
                 HubGroup.Editor to listOf("appearance", "Colors", "editor", "CodeStyle", "keymap", "Symbols"),
                 HubGroup.Code to listOf("completion", "analysis"),
-                HubGroup.Build to listOf("buildRuntime", "SdkManager", "Keystore"),
+                HubGroup.Build to listOf("buildRuntime", "runtimes", "SdkManager", "Keystore"),
                 HubGroup.Extensions to listOf("Plugins"),
                 HubGroup.System to listOf("Storage", "privacy"),
             ),
@@ -34,7 +34,7 @@ class SettingsHubPlacementTest {
     @Test
     fun projectPagesJoinBuildOnlyWhenOffered() {
         val build = ids(hubPlacement(appPages + listOf("preview", "build"))).toMap().getValue(HubGroup.Build)
-        assertEquals(listOf("build", "preview", "buildRuntime", "SdkManager", "Keystore"), build)
+        assertEquals(listOf("build", "preview", "buildRuntime", "runtimes", "SdkManager", "Keystore"), build)
     }
 
     @Test

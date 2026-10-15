@@ -6,6 +6,7 @@ import dev.ide.android.workbench.runtime.AndroidRuntimeHost
 import dev.ide.gradle.GradleRuntimeCommandBridge
 import dev.ide.gradle.GradleScriptEnvironment
 import dev.ide.workbench.runtime.RuntimeHost
+import dev.ide.workbench.runtime.RuntimeKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
@@ -28,6 +29,8 @@ class AndroidGradleRuntimeBridge(
         // GradleHost's synchronous API already runs on a build/import/approved-repair worker. The
         // suspend APK installer also remains on IO; do not runBlocking on the UI or at IDE startup.
         return runBlocking(Dispatchers.IO) {
+            // Keep Java-only builds usable and never provision the pack just to expose disabled tools.
+            if (runtimeHost.disabledReason(RuntimeKind.NODE) != null) return@runBlocking GradleScriptEnvironment()
             val runtime = runtimeHost.prepare()
             GradleRuntimeCommandBridge.install(
                 directory = files.resolve("developer-runtime/gradle-commands"),

@@ -79,6 +79,7 @@ private val HubSlots: List<Pair<HubGroup, List<HubTarget>>> = listOf(
         HubTarget.Page("build"),
         HubTarget.Page("preview"),
         HubTarget.Page("buildRuntime"),
+        HubTarget.Page("runtimes"),
         HubTarget.Tool(HubTool.SdkManager),
         HubTarget.Tool(HubTool.Keystore),
     ),

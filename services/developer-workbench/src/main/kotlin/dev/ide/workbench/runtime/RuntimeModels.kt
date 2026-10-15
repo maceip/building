@@ -157,9 +157,16 @@ data class RuntimeInstallation(
 /** The Android implementation owns installer paths and process-group termination. */
 interface RuntimeHost {
     val workspaceCache: Path
+    /** Read live app settings before provisioning or launching a new session. */
+    fun disabledReason(kind: RuntimeKind): String? = null
     suspend fun prepare(): RuntimeInstallation
     fun requiresWorkspaceCopy(projectRoot: Path): Boolean = false
     fun start(command: List<String>, workingDirectory: Path, environment: Map<String, String>): RuntimeChild
+}
+
+/** Extension avoids interface delegation bypassing a wrapping host's live availability policy. */
+fun RuntimeHost.requireEnabled(kind: RuntimeKind) {
+    disabledReason(kind)?.let { throw IllegalStateException(it) }
 }
 
 interface RuntimeChild {

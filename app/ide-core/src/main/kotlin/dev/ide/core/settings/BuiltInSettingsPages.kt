@@ -3,6 +3,7 @@ package dev.ide.core.settings
 import dev.ide.platform.settings.SettingControl
 import dev.ide.platform.settings.SettingsPage
 import dev.ide.platform.settings.SettingsScope
+import dev.ide.workbench.runtime.RuntimeFeature
 
 /**
  * The built-in Settings pages, declared against the same [SettingsPage] SPI a plugin uses — so built-ins and
@@ -147,8 +148,18 @@ object BuiltInSettingsPages {
     /** All built-in pages in display order. [analyticsAvailable] gates the analytics toggle on the Privacy page.
      *  Code Style is not here: it has its own dedicated screen (the formatting profiles are per-language). */
     fun all(analyticsAvailable: Boolean): List<SettingsPage> = listOf(
-        appearance, editor, completion, analysis, preview, build, buildRuntime, privacy(analyticsAvailable),
+        appearance, editor, completion, analysis, preview, build, buildRuntime, runtimes, privacy(analyticsAvailable),
     )
+
+    private val runtimes = page(RuntimeFeature.PAGE_ID, "Runtimes", "terminal", 46) {
+        RuntimeFeature.entries.map { feature ->
+            SettingControl.Toggle(
+                feature.key, feature.title,
+                "${feature.description} Changes apply to new sessions. Existing sessions and saved files are kept.",
+                default = true,
+            )
+        }
+    }
 
     private val appearance = page(APPEARANCE, "Appearance", "moon", 0) {
         listOf(

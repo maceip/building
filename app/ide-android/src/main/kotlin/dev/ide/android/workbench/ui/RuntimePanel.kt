@@ -110,7 +110,7 @@ fun RuntimePanel(
     val editable = form.busy == null && !session.isRunning && !openingProject
     val target = form.selectedTarget
     val probe = form.report?.runtimes?.firstOrNull { it.kind == target?.kind }
-    val unavailable = target != null && target.kind != RuntimeKind.STATIC && probe?.available == false
+    val unavailable = target != null && probe?.available == false
     val currentSession = runtimeSamePath(session.projectRoot, form.root)
     val preview = if (session.phase == RuntimePhase.RUNNING && currentSession) {
         session.previewUrl?.let(RuntimePreviewAddress::parse)
@@ -276,7 +276,7 @@ fun RuntimePanel(
                         }
                         Text("Auto may mirror external storage into app-private storage for executable and symlink semantics. Direct runs write to the selected folder and can fail on external storage. An internal copy is not the editor's live files; sync is explicit after stopping.", style = MaterialTheme.typography.bodySmall)
                     }
-                    OutlinedButton(onClick = { form.requestRun(install = true) }, enabled = editable && form.loaded && form.hasPackageManifest, modifier = Modifier.testTag("runtime-install")) { Text("Install npm dependencies…") }
+                    OutlinedButton(onClick = { form.requestRun(install = true) }, enabled = editable && form.loaded && form.hasPackageManifest && form.report?.npm?.available != false, modifier = Modifier.testTag("runtime-install")) { Text("Install npm dependencies…") }
                     Text("Explicit npm install downloads packages and runs their lifecycle scripts, including install/postinstall. npm run executes pre/post hooks normally. Nothing installs automatically. Native addons and downloaded binaries must support Android/Bionic; desktop Linux packages may not work.", style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -341,6 +341,7 @@ fun RuntimePanel(
             }
             item(key = "availability") {
                 RuntimeSection("Runtime availability") {
+                    Text("Choose which runtimes to use in Settings > Runtimes. Turning one off keeps its installed files and existing sessions.", style = MaterialTheme.typography.bodySmall)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { showAvailability = !showAvailability }) { Text(if (showAvailability) "Hide details" else "Show versions & limitations") }
                         OutlinedButton(onClick = form::probe, enabled = !form.probing && !session.isRunning) { Text(if (form.probing) "Probing…" else "Recheck runtimes") }
@@ -350,7 +351,7 @@ fun RuntimePanel(
                     if (showAvailability) {
                         form.report?.let { report ->
                             Text("${report.packId} · ${report.abi}", style = MaterialTheme.typography.labelLarge)
-                            listOf(RuntimeKind.NODE, RuntimeKind.NPM, RuntimeKind.PYTHON, RuntimeKind.SHELL).forEach { kind ->
+                            RuntimeKind.entries.forEach { kind ->
                                 val result = report.runtimes.firstOrNull { it.kind == kind }
                                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text("${runtimeKindLabel(kind)} · ${when (result?.available) { true -> "Available"; false -> "Unavailable"; null -> "Not reported" }}", fontWeight = FontWeight.SemiBold)

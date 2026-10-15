@@ -39,6 +39,13 @@ class RuntimeController(
 
     suspend fun probe(): RuntimeProbeReport = withContext(Dispatchers.IO) {
         check(!closed.get()) { "Runtime controller is closed" }
+        val kinds = listOf(RuntimeKind.NODE, RuntimeKind.NPM, RuntimeKind.PYTHON, RuntimeKind.SHELL)
+        if (kinds.all { host.disabledReason(it) != null }) {
+            return@withContext RuntimeProbeReport("Not prepared", "", kinds.map {
+                RuntimeProbe(it, false, error = host.disabledReason(it))
+            } + RuntimeProbe(RuntimeKind.STATIC, host.disabledReason(RuntimeKind.STATIC) == null,
+                error = host.disabledReason(RuntimeKind.STATIC)))
+        }
         val installed = host.prepare()
         val commands = listOf(
             RuntimeKind.NODE to installed.node?.let { listOf(it.toString(), "--version") },
@@ -47,7 +54,9 @@ class RuntimeController(
             RuntimeKind.SHELL to installed.shell?.let { listOf(it.toString(), "-c", "printf 'dash ready\\n'") },
         )
         val probes = commands.map { (kind, command) ->
-            if (command == null) RuntimeProbe(kind, false, error = "Not included for this ABI")
+            val disabled = host.disabledReason(kind)
+            if (disabled != null) RuntimeProbe(kind, false, error = disabled)
+            else if (command == null) RuntimeProbe(kind, false, error = "Not included for this ABI")
             else {
                 val output = StringBuilder()
                 try {
@@ -60,7 +69,9 @@ class RuntimeController(
                 catch (e: Exception) { RuntimeProbe(kind, false, error = e.message ?: e.javaClass.simpleName) }
             }
         }
-        RuntimeProbeReport(installed.packId, installed.abi, probes, listOf(
+        val staticDisabled = host.disabledReason(RuntimeKind.STATIC)
+        RuntimeProbeReport(installed.packId, installed.abi,
+            probes + RuntimeProbe(RuntimeKind.STATIC, staticDisabled == null, error = staticDisabled), listOf(
             "Native runtime bytes are delivered in the APK; provisioning and these probes are offline.",
             "User-trusted project execution, not a sandbox. Native addons and downloaded binaries must support Android/Bionic; desktop Linux, Bun and Cargo compatibility is not guaranteed.",
             "Explicit npm install can download packages and runs lifecycle scripts. npm run also executes pre/post hooks. Only install and run code you trust.",
@@ -149,6 +160,7 @@ class RuntimeController(
                 else RuntimeProjects.targets(original).firstOrNull { it.id == request.targetId } ?: error("Run target no longer exists: ${request.targetId}")
             mutableState.update { it.copy(target = target) }
             observation.start(original, target)
+            host.requireEnabled(target.kind)
             val useCopy = config.workspaceMode == RuntimeWorkspaceMode.INTERNAL_COPY || config.workspaceMode == RuntimeWorkspaceMode.AUTO && host.requiresWorkspaceCopy(original)
             val selectedWorkspace = if (useCopy) RuntimeWorkspace(original, host.workspaceCache) else null
             workspace = selectedWorkspace
@@ -162,6 +174,7 @@ class RuntimeController(
             append("[User-trusted execution; this is not a security sandbox.]\n")
             if (target.kind == RuntimeKind.STATIC) {
                 observation.stage = RuntimeOutcomeStage.LAUNCH
+                host.requireEnabled(target.kind)
                 val server = StaticPreviewServer(root, target.relativePath)
                 preview = server
                 observation.stage = RuntimeOutcomeStage.PROCESS
@@ -177,6 +190,7 @@ class RuntimeController(
             val command = if (install) dependencyCommand(root, installed) else command(target, root, installed, args)
             append("> ${target.label}\n")
             observation.stage = RuntimeOutcomeStage.LAUNCH
+            host.requireEnabled(target.kind)
             val process = host.start(command, cwd, env)
             child = process
             observation.stage = RuntimeOutcomeStage.PROCESS

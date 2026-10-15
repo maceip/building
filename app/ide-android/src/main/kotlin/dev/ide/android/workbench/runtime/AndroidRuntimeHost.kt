@@ -6,6 +6,7 @@ import android.os.Process as AndroidProcess
 import dev.ide.workbench.runtime.RuntimeChild
 import dev.ide.workbench.runtime.RuntimeHost
 import dev.ide.workbench.runtime.RuntimeInstallation
+import dev.ide.workbench.runtime.RuntimeKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -32,6 +33,8 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
     private val native = java.nio.file.Paths.get(app.applicationInfo.nativeLibraryDir)
     override val workspaceCache: Path = home.resolve("workspaces")
     @Volatile private var installation: RuntimeInstallation? = null
+
+    override fun disabledReason(kind: RuntimeKind): String? = AndroidRuntimeSettings.read(app).disabledReason(kind)
 
     override suspend fun prepare(): RuntimeInstallation = withContext(Dispatchers.IO) {
         installation?.let { return@withContext it }

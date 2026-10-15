@@ -6,6 +6,13 @@ engines embedded in generated applications are a separate deliverable, configure
 through `IDE_APP_ENGINE_DELIVERY=none|direct|play` and `IDE_APP_ENGINE=node|python`.
 Those settings do not remove the IDE development runtime.
 
+Users can enable or disable Node/package-manager, Python, shell/terminal and static
+preview launches in **Settings > Runtimes**. Choices use the existing app preference
+store and apply to new sessions. Existing work and installed payloads are retained;
+these switches do not reduce the APK size. Shell/Python dependencies used by other
+enabled tools remain available. See [Play runtime delivery](play-runtime-delivery.md)
+for the investigation and proposed on-demand component design.
+
 ## Inspect the artifact
 
 ```sh
