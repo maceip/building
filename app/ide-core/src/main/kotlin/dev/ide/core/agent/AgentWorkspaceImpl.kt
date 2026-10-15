@@ -318,8 +318,8 @@ internal class IdeAgentWorkspace(private val ctx: BackendContext) : AgentWorkspa
         val outcome = ctx.background {
             current.mutateSources {
                 check(engine() === current) { "The project changed during the agent operation." }
-                current.rename(file, current.readCurrentText(file), offset, newName)
             }
+            current.rename(file, current.readCurrentText(file), offset, newName)
         }
         ctx.bumpFileSystemEpoch()
         RenameResult(outcome.success, outcome.message, outcome.occurrences, outcome.filesChanged)

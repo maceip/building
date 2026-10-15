@@ -310,7 +310,6 @@ class ProjectManager private constructor(
         // the home screen, so a throw here (AccessDeniedException, seen in the field) escapes through
         // ProjectBackend.projects into composition and takes the app down before it can draw anything --
         // leaving no way back in. An empty picker is recoverable; a boot loop is not.
-        val prefs = loadPrefs()
         val dirs = runCatching { Files.newDirectoryStream(projectsRoot).use { it.toList() } }
             .onFailure { log.warn("project list: $projectsRoot could not be read", it) }
             .getOrElse { return emptyList() }

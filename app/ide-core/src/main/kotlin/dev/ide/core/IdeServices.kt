@@ -3324,10 +3324,7 @@ class IdeServices private constructor(
      * (the backing file is renamed as part of that). Otherwise it is a plain filesystem rename. [newName] is
      * the full new name (with extension for files).
      */
-    fun renameFile(target: Path, newName: String): RenameOutcome =
-        mutateSources { renameFileLocked(target, newName) }
-
-    private fun renameFileLocked(target: Path, newName: String): RenameOutcome {
+    suspend fun renameFile(target: Path, newName: String): RenameOutcome {
         val name = newName.trim()
         if (name.isEmpty() || name.contains('/') || name.contains('\\')) return RenameOutcome(
             false, "'$newName' is not a valid name."

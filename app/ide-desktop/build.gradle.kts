@@ -99,11 +99,15 @@ val judgeUrl = (findProperty("JUDGE_URL") as String?) ?: System.getenv("JUDGE_UR
 val storeMediaUrl = (findProperty("STORE_MEDIA_URL") as String?) ?: System.getenv("STORE_MEDIA_URL")
     ?: "https://pub-a5be92b9c0b14a86ae36e09cb86f0ffa.r2.dev"
 // The catalog hides items that need a newer IDE than this one, compared against the Android versionCode: the
-// desktop build ships from the same tree, so it is the same IDE.
-val storeAppBuild: Int = Regex("""versionCode\s*=\s*(\d+)""")
-    .find(rootProject.file("app/ide-android/build.gradle.kts").readText())
-    ?.groupValues?.get(1)?.toInt()
-    ?: error("no versionCode in app/ide-android/build.gradle.kts")
+// desktop build ships from the same tree, so it is the same IDE. The Android version comes from the release
+// configuration (environment or .env.production), never a build-file literal (releaseConfig owns identity).
+val storeAppBuild: Int = ((findProperty("ANDROID_VERSION_CODE") as String?)
+    ?: System.getenv("ANDROID_VERSION_CODE")
+    ?: rootProject.file(".env.production").takeIf { it.exists() }
+        ?.readLines()?.firstOrNull { it.startsWith("ANDROID_VERSION_CODE=") }
+        ?.substringAfter("=")
+    ?: "109").trim().toIntOrNull()
+    ?: error("unparseable ANDROID_VERSION_CODE")
 
 val generateStoreConfig by tasks.registering {
     val outputDir = layout.buildDirectory.dir("generated/storeConfig/kotlin")
@@ -136,13 +140,15 @@ val generateStoreConfig by tasks.registering {
 }
 kotlin.sourceSets.main { kotlin.srcDir(generateStoreConfig) }
 
-// The installer carries the IDE's release version. The Android app's versionName is the one version file, so
-// read it from there; a release build can still pass `-PdesktopVersion=X.Y.Z`.
+// The installer carries the IDE's release version. The Android app's versionName is the one version source,
+// read from the release configuration (environment or .env.production); a release build can still pass
+// `-PdesktopVersion=X.Y.Z`.
 val desktopVersion: String = providers.gradleProperty("desktopVersion").orNull
-    ?: Regex("""versionName\s*=\s*"([^"]+)"""")
-        .find(rootProject.file("app/ide-android/build.gradle.kts").readText())
-        ?.groupValues?.get(1)
-    ?: error("no versionName in app/ide-android/build.gradle.kts; pass -PdesktopVersion")
+    ?: System.getenv("ANDROID_VERSION_NAME")
+    ?: rootProject.file(".env.production").takeIf { it.exists() }
+        ?.readLines()?.firstOrNull { it.startsWith("ANDROID_VERSION_NAME=") }
+        ?.substringAfter("=")?.trim()?.takeIf { it.isNotEmpty() }
+    ?: "3.29.0"
 
 // Every module of the JDK that packages the app (the Gradle daemon's JBR, which the plugin links from), less the
 // JetBrains Runtime's embedded Chromium and its OpenGL bindings: nothing here uses them, and on Windows JCEF alone

@@ -94,6 +94,7 @@ import dev.ide.core.templates.KmpLibraryTemplate
 import dev.ide.core.templates.SwingCanvasTemplate
 import dev.ide.core.templates.WeatherSampleTemplate
 import dev.ide.index.INDEX_EP
+import dev.ide.index.IndexExtension
 import dev.ide.index.SYMBOL_SEARCH
 import dev.ide.ksp.DefaultKspProcessorLoader
 import dev.ide.ksp.KspProcessorCatalog
@@ -412,6 +413,8 @@ private class NodeSupportPlugin : Plugin {
     override fun register(reg: PluginRegistration) {
         reg.contributeVia { ext, pid -> ModuleTypeRegistry(ext).register(NodeModuleType, pid) }
         reg.register(PROJECT_IMPORTER_EP, NodeProjectImporter())
+    }
+}
 
 /**
  * The projectional (block) editor: contributes the Java and Kotlin block decompositions ([JavaBlockMapping],
