@@ -6,13 +6,18 @@ internal object AppEngineProject {
     fun files(request: AppEnginePackageRequest): Map<String, String> {
         val pkg = request.applicationId
         val java = "app/src/main/java/${pkg.replace('.', '/')}/MainActivity.java"
+        val reliability = request.reliability != null
+        val libraries = listOf("runtime-engine" to "libs/runtime-engine.jar") + if (reliability) listOf(
+            "app-engine-reliability-sdk" to "libs/debug/applog-runtime.jar",
+            "app-engine-reliability-listener" to "libs/debug/runtime-engine-reliability.jar",
+        ) else emptyList()
         return linkedMapOf(
             ".platform/workspace.json" to """
-                {"version":1,"projects":[{"id":"engine-app","name":"Engine app","root":".","buildSystem":"native","settings":{},"modules":[{"id":"app","name":"app","dir":"app"}],"libraries":[{"name":"runtime-engine","kind":"JAR","classes":["libs/runtime-engine.jar"],"sources":[]}]}]}
+                {"version":1,"projects":[{"id":"engine-app","name":"Engine app","root":".","buildSystem":"native","settings":{},"modules":[{"id":"app","name":"app","dir":"app"}],"libraries":[${libraries.joinToString(",") { (name, path) -> """{"name":"$name","kind":"JAR","classes":["$path"],"sources":[]}""" }}]}]}
             """.trimIndent() + "\n",
             ".platform/libraries.json" to "{\"version\":1,\"libraries\":[]}\n",
             ".platform/sdks.json" to "{\"version\":1,\"sdks\":[]}\n",
-            "app/module.toml" to module(pkg),
+            "app/module.toml" to module(pkg, reliability),
             "app/proguard-rules.pro" to "-keep class dev.ide.runtime.engine.NativeBridge { *; }\n-keep class dev.ide.runtime.engine.RuntimeService { *; }\n",
             "app/src/main/AndroidManifest.xml" to """
                 <?xml version="1.0" encoding="utf-8"?>
@@ -31,9 +36,15 @@ internal object AppEngineProject {
             """.trimIndent() + "\n",
             "app/src/main/res/values/strings.xml" to "<resources><string name=\"app_name\" translatable=\"false\" formatted=\"false\">\"${xml(request.label)}\"</string></resources>\n",
             java to activity(request),
-        )
+        ).apply {
+            if (reliability) {
+                for (variant in listOf("debug", "release")) {
+                    put("app/src/$variant/java/${pkg.replace('.', '/')}/AppEngineRuntimeClient.java", runtimeClient(request, variant))
+                }
+            }
+        }
     }
-    private fun module(pkg: String): String = buildString {
+    private fun module(pkg: String, reliability: Boolean): String = buildString {
         append("""
             version = 2
             [module]
@@ -61,7 +72,7 @@ internal object AppEngineProject {
 
             [dependencies]
             implementation = ["runtime-engine"]
-
+            ${if (reliability) "\n[dependencies.debug]\nimplementation = [\"app-engine-reliability-sdk\", \"app-engine-reliability-listener\"]\n" else ""}
             [android]
             namespace = "$pkg"
             compileSdk = 36
@@ -94,6 +105,31 @@ internal object AppEngineProject {
     }
     private fun argv(values: List<String>): String = if (values.isEmpty()) "Collections.<String>emptyList()"
         else values.joinToString(prefix = "java.util.Arrays.asList(", postfix = ")") { "\"${java(it)}\"" }
+
+    private fun runtimeClient(request: AppEnginePackageRequest, variant: String): String {
+        val capture = if (variant == "debug") """
+            // The app's own Config/provider must finish SDK initialization before Activity creation.
+            // The export flag is not consent and never initializes or enables the SDK.
+            if (${request.reliability?.enableCapture == true} && dev.ide.applog.Reliability.isInitialized()) {
+                return dev.ide.runtime.engine.reliability.ReliabilityEngineListener.createClient(
+                    context, dev.ide.runtime.engine.Engine.${request.engine.id.uppercase()}, delegate, true).client;
+            }
+        """.trimIndent() else "// Release has no SDK dependency or capture branch."
+        return """
+            package ${request.applicationId};
+
+            import android.content.Context;
+            import dev.ide.runtime.engine.EngineClient;
+
+            /** Variant-specific production registration; no transport, prompt or synthetic identity. */
+            final class AppEngineRuntimeClient {
+                static EngineClient create(Context context, EngineClient.Listener delegate) {
+                    $capture
+                    return new EngineClient(context, delegate);
+                }
+            }
+        """.trimIndent() + "\n"
+    }
 
     private fun activity(request: AppEnginePackageRequest): String = """
         package ${request.applicationId};
@@ -132,7 +168,7 @@ internal object AppEngineProject {
                 ScrollView scroll = new ScrollView(this); output = new TextView(this); output.setTextIsSelectable(true);
                 output.setTypeface(android.graphics.Typeface.MONOSPACE); scroll.addView(output);
                 layout.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1)); setContentView(layout);
-                client = new EngineClient(this, new EngineClient.Listener() {
+                client = ${if (request.reliability == null) "new EngineClient" else "AppEngineRuntimeClient.create"}(this, new EngineClient.Listener() {
                     @Override public void onState(EngineSnapshot state) {
                         status.setText(state.phase.name() + " pid=" + state.processId + " exit=" + state.exitCode + " " + state.error);
                         output.setText(state.stdout + "\n[stderr]\n" + state.stderr

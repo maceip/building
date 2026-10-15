@@ -45,11 +45,22 @@ class AppEnginePackager {
             for (name in listOf("EngineClient", "RuntimeService", "NativeBridge"))
                 require(zip.getEntry("dev/ide/runtime/engine/$name.class") != null) { "Incomplete runtime library: $name" }
             require(zip.entries().asSequence().none { it.name.startsWith("dev/ide/android/") }) { "IDE classes must not leak into generated apps" }
+            require(zip.entries().asSequence().none { it.name.startsWith("dev/ide/applog/") || it.name.startsWith("dev/ide/runtime/engine/reliability/") }) {
+                "SDK and listener must be supplied separately as debug-only dependencies"
+            }
         }
+        val reliabilityJars = request.reliability?.let { dependencies ->
+            listOf(
+                "libs/debug/applog-runtime.jar" to checkedClasses(dependencies.sdkClassesJar, "dev/ide/applog/", listOf("Reliability", "Config")),
+                "libs/debug/runtime-engine-reliability.jar" to checkedClasses(dependencies.listenerClassesJar,
+                    "dev/ide/runtime/engine/reliability/", listOf("ReliabilityEngineListener", "ReliabilityEngineListener\$Client")),
+            )
+        }.orEmpty()
         val libraries = nativeLibraries(payload, request.engine)
         require(libraries.all { it in payloadIndex }) { "Native libraries must be covered by payload hashes" }
         val scripts = sourceFiles(source)
         require(scripts.any { it.first == relativeEntry }) { "Entry not included in reviewed source files" }
+        AppEngineSourceCheck.check(request.engine, scripts)
         val staging = Files.createTempDirectory(parent, ".engine-app-")
         var total = 0L
         try {
@@ -58,6 +69,10 @@ class AppEnginePackager {
             }
             val jar = staging.resolve("libs/runtime-engine.jar"); Files.createDirectories(jar.parent); Files.copy(runtimeJar, jar)
             total += Files.size(jar)
+            reliabilityJars.forEach { (name, file) ->
+                val target = staging.resolve(name); Files.createDirectories(target.parent); Files.copy(file, target)
+                total += Files.size(target)
+            }
             libraries.forEach { file ->
                 val target = staging.resolve("app/src/main/jniLibs/arm64-v8a/${file.fileName}")
                 Files.createDirectories(target.parent); Files.copy(file, target); total += Files.size(target)
@@ -91,6 +106,19 @@ class AppEnginePackager {
         } finally {
             if (Files.exists(staging)) Files.walk(staging).use { it.sorted(Comparator.reverseOrder()).forEach(Files::delete) }
         }
+    }
+
+    private fun checkedClasses(input: Path, prefix: String, required: List<String>): Path {
+        val file = input.toRealPath()
+        require(Files.isRegularFile(file) && Files.size(file) in 1..16_777_216L) { "Expected a bounded classes jar" }
+        ZipFile(file.toFile()).use { zip ->
+            required.forEach { name -> require(zip.getEntry("$prefix$name.class") != null) { "Incomplete optional SDK classes: $name" } }
+            require(zip.entries().asSequence().all { entry ->
+                entry.isDirectory || entry.name.startsWith("META-INF/") ||
+                    (entry.name.startsWith(prefix) && entry.name.endsWith(".class") && ".." !in entry.name)
+            }) { "Optional SDK jars must contain only their own classes, not IDE, core, configuration or native payloads" }
+        }
+        return file
     }
 
     private fun checksumIndex(root: Path): Map<Path, String> {

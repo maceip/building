@@ -26,6 +26,21 @@ data class AppEnginePackageRequest(
     val internetPermission: Boolean = false,
     /** Script argv only; never interpreted as engine switches or passed through a shell. */
     val arguments: List<String> = emptyList(),
+    /** Optional debug-only SDK bridge. Null exports no SDK, listener, provider or configuration. */
+    val reliability: AppEngineReliabilityDependencies? = null,
+)
+
+/**
+ * Caller-supplied production classes, not downloaded or taken from the IDE process.
+ * Only debug depends on these jars; release remains SDK-free. enableCapture alone is
+ * insufficient: the generated app must separately initialize its own enabled, consented
+ * SDK Config through the existing build/provider or Application path. Generation never
+ * fabricates build identity, pairing credentials, collection consent or SDK configuration.
+ */
+data class AppEngineReliabilityDependencies(
+    val sdkClassesJar: Path,
+    val listenerClassesJar: Path,
+    val enableCapture: Boolean = false,
 )
 
 data class AppEnginePackageResult(
