@@ -1134,6 +1134,10 @@ class IdeServices private constructor(
                     coalesced = coalesced,
                 )
             )
+            // A full pass re-read every source segment, so source declarations may have changed —
+            // snapshots memoized on the generation (custom-view tag list, member usage) must refresh.
+            // Save/resync paths bump separately; an extra bump here only costs one recompute.
+            bumpSourceIndexGeneration()
         }
     }
 
