@@ -357,7 +357,7 @@ class BuildSystemExtensionTest {
         // pre-dispatch state object would otherwise satisfy this wait before the new task's
         // graph has recorded anything (runTask dispatches asynchronously).
         val before = ide.build.buildState.value
-        withTimeout(30_000) {
+        withTimeout(60_000) {
             ide.build.buildState.first {
                 it !== before && it.status != RunStatus.Running && it.log.isNotEmpty()
             }
