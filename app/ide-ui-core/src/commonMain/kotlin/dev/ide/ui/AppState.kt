@@ -776,6 +776,9 @@ class IdeUiState(
      * on [ioDispatcher]; the resulting Compose-state mutations resume on the launching (main) dispatcher.
      */
     suspend fun openSuspend(path: String, name: String) {
+        // A disposed project state retains and installs nothing: fail closed instead of leaking a
+        // lease or installing a tab against a replaced backend.
+        scope.ensureActive()
         if (focusOpenTab(path)) {
             // Re-opening is the user saying "show me this file", so give them what is on disk now: a write from
             // outside the IDE (a file manager copying over it) raises no event, and the tab would keep the old
@@ -783,13 +786,27 @@ class IdeUiState(
             active?.let { if (syncTabsFromDisk(listOf(it))) analysisEpoch++ }
             return
         }
-        val text = withContext(ioDispatcher) { backend.files.readFile(path) }
-        // A second tap on the same row may have opened it while we were reading — focus it, don't duplicate.
-        if (focusOpenTab(path)) return
-        backend.editor.documentLoaded(path, text)
-        openFiles.add(OpenFile(path, name, text))
-        activeIndex = openFiles.lastIndex
-        backend.editor.onFileOpened(path) // a genuinely new tab (focus path returned above), for plugin events
+        // Retain BEFORE the read (EditorService.retainDocument): the lease covers the disk read
+        // through tab installation. Released here when no tab is installed (read failure, duplicate
+        // win, cancellation); otherwise carried by the tab and released on close/dispose.
+        val release = backend.editor.retainDocument(path)
+        var installed = false
+        try {
+            val text = withContext(ioDispatcher) { backend.files.readFile(path) }
+            // The read suspends: disposal (or a backend swap) meanwhile must prevent the late
+            // installation, and the orphaned lease must not outlive this call.
+            scope.ensureActive()
+            // A second tap on the same row may have opened it while we were reading — focus it,
+            // don't duplicate; our unneeded lease must not outlive this call.
+            if (focusOpenTab(path)) return
+            backend.editor.documentLoaded(path, text)
+            openFiles.add(OpenFile(path, name, text, releaseDocument = release))
+            installed = true
+            activeIndex = openFiles.lastIndex
+            backend.editor.onFileOpened(path) // a genuinely new tab (focus path returned above), for plugin events
+        } finally {
+            if (!installed) release()
+        }
     }
 
     /** Focus the already-open tab for [path] if there is one; returns true when it existed. */
