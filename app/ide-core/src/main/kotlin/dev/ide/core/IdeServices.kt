@@ -1916,7 +1916,10 @@ class IdeServices private constructor(
     fun isCompatibilityMode(): Boolean {
         if (!projectSync.isExternal()) return false
         return store.workspace.projects.none {
-            it.buildSystemId == BuildSystemId.GRADLE || it.buildSystemId == dev.ide.core.node.NodeModuleType.BUILD_SYSTEM
+            it.buildSystemId == BuildSystemId.GRADLE ||
+                it.buildSystemId == dev.ide.core.node.NodeModuleType.BUILD_SYSTEM ||
+                it.buildSystemId == dev.ide.core.swift.SwiftModuleType.BUILD_SYSTEM ||
+                it.buildSystemId == dev.ide.core.python.PythonModuleType.BUILD_SYSTEM
         }
     }
 

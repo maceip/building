@@ -685,7 +685,7 @@ class CodeAssistAppState(
             scope.launch {
                 when (backend.projects.inspectProjectFolder(path)) {
                     // Nothing to translate: adopt it and open it.
-                    UiProjectFolderKind.CODE_ASSIST, UiProjectFolderKind.NODE -> runImport(path, convert = false)
+                    UiProjectFolderKind.CODE_ASSIST, UiProjectFolderKind.NODE, UiProjectFolderKind.SWIFT, UiProjectFolderKind.PYTHON -> runImport(path, convert = false)
                     // Foreign build system: it still has a mode to choose.
                     // The question is the user's to answer, so drop the overlay while it is on screen.
                     UiProjectFolderKind.GRADLE -> {

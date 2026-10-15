@@ -52,6 +52,8 @@ internal fun ImportableKind.toUi(): UiProjectFolderKind = when (this) {
     ImportableKind.CODE_ASSIST -> UiProjectFolderKind.CODE_ASSIST
     ImportableKind.EXTERNAL -> UiProjectFolderKind.GRADLE
     ImportableKind.NODE -> UiProjectFolderKind.NODE
+    ImportableKind.SWIFT -> UiProjectFolderKind.SWIFT
+    ImportableKind.PYTHON -> UiProjectFolderKind.PYTHON
     ImportableKind.NONE -> UiProjectFolderKind.UNKNOWN
 }
 
@@ -70,7 +72,7 @@ internal class ProjectBackend(private val ctx: BackendContext) : ProjectService 
      *  lists keyed by `rootPath`, where a repeat throws out of the measure pass instead of drawing twice. */
     override fun projects(): List<ProjectInfo> =
         ctx.manager?.list()
-            ?.map { ProjectInfo(it.name, it.rootPath, it.moduleCount, it.compatibility, it.isAndroid, it.lastOpened, it.unrecognized, it.isNode) }
+            ?.map { ProjectInfo(it.name, it.rootPath, it.moduleCount, it.compatibility, it.isAndroid, it.lastOpened, it.unrecognized, it.isNode, it.isSwift, it.isPython) }
             ?.distinctBy { it.rootPath }
             ?: ctx.servicesOrNull?.let {
                 listOf(ProjectInfo(it.projectDisplayName(), it.workspaceRoot.toString(), it.modules().size, runCatching { it.isCompatibilityMode() }.getOrDefault(false)))

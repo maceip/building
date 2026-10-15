@@ -26,6 +26,8 @@ import dev.ide.core.gradle.GradleImport
 import dev.ide.core.gradle.GradleProjectExport
 import dev.ide.core.notify.UserMessageCenter
 import dev.ide.core.node.NodeModuleType
+import dev.ide.core.python.PythonModuleType
+import dev.ide.core.swift.SwiftModuleType
 import dev.ide.core.plugins.KnownPlugin
 import dev.ide.core.plugins.PluginChanges
 import dev.ide.core.sdk.SdkManagerService
@@ -102,6 +104,8 @@ data class ProjectSummary(
     val unrecognized: Boolean = false,
     /** package.json owns this project; it runs through the Node Runtime workbench. */
     val isNode: Boolean = false,
+    val isSwift: Boolean = false,
+    val isPython: Boolean = false,
 )
 
 /** What [ProjectManager.inspectFolder] found in a folder offered for import. */
@@ -115,6 +119,12 @@ enum class ImportableKind {
 
     /** A statically read package.json project. No Gradle conversion choice or automatic installation. */
     NODE,
+
+    /** A Swift / XTool project. */
+    SWIFT,
+
+    /** A Python project. */
+    PYTHON,
 
     /** Neither -- the caller should say so rather than silently doing nothing. */
     NONE,
@@ -318,12 +328,18 @@ class ProjectManager private constructor(
                     proj?.name ?: dir.fileName.toString(),
                     dir.toString(),
                     proj?.modules?.size ?: 0,
-                    compatibility = ExternalProjectMarker.exists(dir) && proj?.buildSystemId != NodeModuleType.BUILD_SYSTEM.value,
+                    compatibility = ExternalProjectMarker.exists(dir) && proj?.buildSystemId !in setOf(
+                        NodeModuleType.BUILD_SYSTEM.value,
+                        SwiftModuleType.BUILD_SYSTEM.value,
+                        PythonModuleType.BUILD_SYSTEM.value,
+                    ),
                     isAndroid = proj?.modules?.any { m -> m.facets.any { it.tomlTable == AndroidFacetCodec.tomlTable } } ?: false,
                     lastOpened = prefs.getProperty(openedKey(dir))?.toLongOrNull() ?: 0L,
                     // Same two conditions as IdeServices.isUnrecognizedProject, read without opening the engine.
                     unrecognized = proj?.modules.isNullOrEmpty() && UnrecognizedProjectMarker.exists(dir),
                     isNode = proj?.buildSystemId == NodeModuleType.BUILD_SYSTEM.value,
+                    isSwift = proj?.buildSystemId == SwiftModuleType.BUILD_SYSTEM.value,
+                    isPython = proj?.buildSystemId == PythonModuleType.BUILD_SYSTEM.value,
                 )
             }
             .sortedWith(compareByDescending<ProjectSummary> { it.lastOpened }.thenBy { it.name.lowercase() })
@@ -421,7 +437,12 @@ class ProjectManager private constructor(
         if (!Files.isDirectory(dir)) return ImportableKind.NONE
         if (ModelPersistence.exists(dir.toString())) return ImportableKind.CODE_ASSIST
         val importer = ProjectSyncService.importerFor(env.platform.extensions, dir) ?: return ImportableKind.NONE
-        return if (importer.id == NodeModuleType.BUILD_SYSTEM) ImportableKind.NODE else ImportableKind.EXTERNAL
+        return when (importer.id) {
+            NodeModuleType.BUILD_SYSTEM -> ImportableKind.NODE
+            SwiftModuleType.BUILD_SYSTEM -> ImportableKind.SWIFT
+            PythonModuleType.BUILD_SYSTEM -> ImportableKind.PYTHON
+            else -> ImportableKind.EXTERNAL
+        }
     }
 
     fun importExternalProject(sourceDir: Path): IdeServices? {
@@ -508,7 +529,7 @@ class ProjectManager private constructor(
         // An importer claiming the folder can still fail on its contents (an unreadable build script). The
         // fallback is the same as for a folder nothing claimed: an editable project beats no project.
         val adopted = kind == ImportableKind.CODE_ASSIST ||
-            (kind in setOf(ImportableKind.EXTERNAL, ImportableKind.NODE) && runCatching { adoptProjectInPlace(here) }.getOrDefault(false))
+            (kind in setOf(ImportableKind.EXTERNAL, ImportableKind.NODE, ImportableKind.SWIFT, ImportableKind.PYTHON) && runCatching { adoptProjectInPlace(here) }.getOrDefault(false))
         if (adopted) return kind
         IdeServices.adoptPlainFolderAt(here, sdk(), sharedCachesRoot = homeDir, env = env, origin = origin)
         return ImportableKind.NONE
@@ -527,6 +548,12 @@ class ProjectManager private constructor(
             when (inspectFolder(here)) {
                 ImportableKind.NODE -> check(IdeServices.importExternalProjectAt(here, sdk(), languageLevel, env)) {
                     "Could not import package.json. No project scripts were executed."
+                }
+                ImportableKind.SWIFT -> check(IdeServices.importExternalProjectAt(here, sdk(), languageLevel, env)) {
+                    "Could not import Swift package. No project scripts were executed."
+                }
+                ImportableKind.PYTHON -> check(IdeServices.importExternalProjectAt(here, sdk(), languageLevel, env)) {
+                    "Could not import Python project files. No project scripts were executed."
                 }
                 ImportableKind.NONE -> IdeServices.adoptPlainFolderAt(here, sdk(), sharedCachesRoot = homeDir, env = env)
                 ImportableKind.EXTERNAL -> {

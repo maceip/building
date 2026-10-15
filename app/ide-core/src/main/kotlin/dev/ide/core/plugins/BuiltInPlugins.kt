@@ -64,6 +64,10 @@ import dev.ide.core.gradle.GradleProjectImporter
 import dev.ide.core.gradle.GradleToolingImporter
 import dev.ide.core.node.NodeModuleType
 import dev.ide.core.node.NodeProjectImporter
+import dev.ide.core.swift.SwiftModuleType
+import dev.ide.core.swift.SwiftProjectImporter
+import dev.ide.core.python.PythonModuleType
+import dev.ide.core.python.PythonProjectImporter
 import dev.ide.gradle.GradleBuildSystem
 import dev.ide.model.BuildSystemId
 import dev.ide.core.services.AndroidResourceService
@@ -217,6 +221,8 @@ object BuiltInPlugins {
         BuiltInPlugin(KspSupportPlugin(env)),
         BuiltInPlugin(GradleSupportPlugin()),
         BuiltInPlugin(NodeSupportPlugin()),
+        BuiltInPlugin(SwiftSupportPlugin()),
+        BuiltInPlugin(PythonSupportPlugin()),
         BuiltInPlugin(BlocksPlugin()),
         BuiltInPlugin(AndroidSupportPlugin(codecs)),
         BuiltInPlugin(SamplesPlugin()),
@@ -398,6 +404,32 @@ private class NodeSupportPlugin : Plugin {
     override fun register(reg: PluginRegistration) {
         reg.contributeVia { ext, pid -> ModuleTypeRegistry(ext).register(NodeModuleType, pid) }
         reg.register(PROJECT_IMPORTER_EP, NodeProjectImporter())
+    }
+}
+
+/** Swift / XTool package import and Runtime workbench integration. */
+private class SwiftSupportPlugin : Plugin {
+    override val manifest = PluginManifest(
+        id = "swift-support", name = "Swift & iOS Support", essential = true,
+        description = "Opens Swift and iOS projects for editing and running with xtool/Swift in the Runtime workbench.",
+    )
+
+    override fun register(reg: PluginRegistration) {
+        reg.contributeVia { ext, pid -> ModuleTypeRegistry(ext).register(SwiftModuleType, pid) }
+        reg.register(PROJECT_IMPORTER_EP, SwiftProjectImporter())
+    }
+}
+
+/** Python project import and Runtime workbench integration. */
+private class PythonSupportPlugin : Plugin {
+    override val manifest = PluginManifest(
+        id = "python-support", name = "Python Support", essential = true,
+        description = "Opens Python projects for editing and running in the Runtime workbench.",
+    )
+
+    override fun register(reg: PluginRegistration) {
+        reg.contributeVia { ext, pid -> ModuleTypeRegistry(ext).register(PythonModuleType, pid) }
+        reg.register(PROJECT_IMPORTER_EP, PythonProjectImporter())
     }
 }
 

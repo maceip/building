@@ -642,6 +642,8 @@ class IdeServicesBackend(
             moduleCount = services.modules().size,
             compatibility = runCatching { services.isCompatibilityMode() }.getOrDefault(false),
             isNode = services.store.workspace.projects.any { it.buildSystemId == dev.ide.core.node.NodeModuleType.BUILD_SYSTEM },
+            isSwift = services.store.workspace.projects.any { it.buildSystemId == dev.ide.core.swift.SwiftModuleType.BUILD_SYSTEM },
+            isPython = services.store.workspace.projects.any { it.buildSystemId == dev.ide.core.python.PythonModuleType.BUILD_SYSTEM },
         )
 
     // ---- Compose preview (LayoutPreviewBackend; aggregator-level, uses the preview lane) ----
