@@ -48,6 +48,7 @@
          biggest lever against OOM during on-device builds; the dexer also bounds its parallelism to the heap
          (see DexConcurrency). -->
     <application
+            android:name=".BuildingApplication"
             android:allowBackup="true"
             android:fullBackupContent="@xml/backup_rules"
             android:dataExtractionRules="@xml/data_extraction_rules"

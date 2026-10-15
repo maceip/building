@@ -100,6 +100,9 @@ import org.jetbrains.compose.resources.stringResource
 
 private val WIDE_BREAKPOINT = 720.dp
 
+/** Platform delivery UI alongside the shared runtime switches; absent on hosts without packs. */
+val LocalRuntimeDownloads = androidx.compose.runtime.staticCompositionLocalOf<@Composable () -> Unit> { {} }
+
 /** Keys the screen handles with a UI flow rather than [IdeBackend.invokeSettingAction] (built-in Privacy). */
 private const val ACTION_VIEW_LOGS = "viewLogs"
 private const val ACTION_BACKUP = "backup"
@@ -321,8 +324,10 @@ private fun PageContent(
     val advanced = page.controls.filter { it.advanced }
     // Regular controls grouped by their optional sub-heading (null group first, in declaration order).
     val groups = regular.groupBy { it.group }.toList()
+    val runtimeDownloads = LocalRuntimeDownloads.current
 
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (page.id == "runtimes") item("runtimeDownloads") { runtimeDownloads() }
         groups.forEach { (groupTitle, controls) ->
             item(groupTitle ?: "_") {
                 SettingsCard(localizedGroup(groupTitle)) {

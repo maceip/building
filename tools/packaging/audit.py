@@ -83,6 +83,12 @@ def verify_runtime(archive, inventory, base):
         if digest(stream) != manifest["launcherSha256"]:
             raise ValueError("Runtime launcher SHA-256 mismatch")
     runtime_pack.verify_elf(archive.read(launcher), launcher)
+    if "nodeLauncherSha256" in manifest:
+        node_launcher = base + "lib/arm64-v8a/libdevruntime-node.so"
+        with archive.open(node_launcher) as stream:
+            if digest(stream) != manifest["nodeLauncherSha256"]:
+                raise ValueError("Node launcher SHA-256 mismatch")
+        runtime_pack.verify_elf(archive.read(node_launcher), node_launcher)
     with zipfile.ZipFile(io.BytesIO(prefix_bytes)) as prefix:
         prefix_entries = entries(prefix)
         expected = {r["path"] for r in manifest["files"]}

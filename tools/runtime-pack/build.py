@@ -347,13 +347,16 @@ def main():
     launcher = native_dir / "libdevruntime-launcher.so"
     subprocess.run([str(compiler), str(HERE / "runtime-launcher.c"), "-Os", "-fPIE", "-pie", "-Wl,-z,max-page-size=16384,-z,common-page-size=16384", "-o", str(launcher)], check=True)
     verify_elf(launcher.read_bytes(), launcher.name)
+    node_launcher = native_dir / "libdevruntime-node.so"
+    subprocess.run([str(compiler), str(HERE / "node-launcher.c"), "-Os", "-fPIE", "-pie", "-Wl,-z,max-page-size=16384,-z,common-page-size=16384", "-o", str(node_launcher)], check=True)
+    verify_elf(node_launcher.read_bytes(), node_launcher.name)
     env_helper = output / "runtime-env"
     subprocess.run([str(compiler), str(HERE / "runtime-env.c"), "-Os", "-fPIE", "-pie", "-Wl,-z,max-page-size=16384,-z,common-page-size=16384", "-o", str(env_helper)], check=True)
     files["bin/env"] = env_helper.read_bytes()
     owners["bin/env"] = "building-runtime (GPL-3.0-or-later)"
     payload = assets / "prefix.zip"
     native, data_manifest, kept_links = [], [], []
-    live_native = {launcher.name}
+    live_native = {launcher.name, node_launcher.name}
     with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for name, data in sorted(files.items()):
             if data.startswith(b"\x7fELF") and len(data) >= 18 and struct.unpack_from("<H", data, 16)[0] in (2, 3):
@@ -370,7 +373,7 @@ def main():
                     data = b"#!/usr/" + data[len(b"#!/data/data/com.termux/files/usr/"):]
                     transform = "legacy-Termux-shebang-to-/usr (termux-exec relocates to active prefix)"
                 zip_entry(archive, name, data)
-                data_manifest.append({"path": name, "sha256": sha256(data), "size": len(data), "executableScript": data.startswith(b"#!"), "originalSha256": original_hash, "transform": transform})
+                data_manifest.append({"path": name, "owner": owners[name], "sha256": sha256(data), "size": len(data), "executableScript": data.startswith(b"#!"), "originalSha256": original_hash, "transform": transform})
         for name, target in sorted(links.items()):
             # Omit dangling links while retaining development headers and libraries.
             seen = {name}
@@ -380,12 +383,12 @@ def main():
                 resolved = links[resolved]
             if resolved not in files:
                 continue
-            kept_links.append({"path": name, "target": target})
+            kept_links.append({"path": name, "target": target, "owner": owners[name]})
     # Delete only this generator's obsolete output files, never user/workspace directories.
     for old in native_dir.glob("libdevruntime_*.so"):
         if old.name not in live_native:
             old.unlink()
-    identity = {"format": 1, "abi": lock["abi"], "packages": provenance, "npmTools": npm_tools, "generatedLibraries": generated_libraries, "supplementalNotices": supplemental_notices, "launcherSha256": sha256(launcher.read_bytes()), "payloadSha256": sha256(payload.read_bytes()), "stagingVersion": sha256((HERE / "build.py").read_bytes() + (HERE / "runtime-env.c").read_bytes())}
+    identity = {"format": 1, "abi": lock["abi"], "packages": provenance, "npmTools": npm_tools, "generatedLibraries": generated_libraries, "supplementalNotices": supplemental_notices, "launcherSha256": sha256(launcher.read_bytes()), "nodeLauncherSha256": sha256(node_launcher.read_bytes()), "payloadSha256": sha256(payload.read_bytes()), "stagingVersion": sha256((HERE / "build.py").read_bytes() + (HERE / "runtime-env.c").read_bytes())}
     manifest = dict(identity, id="termux-arm64-" + sha256(json.dumps(identity, sort_keys=True).encode())[:16],
                     payloadBytes=payload.stat().st_size, native=native, files=data_manifest, links=kept_links,
                     approvedNpmPackages=lock["approvedNpmPackages"], policy=lock["policy"], metadata=lock["metadata"],

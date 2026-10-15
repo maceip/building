@@ -1,9 +1,96 @@
 # Google Play delivery for runtimes and SDKs
 
-Investigated 2026-10-14. Recommendation: use **on-demand Play Feature Delivery**
+Investigated 2026-10-14; Node test implementation added 2026-10-15. Use **on-demand Play Feature Delivery**
 for executable development tools, consider **Play Asset Delivery** for genuinely
 non-executable SDK data, and reserve **AI packs** for actual model weights. This
-is a delivery design, not an implemented Play download service or a Play approval.
+includes a local-testing prototype, not a Play Console approval or production rollout.
+
+## Node test build
+
+`-PIDE_RUNTIME_DELIVERY=play` partitions the existing locked developer runtime into
+the base app and `:developer_runtime_node`. The feature contains Node, npm, pnpm,
+their scripts and Node development headers. Native support libraries, Python,
+shell and compiler tools stay in base with a single copy of the license/source
+inventory. Default `bundled` distribution continues to carry everything for
+offline sideloading. This flag is separate from `IDE_APP_ENGINE_DELIVERY`, which
+controls engines embedded into generated apps.
+
+Settings → Runtimes now shows an explicit **Download Node.js** action, download
+progress, cancellation, failure/retry, Play confirmation when needed, and an
+installed-pack verification action. The same component appears in workbench
+runtime availability. Enable switches retain their existing meaning; installation
+does not change them or run project code.
+
+The runtime host resolves installed split libraries from the class loader, checks
+all native and data hashes, composes a versioned prefix from the available packs,
+and invalidates a prepared base-only installation when Node arrives. A missing or
+outdated Node pack leaves Python/shell available. SplitCompat is initialized at
+application startup and on activities so installed packs survive a cold start.
+
+SplitCompat's extracted native libraries are read-only app files, which cannot
+be launched directly with Android `execve`. The base therefore carries a small
+`libdevruntime-node.so` entrypoint that invokes Android's system linker on the
+verified Node payload. The existing prefix helper recognizes the loaded Node
+image and reports that stable entrypoint for `/proc/self/exe`; otherwise Node's
+`process.execPath` points at the linker and breaks child/fork execution. This
+does not change Node's native bytes, chmod the delivered library, add a second
+Node runtime, or affect executable-path reporting in Python/compiler processes.
+See [Android's execution restriction](https://developer.android.com/about/versions/10/behavior-changes-10#execute-permission)
+and the [system linker's executable loading support](https://android.googlesource.com/platform/bionic/+/refs/heads/main/linker/linker_main.cpp).
+
+Reproduce with an ARM64 test device and an official
+[bundletool-all JAR](https://github.com/google/bundletool/releases):
+
+```sh
+python3 tools/runtime-pack/play_test.py \
+  --device emulator-5556 --bundletool /path/to/bundletool-all-1.18.3.jar --test
+```
+
+The helper builds `ai.building.pack.dev`, validates the actual AAB, creates an
+APK set with `--local-testing`, installs only base initially, stages the feature,
+and exercises the download through `SplitInstallManager`. It never uploads to
+Play or replaces `ai.building` / `ai.building.dev`. Use `--reset-test-app` only to
+erase this dedicated test app and repeat the base-only phase; use `--skip-build`
+to reuse the current generated artifacts. Outputs and test logs are under
+`tools/runtime-pack/build/play-test/`.
+
+Local testing simulates Play transport; the signed split files, integrity checks,
+native processes and package managers are real. An internal Play track remains
+necessary to establish actual store delivery.
+
+### Verified 2026-10-15
+
+ARM64 emulator `emulator-5556`, Android API 36, 4096-byte pages:
+
+| Check | Result |
+| --- | --- |
+| Play-mode AAB + instrumentation APK build | Passed |
+| Default bundled APK build and full runtime artifact audit | Passed |
+| Base-only Python execution with Node/npm absent | Passed |
+| Simulated network failure, cancellation, then successful install | Passed |
+| Existing prepared host recognizes the newly delivered Node pack | Passed |
+| Read-only delivered Node, native child processes, crypto, npm and pnpm | Passed |
+| Cold process restart | Passed |
+| Offline runtime/terminal suite with airplane mode enabled | 28 passed, including a compiled N-API addon, workers, HTTP preview, process teardown, Python, shell and settings |
+| Actual Settings download button, progress and installed verification | Passed; execution rechecked after this UI installation |
+| PackageManager-installed feature splits after reinstall | Passed; Node/npm/pnpm/children run through the normal installer-owned native path too |
+| Host runtime suite | 259 cases, zero failures, 2 skipped |
+| Host runtime-pack + packaging checks | 40 cases, zero failures, 2 skipped |
+
+Actual AAB stored payload: **358.65 MiB base**, **21.97 MiB Node feature**.
+These are compressed AAB entries, not installed storage. The feature contains
+one Node ELF and 2,562 data files; no native bytes are duplicated across modules.
+The added base launcher is 6.6 KiB uncompressed.
+
+Local outputs: `tools/runtime-pack/build/play-test/building-node-play-debug.aab`,
+`building-node-local.apks`, `building-pack-tests.apk`, individual phase logs,
+`offline-runtime-suite.log`, and Settings screenshots. AAB SHA-256:
+`fe3c31f28824db53eff25f0d1bae0b026ef61b490915b569e6407b1aed701c2c`.
+
+Real Google Play transport, low-storage behavior, 16 KB-page devices, older API
+levels, and updates to a different payload/app version remain separate acceptance
+work. The verified reinstall used the same app version. Pack removal and other
+runtime families are not implemented in this first Node test.
 
 ## Which service fits?
 
@@ -57,9 +144,9 @@ installed-context refresh and bundle verifier are reusable patterns. The default
 IDE still carries its developer tools in the base APK; this prototype does not
 prove Play delivery of the full development toolchain.
 
-`AndroidRuntimeHost` currently caches the base native directory and materializes
-one complete runtime prefix. Splitting packages requires a fresh installed-path
-resolver and per-component verified manifests, rather than changing only Gradle.
+The original `AndroidRuntimeHost` cached the base native directory and materialized
+one complete runtime prefix. The Node prototype now uses a fresh installed-path
+resolver and per-component verified manifests.
 Keep the existing content hashes and package ownership so shared native files
 have one owner. Swift/iOS integration must reuse LLVM as documented in
 [packaging](packaging.md#xtool-integration-boundary); the standalone xtool APK is
@@ -88,9 +175,9 @@ Feature-module removal is deferred: a removal request is not proof that disk
 space is already reclaimed. Refresh installed context/native paths after a split
 arrives; native loading has special considerations documented in
 [on-demand delivery](https://developer.android.com/guide/playcore/feature-delivery/on-demand).
-Our next prototype must exercise real `ProcessBuilder` execution and child tools,
-not only `System.loadLibrary`. That execution behavior remains unproven for the
-proposed split development runtime.
+The Node test above exercises real `ProcessBuilder` and PTY execution, child
+processes and compiled addons. Other runtime families still need their own
+execution and dependency qualification.
 
 For PAD, query locations at use time and handle missing or updating packs. Treat
 pack files as immutable; they can move or be invalidated by updates. This is not
@@ -100,14 +187,13 @@ Keep a bundled/offline distribution for sideloading. Google's delivery APIs depe
 on Google Play, even though AABs themselves are an open format. See the
 [App Bundle FAQ](https://developer.android.com/guide/app-bundle/faq).
 
-## Next proof before migration
+## Remaining proof before broader migration
 
-Build one small Node feature with its complete native dependency closure, using
-the existing packaging machinery. Verify base-only launch/editing, explicit
-install, real Node/npm execution, process teardown, offline reuse, update and
-re-enable behavior. Test cancellation and insufficient storage, and check
-shared-dependency removal. Start with bundletool local testing, then an internal
-Play test track; the former does not establish real Play download behavior.
+Take this Node build through an internal Play test track, then qualify other
+runtime families using the same real-process checks. Exercise insufficient
+storage, updates to new app/payload versions, and shared-dependency removal.
+The local transport and same-version reinstall checks above do not establish
+those behaviors or actual store delivery.
 
 Moving distribution to Play addresses where the shipped runtime comes from; it
 does not certify all subsequent project dependency execution. The
@@ -116,5 +202,6 @@ restricts executable-code downloads outside Play and separately addresses
 interpreted code. Keep the existing native-tool download distribution gates;
 qualify developer workflows without promising blanket store approval.
 
-No asset/AI packs have been created, no runtime bytes have been moved, and nothing
-has been uploaded to Play as part of this investigation.
+No asset/AI packs have been created and nothing has been uploaded to Play.
+The opt-in Node feature is the first executable runtime delivery test; other
+runtime families have not yet been migrated.

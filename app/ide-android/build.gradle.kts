@@ -418,6 +418,8 @@ val testAdmobNativeUnitId = "ca-app-pub-3940256099942544/2247696110"
 val testAdmobInterstitialUnitId = "ca-app-pub-3940256099942544/1033173712"
 
 val appEngineDelivery = providers.gradleProperty("IDE_APP_ENGINE_DELIVERY").getOrElse("none")
+val runtimeDelivery = providers.gradleProperty("IDE_RUNTIME_DELIVERY").getOrElse("bundled")
+val runtimePackDirectory = if (runtimeDelivery == "play") "developer-runtime-splits/base" else "developer-runtime-pack"
 val selectedAppEngine = providers.gradleProperty("IDE_APP_ENGINE").getOrElse("python")
 require(appEngineDelivery in setOf("none", "direct", "play"))
 require(selectedAppEngine in setOf("node", "python"))
@@ -428,6 +430,7 @@ android {
     compileSdkMinor = 1
     // Pin AGP packaging/stripping separately from the source-built SDK helper toolchain.
     ndkVersion = "27.3.13750724"
+    if (runtimeDelivery == "play") dynamicFeatures += setOf(":developer_runtime_node")
     if (appEngineDelivery == "play") {
         dynamicFeatures += setOf(":runtime_engine_ide_feature")
     }
@@ -436,7 +439,7 @@ android {
         applicationId = releaseConfig.applicationId
         minSdk = 26
         targetSdk = 36
-        if (appEngineDelivery != "none") ndk.abiFilters += setOf("arm64-v8a")
+        if (appEngineDelivery != "none" || runtimeDelivery == "play") ndk.abiFilters += setOf("arm64-v8a")
         // Version identity comes from the release configuration; upstream 3.27.1
         // (versionCode 107) is the floor the configured values must exceed.
         versionCode = releaseConfig.versionCode
@@ -497,8 +500,8 @@ android {
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("app-engine-sdk-asset").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("gradle-tooling-asset").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("hono-project-asset").get().asFile)
-    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("developer-runtime-pack/assets").get().asFile)
-    sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("developer-runtime-pack/jniLibs").get().asFile)
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("$runtimePackDirectory/assets").get().asFile)
+    sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("$runtimePackDirectory/jniLibs").get().asFile)
     sourceSets.getByName("androidTest").assets.srcDir(layout.buildDirectory.dir("vm-spike-asset").get().asFile)
     sourceSets.getByName("androidTest").assets.srcDir(layout.buildDirectory.dir("moshi-libs-asset").get().asFile)
     // The Kotlin-analysis parity corpus and its goldens, staged as test assets so the instrumented suite

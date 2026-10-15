@@ -61,6 +61,11 @@ private const val ADS_STARTUP_DELAY_MS = 5_000L
  */
 class MainActivity : ComponentActivity() {
 
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(newBase)
+        com.google.android.play.core.splitcompat.SplitCompat.installActivity(this)
+    }
+
     private var session: AndroidIde.Session? = null
     private val workbenchScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var workbenchRuntime: RuntimeController? = null
@@ -348,7 +353,10 @@ class MainActivity : ComponentActivity() {
                 onDispose { registration?.dispose() }
             }
             when {
-                b != null -> CompositionLocalProvider(LocalWorkbenchRuntime provides workbenchRuntime) {
+                b != null -> CompositionLocalProvider(
+                    LocalWorkbenchRuntime provides workbenchRuntime,
+                    dev.ide.ui.screens.LocalRuntimeDownloads provides { dev.ide.android.workbench.runtime.RuntimeDownloadPanel() },
+                ) {
                     val projectEpoch by b.projects.projectEpoch.collectAsState()
                     var lastProjectEpoch by remember(b) { mutableStateOf(projectEpoch) }
                     LaunchedEffect(projectEpoch) {

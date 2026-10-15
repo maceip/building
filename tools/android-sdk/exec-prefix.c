@@ -4,9 +4,55 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
+#include <link.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
+
+// A linker-launched PIE sees linker64 at /proc/self/exe. Give Node's libuv a stable,
+// installer-owned entrypoint for spawn/fork. Only substitute when the actual Node
+// image is mapped in THIS process; inherited environment must not affect Python,
+// shells, compiler tools, or arbitrary project programs.
+struct node_image { const char *binary; int found; };
+static int find_node_image(struct dl_phdr_info *info, size_t size, void *data) {
+    (void)size;
+    struct node_image *image = data;
+    struct stat actual, expected;
+    if (info->dlpi_name && info->dlpi_name[0] == '/' &&
+        stat(info->dlpi_name, &actual) == 0 && stat(image->binary, &expected) == 0 &&
+        actual.st_dev == expected.st_dev && actual.st_ino == expected.st_ino) {
+        image->found = 1;
+        return 1;
+    }
+    return 0;
+}
+
+ssize_t readlink(const char *path, char *buffer, size_t size) {
+    ssize_t (*next_readlink)(const char *, char *, size_t) = dlsym(RTLD_NEXT, "readlink");
+    if (!next_readlink) { errno = ENOSYS; return -1; }
+    const char *binary = getenv("BUILDING_RUNTIME_NODE_BINARY");
+    const char *launcher = getenv("BUILDING_RUNTIME_NODE_LAUNCHER");
+    if (size > 0 && strcmp(path, "/proc/self/exe") == 0 && binary && launcher && launcher[0] == '/') {
+        char real[PATH_MAX];
+        ssize_t n = next_readlink(path, real, sizeof(real) - 1);
+        if (n > 0) {
+            real[n] = '\0';
+            if (strcmp(real, "/system/bin/linker64") == 0 || strstr(real, "/bin/linker64") != NULL) {
+                struct node_image image = {binary, 0};
+                dl_iterate_phdr(find_node_image, &image);
+                if (image.found) {
+                    size_t length = strlen(launcher);
+                    if (length > size) length = size;
+                    memcpy(buffer, launcher, length);
+                    return (ssize_t)length;
+                }
+            }
+        }
+    }
+    return next_readlink(path, buffer, size);
+}
 
 static int beneath(const char *path, const char *directory) {
     const size_t length = strlen(directory);

@@ -5,6 +5,7 @@ val stageDeveloperRuntimePack = tasks.register<Exec>("stageDeveloperRuntimePack"
     description = "Stage checksum-pinned Node, npm, dash and Python from APK-delivered runtime inputs."
     val sources = rootProject.file("tools/runtime-pack")
     inputs.files(
+        sources.resolve("node-launcher.c"),
         sources.resolve("build.py"), sources.resolve("packages.lock.json"), sources.resolve("recipes.lock.json"), sources.resolve("runtime-launcher.c"), sources.resolve("runtime-env.c"),
         sources.resolve("build_android_spawn.py"), sources.resolve("android-spawn.source.lock.json"), sources.resolve("optional-notices.lock.json"), sources.resolve("npm-tools.lock.json"),
         rootProject.file("build-system/gradle-build/src/main/resources/dev/ide/gradle/bootstrap-catalog.json"),
@@ -16,4 +17,16 @@ val stageDeveloperRuntimePack = tasks.register<Exec>("stageDeveloperRuntimePack"
     if (gradle.startParameter.isOffline) args("--offline")
 }
 
-tasks.named("preBuild").configure { dependsOn(stageDeveloperRuntimePack) }
+val partitionDeveloperRuntimePack = tasks.register<Exec>("partitionDeveloperRuntimePack") {
+    dependsOn(stageDeveloperRuntimePack)
+    inputs.dir(runtimePackOutput)
+    inputs.file(rootProject.file("tools/runtime-pack/partition.py"))
+    outputs.dir(layout.buildDirectory.dir("developer-runtime-splits"))
+    commandLine("python3", rootProject.file("tools/runtime-pack/partition.py"),
+        "--source", runtimePackOutput.get().asFile,
+        "--output", layout.buildDirectory.dir("developer-runtime-splits").get().asFile)
+}
+tasks.named("preBuild").configure {
+    dependsOn(if (providers.gradleProperty("IDE_RUNTIME_DELIVERY").getOrElse("bundled") == "play")
+        partitionDeveloperRuntimePack else stageDeveloperRuntimePack)
+}

@@ -341,6 +341,7 @@ fun RuntimePanel(
             }
             item(key = "availability") {
                 RuntimeSection("Runtime availability") {
+                    dev.ide.android.workbench.runtime.RuntimeDownloadPanel()
                     Text("Choose which runtimes to use in Settings > Runtimes. Turning one off keeps its installed files and existing sessions.", style = MaterialTheme.typography.bodySmall)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { showAvailability = !showAvailability }) { Text(if (showAvailability) "Hide details" else "Show versions & limitations") }
