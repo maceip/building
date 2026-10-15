@@ -354,7 +354,10 @@ class ForkedKotlincArtSpike {
             )
 
             private fun copyAsset(ctx: Context, name: String, dest: File): File {
-                ctx.assets.open(name).use { input -> dest.outputStream().use { input.copyTo(it) } }
+                val source = if (name == "kotlin-stdlib.jar") {
+                    requireNotNull(dev.ide.lang.kotlin.compile.BundledKotlinStdlib::class.java.getResourceAsStream("/kotlin-stdlib.jar"))
+                } else ctx.assets.open(name)
+                source.use { input -> dest.outputStream().use { input.copyTo(it) } }
                 return dest
             }
 

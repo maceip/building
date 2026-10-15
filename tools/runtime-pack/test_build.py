@@ -37,6 +37,26 @@ class RuntimePackTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build.ar_data(b"not an archive")
 
+    def test_identical_native_files_keep_both_paths_and_share_one_payload(self):
+        data = bytearray(120)
+        data[:6] = b"\x7fELF\x02\x01"
+        struct.pack_into("<H", data, 18, 183)
+        struct.pack_into("<Q", data, 32, 64)
+        struct.pack_into("<HH", data, 54, 56, 1)
+        struct.pack_into("<IIQQQQQQ", data, 64, 1, 5, 0, 0, 0, 100, 100, 16384)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = build.stage_native(root, "lib/first.so", data, "first-package")
+            second = build.stage_native(root, "lib/second.so", data, "second-package")
+            self.assertEqual(first["library"], second["library"])
+            self.assertEqual(1, len(list(root.iterdir())))
+            self.assertEqual("lib/second.so", second["path"])
+            self.assertEqual("second-package", second["owner"])
+            data[7] = 1
+            third = build.stage_native(root, "lib/third.so", data, "third-package")
+            self.assertNotEqual(first["library"], third["library"])
+            self.assertEqual(2, len(list(root.iterdir())))
+
     def test_offline_cache_verifies_digest_and_never_downloads(self):
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory)

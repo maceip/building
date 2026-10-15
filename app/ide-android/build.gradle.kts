@@ -18,6 +18,9 @@ import java.util.zip.ZipOutputStream
 
 plugins {
     alias(libs.plugins.android.application)
+    id("dev.ide.runtime-pack")
+    id("dev.ide.terminal-pty")
+    id("dev.ide.hono-project")
     alias(libs.plugins.compose)
     alias(libs.plugins.kotlin.compose)
     // ASM-rewrites the bundled Kotlin compiler so K2JVMCompiler runs on ART (AGP instrumentation, scope
@@ -61,24 +64,6 @@ if (hasFirebaseConfig) {
     apply(plugin = "com.google.gms.google-services")
 } else {
     logger.lifecycle("ide-android: no google-services.json — building without push notifications.")
-}
-
-// --- kotlin-stdlib asset (on-device Kotlin-compiler spike) ---------------------------------------
-// The discovery spike (KotlinCompilerArtSpikeTest) runs K2JVMCompiler on device and needs the Kotlin
-// stdlib on its compile -classpath. The app's own stdlib is *dexed* (not a usable .jar at runtime), so we
-// stage the stdlib JAR as an asset the test copies to filesDir. Resolved on its own and non-transitive.
-val kotlinStdlibArtifact: Configuration by configurations.creating {
-    isCanBeConsumed = false
-    isCanBeResolved = true
-}
-dependencies { kotlinStdlibArtifact(libs.kotlin.stdlib) { isTransitive = false } }
-
-val bundleKotlinStdlibAsset = tasks.register<Copy>("bundleKotlinStdlibAsset") {
-    description = "Stage kotlin-stdlib.jar into a generated assets dir for the on-device Kotlin-compiler spike."
-    // Lazy: resolve the configuration at execution time, not during configuration.
-    from(kotlinStdlibArtifact.elements.map { it.single().asFile })
-    into(layout.buildDirectory.dir("kotlin-stdlib-asset"))
-    rename { "kotlin-stdlib.jar" }
 }
 
 // --- The bundled platform jar --------------------------------------------------------------------
@@ -151,31 +136,12 @@ val generatePrebuiltIndexAsset = tasks.register<JavaExec>("generatePrebuiltIndex
     })
 }
 
-// --- Compose runtime asset (on-device Compose-compile spike) -------------------------------------
-// The Compose-on-ART spike (KotlinCompilerArtSpikeTest.composeCompilesOnArt) compiles a @Composable with
-// the Compose plugin and needs the `androidx.compose.runtime.*` shapes on its compile -classpath. The app's
-// own compose runtime is dexed (not a usable .jar input), so stage the JVM/desktop runtime JAR as an asset
-// (its class signatures are what the plugin's codegen resolves against — Android-specific bodies are
-// irrelevant to producing transformed .class). The Compose *plugin* jar itself is the lang-kotlin bundled
-// resource (`ComposeCompilerPlugin.jar()`), which works on device, so it needs no separate asset.
-val composeRuntimeArtifact: Configuration by configurations.creating {
-    isCanBeConsumed = false
-    isCanBeResolved = true
-}
-dependencies { composeRuntimeArtifact(libs.compose.runtime.desktop) { isTransitive = false } }
-
-val bundleComposeRuntimeAsset = tasks.register<Copy>("bundleComposeRuntimeAsset") {
-    description = "Stage the Compose runtime JAR as an asset for the on-device Compose-compile spike."
-    from(composeRuntimeArtifact.elements.map { it.single().asFile })
-    into(layout.buildDirectory.dir("compose-runtime-asset"))
-    rename { "compose-runtime.jar" }
-}
-
-// --- Android compose-runtime classes.jar (androidTest VM interpret spike) ------------------------
+// --- Android compose-runtime classes.jar (androidTest compile and VM fixtures) ------------------------
 // VmComposeRuntimeArtSpike interprets the real ANDROID compose-runtime bytecode with the :jvm-interp VM.
 // The app's copy is dexed (no .class bytes on ART), so stage the artifact's classes.jar as an androidTest
-// asset. This is the androidx artifact (not the desktop JAR above) so the Android actuals run against the
-// real platform classes the bridge resolves on device.
+// asset. This is the androidx artifact so the Android actuals run against the
+// real platform classes the bridge resolves on device. The Compose compiler spike shares this jar;
+// runtime-desktop now publishes a forwarding artifact without the required Composable/Composer classes.
 val vmSpikeComposeRuntimeAar: Configuration by configurations.creating {
     isCanBeConsumed = false
     isCanBeResolved = true
@@ -496,6 +462,8 @@ android {
     namespace = "dev.ide.android"
     compileSdk = 36
     compileSdkMinor = 1
+    // Pin AGP packaging/stripping separately from the source-built SDK helper toolchain.
+    ndkVersion = "27.3.13750724"
     if (appEngineDelivery == "play") {
         dynamicFeatures += setOf(":runtime_engine_ide_feature")
     }
@@ -571,7 +539,7 @@ android {
         aidl = true
     }
 
-    // Stage the generated assets (kotlin-stdlib.jar, kotlinc-resources.zip) into the merged assets so the
+    // Stage generated compiler resources into the merged assets so the
     // on-device compiler can load them. AGP 9 disallows a Provider here, so register the static dirs the
     // tasks write to; ordering is carried by the `preBuild.dependsOn(...)` below (same pattern as aapt2).
     sourceSets.getByName("main").java.srcDir("vendor/termux-terminal/src")
@@ -586,13 +554,8 @@ android {
     sourceSets.getByName("main").jniLibs.srcDir(layout.buildDirectory.dir("native-sdk-tools/jniLibs").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("native-sdk-tools/assets").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("prebuilt-index-asset").get().asFile)
-    // DEBUG ONLY. The shipping app reads the stdlib as the `/kotlin-stdlib.jar` classpath resource that
-    // :lang-kotlin bundles (BundledKotlinStdlib), and the forked compiler puts the APK itself on its -cp for
-    // exactly that reason — so this second, byte-identical copy is only there for the androidTest spikes,
-    // which instrument the debug variant. Staging it into `main` shipped 1.8 MB of nothing to every user.
-    sourceSets.getByName("debug").assets.srcDir(layout.buildDirectory.dir("kotlin-stdlib-asset").get().asFile)
+    // Kotlin stdlib is supplied once as :lang-kotlin's /kotlin-stdlib.jar resource.
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("kotlinc-resources-asset").get().asFile)
-    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("compose-runtime-asset").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("compose-fonts-asset").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("compose-strings-asset").get().asFile)
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("agent-ui-strings-asset").get().asFile)
@@ -642,6 +605,8 @@ android {
 
     buildTypes {
         getByName("debug") {
+            // Development installs must have their own data/signature identity.
+            if (!defaultConfig.applicationId.orEmpty().endsWith(".dev")) applicationIdSuffix = ".dev"
             buildConfigField("boolean", "NATIVE_TOOLCHAIN_DOWNLOADS_ENABLED", "true")
         }
         getByName("release") {
@@ -787,7 +752,7 @@ android {
 
     androidResources {
         // The bulk of this app's assets are archives that are ALREADY deflated: the bundled android.jar
-        // (26 MB), r8.dex.zip, kotlinc-resources.zip, kotlin-stdlib.jar, compose-runtime.jar,
+        // (26 MB), r8.dex.zip, kotlinc-resources.zip,
         // applog-runtime.jar, core-lambda-stubs.jar. Both `compress<Variant>Assets` and `package<Variant>`
         // deflate every asset, so those ~38 MB are re-compressed twice per variant for a saving that
         // re-deflating an already-deflated stream cannot produce. Storing them costs no meaningful APK size
@@ -859,9 +824,6 @@ val fetchAndroidBuildTools = tasks.register("fetchAndroidBuildTools") {
 
 // The tooling fat jar is exec'd, not loaded. Staging it as an asset (and excluding the same bytes
 // from Java resources above) keeps it out of the IDE's dex classpath.
-apply(from = "runtime-pack.gradle.kts")
-apply(from = "terminal-pty.gradle.kts")
-apply(from = "hono-project.gradle.kts")
 
 val stageGradleToolingAsset = tasks.register<Copy>("stageGradleToolingAsset") {
     description = "Stage the Gradle tooling fat jar as an APK asset the host extracts and execs."
@@ -881,10 +843,17 @@ val buildNativeSdkTools = tasks.register<Exec>("buildNativeSdkTools") {
 }
 
 // Run before anything AGP does, so the freshly-fetched lib*.so are on disk when the native-lib merge runs,
-// and the staged kotlin-stdlib.jar asset is present when the asset merge runs.
+// and compiler resources are present when the asset merge runs.
 tasks.named("preBuild").configure {
     dependsOn(buildNativeSdkTools, bundleAppEngineSdkAsset)
-    dependsOn(fetchAndroidBuildTools, stripAndroidJarAsset, generatePrebuiltIndexAsset, bundleKotlinStdlibAsset, bundleKotlincResourcesAsset, bundleComposeRuntimeAsset, bundleComposeFontsAsset, bundleComposeStringAsset, bundleAgentUiComposeStringAsset, bundleVcsUiComposeStringAsset, bundleComposeDrawablesAsset, bundleR8DexAsset, bundleAppLogRuntimeAsset, bundleVmSpikeComposeRuntimeAsset, bundleVmSpikeMaterial3Asset, bundleVmStackAsset, bundleMoshiLibsAsset, bundleAwtFixtureAsset, stageGradleToolingAsset)
+    dependsOn(fetchAndroidBuildTools, stripAndroidJarAsset, generatePrebuiltIndexAsset, bundleKotlincResourcesAsset, bundleComposeFontsAsset, bundleComposeStringAsset, bundleAgentUiComposeStringAsset, bundleVcsUiComposeStringAsset, bundleComposeDrawablesAsset, bundleR8DexAsset, bundleAppLogRuntimeAsset, stageGradleToolingAsset)
+}
+
+// Instrumentation fixtures are built only for the test APK. App-only builds must not
+// resolve test-only Compose versions or compile the Swing fixture's test classes.
+tasks.matching { it.name == "preDebugAndroidTestBuild" }.configureEach {
+    dependsOn(bundleVmSpikeComposeRuntimeAsset, bundleVmSpikeMaterial3Asset,
+        bundleVmStackAsset, bundleMoshiLibsAsset, bundleAwtFixtureAsset)
 }
 
 // Same Android packaging gap as the fonts above, for the i18n string resources. :ide-ui-resources'

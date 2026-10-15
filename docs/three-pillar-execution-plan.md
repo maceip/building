@@ -6,6 +6,15 @@ Updated: **2026-10-14**. This is the single current tracker for **Play Store**, 
 
 ## Focus at a glance
 
+Current steering (2026-10-14): complete the build/test checkpoint and prioritize
+the full-app packaging, bundling and configuration pass. iOS signing/provisioning
+and Simulator/emulation work are deferred. The standalone xtool foundation is
+merged into xtool main at `9fb63e9`; Building's Swift project integration remains
+pending. The packaging checkpoint passes debug/release APK and AAB builds, release
+vital lint, runtime artifact verification and 24 emulator tests. The fresh debug APK
+is 416.77 MiB with the complete development runtime. Packaging ownership, precise
+proof boundaries and deferred work are in [packaging.md](packaging.md).
+
 | Pillar | Current focus | Current position |
 | --- | --- | --- |
 | Play Store | A trustworthy signed-app-to-internal-track-to-Play-install flow | API/UI implemented; no live publishing acceptance |
@@ -38,7 +47,11 @@ For each item, record **implementation**, **proof**, **what is missing**, and **
 
 Source delivery is separate: **local changes**, **committed/pushed**, **built**, and **installed** are not synonyms. No percentage-complete estimates or aggregate test counts substituting for feature acceptance.
 
-## Current delivery snapshot
+## Prior delivery snapshot
+
+This snapshot predates the later wave records and packaging checkpoint. Current
+packaging/build evidence is recorded in [packaging.md](packaging.md); the physical
+Pixel and live Play acceptance below are not replaced by emulator checks.
 
 - **Branch:** `feature/developer-platform-expansion`.
 - **Last committed/pushed checkpoint:** `1e90f501ae0a1477ca15856498a41abee192f2b1` — repair guards and launcher artwork. Mandatory full-runtime, Hono, terminal, linked-folder, Node/Gradle, backup and the new runtime-incident additions remain **local/uncommitted**. No commit/push was requested for this milestone.

@@ -55,8 +55,8 @@ class KotlinCompilerArtSpikeTest {
         Log.i(TAG, "kotlinc.art.home = $home")
 
         // Compile classpath: android.jar (the java.* / android.* shape, with -no-jdk) + the Kotlin
-        // stdlib JAR. Both ship as assets (android.jar in src/main/assets; kotlin-stdlib.jar staged by the
-        // bundleKotlinStdlibAsset Gradle task). The app's own dexed stdlib can't serve as a -classpath input.
+        // stdlib JAR. android.jar is an asset; kotlin-stdlib.jar is the production classpath resource.
+        // The app's own dexed stdlib can't serve as a -classpath input.
         val androidJar = copyAsset(ctx, "android.jar", File(work, "android.jar"))
         val stdlibJar = copyAsset(ctx, "kotlin-stdlib.jar", File(work, "kotlin-stdlib.jar"))
 
@@ -81,6 +81,8 @@ class KotlinCompilerArtSpikeTest {
         val outDir = File(work, "out").apply { mkdirs() }
 
         val args = K2JVMCompilerArguments().apply {
+            // Match KotlinJvmCompiler: the -for-ide distribution supplies PSI, not light-tree2fir.
+            useFirLT = false
             freeArgs = listOf(srcDir.absolutePath)
             destination = outDir.absolutePath
             classpath = listOf(androidJar, stdlibJar).joinToString(File.pathSeparator) { it.absolutePath }
@@ -143,7 +145,7 @@ class KotlinCompilerArtSpikeTest {
 
         val androidJar = copyAsset(ctx, "android.jar", File(work, "android.jar"))
         val stdlibJar = copyAsset(ctx, "kotlin-stdlib.jar", File(work, "kotlin-stdlib.jar"))
-        val composeRuntimeJar = copyAsset(ctx, "compose-runtime.jar", File(work, "compose-runtime.jar"))
+        val composeRuntimeJar = copyAsset(InstrumentationRegistry.getInstrumentation().context, "vmbench/compose-runtime-android.jar", File(work, "compose-runtime.jar"))
         val pluginJar = dev.ide.lang.kotlin.compile.ComposeCompilerPlugin.jar()
             ?: fail("Compose plugin jar not bundled in the app (lang-kotlin resource missing)")
         Log.i(TAG, "compose plugin jar = $pluginJar")
@@ -162,6 +164,8 @@ class KotlinCompilerArtSpikeTest {
         val outDir = File(work, "out").apply { mkdirs() }
 
         val args = K2JVMCompilerArguments().apply {
+            // Match KotlinJvmCompiler: the -for-ide distribution supplies PSI, not light-tree2fir.
+            useFirLT = false
             freeArgs = listOf(srcDir.absolutePath)
             destination = outDir.absolutePath
             classpath = listOf(androidJar, stdlibJar, composeRuntimeJar).joinToString(File.pathSeparator) { it.absolutePath }
@@ -230,6 +234,8 @@ class KotlinCompilerArtSpikeTest {
         for (i in 0 until runs) {
             val outDir = File(work, "out$i").apply { deleteRecursively(); mkdirs() }
             val args = K2JVMCompilerArguments().apply {
+                // Match KotlinJvmCompiler: the -for-ide distribution supplies PSI, not light-tree2fir.
+                useFirLT = false
                 freeArgs = listOf(srcDir.absolutePath)
                 destination = outDir.absolutePath
                 classpath = listOf(androidJar, stdlibJar).joinToString(File.pathSeparator) { it.absolutePath }
@@ -303,7 +309,10 @@ class KotlinCompilerArtSpikeTest {
     }
 
     private fun copyAsset(ctx: Context, assetName: String, dest: File): File {
-        ctx.assets.open(assetName).use { input -> dest.outputStream().use { input.copyTo(it) } }
+        val source = if (assetName == "kotlin-stdlib.jar") {
+            requireNotNull(dev.ide.lang.kotlin.compile.BundledKotlinStdlib::class.java.getResourceAsStream("/kotlin-stdlib.jar"))
+        } else ctx.assets.open(assetName)
+        source.use { input -> dest.outputStream().use { input.copyTo(it) } }
         return dest
     }
 

@@ -27,7 +27,7 @@ Current scope:
 - `app/ide-android/src/main/kotlin/dev/ide/android/workbench/runtime/AndroidRuntimeHost.kt`: offline provisioning, environment and Android process groups.
 - `tools/runtime-pack/runtime-launcher.c`: APK-native session/process-group leader; `runtime-env.c` supplies the small POSIX env subset needed by npm shebangs without dropping child interception.
 - `tools/runtime-pack/build.py`, `packages.lock.json`, `recipes.lock.json`: build-host acquisition, checksums, safe extraction, native alignment checks and provenance.
-- `app/ide-android/runtime-pack.gradle.kts`: staging task, applied by the Android app build. Native/asset source directories are wired in the app's own Android DSL.
+- `buildSrc/src/main/kotlin/dev.ide.runtime-pack.gradle.kts`: compiled staging plugin, applied by the Android app build. Native/asset source directories are wired in the app's own Android DSL.
 
 The older generic build SPI (`build-system/build-api/.../Build.kt`) has `BuildSystem.runTasks/actionFor` and `RunTaskProvider`. `ProgramRun.kt` supplies `ProgramIo`, but its interpreter request is JVM classpath/main-class specific. The workbench therefore has its own neutral `RuntimeHost`/`RuntimeChild`; it does not route Node through bytecode interpretation.
 

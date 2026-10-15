@@ -298,6 +298,19 @@ def zip_entry(archive, name, data):
     archive.writestr(info, data)
 
 
+def stage_native(directory, name, data, owner):
+    """Keep every logical tool path while storing byte-identical ELF payloads once."""
+    alignment = verify_elf(data, name)
+    digest = sha256(data)
+    packaged = "libdevruntime_" + digest + ".so"
+    destination = directory / packaged
+    if not destination.is_file() or destination.read_bytes() != data:
+        destination.write_bytes(data)
+        destination.chmod(0o755)
+    return {"path": name, "library": packaged, "sha256": digest, "size": len(data),
+            "owner": owner, "loadAlignments": alignment}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -344,12 +357,9 @@ def main():
     with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for name, data in sorted(files.items()):
             if data.startswith(b"\x7fELF") and len(data) >= 18 and struct.unpack_from("<H", data, 16)[0] in (2, 3):
-                alignment = verify_elf(data, name)
-                packaged = "libdevruntime_" + sha256(name.encode())[:20] + ".so"
-                (native_dir / packaged).write_bytes(data)
-                (native_dir / packaged).chmod(0o755)
-                native.append({"path": name, "library": packaged, "sha256": sha256(data), "size": len(data), "owner": owners[name], "loadAlignments": alignment})
-                live_native.add(packaged)
+                entry = stage_native(native_dir, name, data, owners[name])
+                native.append(entry)
+                live_native.add(entry["library"])
             else:
                 original_hash = sha256(data)
                 transform = None

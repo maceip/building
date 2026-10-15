@@ -38,7 +38,7 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: "platform-tools platforms;android-36 platforms;android-36.1 build-tools;36.0.0"
+          packages: "platform-tools platforms;android-36 platforms;android-36.1 build-tools;36.0.0 ndk;27.3.13750724"
 
       # Same as the framework jobs: one-shot CI builds gain nothing from incremental compilation.
       - name: Disable Kotlin incremental compilation (CI)
@@ -46,13 +46,27 @@ jobs:
           mkdir -p ~/.gradle
           echo "kotlin.incremental=false" >> ~/.gradle/gradle.properties
 
+      # Debug-only packaging fits 4 GiB; full local APK+AAB builds use the larger project default.
       - name: Build debug APK
-        run: ./gradlew :ide-android:assembleDebug --console=plain --stacktrace
+        run: ./gradlew :ide-android:assembleDebug -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8" --console=plain --stacktrace
+
+      - name: Verify packaged development runtime
+        run: |
+          python3 -m unittest discover -s tools/packaging -p 'test_*.py'
+          python3 tools/packaging/audit.py app/ide-android/build/outputs/apk/debug/ide-android-debug.apk --report build/reports/packaging/debug.json
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: codeassist-debug-apk
           path: app/ide-android/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload packaging inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaging-inventory
+          path: build/reports/packaging/*.json
           if-no-files-found: error
           retention-days: 30

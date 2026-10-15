@@ -206,7 +206,10 @@ class KspArtSpikeTest {
     }
 
     private fun copyAsset(ctx: Context, assetName: String, dest: File): File {
-        ctx.assets.open(assetName).use { input -> dest.outputStream().use { input.copyTo(it) } }
+        val source = if (assetName == "kotlin-stdlib.jar") {
+            requireNotNull(dev.ide.lang.kotlin.compile.BundledKotlinStdlib::class.java.getResourceAsStream("/kotlin-stdlib.jar"))
+        } else ctx.assets.open(assetName)
+        source.use { input -> dest.outputStream().use { input.copyTo(it) } }
         return dest
     }
 
