@@ -34,11 +34,14 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
     override val workspaceCache: Path = home.resolve("workspaces")
     @Volatile private var installation: RuntimeInstallation? = null
     private var installationLocation: String? = null // Guarded by installLock.
+    @Volatile private var verifiedNativePaths: Set<Path> = emptySet()
 
     override fun disabledReason(kind: RuntimeKind): String? {
         AndroidRuntimeSettings.read(app).disabledReason(kind)?.let { return it }
         if (kind in setOf(RuntimeKind.NODE, RuntimeKind.NPM) && !RuntimePacks.nodeInstalled(app))
-            return "Node.js is not installed. Download it in Settings > Runtimes."
+            return "Node.js is not installed. Download it in Settings > SDK Manager."
+        if (kind == RuntimeKind.XTOOL && !RuntimePacks.xtoolInstalled(app))
+            return "Swift and xtool are not installed. Download them in Settings > SDK Manager."
         return null
     }
 
@@ -49,12 +52,14 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
             val parts = RuntimePacks.parts(installedContext)
             val packId = if (parts.size == 1) parts.single().manifest.getString("id") else
                 "termux-arm64-" + hex(MessageDigest.getInstance("SHA-256").digest(parts.joinToString(":") { it.manifest.getString("id") }.toByteArray())).take(16)
-            val nodeRecord = parts.asSequence().flatMap { part ->
+            val nativeRecords = parts.asSequence().flatMap { part ->
                 val entries = part.manifest.getJSONArray("native")
                 (0 until entries.length()).asSequence().map { entries.getJSONObject(it) }
-            }.firstOrNull { it.getString("path") == "bin/node" }
+            }.toList()
+            val nodeRecord = nativeRecords.firstOrNull { it.getString("path") == "bin/node" }
             val nodeBinary = nodeRecord?.let { RuntimePacks.nativeLibrary(app, it.getString("library")).toRealPath() }
-            val location = "$native|$nodeBinary"
+            val nativePaths = nativeRecords.map { RuntimePacks.nativeLibrary(app, it.getString("library")).toRealPath() }.toSet()
+            val location = "$native|${nativePaths.sorted().joinToString("|")}"
             installation?.takeIf { it.packId == packId && installationLocation == location }?.let { return@withLock it }
             require(packId.matches(Regex("[a-zA-Z0-9_-]+")))
             // termux-exec 2.5 rejects TERMUX__PREFIX values >= 90 bytes. Keep the versioned
@@ -73,6 +78,8 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 // Installer-owned nativeLibraryDir changes on APK updates; repair only our pack links.
                 parts.forEach { materializeLinks(it.manifest, prefix) }
             }
+            // Only manifest-verified signed native payloads may use the split linker entrypoint.
+            verifiedNativePaths = nativePaths
             val userHome = home.resolve("home")
             val temp = home.resolve("tmp")
             Files.createDirectories(userHome)
@@ -95,6 +102,7 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 "TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE" to "force",
                 "TERMUX__PREFIX" to prefix.toString(),
                 "BUILDING_RUNTIME_NATIVE_DIR" to native.toString(),
+                "BUILDING_RUNTIME_SPLIT_NATIVE_DIRS" to nativePaths.filterNot { it.startsWith(native.toRealPath()) }.map { it.parent }.distinct().joinToString(":"),
                 "XTOOL_RUNTIME_NATIVE_DIR" to native.toString(),
                 "SOURCEKIT_TOOLCHAIN_PATH" to prefix.toString(),
                 "TERMUX_APP__DATA_DIR" to app.dataDir.absolutePath,
@@ -117,6 +125,9 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 "npm_config_fund" to "false",
                 "npm_config_update_notifier" to "false",
             )
+            if (Files.isRegularFile(prefix.resolve("bin/xtool"))) {
+                env["LD_LIBRARY_PATH"] = "$prefix/lib:$native:$prefix/lib/swift-runtime:$prefix/lib/swift/host:$prefix/lib/swift/host/compiler:$prefix/lib/xtool"
+            }
             if (useNodeLauncher) {
                 env["BUILDING_RUNTIME_NODE_BINARY"] = nodeBinary.toString()
                 env["BUILDING_RUNTIME_NODE_LAUNCHER"] = nodeLauncher.toString()
@@ -149,13 +160,17 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
         // The launcher exits 126/127 when exec fails; those codes can also be valid project outcomes.
         val executable = java.nio.file.Paths.get(command.first()).toRealPath()
         if (!Files.isRegularFile(executable)) throw java.io.IOException("Runtime executable is not a regular file")
-        if (!Files.isExecutable(executable)) throw java.nio.file.AccessDeniedException(executable.toString())
+        val deliveredSplit = executable in verifiedNativePaths && !executable.startsWith(native.toRealPath())
+        if (!Files.isExecutable(executable) && !deliveredSplit) throw java.nio.file.AccessDeniedException(executable.toString())
         val launcher = native.resolve("libdevruntime-launcher.so")
         require(Files.isRegularFile(launcher)) { "Runtime launcher is not bundled for this ABI" }
         val pidDirectory = home.resolve("processes")
         Files.createDirectories(pidDirectory)
         val pidFile = pidDirectory.resolve(UUID.randomUUID().toString() + ".pid")
-        val process = ProcessBuilder(listOf(launcher.toString(), pidFile.toString()) + command)
+        // SplitCompat native files are read-only. Android's linker maps the verified ELF;
+        // retain the prefix path as argv[0] because swift/swiftc select different drivers.
+        val entrypoint = if (deliveredSplit) listOf("/system/bin/linker64") + command else command
+        val process = ProcessBuilder(listOf(launcher.toString(), pidFile.toString()) + entrypoint)
             .directory(workingDirectory.toFile())
             .apply {
                 environment().clear()

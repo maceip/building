@@ -1,3 +1,5 @@
 <resources>
     <string name="developer_runtime_node_title">Node.js and package managers</string>
+    <string name="developer_runtime_xtool_title">Swift and xtool</string>
+    <string name="developer_runtime_swift_support_title">Swift compiler support files</string>
 </resources>

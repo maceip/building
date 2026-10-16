@@ -1,8 +1,10 @@
 """Host-only pack boundary tests. Never downloads packages or runs guest code."""
 import importlib.util
 import io
+import os
 from pathlib import Path
 import struct
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -96,6 +98,29 @@ class RuntimePackTests(unittest.TestCase):
     def test_development_inputs_are_not_pruned(self):
         for name in ("include/node/node_api.h", "lib/libnode.a", "lib/python3.14/config/python.o", "lib/pkgconfig/libnode.pc"):
             self.assertFalse(name.startswith(build.EXCLUDED), name)
+
+    def test_apple_targets_do_not_receive_android_headers_or_libraries(self):
+        files = {"bin/clang-21": b"native compiler"}
+        build.add_compiler_wrappers(files, {}, {})
+        with tempfile.TemporaryDirectory(prefix="clang target check ") as directory:
+            prefix = Path(directory)
+            (prefix / "bin").mkdir()
+            compiler = prefix / "bin/clang-21"
+            compiler.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@"\n')
+            compiler.chmod(0o700)
+            wrapper = prefix / "bin/clang++"
+            wrapper.write_bytes(files["bin/clang++"])
+            env = dict(os.environ, PREFIX=str(prefix))
+            for target in (["-target", "arm64-apple-ios17.0"], ["--target=arm64-apple-ios17.0"],
+                           ["--target", "arm64-apple-ios17.0"]):
+                arguments = [*target, "-isysroot", "/Apple SDK", "a file.cpp"]
+                actual = subprocess.check_output(["/bin/sh", wrapper, *arguments], env=env, text=True).splitlines()
+                self.assertEqual(["--no-default-config", "--driver-mode=g++", *arguments], actual)
+            android = subprocess.check_output(["/bin/sh", wrapper, "a file.cpp"], env=env, text=True).splitlines()
+            self.assertIn("--target=aarch64-linux-android24", android)
+            self.assertIn("--sysroot=" + directory, android)
+            self.assertIn("--ld-path=" + directory + "/bin/ld.lld", android)
+            self.assertEqual("a file.cpp", android[-1])
 
 
 if __name__ == "__main__":

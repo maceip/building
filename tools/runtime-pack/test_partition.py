@@ -19,10 +19,10 @@ class PartitionTests(unittest.TestCase):
         (native / "libdevruntime-node.so").write_bytes(b"node-launcher")
         manifest = {"id": "fixture", "files": [], "native": [], "links": []}
         with zipfile.ZipFile(assets / "prefix.zip", "w") as archive:
-            for name, owner in (("lib/node_modules/npm/cli.js", "npm"), ("lib/python.py", "python")):
+            for name, owner in (("lib/node_modules/npm/cli.js", "npm"), ("lib/python.py", "python"), ("lib/swift/test.swiftmodule", "swift")):
                 data = name.encode()
                 archive.writestr(name, data)
-                manifest["files"].append({"path": name, "owner": owner, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+                manifest["files"].append({**({"component": "swift_support"} if owner == "swift" else {}), "path": name, "owner": owner, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
         for path, owner, payload in (("bin/node", "nodejs-lts", b"node"), ("lib/shared.so", "openssl", b"shared")):
             name = "libdevruntime_" + hashlib.sha256(payload).hexdigest() + ".so"
             (native / name).write_bytes(payload)
@@ -37,12 +37,16 @@ class PartitionTests(unittest.TestCase):
             partition(source, root / "out")
             outputs = {}
             all_native = []
-            for name, asset in (("base", "developer-runtime"), ("node", "developer-runtime-node")):
+            for name, asset in (("base", "developer-runtime"), ("node", "developer-runtime-node"), ("xtool", "developer-runtime-xtool"), ("swift_support", "developer-runtime-swift_support")):
                 with zipfile.ZipFile(root / f"out/{name}/assets/{asset}/prefix.zip") as archive:
                     outputs[name] = archive.namelist()
                 all_native += [p.name for p in (root / f"out/{name}/jniLibs/arm64-v8a").iterdir()]
             self.assertEqual(["lib/python.py"], outputs["base"])
             self.assertEqual(["lib/node_modules/npm/cli.js"], outputs["node"])
+            self.assertEqual(["lib/swift/test.swiftmodule"], outputs["swift_support"])
+            catalog = json.loads((root / "out/base/assets/developer-runtime/delivery.json").read_text())
+            xtool = next(p for p in catalog["modules"] if p["module"] == "developer_runtime_xtool")
+            self.assertEqual(["developer_runtime_xtool", "developer_runtime_swift_support"], xtool["requestModules"])
             self.assertEqual(len(set(all_native)), len(all_native))
             self.assertFalse((root / "out/node/assets/developer-runtime-node/notices").exists())
 
@@ -52,7 +56,7 @@ class PartitionTests(unittest.TestCase):
             source, manifest = self.fixture(root)
             manifest["links"] = [{"path": "bin/base-tool", "target": "bin/node", "owner": "python"}]
             (source / "assets/developer-runtime/manifest.json").write_text(json.dumps(manifest))
-            with self.assertRaisesRegex(ValueError, "Base link depends on Node"):
+            with self.assertRaisesRegex(ValueError, "Link depends on another optional pack"):
                 partition(source, root / "out")
 
     def test_corrupt_input_cannot_be_repackaged(self):
@@ -63,3 +67,24 @@ class PartitionTests(unittest.TestCase):
             (source / "assets/developer-runtime/manifest.json").write_text(json.dumps(manifest))
             with self.assertRaisesRegex(ValueError, "integrity mismatch"):
                 partition(source, root / "out")
+
+    def test_optional_packs_cannot_require_one_another(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, manifest = self.fixture(root)
+            manifest["links"] = [{"path": "bin/swift", "target": "bin/node", "owner": "swift", "component": "xtool"}]
+            (source / "assets/developer-runtime/manifest.json").write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, "another optional pack"):
+                partition(source, root / "out")
+
+    def test_shared_bytes_are_stored_once_in_base(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, manifest = self.fixture(root)
+            shared = dict(manifest["native"][0], path="bin/swift-shared", component="xtool", owner="swift")
+            manifest["native"].append(shared)
+            (source / "assets/developer-runtime/manifest.json").write_text(json.dumps(manifest))
+            partition(source, root / "out")
+            self.assertTrue((root / "out/base/jniLibs/arm64-v8a" / shared["library"]).exists())
+            for optional in ("node", "xtool"):
+                self.assertFalse((root / f"out/{optional}/jniLibs/arm64-v8a" / shared["library"]).exists())

@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/prctl.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -23,7 +24,11 @@ int main(int argc, char **argv) {
     int size = snprintf(buffer, sizeof(buffer), "%ld\n", (long)getpid());
     if (write(fd, buffer, (size_t)size) != size) { perror("runtime pid write"); close(fd); return 126; }
     close(fd);
-    execv(argv[2], &argv[2]);
+    char *executable = argv[2];
+    // ProcessBuilder cannot choose argv[0] independently. The Android linker
+    // preserves it through libc startup, so supply the intended tool name.
+    if (argc >= 4 && strcmp(executable, "/system/bin/linker64") == 0) argv[2] = argv[3];
+    execv(executable, &argv[2]);
     perror("runtime exec");
     return errno == ENOENT ? 127 : 126;
 }

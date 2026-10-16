@@ -109,7 +109,7 @@ def verify_elf(data, name):
     return alignments
 
 
-def collect(packages, archives):
+def collect(packages, archives, max_member_bytes=128 * 1024 * 1024):
     files, links, owners = {}, {}, {}
     for package in packages:
         with tarfile.open(fileobj=io.BytesIO(ar_data(archives[package["name"]].read_bytes())), mode="r:*") as tar:
@@ -140,7 +140,7 @@ def collect(packages, archives):
                         raise ValueError(f"Invalid hard link: {name}")
                     links[name] = target
                 elif entry.isfile():
-                    if entry.size > 128 * 1024 * 1024:
+                    if entry.size > max_member_bytes:
                         raise ValueError(f"Oversized runtime member: {name}")
                     content = tar.extractfile(entry).read()
                     if name in files and files[name] != content:
@@ -225,7 +225,27 @@ def add_compiler_wrappers(files, links, owners):
                       '"--ld-path=$PREFIX/bin/ld.lld"', '"$@"']
         path = "bin/" + name
         links.pop(path, None)
-        files[path] = ('#!/system/bin/sh\n: "${PREFIX:?Bundled runtime prefix is required}"\nexec ' + " ".join(arguments) + "\n").encode()
+        # Swift/xtool also uses this shared Clang for Apple targets. Keep host
+        # sysroot, include and library defaults out of those explicit cross builds.
+        apple = f'"$PREFIX/{compiler}" --no-default-config ' + ("--driver-mode=g++" if cxx else "--driver-mode=gcc")
+        target_selection = '''building_clang_target=
+building_clang_next_target=0
+for building_clang_arg do
+    if [ "$building_clang_next_target" = 1 ]; then
+        building_clang_target=$building_clang_arg
+        building_clang_next_target=0
+    else
+        case "$building_clang_arg" in
+            -target|--target) building_clang_next_target=1 ;;
+            -target=*|--target=*) building_clang_target=${building_clang_arg#*=} ;;
+        esac
+    fi
+done
+case "$building_clang_target" in
+    *-apple-*) exec ''' + apple + ''' "$@" ;;
+esac
+'''
+        files[path] = ('#!/system/bin/sh\n: "${PREFIX:?Bundled runtime prefix is required}"\n' + target_selection + 'exec ' + " ".join(arguments) + "\n").encode()
         owners[path] = "building-runtime (GPL-3.0-or-later)"
 
 

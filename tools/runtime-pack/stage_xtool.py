@@ -1,197 +1,130 @@
 #!/usr/bin/env python3
-"""Stage XTool and Swift toolchain into the developer-runtime-pack.
+"""Merge pinned Android Swift/xtool inputs into a separately verified runtime pack.
 
-Reuses the existing LLVM / Clang / LLD native binaries already staged in
-the runtime pack, avoiding double-bundling LLVM.
+Shared Termux packages stay owned by the base pack. Apple SDKs are never input to
+this distributor. The sibling xtool checkout supplies its pinned Android builds.
 """
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import struct
 import zipfile
+from build import collect, sha256, stage_native, zip_entry
 
 HERE = Path(__file__).resolve().parent
 
 
-def sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def verify_elf(data: bytes, name: str) -> list[int]:
-    if not (data.startswith(b"\x7fELF") and len(data) >= 64 and data[4] == 2 and data[5] == 1):
-        raise ValueError(f"Not a 64-bit little-endian ELF file: {name}")
-    machine = struct.unpack_from("<H", data, 18)[0]
-    if machine != 183:  # EM_AARCH64
-        raise ValueError(f"ELF is not aarch64 (machine={machine}): {name}")
-    phoff = struct.unpack_from("<Q", data, 32)[0]
-    phentsize, phnum = struct.unpack_from("<HH", data, 54)
-    alignments = []
-    for i in range(phnum):
-        offset = phoff + i * phentsize
-        if offset + 56 > len(data):
-            break
-        p_type = struct.unpack_from("<I", data, offset)[0]
-        if p_type == 1:  # PT_LOAD
-            p_align = struct.unpack_from("<Q", data, offset + 48)[0]
-            alignments.append(p_align)
-            if p_align < 16384:
-                raise ValueError(f"ELF LOAD segment alignment {p_align} < 16384: {name}")
-    return alignments
-
-
-def stage_native(directory: Path, name: str, data: bytes, owner: str) -> dict:
-    alignment = verify_elf(data, name)
-    digest = sha256(data)
-    packaged = f"libdevruntime_{digest}.so"
-    dest = directory / packaged
-    if not dest.is_file() or dest.read_bytes() != data:
-        dest.write_bytes(data)
-        dest.chmod(0o755)
-    return {
-        "path": name,
-        "library": packaged,
-        "sha256": digest,
-        "size": len(data),
-        "owner": owner,
-        "loadAlignments": alignment,
-    }
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--pack-dir", type=Path, default=HERE.parent.parent / "app/ide-android/build/developer-runtime-pack")
-    parser.add_argument("--xtool-output", type=Path, default=Path("/Users/mac/xtool/Android/output"))
-    parser.add_argument("--android-runtime", type=Path, default=Path("/Users/mac/xtool/.build/android-runtime"))
-    args = parser.parse_args()
-
-    pack_dir = args.pack_dir.resolve()
-    xtool_output = args.xtool_output.resolve()
-    android_runtime = args.android_runtime.resolve()
-
-    if not xtool_output.is_dir():
-        print(f"XTool output directory not found at {xtool_output}; skipping XTool staging.")
-        return 0
-
-    assets_dir = pack_dir / "assets/developer-runtime"
-    native_dir = pack_dir / "jniLibs/arm64-v8a"
-    manifest_file = assets_dir / "manifest.json"
-    prefix_zip = assets_dir / "prefix.zip"
-
-    if not manifest_file.is_file() or not prefix_zip.is_file():
-        print(f"Base runtime pack not staged yet in {pack_dir}; skipping.")
-        return 0
-
-    with open(manifest_file, "r", encoding="utf-8") as f:
-        manifest = json.load(f)
-
-    # 1. Update packages declaration
-    existing_pkg_names = {p["name"] for p in manifest.get("packages", [])}
-    packages = manifest.setdefault("packages", [])
-    if "swift" not in existing_pkg_names:
-        packages.append({
-            "name": "swift",
-            "version": "6.4.1",
-            "size": 132440968,
-            "license": "Apache-2.0 with LLVM Exceptions",
-        })
-    if "xtool" not in existing_pkg_names:
-        packages.append({
-            "name": "xtool",
-            "version": "0.1.0",
-            "size": 191650928,
-            "license": "Apache-2.0",
-        })
-    if "sourcekit-lsp" not in existing_pkg_names:
-        packages.append({
-            "name": "sourcekit-lsp",
-            "version": "6.4.1",
-            "size": 12528256,
-            "license": "Apache-2.0 with LLVM Exceptions",
-        })
-
-    native_entries = {entry["path"]: entry for entry in manifest.get("native", [])}
-    links_entries = {link["path"]: link["target"] for link in manifest.get("links", [])}
-
-    # 2. Stage xtool CLI, macro server, swift-launcher, libxtool-exec
-    binaries = {
-        "bin/xtool": xtool_output / "xtool",
-        "bin/OpenAppleMacrosServer": xtool_output / "OpenAppleMacrosServer",
-        "bin/swift-launcher": xtool_output / "swift-launcher",
-    }
-    for bin_path, bin_file in binaries.items():
-        if bin_file.is_file():
-            data = bin_file.read_bytes()
-            native_entries[bin_path] = stage_native(native_dir, bin_path, data, "xtool (Apache-2.0)")
-
-    # Direct libxtool-exec.so for LD_PRELOAD
-    libxtool_exec = xtool_output / "libxtool-exec.so"
-    if libxtool_exec.is_file():
-        exec_data = libxtool_exec.read_bytes()
-        native_entries["lib/libxtool-exec.so"] = stage_native(native_dir, "lib/libxtool-exec.so", exec_data, "xtool (Apache-2.0)")
-        shutil.copyfile(libxtool_exec, native_dir / "libxtool-exec.so")
-
-    # Shared libraries in xtool_output
-    for so_file in sorted(xtool_output.glob("*.so*")):
-        if so_file.name == "libxtool-exec.so":
-            continue
-        try:
-            data = so_file.read_bytes()
-            if data.startswith(b"\x7fELF"):
-                staged = stage_native(native_dir, f"lib/xtool/{so_file.name}", data, "xtool/swift (Apache-2.0)")
-                native_entries[f"lib/xtool/{so_file.name}"] = staged
-                # Only create top-level lib symlink if not colliding with base runtime libraries (OpenSSL, libc++, liblzma)
-                base_colliding = {"libc++_shared.so", "libcrypto.so.3", "libcrypto.so", "libssl.so.3", "libssl.so", "liblzma.so", "liblzma.so.5"}
-                if so_file.name not in base_colliding and f"lib/{so_file.name}" not in native_entries:
-                    links_entries[f"lib/{so_file.name}"] = f"lib/xtool/{so_file.name}"
-                else:
-                    links_entries.pop(f"lib/{so_file.name}", None)
-        except Exception as e:
-            print(f"Note: skipped {so_file.name}: {e}")
-
-    # 3. Stage swift executables from android_runtime if present
-    if android_runtime.is_dir():
-        swift_bins = {
-            "bin/swift-frontend": android_runtime / "usr/bin/swift-frontend",
-            "bin/sourcekit-lsp": android_runtime / "usr/bin/sourcekit-lsp",
-            "bin/swift-package": android_runtime / "usr/bin/swift-package",
-            "bin/swift-driver": android_runtime / "usr/bin/swift-driver",
-            "bin/swift-build-tool": android_runtime / "usr/bin/swift-build-tool",
-        }
-        for bin_path, bin_file in swift_bins.items():
-            if bin_file.is_file():
-                try:
-                    data = bin_file.read_bytes()
-                    native_entries[bin_path] = stage_native(native_dir, bin_path, data, "swift (Apache-2.0 with LLVM Exceptions)")
-                except Exception as e:
-                    print(f"Note: skipping {bin_path}: {e}")
-
-        # Add symlinks for swift, swiftc, swift-build, swift-test, etc.
-        links_entries["bin/swift"] = "bin/swift-frontend"
-        links_entries["bin/swiftc"] = "bin/swift-frontend"
-        links_entries["bin/swift-build"] = "bin/swift-package"
-        links_entries["bin/swift-test"] = "bin/swift-package"
-        links_entries["bin/swift-run"] = "bin/swift-package"
-        links_entries["bin/swift-sdk"] = "bin/swift-package"
-
-    # Update manifest native and links lists
-    manifest["native"] = sorted(native_entries.values(), key=lambda e: e["path"])
-    manifest["links"] = [{"path": p, "target": t} for p, t in sorted(links_entries.items())]
-
-    # Recompute payload SHA256 and ID
-    manifest["payloadSha256"] = sha256(prefix_zip.read_bytes())
-    manifest["payloadBytes"] = prefix_zip.stat().st_size
-    manifest_bytes = json.dumps({"native": manifest["native"], "links": manifest["links"]}, sort_keys=True).encode()
-    manifest["id"] = "termux-arm64-" + sha256(manifest_bytes)[:16]
-
-    with open(manifest_file, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2)
-
-    print(f"Successfully staged XTool & Swift into runtime pack at {pack_dir}")
-    return 0
+def stage(source, output, xtool_root, lock_path=HERE / "xtool-inputs.lock.json"):
+    if source.resolve() == output.resolve():
+        raise ValueError("Swift staging requires a separate output from the base runtime")
+    lock = json.loads(lock_path.read_text())
+    assets = source / "assets/developer-runtime"
+    original = json.loads((assets / "manifest.json").read_text())
+    if original.get("xtoolInputs"):
+        raise ValueError("Source must be the base runtime, before Swift staging")
+    shared = {p["name"]: p["sha256"] for p in original["packages"]}
+    for name, digest in lock["reusedPackageSha256"].items():
+        if shared.get(name) != digest:
+            raise ValueError("Shared toolchain changed; review Swift compatibility and input lock: " + name)
+    notice_paths = ("LICENSE.md", "Android/swift-launcher.c", "Android/README.md")
+    for path in notice_paths:
+        if not (xtool_root / path).is_file():
+            raise ValueError("Missing xtool source notice: " + path)
+    # Verify all inputs before replacing generated output; never ship half a compiler.
+    archives = {}
+    for package in lock["packages"]:
+        archive = xtool_root / ".build/android-debs" / Path(package["filename"]).name
+        data = archive.read_bytes()
+        if len(data) != package["size"] or sha256(data) != package["sha256"]:
+            raise ValueError("Swift package checksum mismatch: " + str(archive))
+        archives[package["name"]] = archive
+    binaries = {}
+    for name, expected in lock["binaries"].items():
+        data = (xtool_root / "Android/output" / name).read_bytes()
+        if len(data) != expected["size"] or sha256(data) != expected["sha256"]:
+            raise ValueError("xtool output changed; rebuild/review the input lock: " + name)
+        binaries[name] = data
+    files, links, owners = collect(lock["packages"], archives, max_member_bytes=256 * 1024 * 1024)
+    base_paths = {r["path"] for key in ("files", "native", "links") for r in original[key]}
+    # Retain Building's env helper and its existing executable relocation contract.
+    files.pop("bin/env", None)
+    links.pop("bin/env", None)
+    collisions = (set(files) | set(links)) & base_paths
+    if collisions:
+        raise ValueError("Swift inputs would replace base paths: " + str(sorted(collisions)))
+    for name, data in binaries.items():
+        destination = "bin/" + name if name in {"xtool", "OpenAppleMacrosServer", "swift-launcher"} else "lib/xtool/" + name
+        files[destination], owners[destination] = data, "xtool"
+    # Swift uses argv[0] to select its driver; this adapter supplies relocated resources.
+    for name in ("swift", "swiftc"):
+        links["bin/" + name] = "bin/swift-launcher"
+        owners["bin/" + name] = "xtool"
+    # Termux creates this directory alias in a package hook. We do not run hooks.
+    clang_versions = {p.split("/")[2] for p in base_paths if p.startswith("lib/clang/")}
+    if "lib/clang/latest" in links.values():
+        if len(clang_versions) != 1:
+            raise ValueError("Cannot resolve the shared Clang resource directory")
+        links = {name: ("lib/clang/" + next(iter(clang_versions)) if target == "lib/clang/latest" else target)
+                 for name, target in links.items()}
+    # Keep runtime libraries apart from Android's link-time system-library stubs.
+    for name in files:
+        if name.startswith("opt/ndk-multilib/aarch64-linux-android/lib/") and name.endswith(".so"):
+            leaf = Path(name).name
+            if leaf.startswith(("libswift", "libFoundation", "lib_Foundation", "libTesting", "libXCTest", "lib_Testing")):
+                links["lib/swift-runtime/" + leaf] = name
+                owners["lib/swift-runtime/" + leaf] = "swift-runtime-aarch64"
+    paths = base_paths | set(files) | set(links)
+    paths |= {str(parent) for path in list(paths) for parent in Path(path).parents if str(parent) != "."}
+    for name, target_path in links.items():
+        seen = {name}
+        while target_path in links and target_path not in seen:
+            seen.add(target_path)
+            target_path = links[target_path]
+        if target_path not in paths or target_path in links:
+            raise ValueError(f"Dangling/cyclic Swift link: {name} -> {target_path}")
+    if output.exists():
+        shutil.rmtree(output)  # This task's generated output only, never source/user data.
+    shutil.copytree(source, output)
+    target = output / "assets/developer-runtime"
+    native_dir = output / "jniLibs/arm64-v8a"
+    manifest = dict(original)
+    for key in ("files", "native", "links"):
+        manifest[key] = list(original[key])
+    with zipfile.ZipFile(target / "prefix.zip", "a", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        for name, data in sorted(files.items()):
+            # NDK system-library stubs are compiler inputs, not executable runtime libraries.
+            ndk_stub = name.startswith("opt/ndk-multilib/") and name not in links.values()
+            elf_host = not ndk_stub and data[:6] == b"\x7fELF\x02\x01" and len(data) >= 64 and struct.unpack_from("<H", data, 18)[0] == 183 and struct.unpack_from("<H", data, 16)[0] in (2, 3)
+            if elf_host:
+                manifest["native"].append(dict(stage_native(native_dir, name, data, owners[name]), component="xtool"))
+            else:
+                original_hash = sha256(data)
+                if data.startswith(b"#!/data/data/com.termux/files/usr/"):
+                    data = b"#!/usr/" + data[len(b"#!/data/data/com.termux/files/usr/"):]
+                zip_entry(archive, name, data)
+                manifest["files"].append(dict(path=name, owner=owners[name], component="swift_support", size=len(data), sha256=sha256(data), originalSha256=original_hash, executableScript=data.startswith(b"#!")))
+    manifest["links"] += [dict(path=name, target=target_path, owner=owners[name], component="xtool") for name, target_path in sorted(links.items())]
+    manifest["packages"] = original["packages"] + lock["packages"]
+    manifest["xtoolInputs"] = lock
+    manifest["payloadSha256"] = sha256((target / "prefix.zip").read_bytes())
+    manifest["payloadBytes"] = (target / "prefix.zip").stat().st_size
+    manifest.pop("id", None)
+    manifest["id"] = "termux-arm64-" + sha256(json.dumps(manifest, sort_keys=True).encode())[:16]
+    (target / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    notices = target / "notices/xtool"
+    notices.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(lock_path, notices / "inputs.lock.json")
+    for path in notice_paths:
+        shutil.copyfile(xtool_root / path, notices / Path(path).name)
+    print(f"Swift/xtool: {len(files)} additional files, {len(links)} links; reused {len(lock['reusedPackages'])} base packages", flush=True)
 
 
 if __name__ == "__main__":
-    exit(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--xtool-root", type=Path, default=Path(os.environ.get("XTOOL_ROOT", str(HERE.parents[2] / "xtool"))))
+    args = parser.parse_args()
+    stage(args.source, args.output, args.xtool_root)

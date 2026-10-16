@@ -3,7 +3,66 @@
 Investigated 2026-10-14; Node test implementation added 2026-10-15. Use **on-demand Play Feature Delivery**
 for executable development tools, consider **Play Asset Delivery** for genuinely
 non-executable SDK data, and reserve **AI packs** for actual model weights. This
-includes a local-testing prototype, not a Play Console approval or production rollout.
+includes local testing and an internal-track release, not a public production rollout.
+
+## Swift and xtool delivery (2026-10-16)
+
+Play builds now also stage checksum-pinned Android Swift/xtool inputs from
+`XTOOL_ROOT` (default: the sibling `xtool` checkout). The input lock is
+`tools/runtime-pack/xtool-inputs.lock.json`. Missing or changed inputs fail the
+build rather than silently shipping an incomplete compiler. The 36 shared Termux
+packages, including LLVM/Clang/LLD, must match the base pack's pinned hashes.
+Apple SDKs are not distributor inputs.
+
+`developer_runtime_xtool` carries the additional host executables/libraries;
+`developer_runtime_swift_support` carries compiler modules, headers, static
+libraries, scripts and other support data. Two on-demand modules keep each below
+Google Play's 500 MB compressed-download limit. **Download Swift and xtool** in
+Settings → SDK Manager requests both in one transaction. Neither partial nor
+outdated installation becomes usable. Node remains independently optional.
+
+The Swift adapter preserves compiler/driver selection and relocated resources.
+Manifest-verified SplitCompat ELF entrypoints use Android's system linker while
+retaining their prefix names. Swift libraries follow shared base libraries in the
+search path; xtool's compatibility libraries come last. Compiler-only NDK stubs
+are data and never enter the runtime library search path.
+SwiftPM's generated manifest programs and SDK-supplied Android host tools also
+use the linker when executed from private app storage. The adapter covers both
+`execve` and `posix_spawn`, preserves Swift's command-line arguments, and resolves
+the exec interceptors before compiler threads fork. Apple-target Clang calls
+omit the Android sysroot and library defaults used for native Android builds.
+
+The dedicated local test workflow now also downloads Swift before Node, compiles
+and runs a Swift program and a SwiftPM executable, and repeats after a cold start.
+Use `--apple-sdk /path/to/darwin.xtoolsdk` to additionally stream a developer-owned
+SDK into **only the test application's private data** and exercise unsigned iOS
+compilation, a source edit/rebuild, and Xcode workspace export. The SDK never
+enters the AAB or the Play upload. These tests do not establish signing, iPhone
+installation, iOS simulation, or real Play transport.
+
+### Swift delivery verified 2026-10-16
+
+On the dedicated ARM64/API-36 emulator (`emulator-5558`, 4 KB pages), the final
+packaged build passed all eight ordered clean-install checks: base-only use,
+delivery failure/retry and cancellation, Swift installation without Node, Swift
+and SwiftPM compilation/execution, cold restart, independent Node installation
+and child processes, and unsigned iOS compile/edit/rebuild/workspace export.
+Two additional cold-start Swift/Node checks passed with airplane mode enabled,
+Wi-Fi/data disabled and no active default network; networking was restored.
+
+The exported `PhoneHello-unsigned.ipa` passed ARM64/iPhoneOS, resource and edited
+text verification. SHA-256:
+`594febff567ac6fa3df525d349fb85f32706ff1932bafb6df41ecf17d2d09e80`.
+This does not prove signing or iPhone installation. Logs and the IPA are in
+`tools/runtime-pack/build/play-test/`.
+
+The runtime-pack suite ran 42 cases (zero failures, two skips), and the host
+runtime suite passed 43 cases. Signed release 111 also passed bundle validation,
+native alignment checks, manifest/hash verification and the no-duplicate-native
+audit. For the reference device, base is **360.15 MB**, Node adds **22.94 MB**,
+and Swift/xtool adds **566.34 MB** across its two optional modules (decimal MB,
+compressed-download estimates). The Apple SDK is additional user-supplied data.
+Real Play delivery and 16 KB-page execution remain separate checks.
 
 ## Node test build
 
@@ -15,7 +74,7 @@ inventory. Default `bundled` distribution continues to carry everything for
 offline sideloading. This flag is separate from `IDE_APP_ENGINE_DELIVERY`, which
 controls engines embedded into generated apps.
 
-Settings → Runtimes now shows an explicit **Download Node.js** action, download
+Settings → SDK Manager shows an explicit **Download Node.js** action, download
 progress, cancellation, failure/retry, Play confirmation when needed, and an
 installed-pack verification action. The same component appears in workbench
 runtime availability. Enable switches retain their existing meaning; installation
@@ -207,6 +266,7 @@ restricts executable-code downloads outside Play and separately addresses
 interpreted code. Keep the existing native-tool download distribution gates;
 qualify developer workflows without promising blanket store approval.
 
-No asset/AI packs have been created and nothing has been uploaded to Play.
-The opt-in Node feature is the first executable runtime delivery test; other
-runtime families have not yet been migrated.
+No asset/AI packs have been created. Version 1.0.1 (110) was published to the
+internal track with the Node feature; no tester list has been selected and actual
+store installation/download remains unverified. Swift/xtool now uses the same
+delivery mechanism; consult the release receipt and device logs for its validation.

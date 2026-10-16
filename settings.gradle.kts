@@ -178,7 +178,7 @@ require(appEngineDelivery in setOf("none", "direct", "play")) { "IDE_APP_ENGINE_
 require(appEngine in setOf("node", "python")) { "IDE_APP_ENGINE must be node or python" }
 
 if (System.getenv("CI_CORE_ONLY") != "true") {
-    if (runtimeDelivery == "play") include(":developer_runtime_node")
+    if (runtimeDelivery == "play") include(":developer_runtime_node", ":developer_runtime_xtool", ":developer_runtime_swift_support")
     if (appEngineDelivery != "none") include(":runtime-engine-$appEngine")
     if (appEngineDelivery == "play") include(":runtime_engine_ide_feature")
     if (providers.gradleProperty("RUNTIME_ENGINE_RELIABILITY").getOrElse("false").toBooleanStrict()) {
@@ -291,6 +291,8 @@ val layers = mapOf(
 // `samples` holds plugins built as their own apps; it is already a directory, so it needs no mapping.
 val runtimeEngineDirectories = mapOf(
     "developer_runtime_node" to "android/developer-runtime-node",
+    "developer_runtime_xtool" to "android/developer-runtime-xtool",
+    "developer_runtime_swift_support" to "android/developer-runtime-swift-support",
     "runtime-engine" to "android/runtime-engine/core",
     "runtime-engine-node" to "android/runtime-engine/node",
     "runtime-engine-python" to "android/runtime-engine/python",

@@ -6,8 +6,11 @@ No upload to Play. The local transport is simulated; all runtime bytes are real.
 """
 import argparse
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
+import tarfile
+import tempfile
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,6 +32,7 @@ def main():
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--reset-test-app", action="store_true", help="Erase only ai.building.pack.dev to repeat base-only tests")
     parser.add_argument("--test", action="store_true", help="Run ordered base, failed delivery, real execution and cold-start checks")
+    parser.add_argument("--apple-sdk", type=Path, help="Optional developer-owned darwin.xtoolsdk for a local unsigned iOS build; never bundled or uploaded")
     args = parser.parse_args()
     output = ROOT / "tools/runtime-pack/build/play-test"
     output.mkdir(parents=True, exist_ok=True)
@@ -54,13 +58,34 @@ def main():
     if args.test:
         run(*adb, "install", "-r", "-t", ROOT / "app/ide-android/build/outputs/apk/androidTest/debug/ide-android-debug-androidTest.apk")
         suite = "dev.ide.android.workbench.runtime.RuntimeDeliveryDeviceTest"
-        for method in ("baseWorksWithoutNode", "failedDownloadLeavesBaseUsableAndCanBeRetried", "cancelDownloadKeepsNodeAbsent", "downloadThenExecuteNodeAndChildren", "installedPackWorksAfterColdStart"):
+        for method in ("baseWorksWithoutNode", "failedDownloadLeavesBaseUsableAndCanBeRetried", "cancelDownloadKeepsNodeAbsent", "downloadSwiftWithoutNodeThenCompile", "installedSwiftCompilesAfterColdStart", "downloadThenExecuteNodeAndChildren", "installedPackWorksAfterColdStart"):
             run(*adb, "shell", "am", "force-stop", APP)
-            log = run(*adb, "shell", "am", "instrument", "-w", "-e", "class", suite + "#" + method, TEST, capture=True)
+            log = run(*adb, "shell", "am", "instrument", "-w", "-e", "class", ("dev.ide.android.workbench.runtime.XtoolDeliveryDeviceTest" if "Swift" in method else suite) + "#" + method, TEST, capture=True)
             (output / (method + ".log")).write_text(log)
             print(log)
             if "OK (1 test)" not in log:
                 raise RuntimeError("Device check failed: " + method)
+        if args.apple_sdk:
+            sdk = args.apple_sdk.resolve(strict=True)
+            if not (sdk / "swift-sdk.json").is_file():
+                raise ValueError("Expected a darwin.xtoolsdk directory containing swift-sdk.json")
+            # Stream into only the dedicated debug application's data, not its distributed APK.
+            with tempfile.TemporaryFile() as payload:
+                with tarfile.open(fileobj=payload, mode="w") as archive:
+                    archive.add(sdk, arcname="darwin.xtoolsdk")
+                payload.seek(0)
+                command = shlex.join(["run-as", APP, "/system/bin/sh", "-c",
+                                      "mkdir -p files/xtool-test-sdk && cd files/xtool-test-sdk && tar -xf -"])
+                subprocess.run([*adb, "shell", command], stdin=payload, check=True)
+            run(*adb, "shell", "am", "force-stop", APP)
+            log = run(*adb, "shell", "am", "instrument", "-w", "-e", "class",
+                      "dev.ide.android.workbench.runtime.XtoolDeliveryDeviceTest#compileUnsignedIosWithSuppliedSdk", TEST, capture=True)
+            (output / "compileUnsignedIosWithSuppliedSdk.log").write_text(log)
+            print(log)
+            if "OK (1 test)" not in log:
+                raise RuntimeError("Unsigned iOS compile/edit/export check failed")
+            with (output / "PhoneHello-unsigned.ipa").open("wb") as artifact:
+                subprocess.run([*adb, "exec-out", "run-as", APP, "cat", "files/xtool-ios-proof/xtool/PhoneHello.ipa"], stdout=artifact, check=True)
     run(*adb, "shell", "am", "start", "-n", APP + "/dev.ide.android.MainActivity")
     print("Local pack build:", output)
 

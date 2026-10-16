@@ -449,7 +449,7 @@ android {
     compileSdkMinor = 1
     // Pin AGP packaging/stripping separately from the source-built SDK helper toolchain.
     ndkVersion = "27.3.13750724"
-    if (runtimeDelivery == "play") dynamicFeatures += setOf(":developer_runtime_node")
+    if (runtimeDelivery == "play") dynamicFeatures += setOf(":developer_runtime_node", ":developer_runtime_xtool", ":developer_runtime_swift_support")
     if (appEngineDelivery == "play") {
         dynamicFeatures += setOf(":runtime_engine_ide_feature")
     }

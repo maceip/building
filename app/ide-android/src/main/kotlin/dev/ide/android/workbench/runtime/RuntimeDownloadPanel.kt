@@ -22,24 +22,38 @@ import kotlinx.coroutines.withContext
 /** Installation and enablement are independent. Downloading never starts project code. */
 @Composable
 fun RuntimeDownloadPanel() {
+    val app = LocalContext.current.applicationContext
+    val catalogs = remember(app) { RuntimePacks.catalogs(app) }
+    Column {
+        catalogs.filterNot { it.optBoolean("hidden") }.forEach { catalog -> key(catalog.getString("module")) {
+            RuntimePackDownload(catalog.getString("module"))
+        } }
+    }
+}
+
+@Composable
+private fun RuntimePackDownload(module: String) {
     val context = LocalContext.current
     val app = context.applicationContext
-    val catalog = remember(app) { RuntimePacks.catalog(app) } ?: return
+    val isNode = module == RuntimePacks.NODE_MODULE
+    val name = if (isNode) "Node.js" else "Swift and xtool"
+    val tag = if (isNode) "node" else "xtool"
     val manager = remember(app) { SplitInstallManagerFactory.create(app) }
     val scope = rememberCoroutineScope()
-    var installed by remember { mutableStateOf(RuntimePacks.nodeInstalled(app)) }
+    var installed by remember { mutableStateOf(RuntimePacks.installed(app, module)) }
     var session by remember { mutableStateOf<SplitInstallSessionState?>(null) }
     var message by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var verifying by remember { mutableStateOf(false) }
     fun refresh() {
-        installed = RuntimePacks.nodeInstalled(app)
+        installed = RuntimePacks.installed(app, module)
         if (installed) {
             verifying = true
             scope.launch {
                 try {
                     val pack = withContext(Dispatchers.IO) { AndroidRuntimeHost(app).prepare() }
-                    check(pack.node != null && pack.npmCli != null) { "Node pack is incomplete" }
+                    if (isNode) check(pack.node != null && pack.npmCli != null) { "Node pack is incomplete" }
+                    else check(pack.xtool != null && java.nio.file.Files.isRegularFile(pack.prefix.resolve("bin/swiftc"))) { "Swift pack is incomplete" }
                     message = "Installed and verified. The switches below control new sessions."
                 } catch (failed: Exception) { message = "Verification failed: ${failed.message}" }
                 finally { verifying = false }
@@ -49,9 +63,9 @@ fun RuntimeDownloadPanel() {
     val confirmation = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
         if (it.resultCode != Activity.RESULT_OK) message = "Download confirmation canceled."
     }
-    DisposableEffect(manager) {
+    DisposableEffect(manager, module) {
         val listener = SplitInstallStateUpdatedListener { state ->
-            if (RuntimePacks.NODE_MODULE !in state.moduleNames()) return@SplitInstallStateUpdatedListener
+            if (module !in state.moduleNames()) return@SplitInstallStateUpdatedListener
             session = state
             busy = !state.hasTerminalStatus()
             when (state.status()) {
@@ -66,23 +80,25 @@ fun RuntimeDownloadPanel() {
         }
         manager.registerListener(listener)
         manager.sessionStates.addOnSuccessListener { states ->
-            states.lastOrNull { RuntimePacks.NODE_MODULE in it.moduleNames() }?.let {
+            states.lastOrNull { module in it.moduleNames() }?.let {
                 session = it; busy = !it.hasTerminalStatus()
             }
         }.addOnFailureListener { message = "Cannot read download status: ${it.message}" }
         onDispose { manager.unregisterListener(listener) }
     }
     Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Node.js download", style = MaterialTheme.typography.titleMedium)
-        Text(if (installed) "Installed" else "Not installed", Modifier.testTag("runtime-node-installed"))
-        Text("Node.js, npm, pnpm and Node headers. Python, shell and shared build tools are already included.", style = MaterialTheme.typography.bodySmall)
+        Text("$name download", style = MaterialTheme.typography.titleMedium)
+        Text(if (installed) "Installed" else "Not installed", Modifier.testTag("runtime-$tag-installed"))
+        Text(if (isNode) "Node.js, npm, pnpm and Node headers." else "Swift compiler, Swift Package Manager and xtool. Building for iPhone also requires an Apple SDK that you supply.", style = MaterialTheme.typography.bodySmall)
         if (!installed) {
             Text("Google Play supplies the optional pack. Downloading it keeps your runtime switches unchanged.", style = MaterialTheme.typography.bodySmall)
-            Button(enabled = !busy, modifier = Modifier.testTag("runtime-node-download"), onClick = {
-                busy = true; message = "Requesting Node.js…"
-                manager.startInstall(SplitInstallRequest.newBuilder().addModule(RuntimePacks.NODE_MODULE).build())
+            Button(enabled = !busy, modifier = Modifier.testTag("runtime-$tag-download"), onClick = {
+                busy = true; message = "Requesting $name…"
+                val request = SplitInstallRequest.newBuilder()
+                RuntimePacks.requestModules(app, module).forEach { request.addModule(it) }
+                manager.startInstall(request.build())
                     .addOnFailureListener { busy = false; message = "Download unavailable: ${it.message}. Install this build through Google Play or the local pack test installer." }
-            }) { Text(if (session?.status() == Status.FAILED) "Retry download" else "Download Node.js") }
+            }) { Text(if (session?.status() == Status.FAILED) "Retry download" else "Download $name") }
         }
         session?.takeIf { busy }?.let { state ->
             val total = state.totalBytesToDownload()
@@ -95,7 +111,7 @@ fun RuntimeDownloadPanel() {
         }
         if (verifying) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (installed) TextButton(onClick = ::refresh, enabled = !verifying) { Text("Verify installed pack") }
-        if (message.isNotBlank()) Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("runtime-node-message"))
+        if (message.isNotBlank()) Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("runtime-$tag-message"))
     }
 }
 

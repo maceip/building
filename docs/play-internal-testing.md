@@ -1,19 +1,22 @@
-# Prepare the Node runtime test for Google Play
+# Prepare runtime tests for Google Play
 
-This builds the actual `ai.building` release with the existing upload key and an
-on-demand `developer_runtime_node` feature. It does not upload, publish, enroll
-testers, or install anything. The normal sideload build still bundles Node.
+This builds the actual `ai.building` release with the existing upload key and
+on-demand Node and Swift/xtool features. The preparation script does not upload,
+publish, enroll testers, or install anything. The normal sideload build bundles
+the runtimes. Swift tools and support data occupy two modules, requested together.
 
 ## Build and verify
 
 Keep signing credentials in the existing protected `.env.production`, outside
 version control. Confirm the package, **unused version code above every previous
 upload**, and upload certificate against Play Console before uploading. The local
-candidate uses version **1.0.1 (110)**; its availability in Console is unconfirmed.
+previous release **1.0.1 (110)** is published on the internal track. Its upload key
+matched Console; testers have not yet been enrolled. Always recheck the latest
+uploaded code before preparing another release.
 
 ```sh
 python3 tools/runtime-pack/prepare_play.py \
-  --version-code 110 --version-name 1.0.1 \
+  --version-code 111 --version-name 1.0.2 \
   --bundletool tools/runtime-pack/build/play-test/bundletool.jar
 ```
 
@@ -23,13 +26,13 @@ helper does not change the shared release defaults or `.env.production`.
 The numeric version name also works with the repository's desktop packaging
 configuration, which currently reads the Android version environment variable.
 
-Outputs live in `dist/play-internal/110/`:
+Outputs live in `dist/play-internal/<version-code>/`:
 
-- `building-110-play-release.aab`: signed upload candidate; this is the Console upload.
+- `building-<version-code>-play-release.aab`: signed upload candidate; this is the Console upload.
 - `receipt.json`, `SHA256SUMS`: exact artifact identity, upload-key fingerprint,
   local verification and remaining checks.
 - `upload-certificate.pem`: public upload certificate, never the private key.
-- `delivery-audit.json`, manifests: Node ownership, hashes, dependency closure,
+- `delivery-audit.json`, manifests: runtime ownership, hashes, dependency closure,
   on-demand declaration, release identity and absence of local-testing metadata.
 - `reference-device.apks`, size CSVs: normal ARM64/API-36 splits and estimated
   compressed downloads. No `--local-testing` is used; these are local inspection
@@ -58,8 +61,23 @@ native library (272) passes the ELF LOAD alignment check. RELRO diagnostics and
 
 Candidate AAB SHA-256:
 `5c40fc1854c06031611d3b37dbe352c164a8aeac5bc3175df1c2f7c4a358663a`.
-This is local preparation evidence. No Console upload or real Play download has
-occurred, and code 110 and the upload certificate still need Console confirmation.
+This records the original local preparation evidence. Console subsequently
+accepted and published code 110 on the internal track and confirmed the upload
+certificate. Actual Play installation and runtime downloading remain unverified.
+
+### Swift update verified 2026-10-16
+
+Version **1.0.2 (111)** includes the two Swift/xtool on-demand modules alongside
+Node. Its signed APK/AAB build, bundle/signature/configuration checks, module
+partition audit and ELF LOAD alignment checks passed. AAB SHA-256:
+`65f8ceb6683c6fe3e1b3995730b3b79133ff9029452e4576f2fa8374cd6f57c5`.
+
+Reference compressed-download estimates are 360,149,983 bytes for base,
+22,935,227 additional bytes for Node, and 566,335,223 additional bytes for the
+combined Swift tools/support modules. The [delivery evidence](play-runtime-delivery.md#swift-delivery-verified-2026-10-16)
+includes a fresh local-testing installation, native Swift compilation, unsigned
+iPhone IPA creation, edit/rebuild/export and offline reuse. Local testing is not
+evidence that Google Play has served these modules to a tester.
 
 ## Console preparation
 
@@ -68,7 +86,7 @@ occurred, and code 110 and the upload certificate still need Console confirmatio
    fixes that identity. Complete any account or signing setup shown by Console.
 2. Under **Test and release → Testing → Internal testing**, create the release and
    select the AAB above. Verify that Console recognizes the intended code, target
-   SDK and on-demand Node module, and resolve any reported upload blockers.
+   SDK and all three on-demand runtime modules, and resolve reported upload blockers.
 3. Compare the **upload** certificate in App integrity with `receipt.json`. The
    Play **app signing** certificate may differ; that is the key on installed APKs.
    Do not replace an existing app's key or change its identity to bypass a mismatch.
@@ -92,10 +110,12 @@ proof. If a previous sideload conflicts with Play's signing key, preserve projec
 before choosing a clean installation; the preparation helper never uninstalls it.
 
 1. Record the installed version and installer (`com.android.vending`).
-2. On a fresh base-only install, open **Settings → Runtimes**. Node should be
-   available to download while Python and shell already work. Record the splits.
-3. Download Node. Capture real progress, completion and installed verification.
-4. Run Node, npm and pnpm from a project/terminal. Exercise a child Node process.
+2. On a fresh base-only install, open **Settings → SDK Manager**. Node and Swift
+   should be available to download while Python and shell already work. Record the splits.
+3. Download Swift/xtool and Node separately. Capture progress, completion and
+   installed verification; Swift must request its tools and support modules together.
+4. Compile and run a Swift package. With a user-supplied Apple SDK, compile an
+   unsigned iOS app. Run Node, npm and pnpm and exercise a child Node process.
 5. Force-stop/reopen the app and repeat with networking disabled. Restore networking.
 6. Capture the final installed splits, device/API/page size, outputs and logs.
    Test cancellation/retry on a fresh installation when practical. Record actual

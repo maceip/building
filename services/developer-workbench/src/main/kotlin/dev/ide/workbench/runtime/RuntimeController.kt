@@ -67,7 +67,7 @@ class RuntimeController(
                         val swiftHost = installed.prefix.resolve("lib/swift/host").takeIf { Files.isDirectory(it) }?.toString()
                         val swiftCompiler = installed.prefix.resolve("lib/swift/host/compiler").takeIf { Files.isDirectory(it) }?.toString()
                         val baseLd = installed.environment["LD_LIBRARY_PATH"] ?: ""
-                        val xtoolLd = listOfNotNull(xtoolLib, swiftRuntime, swiftHost, swiftCompiler, baseLd.takeIf { it.isNotBlank() }).joinToString(":")
+                        val xtoolLd = listOfNotNull(baseLd.takeIf { it.isNotBlank() }, swiftRuntime, swiftHost, swiftCompiler, xtoolLib).joinToString(":")
                         installed.environment + ("LD_LIBRARY_PATH" to xtoolLd)
                     } else installed.environment
                     val process = host.start(command, installed.prefix.parent, env)
@@ -201,7 +201,7 @@ class RuntimeController(
                 val swiftHost = installed.prefix.resolve("lib/swift/host").takeIf { Files.isDirectory(it) }?.toString()
                 val swiftCompiler = installed.prefix.resolve("lib/swift/host/compiler").takeIf { Files.isDirectory(it) }?.toString()
                 val baseLd = baseEnv["LD_LIBRARY_PATH"] ?: ""
-                val xtoolLd = listOfNotNull(xtoolLib, swiftRuntime, swiftHost, swiftCompiler, baseLd.takeIf { it.isNotBlank() }).joinToString(":")
+                val xtoolLd = listOfNotNull(baseLd.takeIf { it.isNotBlank() }, swiftRuntime, swiftHost, swiftCompiler, xtoolLib).joinToString(":")
                 baseEnv + ("LD_LIBRARY_PATH" to xtoolLd)
             } else baseEnv
             val args = config.args + request.args

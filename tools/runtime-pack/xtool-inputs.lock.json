@@ -1,0 +1,373 @@
+{
+  "format": 1,
+  "xtoolRevision": "9fb63e9",
+  "baseURL": "https://packages.termux.dev/apt/termux-main/",
+  "packages": [
+    {
+      "name": "coreutils",
+      "version": "9.12",
+      "filename": "pool/main/c/coreutils/coreutils_9.12_aarch64.deb",
+      "size": 824156,
+      "sha256": "bedfe9e57f6867232e8f5fee947efa23be20332c57e92d843b3ea155545d6b8b"
+    },
+    {
+      "name": "git",
+      "version": "2.56.0",
+      "filename": "pool/main/g/git/git_2.56.0_aarch64.deb",
+      "size": 4541040,
+      "sha256": "dcdd22c5fdf7bdb5b825a03a17441d43858ed8515fea57fbb37eb42e733ca82f"
+    },
+    {
+      "name": "glib",
+      "version": "2.90.1",
+      "filename": "pool/main/g/glib/glib_2.90.1_aarch64.deb",
+      "size": 2573108,
+      "sha256": "132d8ce961d96a7252fd4bc2228bddd385b1b17b706a46caae6d541ae0e4b2c0"
+    },
+    {
+      "name": "less",
+      "version": "710",
+      "filename": "pool/main/l/less/less_710_aarch64.deb",
+      "size": 143624,
+      "sha256": "bff261b48553bcde3a93e0d7c2a51dbb1b7e5025767a1ee9a1cb4459a3789499"
+    },
+    {
+      "name": "libandroid-execinfo",
+      "version": "0.1-3",
+      "filename": "pool/main/liba/libandroid-execinfo/libandroid-execinfo_0.1-3_aarch64.deb",
+      "size": 14964,
+      "sha256": "725dd2c6da7fc96e860fcc928e18aa9fb0e85e0bdcaf4f8ce0f0654ca6860fc2"
+    },
+    {
+      "name": "libandroid-selinux",
+      "version": "14.0.0.11-1",
+      "filename": "pool/main/liba/libandroid-selinux/libandroid-selinux_14.0.0.11-1_aarch64.deb",
+      "size": 59624,
+      "sha256": "00afd8c34087c2864737b51fd9d104dc5e955f6ec3c0f50c0c7ef5b4a56866b9"
+    },
+    {
+      "name": "libandroid-shmem",
+      "version": "0.7",
+      "filename": "pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb",
+      "size": 7216,
+      "sha256": "0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6"
+    },
+    {
+      "name": "libandroid-spawn-static",
+      "version": "0.3",
+      "filename": "pool/main/liba/libandroid-spawn-static/libandroid-spawn-static_0.3_aarch64.deb",
+      "size": 4004,
+      "sha256": "bbbf60f22fea99dd9924430f1e7cb8f48c3591dd9626771516773be4a7f60728"
+    },
+    {
+      "name": "libandroid-sysv-semaphore",
+      "version": "0.1-1",
+      "filename": "pool/main/liba/libandroid-sysv-semaphore/libandroid-sysv-semaphore_0.1-1_aarch64.deb",
+      "size": 3568,
+      "sha256": "c3369a92814690d56278d0455ae6df7bf2ad7678ae9543e86d1e3aa433937c69"
+    },
+    {
+      "name": "libblocksruntime",
+      "version": "1:6.4.0",
+      "filename": "pool/main/libb/libblocksruntime/libblocksruntime_1:6.4.0_aarch64.deb",
+      "size": 5420,
+      "sha256": "ed5b72a071d88fe1d11d0e7192a0470bf9f694c6475356b6b7ce824e821d6b5a"
+    },
+    {
+      "name": "libdispatch",
+      "version": "1:6.4.0",
+      "filename": "pool/main/libd/libdispatch/libdispatch_1:6.4.0_aarch64.deb",
+      "size": 138800,
+      "sha256": "e2e02c43c24d69c30993e8b17842a0054c9a2480342f678978e59f00041e43cf"
+    },
+    {
+      "name": "libgmp",
+      "version": "6.3.0-2",
+      "filename": "pool/main/libg/libgmp/libgmp_6.3.0-2_aarch64.deb",
+      "size": 328368,
+      "sha256": "5a3c1325638946ca212ddcb89bffb2c4459b4c90757d6e69f820e176534037fa"
+    },
+    {
+      "name": "libuuid",
+      "version": "2.42.4",
+      "filename": "pool/main/libu/libuuid/libuuid_2.42.4_aarch64.deb",
+      "size": 15456,
+      "sha256": "ecbaab0afd7f4c2c84d687c8e4ba46794d71001866efc261a7015f663eec4e85"
+    },
+    {
+      "name": "llbuild",
+      "version": "6.4.0",
+      "filename": "pool/main/l/llbuild/llbuild_6.4.0_aarch64.deb",
+      "size": 485192,
+      "sha256": "defe41057d01078ef2e92ae6c9753d9ee07c3b3b3a0695a33f115ba82e35dd53"
+    },
+    {
+      "name": "ndk-multilib",
+      "version": "30",
+      "filename": "pool/main/n/ndk-multilib/ndk-multilib_30_all.deb",
+      "size": 72884540,
+      "sha256": "bf5ed9c7176786bf71d8c2a64e7395aaa54f7469229ace5de7bd14e8b68819c8"
+    },
+    {
+      "name": "pcre2",
+      "version": "10.49",
+      "filename": "pool/main/p/pcre2/pcre2_10.49_aarch64.deb",
+      "size": 1001320,
+      "sha256": "c27995e5f52b8ecc9b8b3e662eb08e49f82a18bfd3f34343936acc7b23964724"
+    },
+    {
+      "name": "pkg-config",
+      "version": "0.29.2-3",
+      "filename": "pool/main/p/pkg-config/pkg-config_0.29.2-3_aarch64.deb",
+      "size": 32776,
+      "sha256": "fd6bf82d17dc811488c114a016181801b336f0be4fd2f22f9677ed9aefed42d2"
+    },
+    {
+      "name": "sourcekit-lsp",
+      "version": "6.4.1",
+      "filename": "pool/main/s/sourcekit-lsp/sourcekit-lsp_6.4.1_aarch64.deb",
+      "size": 12528256,
+      "sha256": "e71cabf7f9c25c1e109fc4aa2c9db2378bfa0932882498f334a26195aff51af1"
+    },
+    {
+      "name": "swift",
+      "version": "6.4.1",
+      "filename": "pool/main/s/swift/swift_6.4.1_aarch64.deb",
+      "size": 132440968,
+      "sha256": "9882d9586c12c1ba71ac4ab52d649bdd92b566c73d96c8a84d2aef003a9abb62"
+    },
+    {
+      "name": "swift-runtime-aarch64",
+      "version": "6.4.1",
+      "filename": "pool/main/s/swift-runtime-aarch64/swift-runtime-aarch64_6.4.1_all.deb",
+      "size": 18388848,
+      "sha256": "499f8b3602dfeef3951dbc26e72b95717aabc91dd08f17d26c75cb878ae8aee9"
+    },
+    {
+      "name": "swift-sdk-aarch64",
+      "version": "6.4.1",
+      "filename": "pool/main/s/swift-sdk-aarch64/swift-sdk-aarch64_6.4.1_all.deb",
+      "size": 37581484,
+      "sha256": "876e2b1fddfc2a408836387ea915e33c3f198c226e7bb87ef21510ab4f9e5da1"
+    },
+    {
+      "name": "unzip",
+      "version": "6.0-10",
+      "filename": "pool/main/u/unzip/unzip_6.0-10_aarch64.deb",
+      "size": 117092,
+      "sha256": "9e0b3320ff446d9989c048047a305c679b66f30b6fb4b04225a54821af37345b"
+    },
+    {
+      "name": "zip",
+      "version": "3.0-7",
+      "filename": "pool/main/z/zip/zip_3.0-7_aarch64.deb",
+      "size": 142212,
+      "sha256": "0c121e7f633e439e3c46f6e661e7a3f488ef5ee446cdcff5aed4c9ddf25001bf"
+    },
+    {
+      "name": "termux-licenses",
+      "version": "2.2",
+      "filename": "pool/main/t/termux-licenses/termux-licenses_2.2_all.deb",
+      "sha256": "a3265cd1cf7d04754f2fb683eaf5b21918263792fd714457127900c1d6d9bcd9",
+      "size": 52276
+    }
+  ],
+  "binaries": {
+    "OpenAppleMacrosServer": {
+      "sha256": "c5e8711429ef2489772f76a818db4f56f7f8d83bf33e55652e4c23069db56167",
+      "size": 46402184
+    },
+    "libBlocksRuntime.so": {
+      "sha256": "3c345b6b82894bf4abc29d52fd0209e6f33b251a8176c23bf232e2befe13f7b8",
+      "size": 14488
+    },
+    "libFoundation.so": {
+      "sha256": "170a897b0eb162c74be0a5c869ce681c7e74bbc0a55be75518ef4313b5378a6b",
+      "size": 8982200
+    },
+    "libFoundationEssentials.so": {
+      "sha256": "b98026262a2009e5d72ddbae0aa243bf8d5079dba858ce2a5b2c56ea7a3f5976",
+      "size": 10457432
+    },
+    "libFoundationInternationalization.so": {
+      "sha256": "228e0d44d4443fda2569ebe5f939b12926f9acb73a7a15788141d8db28adf3ed",
+      "size": 3791928
+    },
+    "libFoundationNetworking.so": {
+      "sha256": "26edabd881f6ea4b00486aaa9377c3c74660cf3c70661056c82152f748e66b72",
+      "size": 16498224
+    },
+    "libFoundationXML.so": {
+      "sha256": "e3bb1e092655cb7291a66fa34e8b9a4f0d21efe90c3558f32f852a01afbec996",
+      "size": 6043264
+    },
+    "lib_FoundationICU.so": {
+      "sha256": "ba1793edc8c16af89047462e8800150fce1ff34445e1ff2651b9fcb65d0f943b",
+      "size": 45817552
+    },
+    "libc++_shared.so": {
+      "sha256": "d523468d62d9b603cb3354294d70d4b2feabf2c3f1e43b0c96c9aabf32813708",
+      "size": 1794776
+    },
+    "libcrypto.so.3": {
+      "sha256": "ab3aa5ac20ea0acb8692ea0865dcb8c2a8adc0a500eb2074ba50c09c27043f00",
+      "size": 5265368
+    },
+    "libdispatch.so": {
+      "sha256": "fa6aa77793c1547ce41b1f0b247e4436fcf96b4e4e6384a5376d88c4ebcfcb8a",
+      "size": 423312
+    },
+    "libimobiledevice-1.0.so": {
+      "sha256": "972f69193338e51ae5fbdd11c6c5fd5fa34abd9551d768a9e1475cb1a8bb3280",
+      "size": 1047944
+    },
+    "libimobiledevice-glue-1.0.so": {
+      "sha256": "c686658cc503c7af77f023adb7c8319e3673869e434824b5b59f94b166da0b10",
+      "size": 243992
+    },
+    "liblzma.so": {
+      "sha256": "9ba7670ac47346cf50ed1c6d51006a737eebd061e385692aa346c7babf90cdee",
+      "size": 869472
+    },
+    "libplist-2.0.so": {
+      "sha256": "97959a7d744282517dc28051660228cb41f758e1825e7a492450ec5ff9d956f8",
+      "size": 400008
+    },
+    "libssl.so.3": {
+      "sha256": "2c3a8c2aef1b7fb0017fd1a88ed87729c074764e69c9cf20a099c8d33bd17b57",
+      "size": 1085144
+    },
+    "libswiftAndroid.so": {
+      "sha256": "f73459813b7830366c017992f13b42fd3cdc702c08ce9070f0d0079948cd4a83",
+      "size": 80568
+    },
+    "libswiftCore.so": {
+      "sha256": "147ff206b878adbc23facd046cf1b5186c0b05d99719e7ff46261870dc8ddb8e",
+      "size": 11670272
+    },
+    "libswiftDispatch.so": {
+      "sha256": "76ea0f99351b4d67e4fb0700238e17e2a8f6f9bbcdd0a730c608221582e130b3",
+      "size": 353096
+    },
+    "libswiftObservation.so": {
+      "sha256": "cbcb1e839ae7c4b0e87f9aafaa9fc67c54a54a0e52dc5e9ed5b54c1d2291f6b0",
+      "size": 241312
+    },
+    "libswiftSwiftOnoneSupport.so": {
+      "sha256": "902aa301749978c538847d2f522722ae4eef1239db2528f875fd6b13151bb412",
+      "size": 408976
+    },
+    "libswiftSynchronization.so": {
+      "sha256": "cad99867e16db7f76554d9a14ff1e99d205b747fb39664107f222dd05ab12b3f",
+      "size": 125784
+    },
+    "libswift_Builtin_float.so": {
+      "sha256": "e75415c67f7aad904f67b176f4b13d5efb84a6e2f514b2bb36fbb73918b4412b",
+      "size": 12608
+    },
+    "libswift_Concurrency.so": {
+      "sha256": "f369036fd3839ee247806e1b7aff089c422d0a563ad87a6cee99f4be6d08adeb",
+      "size": 1377224
+    },
+    "libswift_RegexParser.so": {
+      "sha256": "34d7f073b886b283480ac554b1e8271dcc8a38d69fac4ce3fbf95ae14617399b",
+      "size": 1575416
+    },
+    "libswift_StringProcessing.so": {
+      "sha256": "7a6fcbf1213ddbcf997b544665b9db188b336d83f05cdaf15c32c1ea0896f0d9",
+      "size": 1125104
+    },
+    "libswift_math.so": {
+      "sha256": "7419a6a5617bedf1706af15826eb7e5d378d826d718bd5c8441e66f382da66c1",
+      "size": 11384
+    },
+    "libusbmuxd-2.0.so": {
+      "sha256": "642d1d2c53f894afcf94eaa4f228ad87ac9700177e8fa64a59c3392358646240",
+      "size": 105152
+    },
+    "swift-launcher": {
+      "sha256": "4c32db13b8b76a69eb2a93070417182102d62756b8e7ba6f6711001d5feb8108",
+      "size": 9856
+    },
+    "xtool": {
+      "sha256": "425ab50ac2e1aa7f0b4224133a879cbd4a498418abf7e77023320fb41d99ac3b",
+      "size": 191650928
+    }
+  },
+  "reusedPackages": [
+    "ca-certificates",
+    "clang",
+    "dash",
+    "gdbm",
+    "libandroid-glob",
+    "libandroid-posix-semaphore",
+    "libandroid-spawn",
+    "libandroid-support",
+    "libbz2",
+    "libc++",
+    "libcompiler-rt",
+    "libcrypt",
+    "libcurl",
+    "libexpat",
+    "libffi",
+    "libiconv",
+    "libllvm",
+    "liblzma",
+    "libnghttp2",
+    "libnghttp3",
+    "libngtcp2",
+    "libsqlite",
+    "libssh2",
+    "libxml2",
+    "lld",
+    "llvm",
+    "ncurses",
+    "ncurses-ui-libs",
+    "ndk-sysroot",
+    "openssl",
+    "python",
+    "readline",
+    "resolv-conf",
+    "termux-exec",
+    "zlib",
+    "zstd"
+  ],
+  "reusedPackageSha256": {
+    "ca-certificates": "57fab24bf4561bfdd35afe71bc1929914e51c35458cfd1fca2b15e54bc8df7af",
+    "clang": "9fb565013b96ce10abd8f8f217aaebb48f72873f53acbf8886329bcea841a21c",
+    "dash": "02bb8b06db6616382e0baf9e63f11cb5fe82307dddf3f8880f6b39dbc808adc5",
+    "gdbm": "c378de833aae3cf41f3028491ea11836479d9833ab653edc27d0c0e0e691d5c5",
+    "libandroid-glob": "2276ae8adedf0db76c2f4ffc94cc4cceb2f4f5d78e021b54e2e046d1233e7826",
+    "libandroid-posix-semaphore": "0efa8677a0166315ba4e685863712eba0ca0a1732827492f38226e2723730c7a",
+    "libandroid-spawn": "7988fa788ef48ab5da9660443905a2e4099ac36221739d72f5c39acc644b4d1c",
+    "libandroid-support": "f2f145d6135ad4843ac9670153be3e3944dc1e6f1736d46d2306c28f2b86f517",
+    "libbz2": "4335d7f060650b0aabef545d1334c2f9f280223d5962e13c24a00ec934b794ba",
+    "libc++": "53d0b84a7ba7459024257cb94d5b136fe13ef858567f65a8064b35950799f2ca",
+    "libcompiler-rt": "89de02f642e34fa6494ad16105bd08510bd1dbdbe4fdb2b297aaa4f4e8e534b6",
+    "libcrypt": "6c283eed576b98cc3568f99638156f8588f77d979579d03bef8683d6eb8601e1",
+    "libcurl": "2011bb9709261bb3d5ecaa6672faa333be14cf48ad4af37031e3e365309557ac",
+    "libexpat": "f8a104e8227c9c181f6818658a3ee2fa4c107fac94219b068144fc6591086cdb",
+    "libffi": "4f255badf74cd31f6a2801c17fa1444199c84c834b517b7c843e2fe9ebe91d77",
+    "libiconv": "fe9481b1dc101c6c3552943f25435109fd522aecc615ae49594f9fbee863bb37",
+    "libllvm": "5056a73f2645fc9c0759e6f94a1bd6edcf36305acaef58dc685211ced9cc2a02",
+    "liblzma": "44e95e6e60dddb3705e60a344a4f009a1085a210797342b721eaff41b44033c0",
+    "libnghttp2": "ab2e0a3408fe4934ffdf774bd5049a265db2e6db62dcb651baecbecfb81e3f0b",
+    "libnghttp3": "0be2ee96def3608afaf24eb0b4b55f3484a37c95ea21bb1d6d85c7d543467603",
+    "libngtcp2": "f471bad7f4329b6b0b4aedf124e0a23a35f6ac99bfbae73304136f8bfd570fc3",
+    "libsqlite": "9adf91e118fcf4d449f0fb9668485d895916c4f76c2407da17ba114406f43a58",
+    "libssh2": "1add4e0a926b848814e7e2f1817ea28b123c54cabd5bbc4e5cfd65291cbad84e",
+    "libxml2": "d315861bbcf716cfb088f53cddab9fb6a96430cc66769f79774cc69c2f53bcff",
+    "lld": "6299c8fdff59dcff972f6b444805bcdb211c2bd797a64d2ddb3875e699f30630",
+    "llvm": "2d17e4dde485cae71e6872d19ce1d44555789208708b4e0fd15ebf6818a146d3",
+    "ncurses": "f44bbfdc3d42ec0217bffa978309390e59cea5a48a9a83226d4a496c42ad0b99",
+    "ncurses-ui-libs": "7393f369009be189b3d4ec1f9b16ebd57621d6a1b22949ae07685573950d1f37",
+    "ndk-sysroot": "73502f9b04fce210c430c83bf9ae2b8e332ba5c319f3eb94a61ba5cef090f787",
+    "openssl": "a2fb7856875e63ef6b90442752e05974813372c3ca86d2513a78ea43c67a0f8b",
+    "python": "3166e56c2b6c03fff41191fbb9d736302978e7c484702814d9f6dc99dd6006bd",
+    "readline": "616cc73009bc0223f61caed8dd09455714455aa5ea5e180126e2f69c4c775136",
+    "resolv-conf": "ab541abac8e0c81709cd7ca4a02bcfa0d60ba1f4bfe7fd6dce4a694a4a9dfffa",
+    "termux-exec": "fd6a06a6a74c6fba2d1cec56dc8b5726e6488918322b06fd19fe5cff34b28a5d",
+    "zlib": "75e7d0af17fcc3b40004309fdc00a1ddb9ae08346dce5e269902c34ac3966ac9",
+    "zstd": "e1b4a5113648da8de189620ba1fce74c48b2d0833d9043391b9a1c91fb606fd3"
+  }
+}

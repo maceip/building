@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from verify_delivery import inspect as inspect_delivery
+from partition import FEATURES
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("android_release", ROOT / "tools/android-release.py")
@@ -26,7 +27,7 @@ DIST = "{http://schemas.android.com/apk/distribution}"
 MODULE = "developer_runtime_node"
 
 
-def verify_manifests(base_xml, feature_xml, env):
+def verify_manifests(base_xml, feature_xml, env, module=MODULE):
     base, feature = ET.fromstring(base_xml), ET.fromstring(feature_xml)
     for key, expected in (("package", env["ANDROID_APPLICATION_ID"]),
                           (ANDROID + "versionCode", env["ANDROID_VERSION_CODE"]),
@@ -41,13 +42,13 @@ def verify_manifests(base_xml, feature_xml, env):
         for metadata in manifest.iter("meta-data"):
             if "local_testing" in metadata.get(ANDROID + "name", "").lower():
                 raise ValueError("Local Play simulation metadata must not reach an internal-track release.")
-    if feature.get("split") != MODULE or feature.get("package") != base.get("package"):
-        raise ValueError("Wrong Node feature identity.")
+    if feature.get("split") != module or feature.get("package") != base.get("package"):
+        raise ValueError("Wrong feature identity.")
     if feature.find(f"{DIST}module/{DIST}delivery/{DIST}on-demand") is None:
-        raise ValueError("Node must be delivered on demand.")
+        raise ValueError("Runtime must be delivered on demand.")
     fusing = feature.find(f"{DIST}module/{DIST}fusing")
     if fusing is None or fusing.get(DIST + "include") != "false":
-        raise ValueError("Node must not be fused into the base install.")
+        raise ValueError("Runtime must not be fused into the base install.")
 
 
 def native_alignment(archive):
@@ -124,13 +125,14 @@ def main():
 
     (output / "bundle-validation.txt").write_text(run("validate", "--bundle=" + str(aab)))
     manifests = {module: run("dump", "manifest", "--bundle=" + str(aab), "--module=" + module)
-                 for module in ("base", MODULE)}
-    verify_manifests(manifests["base"], manifests[MODULE], env)
+                 for module in ("base", *FEATURES.values())}
+    for module in FEATURES.values():
+        verify_manifests(manifests["base"], manifests[module], env, module)
     for module, xml in manifests.items():
         (output / (module + "-manifest.xml")).write_text(xml)
     with zipfile.ZipFile(aab) as archive:
         modules = {n.split("/")[0] for n in archive.namelist() if n.endswith("/manifest/AndroidManifest.xml")}
-        if modules != {"base", MODULE}:
+        if modules != {"base", *FEATURES.values()}:
             raise ValueError("Unexpected bundle modules: " + str(sorted(modules)))
         alignment = native_alignment(archive)
     delivery = inspect_delivery(aab)
@@ -152,19 +154,20 @@ def main():
             "--ks-key-alias=" + env["RELEASE_KEY_ALIAS"], "--ks-pass=file:" + str(store_pass),
             "--key-pass=file:" + str(key_pass))
     sizes = {}
-    for name, modules in (("base", "base"), ("baseAndNode", "base," + MODULE)):
+    for name, modules in [("base", "base")] + [(name, "base," + module) for name, module in FEATURES.items()]:
         result = run("get-size", "total", "--apks=" + str(apks), "--device-spec=" + str(device), "--modules=" + modules)
         (output / (name + "-download-size.csv")).write_text(result)
         sizes[name] = {k: int(v) for k, v in next(csv.DictReader(io.StringIO(result))).items()}
     # Conservative decimal interpretation of the documented 500 MB per-module limit.
-    if sizes["base"]["MAX"] > 500_000_000 or sizes["baseAndNode"]["MAX"] - sizes["base"]["MIN"] > 500_000_000:
+    if sizes["base"]["MAX"] > 500_000_000 or any(sizes[name]["MAX"] - sizes["base"]["MIN"] > 500_000_000 for name in FEATURES):
         raise ValueError("Estimated module download exceeds 500 MB; inspect the size reports.")
     with aab.open("rb") as stream:
         sha = hashlib.file_digest(stream, "sha256").hexdigest()
     (output / "SHA256SUMS").write_text(sha + "  " + aab.name + "\n")
     (output / "release-notes.txt").write_text(
-        "<en-US>\nInternal test: download the Node.js, npm and pnpm runtime from Settings > Runtimes. "
-        "Test installation, restart, and offline reuse. Other development tools remain included.\n</en-US>\n")
+        "<en-US>\nDownload Swift and xtool or Node.js separately from Settings > SDK Manager. "
+        "Test installation, compilation, restart and offline reuse. iPhone builds require your own Apple SDK. "
+        "Signing and iOS simulation are not included.\n</en-US>\n")
     receipt = {"applicationId": env["ANDROID_APPLICATION_ID"], "versionCode": args.version_code,
                "versionName": args.version_name, "track": "internal", "aab": aab.name, "sha256": sha,
                "uploadCertificateSha256": fingerprint, "runtimeDelivery": "play", "localTesting": False,
@@ -176,7 +179,7 @@ def main():
                "pending": ["Confirm package, unused version code and upload certificate in Play Console",
                            "Qualify native dependencies on a 16 KB device; see native-alignment.json",
                            "Upload to internal track, enroll testers and install through Google Play",
-                           "Download Node through Settings, run a project, restart and repeat offline"]}
+                           "Download Swift/xtool and Node through Settings, compile a project, restart and repeat offline"]}
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print("Signed internal-track candidate:", aab)
     print("SHA-256:", sha)
