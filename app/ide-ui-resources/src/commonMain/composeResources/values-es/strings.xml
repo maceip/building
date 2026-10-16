@@ -104,6 +104,7 @@ Nunca recopilamos su código, nombres de archivos o proyectos, qué funciones us
     <string name="no_project_yet">Aún no hay proyectos. Crea uno para comenzar.</string>
     <string name="your_projects">Tus proyectos</string>
     <string name="project_kind_android">Android</string>
+    <string name="project_kind_files">Archivos</string>
     <string name="project_opened_just_now">Abierto justo ahora</string>
     <plurals name="project_opened_minutes">
         <item quantity="one">Abierto hace %1$d minuto</item>
@@ -132,6 +133,9 @@ Nunca recopilamos su código, nombres de archivos o proyectos, qué funciones us
     <string name="your_codeassist_files_content">Abre esta carpeta en cualquier administrador de archivos para examinar tus proyectos, agregar íconos o recursos, o editar desde una PC.</string>
     <string name="open_in_the_file_manager">Abrir en administrador de archivos</string>
     <string name="choose_start_point">Elige un punto de partida.</string>
+    <string name="templates_search">Buscar plantillas</string>
+    <string name="templates_all">Todas</string>
+    <string name="templates_no_match">Ninguna plantilla coincide con “%1$s”.</string>
     <string name="backup">Hacer copia de seguridad</string>
     <string name="delete_project">¿Eliminar proyecto?</string>
     <string name="delete_project_content">“%1$s” y todos sus archivos se eliminarán permanentemente. Esto no se puede deshacer.</string>
@@ -184,6 +188,13 @@ Nunca recopilamos su código, nombres de archivos o proyectos, qué funciones us
     <string name="edview_open_a_file_from_navigator">Abre un archivo desde el navegador</string>
     <string name="edview_no_file_open_title">Ningún archivo abierto</string>
     <string name="edview_no_file_open_hint">Selecciona un archivo en el navegador para empezar a editar</string>
+    <string name="edview_action_search">Buscar en todo</string>
+    <string name="edview_action_go_to_file">Ir a archivo</string>
+    <string name="edview_action_recent">Archivos recientes</string>
+    <string name="edview_action_find">Buscar en archivos</string>
+    <string name="edview_action_new_file">Nuevo archivo</string>
+    <string name="edview_action_project">Archivos del proyecto</string>
+    <string name="edview_recent_title">Abiertos recientemente</string>
 
     <!-- Tabs -->
     <string name="tab_close_others">Cerrar las demás</string>
@@ -363,6 +374,9 @@ Nunca recopilamos su código, nombres de archivos o proyectos, qué funciones us
     <!-- Gradle compatibility -->
     <string name="gradle_mode_title">Modo de compatibilidad con Gradle</string>
     <string name="gradle_resync">Volver a sincronizar</string>
+    <string name="gradle_kmp_target">Destino multiplataforma</string>
+    <string name="gradle_kmp_android">Android</string>
+    <string name="gradle_kmp_jvm">Escritorio (JVM)</string>
     <string name="gradle_syncing">Sincronizando desde Gradle…</string>
 
     <!-- SDK sources -->
@@ -495,6 +509,10 @@ Nunca recopilamos su código, nombres de archivos o proyectos, qué funciones us
     <string name="palette_hint">Ejecuta un comando, salta a un archivo o símbolo…</string>
     <string name="palette_type_to_search">Escribe para buscar %1$s…</string>
     <string name="palette_no_matches">Sin coincidencias</string>
+    <string name="palette_key_navigate">navegar</string>
+    <string name="palette_key_open">abrir</string>
+    <string name="palette_key_scope">cambiar ámbito</string>
+    <string name="palette_key_close">cerrar</string>
 
     <!-- Run -->
     <string name="run_no_active_run">No hay ninguna ejecución activa.</string>
@@ -508,6 +526,18 @@ Nunca recopilamos su código, nombres de archivos o proyectos, qué funciones us
     <string name="run_building_module">Compilando %1$s…</string>
     <string name="run_running_module">Ejecutando %1$s</string>
     <string name="run_no_output">(sin salida)</string>
+    <string name="run_tab_tests">Pruebas</string>
+    <string name="run_tab_output">Salida</string>
+    <string name="tests_passed">%1$d superadas</string>
+    <string name="tests_failed">%1$d fallidas</string>
+    <string name="tests_skipped">%1$d omitidas</string>
+    <string name="tests_progress">%1$d de %2$d</string>
+    <string name="tests_rerun_failed">Repetir fallidas</string>
+    <string name="tests_run_one">Ejecutar prueba</string>
+    <string name="tests_run_class">Ejecutar todas las pruebas de la clase</string>
+    <string name="tests_none_found">No se encontraron pruebas</string>
+    <string name="tests_none_in_file">No hay pruebas en este archivo</string>
+    <string name="tests_class_failed">La clase falló: %1$s</string>
     <string name="run_type_input">Escribe una entrada, pulsa Intro…</string>
     <string name="run_send">Enviar</string>
     <string name="run_end_input_eof">Finalizar entrada (EOF)</string>
@@ -858,6 +888,16 @@ Nunca recopilamos su código, nombres de archivos o proyectos, qué funciones us
     <string name="modcfg_title_modules">Módulos</string>
     <string name="modcfg_new_module_action">Nuevo módulo</string>
     <string name="modcfg_no_modules">No hay módulos. Toca + para agregar uno.</string>
+    <string name="modcfg_empty_title">Aún no hay módulos</string>
+    <string name="modcfg_empty_body">Un módulo es una parte compilable de tu proyecto: una app, una biblioteca o una función.</string>
+    <string name="keymap_hint">Haz clic en un atajo y pulsa las nuevas teclas. Esc cancela; Retroceso lo elimina.</string>
+    <string name="keymap_search">Buscar comandos o teclas</string>
+    <string name="keymap_modified">Modificados</string>
+    <string name="keymap_reset_all">Restablecer todo</string>
+    <string name="keymap_no_results">Ningún comando coincide.</string>
+    <string name="keymap_recording">Pulsa las teclas…</string>
+    <string name="keymap_not_set">Sin asignar</string>
+    <string name="keymap_reset">Restablecer valor predeterminado</string>
     <string name="modcfg_remove_named">Quitar %1$s</string>
     <string name="modcfg_removed">Se quitó %1$s</string>
     <string name="modcfg_build_features_android_only">Las funciones de compilación se aplican solo a módulos Android.</string>
@@ -881,6 +921,10 @@ Nunca recopilamos su código, nombres de archivos o proyectos, qué funciones us
     <string name="modcfg_packaging_merge_desc">Concatena los duplicados en lugar de descartarlos.</string>
     <string name="modcfg_packaging_default_excludes">Siempre excluidos por defecto</string>
     <string name="modcfg_packaging_default_merges">Siempre combinados por defecto</string>
+    <string name="modcfg_packaging_compression">Compresión</string>
+    <string name="modcfg_packaging_no_compress">No comprimir</string>
+    <string name="modcfg_packaging_no_compress_desc">Sufijos de archivo como tflite o .bin que se guardan sin comprimir en el APK, para que AssetManager.openFd() y el mapeo en memoria funcionen. Se comparan con el final de cada ruta, sin distinguir mayúsculas.</string>
+    <string name="modcfg_packaging_default_no_compress">Nunca comprimidos por defecto</string>
     <string name="modcfg_manage_keystores">Gestionar keystores</string>
     <string name="modcfg_keystores_empty">Aún no hay keystores. Crea uno en el Administrador de keystores para firmar compilaciones de lanzamiento.</string>
     <string name="modcfg_debug_default">depuración (predeterminado)</string>
@@ -1260,4 +1304,6 @@ Nunca recopilamos su código, nombres de archivos o proyectos, qué funciones us
     <string name="block_scope_loading">Buscando qué se puede llamar aquí…</string>
     <string name="block_scope_none">Este ámbito no añade nada que llamar.</string>
     <string name="block_lambda_page">Lambda</string>
+    <string name="sdk_platform_tools">Herramientas de la plataforma</string>
+    <string name="sdk_platform_tools_desc">adb, que Ejecutar usa para instalar y abrir tu app en un teléfono o emulador conectado a este equipo.</string>
 </resources>

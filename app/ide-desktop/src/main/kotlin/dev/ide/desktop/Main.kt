@@ -3,6 +3,7 @@ package dev.ide.desktop
 import dev.ide.ui.ext.AppKeys
 import androidx.compose.material.Button
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -13,11 +14,15 @@ import dev.ide.core.IdeServicesBackend
 import dev.ide.core.project.ProjectManager
 import dev.ide.gradle.DesktopGradleHost
 import dev.ide.gradle.GradleEnvironment
+import dev.ide.core.sdk.BundledAndroidToolchain
+import dev.ide.desktop.run.DesktopApkInstaller
+import dev.ide.desktop.store.registerDesktopStore
 import dev.ide.ui.CodeAssistApp
 import dev.ide.ui.editor.preview.ImageSceneComposer
 import dev.ide.ui.editor.preview.OffscreenPreviewRenderer
 import dev.ide.ui.ext.PreviewSnapshots
 import dev.ide.ui.platform.LocalWindowTitleBar
+import java.nio.file.Files
 import java.nio.file.Path
 
 /**
@@ -34,17 +39,36 @@ fun main(args: Array<String>) {
     // Survive an unexpected exception on the AWT event thread (e.g. the live-preview interpreter crashing deep
     // in Compose's measure/semantics pass on a half-typed buffer) instead of taking the whole IDE down.
     AwtThreadGuard.install()
+    // A program the user runs shares this process, so the OS Quit (Cmd+Q) on its window would quit the IDE.
+    QuitGuard.install()
+    // The Android toolchain the app ships (android.jar, the desugar stubs, aapt2), staged into the app resources by
+    // the build: Android projects build with no SDK installed. Absent when run from a classpath without them.
+    System.getProperty("compose.application.resources.dir")
+        ?.let { Path.of(it, "android-toolchain") }
+        ?.takeIf { Files.isDirectory(it) }
+        ?.let { System.setProperty(BundledAndroidToolchain.DIR_PROPERTY, it.toString()) }
 
     val projectsRoot = Path.of(
         System.getProperty("codeassist.projects.root")
             ?: "${System.getProperty("user.home")}/.codeassist/projects",
     )
-    val manager = ProjectManager.desktop(projectsRoot)
+    // Android Run installs and opens the app on a connected device over adb (found, not bundled).
+    val manager = ProjectManager.desktop(projectsRoot, apkInstaller = DesktopApkInstaller())
+    // The online store (catalog, sign-in, publishing). Registered before the backend, which resolves it once.
+    val storeSignIn = registerDesktopStore(manager, projectsRoot.resolveSibling("store-session"))
 
     // Start with no project open: the picker is shown (projectEpoch stays 0), and opening a project from it
     // creates that project's IdeServices on demand. The download cache is still shared across projects via
     // the ProjectManager (sharedCachesRoot = projects-root parent), so deps resolve once.
     val backend = IdeServicesBackend(initial = null, manager = manager)
+    storeSignIn?.onRedirect = { redirect ->
+        backend.store.completeSignIn(redirect)
+        // The browser has the focus now; bring the IDE back, where the sign-in shows up.
+        java.awt.EventQueue.invokeLater {
+            runCatching { java.awt.Desktop.getDesktop().requestForeground(true) }
+            java.awt.Window.getWindows().firstOrNull { it.isVisible }?.toFront()
+        }
+    }
     // Live @Preview rendering on desktop: the interpreter drives Compose for Desktop (see
     // DesktopComposePreviewHost). The backend instance is stable across project switches.
     val previewHost = DesktopComposePreviewHost(backend)
@@ -63,6 +87,10 @@ fun main(args: Array<String>) {
             // Remembered: the app state is keyed on it, so a new instance on recomposition (the title bar's height
             // changes whenever the editor is left) would start the app over and land back in the editor.
             val fileActions = remember { DesktopFileActions(backend) }
+            DisposableEffect(window) {
+                QuitGuard.ideWindow = window
+                onDispose { if (QuitGuard.ideWindow === window) QuitGuard.ideWindow = null }
+            }
             // IntelliJ-style: the app draws the title bar (the editor's top bar, or a plain strip elsewhere)
             // with the native window controls on top of it.
             CompositionLocalProvider(LocalWindowTitleBar provides rememberJbrWindowTitleBar(window, state)) {

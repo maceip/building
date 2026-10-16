@@ -4,10 +4,10 @@
   "packages": [
     {
       "name": "aapt2",
-      "version": "16.0.0.4-2",
-      "filename": "pool/main/a/aapt2/aapt2_16.0.0.4-2_aarch64.deb",
-      "sha256": "ae91c1c1cf743098a4d847e6d44e37a8fd8b83e00548ad7e50e8fbdc4ef0741e",
-      "size": 962720
+      "version": "16.0.0.4-3",
+      "filename": "pool/main/a/aapt2/aapt2_16.0.0.4-3_aarch64.deb",
+      "sha256": "c498333ee1124076f4cf927edc4fe34603966ac25abf6b7b6d7c8757b233148f",
+      "size": 963912
     },
     {
       "name": "abseil-cpp",
@@ -18,10 +18,10 @@
     },
     {
       "name": "aidl",
-      "version": "16.0.0.4-2",
-      "filename": "pool/main/a/aidl/aidl_16.0.0.4-2_aarch64.deb",
-      "sha256": "78398dc0ca29ec667c72db199da7b2e46c20eab8bbb54d43243dc9f4e63c770c",
-      "size": 490640
+      "version": "16.0.0.4-3",
+      "filename": "pool/main/a/aidl/aidl_16.0.0.4-3_aarch64.deb",
+      "sha256": "71391c4792ac9f76d1474d23fcbc4b64181090deb23ce508936f47086c7e236e",
+      "size": 487392
     },
     {
       "name": "alsa-lib",
@@ -130,10 +130,10 @@
     },
     {
       "name": "libandroid-stub",
-      "version": "30-1",
-      "filename": "pool/main/liba/libandroid-stub/libandroid-stub_30-1_aarch64.deb",
-      "sha256": "5b392496146309b8454780821591dccb7e6a7050f8789f3bc97b4bb6c2b6bc67",
-      "size": 26644
+      "version": "30-2",
+      "filename": "pool/main/liba/libandroid-stub/libandroid-stub_30-2_aarch64.deb",
+      "sha256": "74087792a86e3f90772627f2217797e422e5d5fc47f24ad825fc3bbb539a667a",
+      "size": 26788
     },
     {
       "name": "libandroid-support",
@@ -151,10 +151,10 @@
     },
     {
       "name": "libarchive",
-      "version": "3.8.9",
-      "filename": "pool/main/liba/libarchive/libarchive_3.8.9_aarch64.deb",
-      "sha256": "3c1d06ebcfdb6ed8b2053ef36cbe003f088e931bd022d520de80e65a50291fba",
-      "size": 394808
+      "version": "3.8.10",
+      "filename": "pool/main/liba/libarchive/libarchive_3.8.10_aarch64.deb",
+      "sha256": "514a1b8523e9b99964dd5136455012130d59ba10aaf1fd65cfceaa4ea05d67c6",
+      "size": 382076
     },
     {
       "name": "libbz2",
@@ -179,10 +179,10 @@
     },
     {
       "name": "libcurl",
-      "version": "8.22.0",
-      "filename": "pool/main/libc/libcurl/libcurl_8.22.0_aarch64.deb",
-      "sha256": "e780d925d977c32a3cfe6a2c7d340f0726618786deee98b0cb8b601efb93a8c9",
-      "size": 1032924
+      "version": "8.23.0",
+      "filename": "pool/main/libc/libcurl/libcurl_8.23.0_aarch64.deb",
+      "sha256": "2011bb9709261bb3d5ecaa6672faa333be14cf48ad4af37031e3e365309557ac",
+      "size": 1043340
     },
     {
       "name": "libexpat",
@@ -305,10 +305,10 @@
     },
     {
       "name": "libprotobuf",
-      "version": "2:35.1",
-      "filename": "pool/main/libp/libprotobuf/libprotobuf_2:35.1_aarch64.deb",
-      "sha256": "a1ba7c7f0e5903a2134662653d3e7b9ffceaa78bdd00e07ac985e2d313ebc738",
-      "size": 1387016
+      "version": "2:36.2",
+      "filename": "pool/main/libp/libprotobuf/libprotobuf_2:36.2_aarch64.deb",
+      "sha256": "2f79e70af72127b6e9d8e8ea1a8bf261ea5f390914e667049b4f1dbc81f21fb0",
+      "size": 1434244
     },
     {
       "name": "libsndfile",

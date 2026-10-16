@@ -30,19 +30,32 @@ import java.util.zip.ZipInputStream
 class AndroidRuntimeHost(context: Context) : RuntimeHost {
     private val app = context.applicationContext
     private val home = app.filesDir.toPath().resolve("developer-runtime")
-    private val native = java.nio.file.Paths.get(app.applicationInfo.nativeLibraryDir)
+    private val native get() = java.nio.file.Paths.get(app.packageManager.getApplicationInfo(app.packageName, 0).nativeLibraryDir)
     override val workspaceCache: Path = home.resolve("workspaces")
     @Volatile private var installation: RuntimeInstallation? = null
+    private var installationLocation: String? = null // Guarded by installLock.
 
-    override fun disabledReason(kind: RuntimeKind): String? = AndroidRuntimeSettings.read(app).disabledReason(kind)
+    override fun disabledReason(kind: RuntimeKind): String? {
+        AndroidRuntimeSettings.read(app).disabledReason(kind)?.let { return it }
+        if (kind in setOf(RuntimeKind.NODE, RuntimeKind.NPM) && !RuntimePacks.nodeInstalled(app))
+            return "Node.js is not installed. Download it in Settings > Runtimes."
+        return null
+    }
 
     override suspend fun prepare(): RuntimeInstallation = withContext(Dispatchers.IO) {
-        installation?.let { return@withContext it }
         installLock.withLock {
-            installation?.let { return@withLock it }
             require(Build.SUPPORTED_ABIS.contains("arm64-v8a")) { "The bundled developer runtime currently supports arm64-v8a only. Static web previews remain available." }
-            val manifest = app.assets.open("developer-runtime/manifest.json").use { JSONObject(it.bufferedReader().readText()) }
-            val packId = manifest.getString("id")
+            val installedContext = RuntimePacks.context(app)
+            val parts = RuntimePacks.parts(installedContext)
+            val packId = if (parts.size == 1) parts.single().manifest.getString("id") else
+                "termux-arm64-" + hex(MessageDigest.getInstance("SHA-256").digest(parts.joinToString(":") { it.manifest.getString("id") }.toByteArray())).take(16)
+            val nodeRecord = parts.asSequence().flatMap { part ->
+                val entries = part.manifest.getJSONArray("native")
+                (0 until entries.length()).asSequence().map { entries.getJSONObject(it) }
+            }.firstOrNull { it.getString("path") == "bin/node" }
+            val nodeBinary = nodeRecord?.let { RuntimePacks.nativeLibrary(app, it.getString("library")).toRealPath() }
+            val location = "$native|$nodeBinary"
+            installation?.takeIf { it.packId == packId && installationLocation == location }?.let { return@withLock it }
             require(packId.matches(Regex("[a-zA-Z0-9_-]+")))
             // termux-exec 2.5 rejects TERMUX__PREFIX values >= 90 bytes. Keep the versioned
             // native prefix short; home/cache/workspaces can retain their descriptive paths.
@@ -52,13 +65,13 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
             Files.createDirectories(home)
             if (!Files.isRegularFile(stamp) || dev.ide.workbench.runtime.RuntimeFiles.readUtf8(stamp) != packId) {
                 Files.createDirectories(prefix)
-                extractAssets(manifest, prefix)
-                materializeLinks(manifest, prefix)
+                parts.forEach { extractAssets(installedContext, it, prefix) }
+                parts.forEach { materializeLinks(it.manifest, prefix) }
                 // Extract runtime-pack data only; provisioning does not execute package-manager hooks.
                 dev.ide.workbench.runtime.RuntimeFiles.writeUtf8(stamp, packId)
             } else {
                 // Installer-owned nativeLibraryDir changes on APK updates; repair only our pack links.
-                materializeLinks(manifest, prefix)
+                parts.forEach { materializeLinks(it.manifest, prefix) }
             }
             val userHome = home.resolve("home")
             val temp = home.resolve("tmp")
@@ -67,6 +80,8 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
             Files.createDirectories(workspaceCache)
             val relocator = native.resolve("libsdk-exec-prefix.so")
             require(Files.isRegularFile(relocator)) { "APK native prefix helper is missing" }
+            val nodeLauncher = native.resolve("libdevruntime-node.so")
+            val useNodeLauncher = nodeBinary != null && !nodeBinary.startsWith(native.toRealPath())
             val env = linkedMapOf(
                 "PATH" to "${home.resolve("npm-global/bin")}:$prefix/bin:/system/bin:/system/xbin",
                 "HOME" to userHome.toString(),
@@ -102,6 +117,10 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 "npm_config_fund" to "false",
                 "npm_config_update_notifier" to "false",
             )
+            if (useNodeLauncher) {
+                env["BUILDING_RUNTIME_NODE_BINARY"] = nodeBinary.toString()
+                env["BUILDING_RUNTIME_NODE_LAUNCHER"] = nodeLauncher.toString()
+            }
             fun executable(name: String): Path? = prefix.resolve("bin/$name").takeIf { Files.isRegularFile(it) }
             if (Files.isDirectory(prefix.resolve("include/node"))) env["npm_config_nodedir"] = prefix.toString()
             executable("clang")?.let { env["CC"] = it.toString() }
@@ -111,6 +130,7 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
             val xtoolBin = executable("xtool") ?: native.resolve("xtool").takeIf { Files.isRegularFile(it) }
             val pack = RuntimeInstallation(packId, "arm64-v8a", prefix, executable("node")?.toRealPath(), prefix.resolve("lib/node_modules/npm/bin/npm-cli.js").takeIf { Files.isRegularFile(it) }, executable("python3"), executable("sh"), env, xtoolBin)
             installation = pack
+            installationLocation = location
             pack
         }
     }
@@ -146,12 +166,13 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
         return AndroidRuntimeChild(process, pidFile)
     }
 
-    private fun extractAssets(manifest: JSONObject, prefix: Path) {
+    private fun extractAssets(context: Context, part: RuntimePacks.Part, prefix: Path) {
+        val manifest = part.manifest
         val expected = manifest.getJSONArray("files")
         val records = (0 until expected.length()).associate { i -> expected.getJSONObject(i).let { it.getString("path") to it } }
         val digest = MessageDigest.getInstance("SHA-256")
         val seen = mutableSetOf<String>()
-        app.assets.open("developer-runtime/prefix.zip").use { raw ->
+        context.assets.open("${part.root}/prefix.zip").use { raw ->
             java.security.DigestInputStream(raw, digest).use { hashed ->
                 ZipInputStream(hashed).use { zip ->
                     while (true) {
@@ -194,11 +215,16 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
             val item = binaries.getJSONObject(i)
             val filename = item.getString("library")
             require(filename.matches(Regex("libdevruntime_[0-9a-f]+\\.so")))
-            val library = native.resolve(filename)
+            val library = RuntimePacks.nativeLibrary(app, filename)
             require(Files.isRegularFile(library) && Files.size(library) == item.getLong("size")) { "Bundled native library is missing or changed: $filename" }
             // Signed APK provides transport integrity; verify actual extracted native bytes too.
             require(fileHash(library) == item.getString("sha256")) { "Native runtime integrity mismatch: $filename" }
-            link(confined(prefix, item.getString("path")), library)
+            val target = if (item.getString("path") == "bin/node" && !library.toRealPath().startsWith(native.toRealPath())) {
+                native.resolve("libdevruntime-node.so").also {
+                    require(Files.isRegularFile(it) && fileHash(it) == manifest.getString("nodeLauncherSha256")) { "Node launcher integrity mismatch" }
+                }
+            } else library
+            link(confined(prefix, item.getString("path")), target)
         }
         val links = manifest.getJSONArray("links")
         for (i in 0 until links.length()) {

@@ -101,6 +101,7 @@ Nunca coletamos seu código, nomes de arquivos ou projetos, quais recursos você
     <string name="no_project_yet">Nenhum projeto ainda. Crie um para começar.</string>
     <string name="your_projects">Seus projetos</string>
     <string name="project_kind_android">Android</string>
+    <string name="project_kind_files">Arquivos</string>
     <string name="project_opened_just_now">Aberto agora mesmo</string>
     <string name="beta_notice">Você está no %1$s</string>
     <string name="beta_notice_content">Alguns recursos podem estar incompletos ou mudar. Adoraríamos receber seu feedback, conte-nos o que está faltando ou quebrado.</string>
@@ -109,6 +110,9 @@ Nunca coletamos seu código, nomes de arquivos ou projetos, quais recursos você
     <string name="your_codeassist_files_content">Abra esta pasta em qualquer gerenciador de arquivos para navegar pelos seus projetos, adicionar ícones ou recursos, ou editar pelo PC.</string>
     <string name="open_in_the_file_manager">Abrir no gerenciador de arquivos</string>
     <string name="choose_start_point">Escolha um ponto de partida.</string>
+    <string name="templates_search">Buscar modelos</string>
+    <string name="templates_all">Todos</string>
+    <string name="templates_no_match">Nenhum modelo corresponde a “%1$s”.</string>
     <string name="backup">Fazer backup</string>
     <string name="delete_project">Excluir projeto?</string>
     <string name="delete_project_content">“%1$s” e todos os seus arquivos serão excluídos permanentemente. Isso não pode ser desfeito.</string>
@@ -170,6 +174,13 @@ Nunca coletamos seu código, nomes de arquivos ou projetos, quais recursos você
     <string name="edview_open_a_file_from_navigator">Abra um arquivo pelo navegador</string>
     <string name="edview_no_file_open_title">Nenhum arquivo aberto</string>
     <string name="edview_no_file_open_hint">Selecione um arquivo no navegador para começar a editar</string>
+    <string name="edview_action_search">Pesquisar em tudo</string>
+    <string name="edview_action_go_to_file">Ir para arquivo</string>
+    <string name="edview_action_recent">Arquivos recentes</string>
+    <string name="edview_action_find">Localizar nos arquivos</string>
+    <string name="edview_action_new_file">Novo arquivo</string>
+    <string name="edview_action_project">Arquivos do projeto</string>
+    <string name="edview_recent_title">Abertos recentemente</string>
 
     <!-- tabs -->
     <string name="tab_close_others">Fechar outras</string>
@@ -339,6 +350,9 @@ Nunca coletamos seu código, nomes de arquivos ou projetos, quais recursos você
     <!-- app/banners/editor-screen -->
     <string name="gradle_mode_title">Modo de compatibilidade com Gradle</string>
     <string name="gradle_resync">Sincronizar novamente</string>
+    <string name="gradle_kmp_target">Destino multiplataforma</string>
+    <string name="gradle_kmp_android">Android</string>
+    <string name="gradle_kmp_jvm">Desktop (JVM)</string>
     <string name="gradle_syncing">Sincronizando a partir do Gradle…</string>
     <string name="sources_not_installed">As fontes da plataforma Android (%1$s) não estão instaladas. Elas são necessárias para os nomes de parâmetros e a documentação de android.*.</string>
     <string name="sources_download">Baixar</string>
@@ -457,6 +471,10 @@ Nunca coletamos seu código, nomes de arquivos ou projetos, quais recursos você
     <string name="palette_hint">Execute um comando, vá para um arquivo ou símbolo…</string>
     <string name="palette_type_to_search">Digite para pesquisar %1$s…</string>
     <string name="palette_no_matches">Nenhuma correspondência</string>
+    <string name="palette_key_navigate">navegar</string>
+    <string name="palette_key_open">abrir</string>
+    <string name="palette_key_scope">trocar escopo</string>
+    <string name="palette_key_close">fechar</string>
 
     <!-- run/preview/edoverlay -->
     <string name="run_no_active_run">Nenhuma execução ativa.</string>
@@ -470,6 +488,18 @@ Nunca coletamos seu código, nomes de arquivos ou projetos, quais recursos você
     <string name="run_building_module">Compilando %1$s…</string>
     <string name="run_running_module">Executando %1$s</string>
     <string name="run_no_output">(sem saída)</string>
+    <string name="run_tab_tests">Testes</string>
+    <string name="run_tab_output">Saída</string>
+    <string name="tests_passed">%1$d aprovados</string>
+    <string name="tests_failed">%1$d falharam</string>
+    <string name="tests_skipped">%1$d ignorados</string>
+    <string name="tests_progress">%1$d de %2$d</string>
+    <string name="tests_rerun_failed">Repetir falhas</string>
+    <string name="tests_run_one">Executar teste</string>
+    <string name="tests_run_class">Executar todos os testes da classe</string>
+    <string name="tests_none_found">Nenhum teste encontrado</string>
+    <string name="tests_none_in_file">Nenhum teste neste arquivo</string>
+    <string name="tests_class_failed">A classe falhou: %1$s</string>
     <string name="run_type_input">Digite a entrada, pressione Enter…</string>
     <string name="run_send">Enviar</string>
     <string name="run_end_input_eof">Encerrar entrada (EOF)</string>
@@ -814,6 +844,16 @@ Nunca coletamos seu código, nomes de arquivos ou projetos, quais recursos você
     <string name="modcfg_title_modules">Módulos</string>
     <string name="modcfg_new_module_action">Novo módulo</string>
     <string name="modcfg_no_modules">Nenhum módulo. Toque em + para adicionar um.</string>
+    <string name="modcfg_empty_title">Nenhum módulo ainda</string>
+    <string name="modcfg_empty_body">Um módulo é uma parte compilável do seu projeto: um app, uma biblioteca ou um recurso.</string>
+    <string name="keymap_hint">Clique em um atalho e pressione as novas teclas. Esc cancela; Backspace o remove.</string>
+    <string name="keymap_search">Pesquisar comandos ou teclas</string>
+    <string name="keymap_modified">Modificados</string>
+    <string name="keymap_reset_all">Redefinir tudo</string>
+    <string name="keymap_no_results">Nenhum comando corresponde.</string>
+    <string name="keymap_recording">Pressione as teclas…</string>
+    <string name="keymap_not_set">Não definido</string>
+    <string name="keymap_reset">Restaurar padrão</string>
     <string name="modcfg_remove_named">Remover %1$s</string>
     <string name="modcfg_removed">%1$s removido</string>
     <string name="modcfg_build_features_android_only">Os recursos de compilação se aplicam apenas a módulos Android.</string>
@@ -837,6 +877,10 @@ Nunca coletamos seu código, nomes de arquivos ou projetos, quais recursos você
     <string name="modcfg_packaging_merge_desc">Concatenar as duplicatas em vez de descartá-las.</string>
     <string name="modcfg_packaging_default_excludes">Sempre excluído por padrão</string>
     <string name="modcfg_packaging_default_merges">Sempre mesclado por padrão</string>
+    <string name="modcfg_packaging_compression">Compressão</string>
+    <string name="modcfg_packaging_no_compress">Não comprimir</string>
+    <string name="modcfg_packaging_no_compress_desc">Sufixos de arquivo como tflite ou .bin armazenados sem compressão no APK, para que AssetManager.openFd() e o mapeamento em memória funcionem. Comparados com o fim de cada caminho, sem diferenciar maiúsculas.</string>
+    <string name="modcfg_packaging_default_no_compress">Nunca comprimidos por padrão</string>
     <string name="modcfg_manage_keystores">Gerenciar keystores</string>
     <string name="modcfg_keystores_empty">Nenhuma keystore ainda. Crie uma no Gerenciador de Keystore para assinar compilações de release.</string>
     <string name="modcfg_debug_default">debug (padrão)</string>
@@ -1152,4 +1196,6 @@ Nunca coletamos seu código, nomes de arquivos ou projetos, quais recursos você
     </plurals>
     <string name="close_project_building">Uma compilação ainda está em andamento.</string>
     <string name="close_project_save_and_close">Salvar e fechar</string>
+    <string name="sdk_platform_tools">Ferramentas da plataforma</string>
+    <string name="sdk_platform_tools_desc">adb, que o Executar usa para instalar e abrir seu app em um celular ou emulador conectado a este computador.</string>
 </resources>

@@ -27,10 +27,12 @@ class AndroidCustomViewCompletionTest {
 
     private fun awaitIndexed(ide: IdeServices, timeoutMs: Long = 180_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
-        // A reindex pass launches async: briefly wait for the pass to start so a stale
+        // A reindex pass launches async: wait for the pass to start so a stale
         // "Indexed" left by the previous pass cannot satisfy this wait before the
         // new pass has indexed anything (the suite-only empty-completion flake).
-        val startDeadline = minOf(deadline, System.currentTimeMillis() + 2_000)
+        // The window is generous because a full-build-loaded machine can take
+        // many seconds to schedule the pass; the overall deadline still bounds hangs.
+        val startDeadline = minOf(deadline, System.currentTimeMillis() + 30_000)
         while (!ide.indexStatus.value.building && System.currentTimeMillis() < startDeadline) Thread.sleep(10)
         while ((ide.indexStatus.value.building || ide.indexStatus.value.message != "Indexed") && System.currentTimeMillis() < deadline) Thread.sleep(50)
     }
@@ -59,9 +61,17 @@ class AndroidCustomViewCompletionTest {
         Files.createDirectories(layout.parent)
 
         // 1) The source custom view is offered as a tag (matched by its simple name, inserted fully-qualified).
+        // Poll the completion itself: pass timing ("Indexed") can't prove the tag query sees the file
+        // (a transient status from an earlier pass can satisfy the wait before the requested pass lands).
         val tagText = "<LinearLayout xmlns:android=\"http://schemas.android.com/apk/res/android\">\n  <MyBu\n</LinearLayout>"
         val tagOffset = tagText.indexOf("<MyBu") + "<MyBu".length
-        val tagLabels = runBlocking { s.complete(layout, tagText, tagOffset) }.items.map { it.insertText }
+        val tagDeadline = System.currentTimeMillis() + 60_000
+        var tagLabels: List<String?> = emptyList()
+        while (System.currentTimeMillis() < tagDeadline) {
+            tagLabels = runBlocking { s.complete(layout, tagText, tagOffset) }.items.map { it.insertText }
+            if (tagLabels.any { it == "com.example.app.MyButton" }) break
+            Thread.sleep(50)
+        }
         assertTrue(tagLabels.any { it == "com.example.app.MyButton" }, "source custom view tag expected; got $tagLabels")
 
         // 2) On the custom view, android: attributes inherited from Button/TextView/View are offered.

@@ -318,8 +318,8 @@ internal class IdeAgentWorkspace(private val ctx: BackendContext) : AgentWorkspa
         val outcome = ctx.background {
             current.mutateSources {
                 check(engine() === current) { "The project changed during the agent operation." }
-                current.rename(file, current.readCurrentText(file), offset, newName)
             }
+            current.rename(file, current.readCurrentText(file), offset, newName)
         }
         ctx.bumpFileSystemEpoch()
         RenameResult(outcome.success, outcome.message, outcome.occurrences, outcome.filesChanged)
@@ -580,9 +580,11 @@ internal class IdeAgentWorkspace(private val ctx: BackendContext) : AgentWorkspa
         }
     }
 
-    /** The `assemble:` task for an Android Run task id (`androidRun:<module>:<variant>`), else null. */
+    /** The `assemble:` task for an Android Run task id (`androidRun:<module>:<variant>[:<device>]`), else null. */
     private fun assembleFor(id: String): String? =
-        if (id.startsWith(ANDROID_RUN)) "assemble:" + id.removePrefix(ANDROID_RUN) else null
+        if (id.startsWith(ANDROID_RUN)) {
+            "assemble:" + id.removePrefix(ANDROID_RUN).split(":", limit = 3).take(2).joinToString(":")
+        } else null
 
     private companion object {
         const val ANDROID_RUN = "androidRun:"

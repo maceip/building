@@ -1265,6 +1265,38 @@ private fun ProjectSearchField(query: String, onQuery: (String) -> Unit, modifie
     }
 }
 
+/** A rounded search field: the project list's filter, and the template gallery's. */
+@Composable
+internal fun SearchPill(query: String, onQuery: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier) {
+    val c = MaterialTheme.colorScheme
+    Row(
+        modifier.height(40.dp).clip(RoundedCornerShape(50)).background(c.surfaceContainerHigh).padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Symbol(CaSymbols.search, contentDescription = null, size = 18.dp, tint = c.onSurfaceVariant)
+        BasicTextField(
+            value = query,
+            onValueChange = onQuery,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = c.onSurface),
+            cursorBrush = SolidColor(c.primary),
+            modifier = Modifier.weight(1f),
+            decorationBox = { inner ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (query.isEmpty()) {
+                        Text(placeholder, style = MaterialTheme.typography.bodyMedium, color = c.outline, maxLines = 1)
+                    }
+                    inner()
+                }
+            },
+        )
+        if (query.isNotEmpty()) {
+            IconButtonCa(CaIcons.close, stringResource(Res.string.home_clear_search), { onQuery("") }, iconSize = 14, boxSize = 24)
+        }
+    }
+}
+
 /** Recent (the default, most recently opened first) or alphabetical. */
 @Composable
 private fun SortChooser(sort: ProjectSort, onSort: (ProjectSort) -> Unit) {

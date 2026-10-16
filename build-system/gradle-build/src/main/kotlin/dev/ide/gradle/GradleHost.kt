@@ -2,6 +2,7 @@ package dev.ide.gradle
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
 
 /**
@@ -74,14 +75,14 @@ object GradleEnvironment {
 
 /** Desktop and the CLI: the host JDK, no linker, no prefix. */
 class DesktopGradleHost(
-    private val home: Path = Path.of(System.getProperty("user.home"), ".codeassist"),
+    private val home: Path = Paths.get(System.getProperty("user.home"), ".codeassist"),
 ) : GradleHost {
     override val android: Boolean = false
 
     override fun available(): Boolean =
-        Files.isRegularFile(Path.of(System.getProperty("java.home"), "bin", "java"))
+        Files.isRegularFile(Paths.get(System.getProperty("java.home"), "bin", "java"))
 
-    override fun javaHome(image: JdkSelection.Image): Path = Path.of(System.getProperty("java.home"))
+    override fun javaHome(image: JdkSelection.Image): Path = Paths.get(System.getProperty("java.home"))
 
     override fun androidHome(): Path = home.resolve("android-sdk")
 
@@ -102,7 +103,7 @@ class DesktopGradleHost(
     override fun make(): Path? = null
 
     override fun ramBytes(): Long {
-        val meminfo = Path.of("/proc/meminfo")
+        val meminfo = Paths.get("/proc/meminfo")
         if (Files.isRegularFile(meminfo)) {
             val total = Files.readAllLines(meminfo).firstOrNull { it.startsWith("MemTotal:") }
             val kb = total?.split(Regex("\\s+"))?.getOrNull(1)?.toLongOrNull()

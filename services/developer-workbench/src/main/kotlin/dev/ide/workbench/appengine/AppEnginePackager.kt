@@ -3,6 +3,7 @@ package dev.ide.workbench.appengine
 
 import java.io.IOException
 import java.nio.file.Files
+import java.util.stream.Collectors
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
@@ -65,7 +66,7 @@ class AppEnginePackager {
         var total = 0L
         try {
             AppEngineProject.files(request).forEach { (name, text) ->
-                val file = staging.resolve(name); Files.createDirectories(file.parent); Files.writeString(file, text)
+                val file = staging.resolve(name); Files.createDirectories(file.parent); Files.write(file, text.toByteArray(Charsets.UTF_8))
             }
             val jar = staging.resolve("libs/runtime-engine.jar"); Files.createDirectories(jar.parent); Files.copy(runtimeJar, jar)
             total += Files.size(jar)
@@ -94,7 +95,7 @@ class AppEnginePackager {
                 require(total <= MAX_BUNDLED_BYTES) { "Generated-app byte budget exceeded" }
                 index.append(hash(target)).append('\t').append(size).append('\t').append(name).append('\n')
             }
-            Files.writeString(assets.resolve("files.sha256"), index.toString())
+            Files.write(assets.resolve("files.sha256"), index.toString().toByteArray(Charsets.UTF_8))
             val licenseBundle = staging.resolve("runtime-sources/${sourceBundle.fileName}")
             Files.createDirectories(licenseBundle.parent); Files.copy(sourceBundle, licenseBundle)
             Files.copy(payload.resolve("SHA256SUMS"), staging.resolve("runtime-sources/PAYLOAD-SHA256SUMS"))
@@ -138,7 +139,7 @@ class AppEnginePackager {
     private fun nativeLibraries(payload: Path, engine: AppEngine): List<Path> {
         val directory = payload.resolve("jniLibs/arm64-v8a")
         val expected = setOf("libengine_host.so", "libengine_${engine.id}.so", if (engine == AppEngine.Python) "libpython3.14.so" else "libnode.so")
-        val result = Files.list(directory).use { it.toList() }
+        val result = Files.list(directory).use { it.collect(Collectors.toList()) }
         require(result.map { it.fileName.toString() }.toSet() == expected) { "Payload contains missing/unselected native libraries" }
         result.forEach { file ->
             require(Files.isRegularFile(file, NOFOLLOW_LINKS) && Files.size(file) in 4096..200_000_000L) { "Invalid native library" }

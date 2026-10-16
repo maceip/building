@@ -54,7 +54,44 @@ class AndroidDeviceTools(
  */
 interface ApkInstaller {
     suspend fun installAndLaunch(apk: Path, packageName: String, log: (String) -> Unit): Boolean
+
+    /**
+     * True for an installer that installs onto devices it has to pick between (the desktop, over adb), rather
+     * than onto the machine it runs on. Run then lists one entry per [targets], and keeps the plain assemble
+     * task beside them, since building without a device is still something to do.
+     */
+    val choosesTarget: Boolean get() = false
+
+    /** The devices it can install onto right now. Read on the UI thread, so it must answer from a cache. */
+    fun targets(): List<InstallTarget> = emptyList()
+
+    /** [installAndLaunch] onto the target with id [target], or wherever the installer chooses when null. */
+    suspend fun installAndLaunch(apk: Path, packageName: String, target: String?, log: (String) -> Unit): Boolean =
+        installAndLaunch(apk, packageName, log)
+
+    /** Whether [runInstrumentation] works here: it needs a device the IDE drives from outside (adb). */
+    val runsInstrumentation: Boolean get() = false
+
+    /**
+     * Install the app ([appApk]) and its instrumented test APK ([testApk]) on [target] (or the installer's choice),
+     * then run `am instrument -r -w` for [testPackage]/[runner] with the `-e` [args], handing every line it prints
+     * to [onLine] as it comes. False, after saying why through [log], when the tests could not be started.
+     */
+    suspend fun runInstrumentation(
+        appApk: Path,
+        appPackage: String,
+        testApk: Path,
+        testPackage: String,
+        runner: String,
+        args: List<Pair<String, String>>,
+        target: String?,
+        log: (String) -> Unit,
+        onLine: (String) -> Unit,
+    ): Boolean = false
 }
+
+/** A device an [ApkInstaller] can install onto: [id] is its stable handle (an adb serial), [label] its name. */
+data class InstallTarget(val id: String, val label: String)
 
 /** The status of running a Compose `@Preview` through the interpreter: [ok] = interpretable/rendered. */
 data class PreviewRunResult(val ok: Boolean, val message: String)

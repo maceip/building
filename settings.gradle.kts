@@ -171,11 +171,14 @@ include(
 // local build leaves it unset and includes everything. Nothing in the framework depends on these, so
 // excluding them is safe and keeps the acyclic graph intact.
 val appEngineDelivery = providers.gradleProperty("IDE_APP_ENGINE_DELIVERY").getOrElse("none")
+val runtimeDelivery = providers.gradleProperty("IDE_RUNTIME_DELIVERY").getOrElse("bundled")
+require(runtimeDelivery in setOf("bundled", "play")) { "IDE_RUNTIME_DELIVERY must be bundled or play" }
 val appEngine = providers.gradleProperty("IDE_APP_ENGINE").getOrElse("python")
 require(appEngineDelivery in setOf("none", "direct", "play")) { "IDE_APP_ENGINE_DELIVERY must be none, direct or play" }
 require(appEngine in setOf("node", "python")) { "IDE_APP_ENGINE must be node or python" }
 
 if (System.getenv("CI_CORE_ONLY") != "true") {
+    if (runtimeDelivery == "play") include(":developer_runtime_node")
     if (appEngineDelivery != "none") include(":runtime-engine-$appEngine")
     if (appEngineDelivery == "play") include(":runtime_engine_ide_feature")
     if (providers.gradleProperty("RUNTIME_ENGINE_RELIABILITY").getOrElse("false").toBooleanStrict()) {
@@ -287,6 +290,7 @@ val layers = mapOf(
 
 // `samples` holds plugins built as their own apps; it is already a directory, so it needs no mapping.
 val runtimeEngineDirectories = mapOf(
+    "developer_runtime_node" to "android/developer-runtime-node",
     "runtime-engine" to "android/runtime-engine/core",
     "runtime-engine-node" to "android/runtime-engine/node",
     "runtime-engine-python" to "android/runtime-engine/python",

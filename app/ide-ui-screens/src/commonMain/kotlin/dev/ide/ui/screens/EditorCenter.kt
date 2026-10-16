@@ -1,5 +1,6 @@
 package dev.ide.ui.screens
 
+import dev.ide.ui.backend.TestOutput
 import dev.ide.ui.LocalPluginFileOpener
 import dev.ide.ui.LocalPluginNavigator
 import dev.ide.ui.theme.Ide
@@ -38,6 +39,7 @@ import dev.ide.ui.generated.resources.show_details
 import dev.ide.ui.generated.resources.gradle_mode_title
 import dev.ide.ui.generated.resources.Res
 import dev.ide.ui.components.NoOpenFilesView
+import dev.ide.ui.components.RecentFileEntry
 import dev.ide.ui.components.TabsStrip
 import dev.ide.ui.editor.BlockEditor
 import dev.ide.ui.editor.CodeEditor
@@ -283,6 +285,7 @@ internal fun EditorCenter(
                         }
                         androidSourcesNotice(state)?.let(::add)
                         active?.let { file ->
+                            staleOnDiskNotice(state, file)?.let(::add)
                             readOnlyNotice(state, file)?.let(::add)
                             largeFileNotice(file)?.let(::add)
                         }
@@ -296,6 +299,8 @@ internal fun EditorCenter(
                             compact = compact,
                             onDismiss = { showCompatBanner = false },
                             onConvert = { showConvertDialog = true },
+                            // Re-read the notes (and the multiplatform target) the sync just rewrote.
+                            onSynced = { compatEpoch++ },
                         )
                     }
                     // Hosted outside the compatInfo guard so it survives the marker being dropped on convert (which
@@ -386,7 +391,12 @@ internal fun EditorCenter(
                                 // place and writes a closed file through. Dropped here until it was wired up.
                                 onOtherFileEdits = { edits -> state.applyWorkspaceEdits(edits) },
                                 onEditorAction = { actionId, selStart, selEnd ->
-                                    state.dispatchAction(
+                                    // A test's gutter mark carries its Run task: start it like a pick from Run.
+                                    if (actionId.startsWith(TestOutput.GUTTER_ACTION_PREFIX)) {
+                                        val task = actionId.removePrefix(TestOutput.GUTTER_ACTION_PREFIX)
+                                        state.consoleOpen = true
+                                        state.requestRun { state.backend.build.runTask(task) }
+                                    } else state.dispatchAction(
                                         actionId,
                                         UiActionContext(
                                             place = UiActionPlaces.EDITOR,
@@ -423,6 +433,7 @@ internal fun EditorCenter(
                                     backend = state.backend,
                                     session = active.session,
                                     modifier = mod,
+                                    onOpenFile = { file, line -> state.openAtLine(file, line, 1) },
                                 )
 
                                 isPreviewable(active.path) -> ResourcePreviewPane(
@@ -493,7 +504,17 @@ internal fun EditorCenter(
                             }
                         }
                     } else {
-                        NoOpenFilesView(Modifier.weight(1f).fillMaxWidth())
+                        // The files used this session, newest first, so closing every tab is one tap from undone.
+                        val root = state.backend.project.rootPath.replace('\\', '/').trimEnd('/')
+                        val recent = state.recentPaths.take(5).map { path ->
+                            val rel = path.replace('\\', '/').let { if (root.isNotEmpty() && it.startsWith("$root/")) it.removePrefix("$root/") else it }
+                            RecentFileEntry(path, state.recentName(path), rel.substringBeforeLast('/', ""))
+                        }
+                        NoOpenFilesView(
+                            Modifier.weight(1f).fillMaxWidth(),
+                            recentFiles = recent,
+                            onOpenRecent = { state.open(it.path, it.name) },
+                        )
                     }
                 }
             }

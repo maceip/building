@@ -434,6 +434,7 @@ private fun AppRoute(
             closeProjectConfirm = app.confirmCloseProject,
             onCloseProjectConfirmChange = { app.confirmCloseProject = it },
             onOpenRun = { app.navigateTo(Screen.Run) },
+            onRunDockedChange = { app.runDocked = it },
             fileActions = fileActions,
         )
 
@@ -445,6 +446,10 @@ private fun AppRoute(
                     state.openAtLine(it, d.line, d.column)
                     app.navigateTo(Screen.Editor)
                 }
+            },
+            onOpenSource = { path, offset ->
+                state.openAt(path, offset)
+                app.navigateTo(Screen.Editor)
             },
         )
 

@@ -106,8 +106,13 @@ class CrashFixesTest {
         }
         state.openSuspend("/p/A.java", "A.java")
         val tab = state.openFiles.single()
-        state.openSuspend("/p/A.java", "A.java") // focusing is not another retain/read/open
-        assertEquals(listOf("retain:1", "read:/p/A.java", "update:/p/A.java", "open:/p/A.java"), backend.events)
+        // Focusing is not another retain/update/open, but it does refresh the focused tab from disk
+        // (an outside copy shows on retap), so a second disk read with no change behind it is expected.
+        state.openSuspend("/p/A.java", "A.java")
+        assertEquals(
+            listOf("retain:1", "read:/p/A.java", "update:/p/A.java", "open:/p/A.java", "read:/p/A.java"),
+            backend.events,
+        )
         backend.closing = { path ->
             assertTrue(tab !in state.openFiles, "remove the authoritative tab before notifying the backend")
             assertEquals(listOf(path), backend.retained.values.toList(), "the lease still covers onFileClosed")

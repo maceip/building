@@ -369,6 +369,67 @@ fun RuntimePanel(
                     }
                 }
             }
+            item(key = "output") {
+                RuntimeSection("Output") {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Combined", "Stdout", "Stderr").forEach { name -> FilterChip(selected = stream == name, onClick = { stream = name }, label = { Text(name) }) }
+                    }
+                    Text("${runtimePhaseLabel(session)} · bounded session output; this view shows at most the latest 300 lines / 32 KiB, wrapped for the screen.", style = MaterialTheme.typography.bodySmall)
+                    val raw = when (stream) { "Stdout" -> session.stdout; "Stderr" -> session.stderr; else -> session.transcript }
+                    val visible = remember(raw) { runtimeVisibleOutput(raw) }
+                    if ((stream == "Stdout" && session.stdoutTruncated) || (stream == "Stderr" && session.stderrTruncated)) Text("Older output was removed from the engine's bounded buffer.", style = MaterialTheme.typography.bodySmall)
+                    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.small) {
+                        SelectionContainer {
+                            Text(
+                                visible.ifEmpty { if (session.isRunning) "Waiting for output…" else "No output yet. Choose a target and press Start." },
+                                fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall,
+                                color = if (stream == "Stderr") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                softWrap = true,
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(rememberScrollState()).padding(12.dp).testTag("runtime-output"),
+                            )
+                        }
+                    }
+                }
+            }
+            item(key = "preview") {
+                RuntimeSection("Local preview") {
+                    if (preview != null && session.sessionId != null) {
+                        SelectionContainer { Text(preview.url, style = MaterialTheme.typography.bodyMedium) }
+                        Text("JavaScript is enabled. Only this live session's loopback origin is allowed in the embedded view; file/content access, popups, downloads, permissions and external navigation are blocked. This is a preview restriction, not a sandbox for the process.", style = MaterialTheme.typography.bodySmall)
+                        if (fileActions.canOpenUrl) OutlinedButton(onClick = { externalPreview = preview.url }) { Text("Open in external browser…") }
+                        key(session.sessionId, preview.url) { RuntimePreview(preview, requireNotNull(session.sessionId)) }
+                    } else {
+                        Text(if (session.phase == RuntimePhase.RUNNING && session.previewUrl != null) "The reported preview URL is not an allowed loopback HTTP(S) address for the current workspace." else "Start a static target or a server that reports a loopback URL. The preview is cleared and its WebView destroyed when the session stops.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            item(key = "availability") {
+                RuntimeSection("Runtime availability") {
+                    dev.ide.android.workbench.runtime.RuntimeDownloadPanel()
+                    Text("Choose which runtimes to use in Settings > Runtimes. Turning one off keeps its installed files and existing sessions.", style = MaterialTheme.typography.bodySmall)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { showAvailability = !showAvailability }) { Text(if (showAvailability) "Hide details" else "Show versions & limitations") }
+                        OutlinedButton(onClick = form::probe, enabled = !form.probing && !session.isRunning) { Text(if (form.probing) "Probing…" else "Recheck runtimes") }
+                    }
+                    if (form.probing) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    form.probeError?.let { Text("Availability check failed: $it", color = MaterialTheme.colorScheme.error) }
+                    if (showAvailability) {
+                        form.report?.let { report ->
+                            Text("${report.packId} · ${report.abi}", style = MaterialTheme.typography.labelLarge)
+                            RuntimeKind.entries.forEach { kind ->
+                                val result = report.runtimes.firstOrNull { it.kind == kind }
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text("${runtimeKindLabel(kind)} · ${when (result?.available) { true -> "Available"; false -> "Unavailable"; null -> "Not reported" }}", fontWeight = FontWeight.SemiBold)
+                                    Text(result?.version?.takeIf { it.isNotBlank() } ?: "No version output.", style = MaterialTheme.typography.bodySmall)
+                                    result?.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                                }
+                            }
+                            report.notes.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+                        } ?: Text(if (form.probing) "Checking installed binaries; availability is not assumed." else "Native runtime availability is unknown. Use Recheck for actual versions and errors.", style = MaterialTheme.typography.bodySmall)
+                        Text("Static preview is served in-app without Node or Python. Regular runs use pipe output; Terminal opens a separate interactive PTY. The bundled POSIX shell is not a Linux distribution. Bun, Cargo, arbitrary Linux executables, and universal native npm/pip or desktop-toolchain compatibility are not promised.", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
         }
     }
 

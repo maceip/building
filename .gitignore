@@ -96,3 +96,6 @@ app/ide-android/google-services.json
 
 # Local verification repositories
 verification_repos/
+
+# Session design mockups (product-design Image Gen scratch)
+generated-*.png

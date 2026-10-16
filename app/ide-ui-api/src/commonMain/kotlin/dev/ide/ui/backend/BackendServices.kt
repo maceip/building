@@ -87,6 +87,10 @@ interface EditorService {
     /** Register/refresh the live editor buffer so cross-file analysis sees in-progress edits. */
     fun updateDocument(path: String, text: String)
 
+    /** The buffer for [path] was just (re)loaded from disk: [text] is what the file holds, with no unsaved edit,
+     *  so a build's flush of unsaved buffers must leave the file alone. */
+    fun documentLoaded(path: String, text: String) = updateDocument(path, text)
+
     /** Persist the buffer [text] for [path] to disk (and keep it as the live buffer). */
     fun saveFile(path: String, text: String)
 
@@ -192,12 +196,13 @@ interface EditorService {
     /** Go-to-definition for the symbol/reference at [offset], or null. */
     suspend fun definitionAt(path: String, text: String, offset: Int): UiDefinition? = null
 
-    /** Source go-to targets for the symbol at [offset] ([kind]: declaration / implementation / type / super).
-     *  0 → nothing found; 1 → navigate; >1 → the caller shows a picker. Kotlin source only for now. */
+    /** Go-to targets for the symbol at [offset] ([kind]: declaration / implementation / type / super / usages /
+     *  related). 0 → nothing found; 1 → navigate; >1 → the caller shows a picker. Kotlin source, and Android
+     *  resources / XML. */
     suspend fun navigationTargets(path: String, text: String, offset: Int, kind: UiNavKind): List<UiNavTarget> = emptyList()
 
     /** The navigation actions APPLICABLE at [offset] (each with its resolved targets) — so the Go-to menu shows
-     *  only usable actions. Empty when nothing applies. Kotlin source only for now. */
+     *  only usable actions. Empty when nothing applies. Kotlin source, and Android resources / XML. */
     suspend fun navigationOptions(path: String, text: String, offset: Int): List<UiNavOption> = emptyList()
 
     /** The read-only content for a `library://<fqn>` target: attached source, else a decompiled view (full-body
@@ -215,6 +220,10 @@ interface EditorService {
 
     /** Quick documentation (signature + doc comment) for the symbol at [offset], or null. */
     suspend fun quickDocAt(path: String, text: String, offset: Int): UiQuickDoc? = null
+
+    /** Gutter previews of the colors and drawables the buffer's resource references resolve to, at most one per
+     *  line. Empty for files without Android resources. */
+    suspend fun resourceSwatches(path: String, text: String): List<UiResourceSwatch> = emptyList()
 
     /** Expand the selection `[selStart, selEnd)` to the smallest enclosing structural node — one step of a walk
      *  UP the tolerant DOM (word → expression → statement → block → method → class …). Returns that node's
@@ -592,9 +601,10 @@ interface ModuleService {
      *  it is not an Android module. */
     suspend fun getPackagingOptions(moduleName: String): UiPackagingOptions? = null
 
-    /** Persist the Android packaging merge rules for [moduleName] (empty lists clear the block). */
+    /** Persist the Android packaging merge rules and the [noCompress] suffixes for [moduleName] (empty lists
+     *  clear the block). */
     suspend fun updatePackagingOptions(
-        moduleName: String, resources: UiPackagingRules, jniLibs: UiPackagingRules
+        moduleName: String, resources: UiPackagingRules, jniLibs: UiPackagingRules, noCompress: List<String>,
     ): UiConfigResult = UiConfigResult(false, "Packaging options not supported by this backend")
 
     /**
@@ -768,6 +778,14 @@ interface ProjectService {
      * thread. No-op returning `ok = false` for a project whose model the IDE itself owns.
      */
     suspend fun syncProject(): UiSyncResult = UiSyncResult(false, "This project has no build files to sync from.")
+
+    /**
+     * Import the open project's Kotlin Multiplatform modules for [target] (`"android"` or `"jvm"`, see
+     * [UiCompatibilityInfo.kmpTarget]) and re-sync, re-resolving and re-indexing like [syncProject]. The
+     * choice is kept with the project. No-op returning `ok = false` when the project has no such choice.
+     */
+    suspend fun setKmpTarget(target: String): UiSyncResult =
+        UiSyncResult(false, "This project has no multiplatform target to choose.")
 
     /**
      * Convert the open Gradle compatibility-mode project to a native CodeAssist project: the leftover Gradle

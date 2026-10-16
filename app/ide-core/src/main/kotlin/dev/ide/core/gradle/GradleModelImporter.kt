@@ -3,6 +3,7 @@ package dev.ide.core.gradle
 import dev.ide.android.support.AndroidApiLevels
 import dev.ide.android.support.AndroidFacet
 import dev.ide.android.support.AndroidFacetCodec
+import dev.ide.android.support.AndroidPackaging
 import dev.ide.android.support.BuildFeatures
 import dev.ide.build.jvm.compose.ComposeResourcesFacet
 import dev.ide.build.jvm.compose.ComposeResourcesFacetCodec
@@ -91,7 +92,7 @@ class GradleModelImporter : ProjectImporter {
         val messages = ArrayList<SyncMessage>()
         val modules = (root["modules"] as? List<*>).orEmpty()
             .filterIsInstance<Map<*, *>>()
-            .map { module(it, messages) }
+            .map { module(request.root, it, messages) }
         if (modules.isEmpty()) messages.add(SyncMessage(SyncSeverity.WARNING, "$DUMP_PATH declares no modules"))
 
         val target = root["target"] as? String
@@ -121,7 +122,7 @@ class GradleModelImporter : ProjectImporter {
 
     // --- modules ---
 
-    private fun module(raw: Map<*, *>, messages: MutableList<SyncMessage>): ExternalModule {
+    private fun module(root: Path, raw: Map<*, *>, messages: MutableList<SyncMessage>): ExternalModule {
         val name = raw["name"] as? String ?: "module"
         val typeId = raw["type"] as? String ?: "java-lib"
         return ExternalModule(
@@ -136,7 +137,7 @@ class GradleModelImporter : ProjectImporter {
             outputRelPath = OUTPUT_ROOT,
             sourceSets = sourceSets(raw),
             dependencies = dependencies(raw, name, messages),
-            facets = facets(raw, name, messages),
+            facets = facets(raw, name, root.resolve(raw["dir"] as? String ?: name), messages),
         )
     }
 
@@ -147,7 +148,28 @@ class GradleModelImporter : ProjectImporter {
      * `src/main/java` would describe none of them.
      */
     private fun sourceSets(raw: Map<*, *>): List<ExternalSourceSet> =
-        declaredSourceSets(raw) + generatedComposeResourcesSourceSet(raw)
+        foldForAndroid(raw, declaredSourceSets(raw)) + generatedComposeResourcesSourceSet(raw)
+
+    /**
+     * A multiplatform Android module's sets folded into `main` (and its test sets into `test`). An Android
+     * variant compiles `main` plus its build-type and flavor sets and nothing else, so `commonMain` and
+     * `androidMain` kept under their own names would never be built. The paths keep the set names, and the
+     * `[kotlin]` facet, read from the export rather than from these, still says which of them are common.
+     * A JVM module keeps the exported names, which its pipeline compiles whatever they are called.
+     */
+    private fun foldForAndroid(raw: Map<*, *>, sets: List<ExternalSourceSet>): List<ExternalSourceSet> {
+        if (raw["multiplatform"] as? Boolean != true || (raw["type"] as? String)?.startsWith("android-") != true) {
+            return sets
+        }
+        val (test, main) = sets.partition { it.scope == DependencyScope.TEST_IMPLEMENTATION }
+        fun fold(name: String, scope: DependencyScope, parts: List<ExternalSourceSet>) =
+            if (parts.isEmpty()) null
+            else ExternalSourceSet(name, scope, parts.flatMap { it.roots.entries }.associateTo(LinkedHashMap()) { it.toPair() })
+        return listOfNotNull(
+            fold("main", DependencyScope.IMPLEMENTATION, main),
+            fold("test", DependencyScope.TEST_IMPLEMENTATION, test),
+        )
+    }
 
     /**
      * Where the Compose resource generator writes, declared as ordinary content roots so the rest of the
@@ -219,9 +241,10 @@ class GradleModelImporter : ProjectImporter {
     private fun facets(
         raw: Map<*, *>,
         module: String,
+        moduleDir: Path,
         messages: MutableList<SyncMessage>,
     ): List<ExternalFacet> =
-        listOfNotNull(kotlinFacet(raw), composeResourcesFacet(raw), androidFacet(raw, module, messages))
+        listOfNotNull(kotlinFacet(raw), composeResourcesFacet(raw), androidFacet(raw, module, moduleDir, messages))
 
     /**
      * `[composeResources]`, for a module the Compose Gradle plugin generates a `Res` class for. Without it
@@ -265,9 +288,13 @@ class GradleModelImporter : ProjectImporter {
     private fun androidFacet(
         raw: Map<*, *>,
         module: String,
+        moduleDir: Path,
         messages: MutableList<SyncMessage>,
     ): ExternalFacet? {
         val android = raw["android"] as? Map<*, *> ?: return null
+        // A multiplatform module keeps its manifest in `androidMain`, where the facet's default never looks.
+        val manifest = android["manifest"] as? String
+            ?: KMP_MANIFEST.takeIf { raw["multiplatform"] as? Boolean == true && Files.isRegularFile(moduleDir.resolve(it)) }
         // The model derives an app's package from the namespace, so a build whose applicationId differs
         // would be renamed silently. Say so instead.
         val applicationId = android["applicationId"] as? String
@@ -284,6 +311,7 @@ class GradleModelImporter : ProjectImporter {
         val features = android["buildFeatures"] as? Map<*, *>
         val facet = AndroidFacet(
             namespace = namespace,
+            manifest = manifest ?: DEFAULT_MANIFEST,
             compileSdk = android.int("compileSdk") ?: AndroidApiLevels.LATEST,
             minSdk = android.int("minSdk") ?: DEFAULT_MIN_SDK,
             targetSdk = android.int("targetSdk") ?: android.int("minSdk") ?: DEFAULT_MIN_SDK,
@@ -294,6 +322,9 @@ class GradleModelImporter : ProjectImporter {
                 compose = features?.get("compose") as? Boolean ?: false,
                 parcelize = features?.get("parcelize") as? Boolean ?: false,
                 serialization = features?.get("serialization") as? Boolean ?: false,
+            ),
+            packaging = AndroidPackaging(
+                noCompress = (android["noCompress"] as? List<*>).orEmpty().filterIsInstance<String>().toSet(),
             ),
         )
         return ExternalFacet(AndroidFacetCodec.tomlTable, AndroidFacetCodec.encode(facet))
@@ -319,6 +350,8 @@ class GradleModelImporter : ProjectImporter {
         const val EXPORTED_MODEL_CONFIDENCE: Int = 100
 
         private const val DEFAULT_MIN_SDK = 21
+        private const val DEFAULT_MANIFEST = "src/main/AndroidManifest.xml"
+        private const val KMP_MANIFEST = "src/androidMain/AndroidManifest.xml"
 
         /** Compile output for an imported module: a subtree of `build/` that is CodeAssist's alone. */
         private const val OUTPUT_ROOT = "build/codeassist/classes"

@@ -80,6 +80,8 @@ import dev.ide.ui.generated.resources.sdk_manager_title
 import dev.ide.ui.generated.resources.sdk_no_packages
 import dev.ide.ui.generated.resources.sdk_platforms
 import dev.ide.ui.generated.resources.sdk_platforms_desc
+import dev.ide.ui.generated.resources.sdk_platform_tools
+import dev.ide.ui.generated.resources.sdk_platform_tools_desc
 import dev.ide.ui.generated.resources.sdk_resume
 import dev.ide.ui.icons.CaIcons
 import dev.ide.ui.platform.touchInput
@@ -175,6 +177,15 @@ fun SdkManagerScreen(backend: IdeBackend, onBack: () -> Unit) {
                             }
                         }
                     }
+                }
+            }
+
+            // Platform tools (adb), desktop only: what Run uses to install and launch the app on a device.
+            val tools = state.packages.filter { it.category == "PLATFORM_TOOLS" }
+            if (tools.isNotEmpty()) {
+                SdkDisclosure(stringResource(Res.string.sdk_platform_tools), "${tools.count { it.installed }} installed · Platform tools (adb)") {
+                    Text(stringResource(Res.string.sdk_platform_tools_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    PackageList(tools, state, activeIds)
                 }
             }
 

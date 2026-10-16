@@ -14,8 +14,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.IdeUiState
 import dev.ide.ui.backend.FileActions
@@ -44,6 +46,9 @@ import dev.ide.ui.generated.resources.edscreen_project_root
 import dev.ide.ui.platform.PlatformBackHandler
 import dev.ide.ui.platform.isMobilePlatform
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 import org.jetbrains.compose.resources.stringResource
 
 /** Width at/below which the UI reflows to the compact (phone) layout. */
@@ -74,6 +79,8 @@ fun EditorScreen(
     closeProjectConfirm: Boolean = false,
     onCloseProjectConfirmChange: (Boolean) -> Unit = {},
     onOpenRun: () -> Unit = {},
+    /** Told whether the wide layout is on screen, so a run docks in its bottom pane instead of opening full screen. */
+    onRunDockedChange: (Boolean) -> Unit = {},
     fileActions: FileActions = FileActions.None,
 ) {
     // Everything in the editor that leaves the project (the top bar's arrow, the palette) asks first.
@@ -93,6 +100,7 @@ fun EditorScreen(
     // Diagnostics for the tabs that are open but not focused (the daemon in EditorCenter covers the focused
     // one), so every tab's status dot reports its own file rather than only the file on screen.
     OpenTabDiagnosticsEffect(state, indexStatus.building, buildState.status)
+    SyncWithDiskOnReturnEffect(state)
     var newEntry by remember { mutableStateOf<NewEntryRequest?>(null) }
     var newXmlTarget by remember { mutableStateOf<NewXmlTarget?>(null) }
     var newSource by remember { mutableStateOf<NewSourceRequest?>(null) }
@@ -137,9 +145,16 @@ fun EditorScreen(
             isMobilePlatform && state.leftOpen -> state.selectedLeftPanel = null
         }
     }
+    // Mirrors the layout choice below for the overlays outside it (the running-run pill).
+    var wideLayout by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
-            if (maxWidth < COMPACT_BREAKPOINT) CompactLayout(
+            val wide = maxWidth >= COMPACT_BREAKPOINT
+            LaunchedEffect(wide) {
+                wideLayout = wide
+                onRunDockedChange(wide)
+            }
+            if (!wide) CompactLayout(
                 state,
                 onToggleTheme,
                 onOpenHub,
@@ -257,11 +272,39 @@ fun EditorScreen(
         )
         // While a console run is active but its terminal isn't on screen (the user backed out mid-run), a
         // tappable pill returns to it — the run keeps going in the background until then.
-        RunningIndicator(
+        // Docked (wide layout), the pill brings the bottom pane's Run terminal forward and hides while it shows.
+        if (!(wideLayout && state.runOpen)) RunningIndicator(
             state.backend,
-            onClick = onOpenRun,
+            onClick = { if (wideLayout) state.showRunOutput() else onOpenRun() },
             modifier = Modifier.align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = if (isMobilePlatform) 88.dp else 24.dp),
         )
     }
 }
+
+/**
+ * Catches the open tabs and the tree up with the disk when the window gets focus back after being away: on a
+ * phone, the user returning from a file manager that copied a file over one that is open. Nothing watches the
+ * project directory, so without this the tab kept the old text until the file was deleted and copied again.
+ *
+ * Window focus also goes to a focusable popup (a menu, a dialog), so an absence shorter than
+ * [RETURN_SYNC_MIN_AWAY] is not a return; leaving for another app and coming back takes longer than that.
+ */
+@Composable
+private fun SyncWithDiskOnReturnEffect(state: IdeUiState) {
+    val windowInfo = LocalWindowInfo.current
+    LaunchedEffect(state, windowInfo) {
+        var leftAt: TimeMark? = null
+        snapshotFlow { windowInfo.isWindowFocused }.collect { focused ->
+            if (!focused) {
+                leftAt = TimeSource.Monotonic.markNow()
+            } else {
+                val away = leftAt?.elapsedNow()
+                leftAt = null
+                if (away != null && away >= RETURN_SYNC_MIN_AWAY) state.syncWithDiskOnReturn()
+            }
+        }
+    }
+}
+
+private val RETURN_SYNC_MIN_AWAY = 2.seconds

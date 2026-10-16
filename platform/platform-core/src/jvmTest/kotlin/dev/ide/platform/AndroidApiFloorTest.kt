@@ -114,6 +114,7 @@ class AndroidApiFloorTest {
         "src/jvmShared",   // the Compose modules' desktop+android set (it feeds `androidMain`)
         "src/androidMain", // the Compose modules' Android-only set
         "src/debug",       // an Android build variant ships with the app it is built into
+        "src/terminal",    // wired into ide-android's main source set (ships in the APK)
         "src/artShims",    // :art-compat's shims, which exist precisely because ART lacks something
         "src/sqliteStub",  // bundled into the Room processor closure, and that runs on the device
     )
@@ -155,6 +156,7 @@ class AndroidApiFloorTest {
             "test", "commonTest", "jvmTest", "androidTest", "desktopTest", "iosTest", "iosSimulatorArm64Test",
             "iosArm64Test", "androidUnitTest", "androidInstrumentedTest", "jvmSharedTest",
             "desktopMain",             // the desktop shell's half of a Compose target: never on a device
+            "terminalTest",            // wired into ide-android's androidTest source set: device tests, not shipped code
             "iosMain", "iosArm64Main", "iosSimulatorArm64Main", // no JDK to call
             "nativeMain", "nativeTest",
         )
