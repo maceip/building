@@ -1,5 +1,8 @@
 package dev.ide.ui.screens
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,14 +29,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.UiNotification
 import dev.ide.ui.backend.UiNotificationKind
+import dev.ide.ui.components.RareCounter
 import dev.ide.ui.itemsKeyed
 import dev.ide.ui.theme.Symbol
 import dev.ide.ui.generated.resources.Res
@@ -61,18 +69,38 @@ import org.jetbrains.compose.resources.stringResource
 @Composable
 fun NotificationBell(backend: IdeBackend, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val unread by backend.notifications.unreadCount().collectAsState()
+    val swing = remember { Animatable(0f) }
+    var previousUnread by remember { mutableIntStateOf(unread) }
+    LaunchedEffect(unread) {
+        if (unread != previousUnread && unread > 0) {
+            val delta = (unread - previousUnread).coerceIn(-6, 6)
+            swing.animateTo(
+                targetValue = 0f,
+                animationSpec = spring(dampingRatio = 0.34f, stiffness = 220f),
+                initialVelocity = if (delta >= 0) 320f else -240f,
+            )
+        }
+        previousUnread = unread
+    }
     Box(modifier) {
         Surface(
             onClick = onClick,
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            modifier = Modifier.size(46.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.size(40.dp),
         ) {
-            Box(contentAlignment = Alignment.Center) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.graphicsLayer {
+                    rotationZ = swing.value
+                    transformOrigin = TransformOrigin(0.5f, 0.2f)
+                },
+            ) {
                 Symbol(
                     CaSymbols.inbox,
                     contentDescription = stringResource(Res.string.notif_title),
-                    size = 22.dp,
+                    size = 20.dp,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -86,11 +114,20 @@ fun NotificationBell(backend: IdeBackend, onClick: () -> Unit, modifier: Modifie
                 contentColor = MaterialTheme.colorScheme.onError,
                 modifier = Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp),
             ) {
-                Text(
-                    if (unread > 9) "9+" else unread.toString(),
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
-                )
+                Box(Modifier.padding(horizontal = 6.dp, vertical = 1.dp), contentAlignment = Alignment.Center) {
+                    if (unread > 9) {
+                        Text(
+                            "9+",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    } else {
+                        RareCounter(
+                            value = unread,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onError,
+                        )
+                    }
+                }
             }
         }
     }

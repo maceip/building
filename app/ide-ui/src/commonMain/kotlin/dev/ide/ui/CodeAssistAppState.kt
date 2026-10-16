@@ -47,7 +47,6 @@ private const val REOPEN_LAST_PROJECT_PREF = "settings.appearance.reopenLastProj
 
 private const val MIGRATION_ACK_PREF = "migration.acknowledged"
 private const val LEGACY_RECOVERY_SEEN_PREF = "legacy.recovery.seen"
-private const val ONBOARDING_SEEN_PREF = "onboarding.seen"
 
 /** Why the project-import flow stopped, rendered by the host as a localized notice. */
 sealed interface ImportError {
@@ -251,8 +250,6 @@ class CodeAssistAppState(
         private set
     var showLegacyRecovery: Boolean by mutableStateOf(backend.settings.preference(LEGACY_RECOVERY_SEEN_PREF) != "true")
         private set
-    var showOnboarding: Boolean by mutableStateOf(backend.settings.preference(ONBOARDING_SEEN_PREF) != "true")
-        private set
 
     /** Opt-in analytics: prompt only when collection is available and the user has not decided yet (null). The
      *  re-toggle lives in the editor's More menu (a settings surface), not permanently on the project picker. */
@@ -326,7 +323,7 @@ class CodeAssistAppState(
     /** Whether the system back gesture has somewhere in-app to go. False on the picker landing, where back
      *  exits the app as usual. */
     val canNavigateBack: Boolean
-        get() = screen != Screen.Projects || homeTab != HomeTab.Projects || showOnboarding || showMigration ||
+        get() = screen != Screen.Projects || homeTab != HomeTab.Projects || showMigration ||
             showAnalytics || showImportSourceChoice || showImportModeChoice
 
     // Session resume across a process kill: the project that was on screen last run (captured up-front, before
@@ -1001,11 +998,6 @@ class CodeAssistAppState(
         backend.settings.setPreference(MIGRATION_ACK_PREF, "true")
     }
 
-    fun dismissOnboarding() {
-        showOnboarding = false
-        backend.settings.setPreference(ONBOARDING_SEEN_PREF, "true")
-    }
-
     fun dismissLegacyRecovery() {
         showLegacyRecovery = false
         backend.settings.setPreference(LEGACY_RECOVERY_SEEN_PREF, "true")
@@ -1028,7 +1020,6 @@ class CodeAssistAppState(
         when {
             showImportSourceChoice -> dismissImportSourceChoice()
             showImportModeChoice -> dismissImportModeChoice()
-            showOnboarding -> dismissOnboarding()
             showMigration -> dismissMigration()
             showAnalytics -> setAnalyticsConsent(false)
 
@@ -1108,6 +1099,7 @@ internal fun accentOf(settings: UiSettings): CaAccent = when (settings.accent) {
     UiAccent.Teal -> CaAccent.Teal
     UiAccent.Orange -> CaAccent.Orange
     UiAccent.Violet -> CaAccent.Violet
+    UiAccent.Midnight -> CaAccent.Midnight
     else -> CaAccent.Lime
 }
 

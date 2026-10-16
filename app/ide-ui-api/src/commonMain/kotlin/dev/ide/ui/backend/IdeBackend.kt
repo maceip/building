@@ -55,6 +55,9 @@ interface IdeBackend {
      *  backend that wires no catalog inherits [StoreService.Unsupported]. */
     val store: StoreService get() = StoreService.Unsupported
 
+    /** The GitHub Discovery & Exploration engine. Optional — defaults to [GitHubDiscoveryService.Unsupported]. */
+    val discovery: GitHubDiscoveryService get() = GitHubDiscoveryService.Unsupported
+
     /** The interactive Learn experience: lesson tracks, step-by-step content, auto-checked exercises, and
      *  local progress. Optional — a backend that wires no content inherits [LearnService.Unsupported]. */
     val learn: LearnService get() = LearnService.Unsupported
@@ -2058,7 +2061,7 @@ data class UiSettings(
  * [Dynamic] follows the device wallpaper (Material You, Android 12+; falls back to Violet elsewhere). A
  * preset / Custom always overrides wallpaper dynamic color.
  */
-enum class UiAccent { Dynamic, Lime, Violet, Teal, Orange, Custom }
+enum class UiAccent { Dynamic, Lime, Violet, Teal, Orange, Custom, Midnight }
 
 /**
  * A per-language code style profile the Code Style screen edits. Values are plain strings/ints/bools (preset,

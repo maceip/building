@@ -80,10 +80,9 @@ class CodeAssistAppStateTest {
         override fun setAnalyticsConsent(granted: Boolean) { analyticsConsent = granted }
     }
 
-    /** Preferences of an app that is past its first launch (no migration/onboarding/consent sheets). */
+    /** Preferences of an app that is past its first launch (no migration/consent sheets). */
     private fun settledPrefs() = mapOf(
         "migration.acknowledged" to "true",
-        "onboarding.seen" to "true",
         "legacy.recovery.seen" to "true",
     )
 
@@ -562,13 +561,9 @@ class CodeAssistAppStateTest {
         val backend = AppBackend() // nothing acknowledged yet
         val app = appState(backend)
         advanceUntilIdle()
-        assertTrue(app.showOnboarding)
         assertTrue(app.showMigration)
         assertTrue(app.showAnalytics)
 
-        app.navigateBack()
-        assertFalse(app.showOnboarding)
-        assertEquals("true", backend.prefs["onboarding.seen"])
         app.navigateBack()
         assertFalse(app.showMigration)
         assertEquals("true", backend.prefs["migration.acknowledged"])

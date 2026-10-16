@@ -22,6 +22,7 @@ import dev.ide.ui.generated.resources.home_sort
 import dev.ide.ui.generated.resources.home_sort_recent
 import dev.ide.ui.generated.resources.home_sort_name
 import dev.ide.ui.generated.resources.home_clear_search
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -85,6 +86,7 @@ import dev.ide.ui.components.CountFilterChip
 import dev.ide.ui.components.dashedBorder
 import dev.ide.ui.components.Eyebrow
 import dev.ide.ui.components.MonoChip
+import dev.ide.ui.components.RareFolder
 import dev.ide.ui.components.SquareToneButton
 import dev.ide.ui.components.SupportingOnContainer
 import dev.ide.ui.components.TonalTile
@@ -219,6 +221,8 @@ fun ProjectsHomeScreen(
      */
     accountRequested: Boolean = false,
     onAccountRequestHandled: () -> Unit = {},
+    backend: dev.ide.ui.backend.IdeBackend? = null,
+    onCloneAndOpen: ((htmlUrl: String, repoName: String) -> Unit)? = null,
 ) {
     var segment by remember { mutableStateOf(HomeSegment.Projects) }
     // Deleting wipes the project from disk and nothing else in this flow asks first.
@@ -351,6 +355,32 @@ fun ProjectsHomeScreen(
                             null
                         },
                     )
+                }
+
+                if (backend != null && backend.discovery.supported()) {
+                    item("discoveryShelf") {
+                        Spacer(Modifier.height(16.dp))
+                        GitHubExplorerFeed(
+                            backend = backend,
+                            onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) }
+                        )
+                    }
+                }
+            } else if (segment == HomeSegment.Projects && ordered.isEmpty()) {
+                if (backend != null && backend.discovery.supported()) {
+                    item("emptyDiscovery") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            GitHubExplorerFeed(
+                                backend = backend,
+                                onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) }
+                            )
+                        }
+                    }
+                } else {
+                    item("empty") { EmptyList() }
                 }
             } else {
                 item("empty") { EmptyList() }
@@ -639,6 +669,7 @@ private fun LocalProjectCard(
         shape = cardShape(index),
         color = c.surfaceContainerLow,
         contentColor = c.onSurface,
+        border = BorderStroke(1.dp, c.outlineVariant),
         interactionSource = interaction,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 6.dp)
             .pressScale(interaction),
@@ -768,18 +799,25 @@ private fun ImportCard(onClick: () -> Unit) {
 @Composable
 private fun EmptyList() {
     val c = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    var tappedOpen by remember { mutableStateOf(false) }
     Column(
-        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 24.dp)
-            .dashedBorder(c.outlineVariant, cornerRadius = 28.dp)
-            .padding(horizontal = 24.dp, vertical = 40.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 20.dp)
+            .dashedBorder(c.outlineVariant, cornerRadius = 12.dp)
+            .clickable(interaction, indication = null) { tappedOpen = !tappedOpen }
+            .padding(horizontal = 24.dp, vertical = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Symbol(CaSymbols.folderOpen, contentDescription = null, size = 40.dp, tint = c.outlineVariant)
+        RareFolder(
+            expanded = hovered || tappedOpen,
+            modifier = Modifier.size(96.dp, 88.dp),
+        )
         Text(
             stringResource(Res.string.home_empty_list),
-            style = MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.bodyMedium,
             color = c.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp),
+            modifier = Modifier.padding(top = 10.dp),
         )
     }
 }
@@ -794,10 +832,11 @@ private fun EmptyList() {
 private fun ResumeCard(project: ProjectInfo, now: Long, onOpen: () -> Unit) {
     val c = MaterialTheme.colorScheme
     Surface(
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(10.dp),
         color = c.tertiaryContainer,
         contentColor = c.onTertiaryContainer,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 22.dp),
+        border = BorderStroke(1.dp, c.outlineVariant),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 16.dp),
     ) {
         Column(Modifier.padding(18.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1225,11 +1264,19 @@ private fun HeaderButton(
         Spacer(Modifier.width(8.dp))
         Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
     }
-    val padding = PaddingValues(start = 14.dp, end = 18.dp)
+    val padding = PaddingValues(start = 12.dp, end = 14.dp)
+    val shape = RoundedCornerShape(8.dp)
     if (primary) {
-        Button(onClick = onClick, contentPadding = padding, modifier = modifier.height(40.dp), content = content)
+        Button(onClick = onClick, shape = shape, contentPadding = padding, modifier = modifier.height(36.dp), content = content)
     } else {
-        OutlinedButton(onClick = onClick, contentPadding = padding, modifier = modifier.height(40.dp), content = content)
+        OutlinedButton(
+            onClick = onClick,
+            shape = shape,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            contentPadding = padding,
+            modifier = modifier.height(36.dp),
+            content = content,
+        )
     }
 }
 
@@ -1237,12 +1284,18 @@ private fun HeaderButton(
 @Composable
 private fun ProjectSearchField(query: String, onQuery: (String) -> Unit, modifier: Modifier = Modifier) {
     val c = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(8.dp)
     Row(
-        modifier.height(40.dp).clip(RoundedCornerShape(50)).background(c.surfaceContainerHigh).padding(horizontal = 14.dp),
+        modifier
+            .height(36.dp)
+            .clip(shape)
+            .background(c.surfaceContainerLow)
+            .border(1.dp, c.outlineVariant, shape)
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Symbol(CaSymbols.search, contentDescription = null, size = 18.dp, tint = c.onSurfaceVariant)
+        Symbol(CaSymbols.search, contentDescription = null, size = 16.dp, tint = c.onSurfaceVariant)
         BasicTextField(
             value = query,
             onValueChange = onQuery,
@@ -1269,12 +1322,18 @@ private fun ProjectSearchField(query: String, onQuery: (String) -> Unit, modifie
 @Composable
 internal fun SearchPill(query: String, onQuery: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier) {
     val c = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(8.dp)
     Row(
-        modifier.height(40.dp).clip(RoundedCornerShape(50)).background(c.surfaceContainerHigh).padding(horizontal = 14.dp),
+        modifier
+            .height(36.dp)
+            .clip(shape)
+            .background(c.surfaceContainerLow)
+            .border(1.dp, c.outlineVariant, shape)
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Symbol(CaSymbols.search, contentDescription = null, size = 18.dp, tint = c.onSurfaceVariant)
+        Symbol(CaSymbols.search, contentDescription = null, size = 16.dp, tint = c.onSurfaceVariant)
         BasicTextField(
             value = query,
             onValueChange = onQuery,
@@ -1339,12 +1398,12 @@ private fun DenseProjectRow(
     val hovered by interaction.collectIsHoveredAsState()
     var menuOpen by remember(project.rootPath) { mutableStateOf(false) }
     Row(
-        Modifier.fillMaxWidth().height(56.dp).clip(RoundedCornerShape(12.dp))
+        Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(8.dp))
             .background(if (hovered || menuOpen) c.surfaceContainerHigh else Color.Transparent)
             .clickable(interaction, indication = null, onClick = onOpen)
-            .padding(start = 12.dp, end = 4.dp),
+            .padding(start = 10.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (icon != null) {
             Box(Modifier.size(34.dp).clip(tileShape(index)).background(tonalPair(index).container)) {

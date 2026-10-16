@@ -70,16 +70,27 @@ import dev.ide.ui.backend.UiTextMatch
 import dev.ide.ui.backend.UiFileSymbol
 import dev.ide.ui.backend.UiFoldRegion
 import dev.ide.ui.backend.UiProjectTemplate
+import dev.ide.ui.backend.BuildLogLine
+import dev.ide.ui.backend.BuildState
+import dev.ide.ui.backend.RunConsoleUi
+import dev.ide.ui.backend.RunFrameUi
+import dev.ide.ui.backend.RunPhase
+import dev.ide.ui.backend.RunStatus
+import dev.ide.ui.backend.RunTaskOption
+import dev.ide.ui.backend.UiLogLevel
 import dev.ide.ui.icons.fileIconId
 import dev.ide.ui.platform.ioDispatcher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
+import platform.Foundation.NSTemporaryDirectory
 import dev.ide.platform.log.Log
 import kotlin.time.TimeSource
 
@@ -582,6 +593,200 @@ class IosBackend(
     internal suspend fun closeComposePreview(session: Int) = IosPreviewThread.run { runCatching { previewRenderer?.close(session) } }
 
     internal fun closeComposePreviewLater(session: Int) = IosPreviewThread.post { runCatching { previewRenderer?.close(session) } }
+
+    // ---- Build & Run: interactive execution of Android Compose in :jvm-vm ---------------------------
+
+    private val backendScope = CoroutineScope(SupervisorJob() + ioDispatcher)
+    private val _buildState = MutableStateFlow(BuildState())
+    override val buildState: StateFlow<BuildState> get() = _buildState
+
+    private val _runConsole = MutableStateFlow<RunConsoleUi?>(null)
+    override val runConsole: StateFlow<RunConsoleUi?> get() = _runConsole
+
+    override fun supported(): Boolean = true
+
+    private var activeRunSession: Int? = null
+    private var runJob: Job? = null
+    private var runSurfaceWidth = 360
+    private var runSurfaceHeight = 640
+    private var runFrameSeq = 0L
+
+    override fun runTasks(): List<RunTaskOption> = listOf(
+        RunTaskOption("run", "Run App", "Application")
+    )
+
+    override fun runTask(id: String) {
+        runBuild()
+    }
+
+    override fun runBuild() {
+        val root = active?.rootPath?.takeIf { it.isNotEmpty() } ?: return
+        val currentRunning = activeRunSession
+        if (currentRunning != null) {
+            stopBuild()
+        }
+
+        _buildState.value = BuildState(status = RunStatus.Running)
+        _runConsole.value = RunConsoleUi(
+            id = 1,
+            moduleName = "app",
+            mainClass = "App",
+            phase = RunPhase.Building,
+        )
+
+        runJob = backendScope.launch {
+            try {
+                // Find entry point: inspect buffers or disk files
+                var targetPath: String? = null
+                var targetText: String? = null
+                var targetFn: String? = null
+
+                // 1. Check open buffers
+                for (path in buffers.keys) {
+                    if (path.endsWith(".kt")) {
+                        val text = buffers[path] ?: continue
+                        val names = withAnalysis(emptyList()) { it.previewNames(path, text) }
+                        if (names.isNotEmpty()) {
+                            targetPath = path
+                            targetText = text
+                            targetFn = names.first()
+                            break
+                        }
+                    }
+                }
+
+                // 2. If no buffer has a preview, walk project src files
+                if (targetPath == null) {
+                    val candidateFiles = findKotlinSourceFiles(root)
+                    for (file in candidateFiles) {
+                        val text = IosFiles.readText(file)
+                        val names = withAnalysis(emptyList()) { it.previewNames(file, text) }
+                        if (names.isNotEmpty()) {
+                            targetPath = file
+                            targetText = text
+                            targetFn = names.first()
+                            break
+                        }
+                    }
+                    if (targetPath == null && candidateFiles.isNotEmpty()) {
+                        targetPath = candidateFiles.first()
+                        targetText = IosFiles.readText(targetPath)
+                        targetFn = "App"
+                    }
+                }
+
+                if (targetPath == null || targetText == null || targetFn == null) {
+                    _buildState.value = BuildState(
+                        status = RunStatus.Failed,
+                        log = listOf(BuildLogLine("No runnable Kotlin Compose entry point found in $root", UiLogLevel.Error)),
+                    )
+                    _runConsole.update { it?.copy(phase = RunPhase.Finished) }
+                    return@launch
+                }
+
+                val blob = previewStage("Lowering $targetFn for Run") {
+                    withAnalysis(null) { it.lowerPreview(targetPath, targetText, targetFn) }
+                }
+
+                if (blob == null) {
+                    _buildState.value = BuildState(
+                        status = RunStatus.Failed,
+                        log = listOf(BuildLogLine("Failed to lower '$targetFn' in $targetPath", UiLogLevel.Error)),
+                    )
+                    _runConsole.update { it?.copy(phase = RunPhase.Finished) }
+                    return@launch
+                }
+
+                val runtime = previewRuntimeJars()
+                val libraries = previewLibraryJars()
+                val classpath = runtime + libraries
+
+                val sessionId = IosPreviewThread.run {
+                    val renderer = previewRendererFor(classpath)
+                    renderer.open(blob, runSurfaceWidth, runSurfaceHeight, 2f, 1f, false, 0L)
+                }
+
+                activeRunSession = sessionId
+                _buildState.value = BuildState(status = RunStatus.Succeeded)
+                _runConsole.value = RunConsoleUi(
+                    id = sessionId,
+                    moduleName = "app",
+                    mainClass = targetFn,
+                    phase = RunPhase.Running,
+                )
+
+                val tmpDir = NSTemporaryDirectory()
+                while (activeRunSession == sessionId) {
+                    val frame = IosPreviewThread.run {
+                        previewRenderer?.frame(sessionId) ?: IosPreviewFrame(null, emptyList())
+                    }
+                    frame.png?.let { pngBytes ->
+                        val framePath = IosFiles.join(tmpDir, "run-frame-$sessionId-${++runFrameSeq}.png")
+                        IosFiles.writeBytes(framePath, pngBytes)
+                        _runConsole.update {
+                            it?.copy(frame = RunFrameUi(framePath, runSurfaceWidth, runSurfaceHeight, runFrameSeq))
+                        }
+                    }
+                    delay(16)
+                }
+            } catch (c: CancellationException) {
+                // Stopped normally
+            } catch (t: Throwable) {
+                previewLog.error("runBuild failed", t)
+                _buildState.value = BuildState(
+                    status = RunStatus.Failed,
+                    log = listOf(BuildLogLine(t.message ?: "Run execution error", UiLogLevel.Error)),
+                )
+                _runConsole.update { it?.copy(phase = RunPhase.Finished) }
+            }
+        }
+    }
+
+    override fun stopBuild() {
+        val s = activeRunSession
+        activeRunSession = null
+        runJob?.cancel()
+        runJob = null
+        if (s != null) {
+            IosPreviewThread.post { runCatching { previewRenderer?.close(s) } }
+        }
+        _runConsole.update { it?.copy(phase = RunPhase.Finished) }
+        _buildState.value = BuildState(status = RunStatus.Idle)
+    }
+
+    override fun sendRunPointer(action: Int, x: Float, y: Float) {
+        val s = activeRunSession ?: return
+        val kind = when (action) {
+            0 -> 0
+            2 -> 2
+            else -> 1
+        }
+        IosPreviewThread.post { runCatching { previewRenderer?.pointer(s, kind, x, y) } }
+    }
+
+    override fun setRunSurfaceSize(widthPx: Int, heightPx: Int) {
+        if (widthPx > 0 && heightPx > 0) {
+            runSurfaceWidth = widthPx
+            runSurfaceHeight = heightPx
+        }
+    }
+
+    private fun findKotlinSourceFiles(dir: String): List<String> {
+        val results = mutableListOf<String>()
+        fun scan(d: String) {
+            for (entry in IosFiles.list(d)) {
+                if (entry.startsWith(".")) continue
+                val full = IosFiles.join(d, entry)
+                if (IosFiles.isDirectory(full)) {
+                    if (entry != "build" && entry != ".git") scan(full)
+                } else if (entry.endsWith(".kt")) {
+                    results.add(full)
+                }
+            }
+        }
+        scan(dir)
+        return results
+    }
 
     /** The renderer for [classpath], replacing (and so ending every session of) one for another class path. */
     private fun previewRendererFor(classpath: List<String>): IosPreviewRenderer =

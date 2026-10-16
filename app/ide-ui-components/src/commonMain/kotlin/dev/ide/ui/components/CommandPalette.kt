@@ -388,11 +388,15 @@ private fun FilterTabs(active: PaletteFilter, counts: Map<PaletteFilter, Int>, o
             val empty = count == 0
             Row(
                 Modifier
-                    .clip(RoundedCornerShape(Ca.radius.pill))
+                    .clip(RoundedCornerShape(7.dp))
                     .background(if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                    .border(1.dp, if (selected) Color.Transparent else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.pill))
+                    .border(
+                        1.dp,
+                        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.40f) else MaterialTheme.colorScheme.outlineVariant,
+                        RoundedCornerShape(7.dp),
+                    )
                     .clickable { onSelect(f) }
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
                     .alpha(if (empty && !selected) 0.5f else 1f),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -403,8 +407,8 @@ private fun FilterTabs(active: PaletteFilter, counts: Map<PaletteFilter, Int>, o
                     style = MaterialTheme.typography.labelLarge,
                 )
                 if (count != null && count > 0) {
-                    Text(
-                        count.toString(),
+                    RareCounter(
+                        value = count,
                         color = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.outline,
                         style = MaterialTheme.typography.labelMedium,
                     )
@@ -444,14 +448,14 @@ private fun PaletteRow(entry: PaletteEntry, query: String, selected: Boolean, on
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 6.dp)
-            .heightIn(min = 44.dp)
-            .clip(RoundedCornerShape(Ca.radius.md))
+            .heightIn(min = 38.dp)
+            .clip(RoundedCornerShape(Ca.radius.sm))
             .background(if (selected) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f) else Color.Transparent)
             .hoverable(interaction)
             .clickable(interaction, indication = null) { entry.run(); onClose() }
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         EntryIcon(entry)
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {

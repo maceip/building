@@ -1,6 +1,8 @@
 package dev.ide.ui.screens
 
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -16,18 +18,26 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
@@ -35,10 +45,12 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.HomeTab
 import dev.ide.ui.components.AppNavBar
 import dev.ide.ui.components.NavDestination
+import dev.ide.ui.components.RareCounter
 import dev.ide.ui.generated.resources.Res
 import dev.ide.ui.generated.resources.home_store
 import dev.ide.ui.generated.resources.projects
@@ -156,16 +168,41 @@ private fun HomeSidebar(
                 color = c.onSurface,
                 modifier = Modifier.padding(start = 12.dp, top = 4.dp, bottom = 16.dp),
             )
-            Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                destinations.forEach { d ->
-                    HomeSidebarItem(
-                        glyph = d.glyph,
-                        label = d.label,
-                        selected = d.id == selectedId,
-                        count = counts[d.id],
-                        role = Role.Tab,
-                        onClick = { onSelect(d.id) },
-                    )
+            val centers = remember { mutableStateMapOf<Int, Float>() }
+            val density = LocalDensity.current
+            val selectedIndex = destinations.indexOfFirst { it.id == selectedId }.coerceAtLeast(0)
+            val targetY = centers[selectedIndex] ?: (selectedIndex * 38f + 15f)
+            val markerY by animateFloatAsState(
+                targetValue = targetY,
+                animationSpec = spring(dampingRatio = 0.65f, stiffness = 300f),
+                label = "sidebarBounceMarker",
+            )
+            Box(Modifier.selectableGroup()) {
+                Box(
+                    Modifier
+                        .offset { IntOffset(2.dp.roundToPx(), markerY.dp.roundToPx()) }
+                        .size(5.dp)
+                        .background(c.primary, CircleShape),
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    destinations.forEachIndexed { index, d ->
+                        Box(
+                            Modifier.onGloballyPositioned { coordinates ->
+                                centers[index] = with(density) {
+                                    (coordinates.positionInParent().y + coordinates.size.height / 2f).toDp().value - 2.5f
+                                }
+                            },
+                        ) {
+                            HomeSidebarItem(
+                                glyph = d.glyph,
+                                label = d.label,
+                                selected = d.id == selectedId,
+                                count = counts[d.id],
+                                role = Role.Tab,
+                                onClick = { onSelect(d.id) },
+                            )
+                        }
+                    }
                 }
             }
             Spacer(Modifier.weight(1f))
@@ -193,10 +230,10 @@ fun HomeSidebarItem(
     val c = MaterialTheme.colorScheme
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(8.dp),
         color = if (selected) c.secondaryContainer else androidx.compose.ui.graphics.Color.Transparent,
         contentColor = if (selected) c.onSecondaryContainer else c.onSurfaceVariant,
-        modifier = Modifier.fillMaxWidth().height(40.dp).semantics {
+        modifier = Modifier.fillMaxWidth().height(36.dp).semantics {
             this.role = role
             if (role == Role.Tab) this.selected = selected
         },
@@ -204,9 +241,9 @@ fun HomeSidebarItem(
         Row(
             Modifier.padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Symbol(glyph, contentDescription = null, size = 20.dp, filled = selected)
+            Symbol(glyph, contentDescription = null, size = 18.dp, filled = selected)
             Text(
                 label,
                 style = MaterialTheme.typography.bodyMedium,
@@ -216,17 +253,20 @@ fun HomeSidebarItem(
                 modifier = Modifier.weight(1f),
             )
             if (count != null && count > 0) {
-                Text(
-                    "$count",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (countIsAlert) c.onError else c.onSurfaceVariant,
+                Box(
                     modifier = if (countIsAlert) {
-                        Modifier.background(c.error, RoundedCornerShape(50)).padding(horizontal = 7.dp, vertical = 1.dp)
+                        Modifier.background(c.error, RoundedCornerShape(5.dp)).padding(horizontal = 6.dp, vertical = 1.dp)
                     } else {
                         Modifier
                     },
-                )
+                    contentAlignment = Alignment.Center,
+                ) {
+                    RareCounter(
+                        value = count,
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = if (countIsAlert) c.onError else c.onSurfaceVariant,
+                    )
+                }
             }
         }
     }

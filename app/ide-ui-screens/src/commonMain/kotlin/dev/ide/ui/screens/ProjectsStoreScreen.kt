@@ -85,6 +85,7 @@ fun ProjectsStoreScreen(
     onOpenItem: (UiStoreItem) -> Unit,
     modifier: Modifier = Modifier,
     onOpenHub: (() -> Unit)? = null,
+    onCloneAndOpen: ((String, String) -> Unit)? = null,
 ) {
     val available = remember { backend.store.storeAvailable() }
     if (!available) {
@@ -119,6 +120,7 @@ fun ProjectsStoreScreen(
                         searchCategory = category
                         searching = true
                     },
+                    onCloneAndOpen = onCloneAndOpen,
                 )
             }
         }
@@ -130,6 +132,7 @@ private fun StoreBrowse(
     state: ProjectsStoreState,
     onOpenItem: (UiStoreItem) -> Unit,
     onOpenSearch: (String?) -> Unit,
+    onCloneAndOpen: ((String, String) -> Unit)? = null,
 ) {
     val catalog = state.catalog
     val allItems = remember(catalog) { catalog.sections.flatMap { it.items } }
@@ -147,6 +150,16 @@ private fun StoreBrowse(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 SearchEntry(onClick = { onOpenSearch(null) }, modifier = Modifier.padding(top = 14.dp))
+            }
+        }
+
+        if (state.backend.discovery.supported()) {
+            item("githubExplorer") {
+                GitHubExplorerFeed(
+                    backend = state.backend,
+                    onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) },
+                    modifier = Modifier.padding(bottom = 14.dp)
+                )
             }
         }
 

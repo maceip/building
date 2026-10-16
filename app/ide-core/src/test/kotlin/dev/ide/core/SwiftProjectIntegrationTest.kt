@@ -66,7 +66,8 @@ class SwiftProjectIntegrationTest {
         val reposRoot = Path.of("/Users/mac/.gemini/antigravity/worktrees/building/restructure_settings_and_menus/verification_repos")
         val alamofire = reposRoot.resolve("trending-alamofire")
         val pokeToken = reposRoot.resolve("trending-poketoken")
-        if (!Files.isDirectory(alamofire) || !Files.isDirectory(pokeToken)) return@withTempDir
+        assertTrue(Files.isDirectory(alamofire), "trending-alamofire directory must exist")
+        assertTrue(Files.isDirectory(pokeToken), "trending-poketoken directory must exist")
 
         val manager = ProjectManager.desktop(temp.resolve("projects"))
         val backend = IdeServicesBackend(manager = manager)

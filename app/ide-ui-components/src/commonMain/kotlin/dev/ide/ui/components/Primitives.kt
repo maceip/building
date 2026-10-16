@@ -34,9 +34,14 @@ import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -54,9 +59,9 @@ fun glassFill(material: GlassMaterial): Color = when (material) {
 }
 
 /**
- * A chrome surface in glass: translucent fill + a 1px top edge highlight and side/bottom hairline,
- * the token recipe for "liquid glass". (True backdrop blur is a desktop RenderEffect enhancement; the
- * fill alone over the app background already reads as frosted and is the spec's solid fallback.)
+ * A chrome surface in liquid glass: translucent fill + directional 45° specular dome sheen + 1px top specular
+ * rim and perimeter hairline. Gives floating panels, banners, and popovers physical slab depth without
+ * neon glow or heavy shaders.
  */
 @Composable
 fun GlassSurface(
@@ -67,12 +72,50 @@ fun GlassSurface(
 ) {
     val fill = glassFill(material)
     val edgeTop = Ide.colors.glassEdgeTop
+    val edge = Ide.colors.glassEdge
+    val domeAlpha = when (material) {
+        GlassMaterial.Thin -> 0.14f
+        GlassMaterial.Regular -> 0.20f
+        GlassMaterial.Thick -> 0.26f
+    }
     Box(
         modifier
             .background(fill, shape)
-            .drawBehind {
-                // top edge highlight
-                drawLine(edgeTop, Offset(0f, 0f), Offset(size.width, 0f), strokeWidth = 1f)
+            .drawWithContent {
+                // Subtle 45° directional dome highlight across the upper face
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colors = listOf(
+                            edgeTop.copy(alpha = domeAlpha),
+                            Color.Transparent,
+                        ),
+                        start = Offset.Zero,
+                        end = Offset(size.width * 0.65f, size.height * 0.85f),
+                    ),
+                )
+                drawContent()
+                val strokePx = 1.dp.toPx()
+                when (val outline = shape.createOutline(size, layoutDirection, this)) {
+                    is Outline.Rectangle -> {
+                        drawLine(edgeTop, Offset(0f, 0f), Offset(size.width, 0f), strokeWidth = strokePx)
+                        drawLine(edge, Offset(0f, size.height), Offset(size.width, size.height), strokeWidth = strokePx)
+                    }
+                    is Outline.Rounded -> {
+                        val path = Path().apply { addRoundRect(outline.roundRect) }
+                        drawPath(
+                            path = path,
+                            brush = Brush.verticalGradient(listOf(edgeTop, edge)),
+                            style = Stroke(width = strokePx),
+                        )
+                    }
+                    is Outline.Generic -> {
+                        drawPath(
+                            path = outline.path,
+                            brush = Brush.verticalGradient(listOf(edgeTop, edge)),
+                            style = Stroke(width = strokePx),
+                        )
+                    }
+                }
             },
     ) { content() }
 }

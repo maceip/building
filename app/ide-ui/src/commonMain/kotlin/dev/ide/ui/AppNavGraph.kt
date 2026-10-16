@@ -766,6 +766,8 @@ private fun ProjectPickerRoute(
         onDismissLegacyRecovery = app::dismissLegacyRecovery,
         loadIcon = { backend.projects.projectIcon(it.rootPath) },
         loadIconImage = { backend.projects.imageBytes(it) },
+        backend = backend,
+        onCloneAndOpen = { _, _ -> app.openPluginScreen(VcsService.SCREEN_CLONE) },
     )
     if (notificationsVisible) {
         NotificationsSheet(
@@ -822,6 +824,7 @@ private fun StoreRoute(app: CodeAssistAppState, fileActions: FileActions) {
                 backend = app.backend,
                 onOpenItem = app::openStoreItem,
                 onOpenHub = { app.openHub(Screen.Projects) },
+                onCloneAndOpen = { _, _ -> app.openPluginScreen(VcsService.SCREEN_CLONE) },
             )
             return
         }

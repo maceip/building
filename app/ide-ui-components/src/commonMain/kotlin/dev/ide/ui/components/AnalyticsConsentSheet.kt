@@ -37,7 +37,7 @@ import dev.ide.ui.theme.Ca
 import org.jetbrains.compose.resources.stringResource
 
 /**
- * The one-time, **opt-in** analytics consent prompt shown on first launch (after onboarding). Collection
+ * The one-time, **opt-in** analytics consent prompt shown on first launch. Collection
  * does not begin until the user taps "Allow" — declining (or dismissing) records the decision so the
  * prompt isn't shown again. Plain-language summary of what's collected and the firm "never" line; an
  * optional [onLearnMore] opens the privacy details. Adapts to the platform like the other notices

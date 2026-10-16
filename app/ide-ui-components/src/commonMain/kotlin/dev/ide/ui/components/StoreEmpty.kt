@@ -102,9 +102,10 @@ fun EmptyStoreHero(
 ) {
     val c = MaterialTheme.colorScheme
     Surface(
-        shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp, bottomEnd = 12.dp, bottomStart = 32.dp),
+        shape = RoundedCornerShape(12.dp),
         color = c.primaryContainer,
         contentColor = c.onPrimaryContainer,
+        border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
         modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp),
     ) {
         Box(Modifier.clipToBounds()) {
@@ -115,41 +116,41 @@ fun EmptyStoreHero(
                 tint = c.onPrimaryContainer.copy(alpha = 0.13f),
                 modifier = Modifier.align(Alignment.BottomEnd).offset(x = 24.dp, y = 34.dp),
             )
-            Column(Modifier.padding(horizontal = 20.dp, vertical = 24.dp)) {
+            Column(Modifier.padding(horizontal = 20.dp, vertical = 20.dp)) {
                 Eyebrow(stringResource(Res.string.store_hero_eyebrow_open), color = c.onPrimaryContainer.copy(alpha = 0.75f))
                 Text(
                     stringResource(Res.string.store_empty_hero_title),
                     style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.Medium, fontSize = 26.sp, lineHeight = 32.sp,
-                        letterSpacing = (-0.7).sp,
+                        fontWeight = FontWeight.Medium, fontSize = 24.sp, lineHeight = 30.sp,
+                        letterSpacing = (-0.6).sp,
                     ),
                     color = c.onPrimaryContainer,
-                    modifier = Modifier.padding(top = 8.dp),
+                    modifier = Modifier.padding(top = 6.dp),
                 )
                 Text(
                     stringResource(Res.string.store_empty_hero_body),
                     style = MaterialTheme.typography.bodyMedium,
                     color = c.onPrimaryContainer.copy(alpha = 0.82f),
-                    modifier = Modifier.padding(top = 10.dp),
+                    modifier = Modifier.padding(top = 8.dp),
                 )
                 FlowRow(
-                    Modifier.fillMaxWidth().padding(top = 18.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    Modifier.fillMaxWidth().padding(top = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Surface(
                         onClick = onPublish,
-                        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 26.dp, bottomEnd = 16.dp, bottomStart = 26.dp),
+                        shape = RoundedCornerShape(8.dp),
                         color = c.onPrimaryContainer,
                         contentColor = c.primaryContainer,
-                        modifier = Modifier.height(46.dp),
+                        modifier = Modifier.height(36.dp),
                     ) {
                         Row(
-                            Modifier.padding(horizontal = 22.dp),
+                            Modifier.padding(horizontal = 16.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Symbol(CaSymbols.upload, contentDescription = null, size = 20.dp)
+                            Symbol(CaSymbols.upload, contentDescription = null, size = 18.dp)
                             Text(
                                 if (hasSubmission) {
                                     stringResource(Res.string.store_publish_another)
@@ -162,13 +163,13 @@ fun EmptyStoreHero(
                     }
                     Surface(
                         onClick = onGuide,
-                        shape = CircleShape,
+                        shape = RoundedCornerShape(8.dp),
                         color = Color.Transparent,
                         contentColor = c.onPrimaryContainer,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, c.onPrimaryContainer),
-                        modifier = Modifier.height(46.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, c.onPrimaryContainer.copy(alpha = 0.45f)),
+                        modifier = Modifier.height(36.dp),
                     ) {
-                        Box(Modifier.padding(horizontal = 20.dp), contentAlignment = Alignment.Center) {
+                        Box(Modifier.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
                             Text(stringResource(Res.string.store_publishing_guide), style = MaterialTheme.typography.labelLarge)
                         }
                     }
@@ -263,9 +264,10 @@ fun NotifySwitchRow(
     val stateOn = stringResource(Res.string.store_notify_state_on)
     val stateOff = stringResource(Res.string.store_notify_state_off)
     Surface(
-        shape = RoundedCornerShape(26.dp),
+        shape = RoundedCornerShape(10.dp),
         color = c.surfaceContainerLow,
         contentColor = c.onSurface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
         modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp),
     ) {
         Row(
@@ -360,18 +362,19 @@ fun SubmissionStatusCard(
         else -> CaSymbols.hourglassTop
     }
     Surface(
-        shape = RoundedCornerShape(26.dp),
+        shape = RoundedCornerShape(10.dp),
         color = c.secondaryContainer,
         contentColor = c.onSecondaryContainer,
+        border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
         modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp),
     ) {
         Row(
-            Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+            Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Box(
-                Modifier.size(44.dp).clip(RoundedCornerShape(16.dp)).background(c.onSecondaryContainer),
+                Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(c.onSecondaryContainer),
                 contentAlignment = Alignment.Center,
             ) {
                 SpinningGlyph(glyph, spinning, c.secondaryContainer)
@@ -394,13 +397,13 @@ fun SubmissionStatusCard(
             }
             Surface(
                 onClick = action,
-                shape = CircleShape,
+                shape = RoundedCornerShape(7.dp),
                 color = Color.Transparent,
                 contentColor = c.onSecondaryContainer,
-                border = androidx.compose.foundation.BorderStroke(1.dp, c.onSecondaryContainer),
-                modifier = Modifier.height(34.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, c.onSecondaryContainer.copy(alpha = 0.45f)),
+                modifier = Modifier.height(32.dp),
             ) {
-                Box(Modifier.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
                     Text(actionLabel, style = MaterialTheme.typography.labelMedium)
                 }
             }

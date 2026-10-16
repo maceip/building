@@ -46,7 +46,7 @@ import org.jetbrains.compose.resources.stringResource
  * One-time upgrade notice for users coming from a previous app version. Explains that the rebuilt
  * on-device build system uses its own (incompatible) project configuration, so older projects won't
  * open — and offers a one-tap "Back up projects" to a `.zip` so nothing is lost. Adapts to the
- * platform like onboarding (centered dialog on desktop, bottom sheet on mobile).
+ * platform (centered dialog on desktop, bottom sheet on mobile).
  *
  * [onBackup] creates the zip and hands it to the host's share/save sheet; [onDismiss] acknowledges the
  * notice (the host persists the flag so it isn't shown again).

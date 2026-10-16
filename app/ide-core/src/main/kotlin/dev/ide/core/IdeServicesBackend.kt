@@ -52,6 +52,7 @@ import dev.ide.core.backend.SdkBackend
 import dev.ide.core.backend.SearchBackend
 import dev.ide.core.backend.SettingsBackend
 import dev.ide.core.backend.SigningBackend
+import dev.ide.core.backend.DiscoveryBackend
 import dev.ide.core.backend.VcsBackend
 import dev.ide.model.event.ProjectEvent
 import dev.ide.model.event.ProjectTopics
@@ -554,6 +555,14 @@ class IdeServicesBackend(
     override val vcs: dev.ide.ui.backend.VcsService =
         if (manager?.env?.pluginCatalog?.isEnabled(VcsPlugin.ID) != false) VcsBackend(this)
         else dev.ide.ui.backend.VcsService.Unsupported
+
+    override val discovery: dev.ide.ui.backend.GitHubDiscoveryService =
+        DiscoveryBackend(
+            client = dev.ide.core.discovery.GitHubDiscoveryClient(
+                token = null,
+                cacheDir = manager?.projectsRoot?.parent
+            )
+        )
 
     // The Compose UI facets of the enabled built-in plugins (see BuiltInPlugins). The shell registers them into
     // UiPluginHost; a disabled plugin's facet isn't in this list, so its UI never appears. Empty with no manager.

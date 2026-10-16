@@ -167,7 +167,7 @@ compose.desktop {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "CodeAssist"
             packageVersion = desktopVersion
-            description = "Android and Kotlin IDE"
+            description = "Universal app workspace"
             vendor = "CodeAssist"
             // The bundled runtime is also the JDK user projects compile and complete against, and kotlinc needs
             // java.management: a runtime trimmed to the modules the IDE itself links fails every Kotlin build.

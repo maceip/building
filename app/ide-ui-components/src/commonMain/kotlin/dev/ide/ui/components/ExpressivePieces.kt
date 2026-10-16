@@ -146,33 +146,36 @@ fun CountFilterChip(
     modifier: Modifier = Modifier,
 ) {
     val c = MaterialTheme.colorScheme
-    val bg = if (selected) c.primaryContainer else Color.Transparent
+    val bg = if (selected) c.primaryContainer else c.surfaceContainerLow
     val fg = if (selected) c.onPrimaryContainer else c.onSurfaceVariant
     val badgeBg = if (selected) c.onPrimaryContainer else c.surfaceContainerHigh
     val badgeFg = if (selected) c.primaryContainer else c.onSurfaceVariant
     Surface(
         selected = selected,
         onClick = onClick,
-        shape = CircleShape,
+        shape = RoundedCornerShape(7.dp),
         color = bg,
         contentColor = fg,
-        border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, c.outline),
-        modifier = modifier.height(32.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) c.primary.copy(alpha = 0.40f) else c.outlineVariant,
+        ),
+        modifier = modifier.height(30.dp),
     ) {
         Row(
-            Modifier.padding(horizontal = 12.dp),
+            Modifier.padding(start = 10.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(label, style = MaterialTheme.typography.labelMedium)
             Box(
                 Modifier.defaultMinSize(minWidth = 18.dp).height(18.dp)
-                    .clip(CircleShape).background(badgeBg)
+                    .clip(RoundedCornerShape(5.dp)).background(badgeBg)
                     .padding(horizontal = 4.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    count.toString(),
+                RareCounter(
+                    value = count,
                     style = MaterialTheme.typography.labelSmall,
                     color = badgeFg,
                 )
@@ -195,10 +198,13 @@ fun PillChip(
     Surface(
         selected = selected,
         onClick = onClick,
-        shape = CircleShape,
-        color = if (selected) c.primaryContainer else Color.Transparent,
+        shape = RoundedCornerShape(7.dp),
+        color = if (selected) c.primaryContainer else c.surfaceContainerLow,
         contentColor = if (selected) c.onPrimaryContainer else c.onSurfaceVariant,
-        border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, c.outline),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) c.primary.copy(alpha = 0.40f) else c.outlineVariant,
+        ),
         modifier = modifier.height(height),
     ) {
         Row(
@@ -263,14 +269,14 @@ fun PrimaryActionButton(
         contentColor = MaterialTheme.colorScheme.onPrimary,
         shadowElevation = 0.dp,
         interactionSource = interaction,
-        modifier = modifier.height(42.dp).pressScale(interaction),
+        modifier = modifier.height(36.dp).pressScale(interaction),
     ) {
         Row(
-            Modifier.padding(horizontal = 14.dp),
+            Modifier.padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Symbol(glyph, contentDescription = null, size = 20.dp)
+            Symbol(glyph, contentDescription = null, size = 18.dp)
             Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
         }
     }
@@ -284,9 +290,9 @@ fun SquareToneButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     shape: Shape = CaShapes.SquareAction,
-    container: Color = MaterialTheme.colorScheme.secondaryContainer,
-    content: Color = MaterialTheme.colorScheme.onSecondaryContainer,
-    size: Dp = 42.dp,
+    container: Color = MaterialTheme.colorScheme.surfaceContainerLow,
+    content: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    size: Dp = 36.dp,
 ) {
     val interaction = remember { MutableInteractionSource() }
     Surface(
@@ -294,11 +300,12 @@ fun SquareToneButton(
         shape = shape,
         color = container,
         contentColor = content,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         interactionSource = interaction,
         modifier = modifier.size(size).pressScale(interaction, pressed = 0.96f),
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Symbol(glyph, contentDescription = contentDescription, size = (size.value * 0.44f).dp)
+            Symbol(glyph, contentDescription = contentDescription, size = (size.value * 0.46f).dp)
         }
     }
 }

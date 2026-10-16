@@ -120,12 +120,22 @@ subprojects {
                     if (name == "regressionTest") includeTags("regression") else excludeTags("regression")
                 }
             }
-            tasks.register<Test>("regressionTest") {
-                group = "verification"
-                description = "Runs the opt-in @Tag(\"regression\") completion benchmark/quality/memory suites."
-                val testTask = tasks.named<Test>(if (pluginId.endsWith("multiplatform")) "jvmTest" else "test")
-                testClassesDirs = testTask.get().testClassesDirs
-                classpath = testTask.get().classpath
+            val testTaskName = when {
+                pluginId.endsWith("multiplatform") -> when {
+                    "jvmTest" in tasks.names -> "jvmTest"
+                    "desktopTest" in tasks.names -> "desktopTest"
+                    else -> null
+                }
+                "test" in tasks.names -> "test"
+                else -> null
+            }
+            if (testTaskName != null) {
+                tasks.register<Test>("regressionTest") {
+                    group = "verification"
+                    description = "Runs the opt-in @Tag(\"regression\") completion benchmark/quality/memory suites."
+                    val testTask = tasks.named<Test>(testTaskName)
+                    testClassesDirs = testTask.get().testClassesDirs
+                    classpath = testTask.get().classpath
                 // Baselines are committed under <module>/baselines and compared on every run; point the suites
                 // at that directory (the Test working dir is the module dir, but be explicit) and give the
                 // memory suites headroom. Always re-run (perf isn't an up-to-date-able output) and surface the
@@ -151,6 +161,7 @@ subprojects {
             }
         }
     }
+}
 
 }
 

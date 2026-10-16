@@ -10,7 +10,6 @@ import dev.ide.ui.components.BuildNotificationGate
 import dev.ide.ui.components.BusyOverlay
 import dev.ide.ui.components.ErrorDialog
 import dev.ide.ui.components.MigrationNotice
-import dev.ide.ui.components.OnboardingSheet
 import dev.ide.ui.components.PermissionDialog
 import dev.ide.ui.components.RunConflictDialog
 import dev.ide.ui.ext.OverlayContext
@@ -22,11 +21,11 @@ import org.jetbrains.compose.resources.stringResource
 
 /**
  * The app-wide overlays layered over the current screen, split out of [CodeAssistApp] so its body stays
- * navigation + layout. Two groups: the one-at-a-time first-launch sheets (build-system migration notice, the
- * onboarding tour, analytics consent) shown only over the project picker ([onPicker]); and the always-on
- * dialogs (run-sandbox permission prompt, first-build notification gate, run-conflict confirmation, the
- * non-fatal error dialog, and the unrecognized-`.caproj` notice). Each is an already-encapsulated composable;
- * this only gates visibility and wires the callbacks.
+ * navigation + layout. Two groups: the one-at-a-time first-launch sheets (build-system migration notice,
+ * analytics consent) shown only over the project picker ([onPicker]); and the always-on dialogs (run-sandbox
+ * permission prompt, first-build notification gate, run-conflict confirmation, the non-fatal error dialog,
+ * and the unrecognized-`.caproj` notice). Each is an already-encapsulated composable; this only gates
+ * visibility and wires the callbacks.
  */
 @Composable
 internal fun AppOverlays(
@@ -38,9 +37,6 @@ internal fun AppOverlays(
     showMigration: Boolean,
     onBackup: suspend () -> Unit,
     onDismissMigration: () -> Unit,
-    showOnboarding: Boolean,
-    onGetStarted: () -> Unit,
-    onFinishOnboarding: () -> Unit,
     showAnalytics: Boolean,
     onAllowAnalytics: () -> Unit,
     onDeclineAnalytics: () -> Unit,
@@ -49,18 +45,11 @@ internal fun AppOverlays(
     /** True while a picked Gradle folder is being copied + imported — shows the blocking busy overlay. */
     importBusy: Boolean = false,
 ) {
-    // Upgrade notice first (the build-system migration warning), then the feature tour — both over the picker
-    // only, one at a time.
+    // Upgrade notice first (the build-system migration warning), over the picker only, one at a time.
     MigrationNotice(visible = showMigration && onPicker, onBackup = onBackup, onDismiss = onDismissMigration)
-    OnboardingSheet(
-        visible = showOnboarding && !showMigration && onPicker,
-        // Final CTA: send the user straight into the Create-Project flow so the tour ends on a concrete action.
-        onGetStarted = onGetStarted,
-        onFinish = onFinishOnboarding,
-    )
-    // Opt-in analytics consent — last of the first-launch sheets, after onboarding/migration.
+    // Opt-in analytics consent — last of the first-launch sheets, after migration.
     AnalyticsConsentSheet(
-        visible = showAnalytics && !showOnboarding && !showMigration && onPicker,
+        visible = showAnalytics && !showMigration && onPicker,
         onAllow = onAllowAnalytics,
         onDecline = onDeclineAnalytics,
         onLearnMore = if (fileActions.canOpenUrl) ({ fileActions.openUrl(BetaInfo.PRIVACY_URL) }) else null,

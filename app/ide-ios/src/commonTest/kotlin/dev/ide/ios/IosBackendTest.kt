@@ -1576,6 +1576,35 @@ class IosBackendTest {
         )
     }
 
+    @Test
+    fun buildServiceIsSupportedAndLaunchesInteractiveSession() = runTest {
+        assertTrue(backend.build.supported(), "interactive build/run is supported on iOS")
+        val tasks = backend.build.runTasks()
+        assertTrue(tasks.isNotEmpty(), "has run tasks")
+        assertEquals("run", tasks.first().id)
+
+        val projectRoot = openSearchableProject()
+        val file = IosFiles.join(projectRoot, "app/src/main/kotlin/demo/App.kt")
+        IosFiles.writeText(
+            file,
+            """
+            package demo
+            import androidx.compose.runtime.Composable
+            import androidx.compose.ui.tooling.preview.Preview
+            @Preview
+            @Composable fun MainApp() {
+            }
+            """.trimIndent()
+        )
+        backend.editor.updateDocument(file, IosFiles.readText(file))
+
+        backend.build.setRunSurfaceSize(320, 480)
+        backend.build.sendRunPointer(0, 100f, 100f)
+        backend.build.sendRunPointer(2, 100f, 100f)
+        backend.build.stopBuild()
+        assertEquals(dev.ide.ui.backend.RunStatus.Idle, backend.build.buildState.value.status)
+    }
+
 }
 
 /** A per-instance suffix so concurrently-run test classes cannot share a directory. */

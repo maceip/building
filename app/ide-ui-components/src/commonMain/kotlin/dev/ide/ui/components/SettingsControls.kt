@@ -149,12 +149,17 @@ fun SettingsChoiceRow(
 
 @Composable
 private fun SettingsChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val bg by animateColorAsState(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh, tween(Motion.FAST), label = "chipBg")
+    val c = MaterialTheme.colorScheme
+    val bg by animateColorAsState(if (selected) c.primary else c.surfaceContainerHigh, tween(Motion.FAST), label = "chipBg")
+    val shape = RoundedCornerShape(Ca.radius.control)
     Box(
-        Modifier.background(bg, RoundedCornerShape(Ca.radius.pill)).clickable(remember { MutableInteractionSource() }, null, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 7.dp),
+        Modifier
+            .background(bg, shape)
+            .border(1.dp, if (selected) c.primary else c.outlineVariant, shape)
+            .clickable(remember { MutableInteractionSource() }, null, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
-        Text(label, color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+        Text(label, color = if (selected) c.onPrimary else c.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
     }
 }
 

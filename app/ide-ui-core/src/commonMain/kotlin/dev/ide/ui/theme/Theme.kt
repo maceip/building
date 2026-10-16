@@ -1,6 +1,7 @@
 package dev.ide.ui.theme
 
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -42,7 +43,7 @@ import dev.ide.ui.theme.colors.SchemeDefaults
  * The preset accent palettes. [Lime] is the default and the one the app's identity is built on: unlike
  * the other three it brings its own warm neutral ramp rather than tinting the shared one.
  */
-enum class CaAccent { Lime, Violet, Teal, Orange }
+enum class CaAccent { Lime, Violet, Teal, Orange, Midnight }
 
 @Immutable
 data class SyntaxColors(
@@ -204,22 +205,102 @@ private val LightSyntax = SyntaxColors(
 
 private fun darkColors(accent: Color, accentStrong: Color) = CodeAssistColors(
     isDark = true,
-    bg = Color(0xFF161719),
-    editorBg = Color(0xFF1B1C1F),
-    consoleBg = Color(0xFF1B1C1F),
-    surface = Color(0xFF232428),
-    surface2 = Color(0xFF2B2C31),
-    surface3 = Color(0xFF34353B),
-    textPrimary = Color(0xFFE9E9EC),
-    textSecondary = Color(0xFFA0A1AA),
-    textTertiary = Color(0xFF6F7079),
+    bg = Color(0xFF09090B),
+    editorBg = Color(0xFF0C0C0F),
+    consoleBg = Color(0xFF0B0B0E),
+    surface = Color(0xFF111114),
+    surface2 = Color(0xFF18181C),
+    surface3 = Color(0xFF222228),
+    textPrimary = Color(0xFFF4F4F6),
+    textSecondary = Color(0xFFA1A1AA),
+    textTertiary = Color(0xFF71717A),
     textOnAccent = Color(0xFFFFFFFF),
-    separator = Color.White.copy(alpha = 0.09f),
-    separatorStrong = Color.White.copy(alpha = 0.14f),
-    hairline = Color.White.copy(alpha = 0.07f),
-    gutterText = Color(0xFF5B5C64),
-    currentLine = Color.White.copy(alpha = 0.045f),
-    selection = accent.copy(alpha = 0.34f),
+    separator = Color(0xFF232329),
+    separatorStrong = Color(0xFF2E2E36),
+    hairline = Color(0xFF1C1C22),
+    gutterText = Color(0xFF52525B),
+    currentLine = Color.White.copy(alpha = 0.038f),
+    selection = accent.copy(alpha = 0.28f),
+    accent = accent,
+    accentStrong = accentStrong,
+    accentSoft = accent.copy(alpha = 0.14f),
+    success = Color(0xFF22C55E),
+    run = Color(0xFF22C55E),
+    warning = Color(0xFFF59E0B),
+    error = Color(0xFFF87171),
+    info = Color(0xFF38BDF8),
+    gitAdded = Color(0xFF22C55E),
+    gitModified = Color(0xFFF59E0B),
+    gitDeleted = Color(0xFFF87171),
+    gitUntracked = Color(0xFF38BDF8),
+    glassThin = Color(0xFF141418).copy(alpha = 0.62f),
+    glassReg = Color(0xFF16161B).copy(alpha = 0.78f),
+    glassThick = Color(0xFF111115).copy(alpha = 0.90f),
+    glassEdge = Color.White.copy(alpha = 0.08f),
+    glassEdgeTop = Color.White.copy(alpha = 0.14f),
+    scrim = Color.Black.copy(alpha = 0.60f),
+    syntax = DarkSyntax,
+    block = DarkBlocks,
+)
+
+private fun lightColors(accent: Color, accentStrong: Color) = CodeAssistColors(
+    isDark = false,
+    bg = Color(0xFFFAFAFA),
+    editorBg = Color(0xFFFFFFFF),
+    consoleBg = Color(0xFFFAFAFA),
+    surface = Color(0xFFFFFFFF),
+    surface2 = Color(0xFFF4F4F5),
+    surface3 = Color(0xFFE4E4E7),
+    textPrimary = Color(0xFF09090B),
+    textSecondary = Color(0xFF52525B),
+    textTertiary = Color(0xFF71717A),
+    textOnAccent = Color(0xFFFFFFFF),
+    separator = Color(0xFFE4E4E7),
+    separatorStrong = Color(0xFFD4D4D8),
+    hairline = Color(0xFFEEEEF0),
+    gutterText = Color(0xFFA1A1AA),
+    currentLine = Color.Black.copy(alpha = 0.03f),
+    selection = accent.copy(alpha = 0.20f),
+    accent = accent,
+    accentStrong = accentStrong,
+    accentSoft = accent.copy(alpha = 0.10f),
+    success = Color(0xFF16A34A),
+    run = Color(0xFF16A34A),
+    warning = Color(0xFFD97706),
+    error = Color(0xFFDC2626),
+    info = Color(0xFF0284C7),
+    gitAdded = Color(0xFF16A34A),
+    gitModified = Color(0xFFD97706),
+    gitDeleted = Color(0xFFDC2626),
+    gitUntracked = Color(0xFF0284C7),
+    glassThin = Color.White.copy(alpha = 0.65f),
+    glassReg = Color(0xFFFAFAFA).copy(alpha = 0.82f),
+    glassThick = Color(0xFFF4F4F5).copy(alpha = 0.92f),
+    glassEdge = Color(0xFFE4E4E7),
+    glassEdgeTop = Color.White.copy(alpha = 0.92f),
+    scrim = Color(0xFF09090B).copy(alpha = 0.36f),
+    syntax = LightSyntax,
+    block = LightBlocks,
+)
+
+private fun oledDarkColors(accent: Color, accentStrong: Color) = CodeAssistColors(
+    isDark = true,
+    bg = Color(0xFF090A0F),
+    editorBg = Color(0xFF0D0E15),
+    consoleBg = Color(0xFF0D0E15),
+    surface = Color(0xFF131620),
+    surface2 = Color(0xFF1A1E2C),
+    surface3 = Color(0xFF222738),
+    textPrimary = Color(0xFFF1F5F9),
+    textSecondary = Color(0xFF94A3B8),
+    textTertiary = Color(0xFF64748B),
+    textOnAccent = Color(0xFFFFFFFF),
+    separator = Color(0xFF212635),
+    separatorStrong = Color(0xFF2D3446),
+    hairline = Color(0xFF1E2230),
+    gutterText = Color(0xFF475569),
+    currentLine = Color(0xFF161A26),
+    selection = accent.copy(alpha = 0.32f),
     accent = accent,
     accentStrong = accentStrong,
     accentSoft = accent.copy(alpha = 0.16f),
@@ -232,60 +313,22 @@ private fun darkColors(accent: Color, accentStrong: Color) = CodeAssistColors(
     gitModified = Color(0xFFFFC44D),
     gitDeleted = Color(0xFFFF6B63),
     gitUntracked = Color(0xFF5AC8E0),
-    glassThin = Color(0xFF1C1D21).copy(alpha = 0.55f),
-    glassReg = Color(0xFF1E1F24).copy(alpha = 0.72f),
-    glassThick = Color(0xFF18191C).copy(alpha = 0.86f),
-    glassEdge = Color.White.copy(alpha = 0.10f),
-    glassEdgeTop = Color.White.copy(alpha = 0.16f),
-    scrim = Color.Black.copy(alpha = 0.5f),
+    glassThin = Color(0xFF0F121B).copy(alpha = 0.65f),
+    glassReg = Color(0xFF131622).copy(alpha = 0.82f),
+    glassThick = Color(0xFF0D0F18).copy(alpha = 0.92f),
+    glassEdge = Color(0xFF2B3244),
+    glassEdgeTop = Color(0xFF3B455D),
+    scrim = Color.Black.copy(alpha = 0.65f),
     syntax = DarkSyntax,
     block = DarkBlocks,
-)
-
-private fun lightColors(accent: Color, accentStrong: Color) = CodeAssistColors(
-    isDark = false,
-    bg = Color(0xFFECEBE7),
-    editorBg = Color(0xFFFAF9F6),
-    consoleBg = Color(0xFFFAF9F6),
-    surface = Color(0xFFFFFFFF),
-    surface2 = Color(0xFFF4F3EF),
-    surface3 = Color(0xFFE8E7E1),
-    textPrimary = Color(0xFF1D1E22),
-    textSecondary = Color(0xFF62636B),
-    textTertiary = Color(0xFF97989F),
-    textOnAccent = Color(0xFFFFFFFF),
-    separator = Color.Black.copy(alpha = 0.09f),
-    separatorStrong = Color.Black.copy(alpha = 0.14f),
-    hairline = Color.Black.copy(alpha = 0.06f),
-    gutterText = Color(0xFFB3B2AD),
-    currentLine = Color.Black.copy(alpha = 0.035f),
-    selection = accent.copy(alpha = 0.24f),
-    accent = accent,
-    accentStrong = accentStrong,
-    accentSoft = accent.copy(alpha = 0.12f),
-    success = Color(0xFF29A847),
-    run = Color(0xFF29A847),
-    warning = Color(0xFFD98300),
-    error = Color(0xFFDF4A45),
-    info = Color(0xFF2399B8),
-    gitAdded = Color(0xFF29A847),
-    gitModified = Color(0xFFC98A00),
-    gitDeleted = Color(0xFFDF4A45),
-    gitUntracked = Color(0xFF2399B8),
-    glassThin = Color.White.copy(alpha = 0.55f),
-    glassReg = Color(0xFFFCFBF9).copy(alpha = 0.72f),
-    glassThick = Color(0xFFF8F7F4).copy(alpha = 0.88f),
-    glassEdge = Color.Black.copy(alpha = 0.08f),
-    glassEdgeTop = Color.White.copy(alpha = 0.9f),
-    scrim = Color(0xFF1E1C18).copy(alpha = 0.32f),
-    syntax = LightSyntax,
-    block = LightBlocks,
 )
 
 fun caColors(dark: Boolean, accent: CaAccent): CodeAssistColors = when {
     // Default (Lime enum id retained for settings compatibility): restrained IDE steel-blue accent.
     dark && accent == CaAccent.Lime -> darkColors(Color(0xFF7AA2F7), Color(0xFF5A8DEE))
     !dark && accent == CaAccent.Lime -> lightColors(Color(0xFF2563EB), Color(0xFF1D4ED8))
+    dark && accent == CaAccent.Midnight -> oledDarkColors(Color(0xFF60A5FA), Color(0xFF3B82F6))
+    !dark && accent == CaAccent.Midnight -> lightColors(Color(0xFF2563EB), Color(0xFF1D4ED8))
     dark && accent == CaAccent.Violet -> darkColors(Color(0xFFB487F7), Color(0xFFA06BFF))
     dark && accent == CaAccent.Teal -> darkColors(Color(0xFF5CCFE6), Color(0xFF3FBDD9))
     // Legacy CodeAssist orange (the Darcula `#CC7832` from the classic `<>` logo).
@@ -478,6 +521,7 @@ fun CodeAssistTheme(
 
     MaterialTheme(colorScheme = scheme, typography = typography, shapes = ExpressiveShapes) {
         CompositionLocalProvider(
+            LocalMinimumInteractiveComponentSize provides 0.dp,
             LocalCaColors provides bridged,
             LocalCaType provides caType,
             LocalIdeColors provides ide,

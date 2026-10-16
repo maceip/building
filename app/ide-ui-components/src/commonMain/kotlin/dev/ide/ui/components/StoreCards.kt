@@ -67,17 +67,17 @@ import org.jetbrains.compose.resources.pluralStringResource
 
 /** The fixed editor palette the code motifs are drawn in. Independent of the app theme, by design. */
 object CodeMotifColors {
-    val Chrome = Color(0xFF151321)
-    val ChromeBar = Color(0xFF0E0D16)
-    val Gutter = Color(0xFF111020)
-    val TreeBar = Color(0xFF2E2C42)
-    val Keyword = Color(0xFFC792EA)
-    val Identifier = Color(0xFF82AAFF)
-    val StringLit = Color(0xFFC3E88D)
-    val Plain = Color(0xFFA6ACCD)
-    val Comment = Color(0xFF5C6370)
-    val FileName = Color(0xFF7C7B95)
-    val Dot = Color(0xFF3B3A4A)
+    val Chrome = Color(0xFF0C0C0F)
+    val ChromeBar = Color(0xFF09090B)
+    val Gutter = Color(0xFF111114)
+    val TreeBar = Color(0xFF232329)
+    val Keyword = Color(0xFFCD7EE0)
+    val Identifier = Color(0xFF6E8EF5)
+    val StringLit = Color(0xFF98C97A)
+    val Plain = Color(0xFFA1A1AA)
+    val Comment = Color(0xFF52525B)
+    val FileName = Color(0xFF71717A)
+    val Dot = Color(0xFF2E2E36)
 }
 
 /** One line of the abstract code motif: how wide it runs, what colour it is, and how far it is indented. */
@@ -338,13 +338,13 @@ fun StoreListRow(
         }
         Surface(
             onClick = onAction,
-            shape = CircleShape,
-            color = if (actionFilled) c.primary else Color.Transparent,
-            contentColor = if (actionFilled) c.onPrimary else c.primary,
-            border = if (actionFilled) null else androidx.compose.foundation.BorderStroke(1.dp, c.outline),
-            modifier = Modifier.height(38.dp),
+            shape = RoundedCornerShape(8.dp),
+            color = if (actionFilled) c.primary else c.surfaceContainerLow,
+            contentColor = if (actionFilled) c.onPrimary else c.onSurface,
+            border = if (actionFilled) null else androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
+            modifier = Modifier.height(34.dp),
         ) {
-            Box(Modifier.padding(horizontal = 18.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
                 Text(actionLabel, style = MaterialTheme.typography.labelLarge)
             }
         }
