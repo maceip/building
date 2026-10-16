@@ -10,8 +10,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Density
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.ide.ui.StubBackend
-import dev.ide.ui.ads.LocalAds
-import dev.ide.ui.fakeAdController
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.StoreService
 import dev.ide.ui.backend.UiStoreCatalog
@@ -91,10 +89,8 @@ class ProjectsStoreScreenSnapshot {
     private fun snapshot(name: String, backend: IdeBackend, dark: Boolean, height: Int = HEIGHT) {
         val scene = ImageComposeScene(width = WIDTH, height = height, density = Density(2f)) {
             CodeAssistTheme(dark = dark) {
-                CompositionLocalProvider(LocalAds provides fakeAdController(StubBackend())) {
-                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                        ProjectsStoreScreen(backend = backend, onOpenItem = {})
-                    }
+                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                    ProjectsStoreScreen(backend = backend, onOpenItem = {})
                 }
             }
         }

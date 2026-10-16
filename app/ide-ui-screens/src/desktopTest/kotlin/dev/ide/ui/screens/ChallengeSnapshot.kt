@@ -16,8 +16,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.StubBackend
-import dev.ide.ui.ads.LocalAds
-import dev.ide.ui.fakeAdController
 import dev.ide.ui.backend.ChallengeService
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.UiChallengeBoard
@@ -170,9 +168,7 @@ class ChallengeSnapshot {
         val scene = ImageComposeScene(width = 824, height = 2200, density = Density(2f)) {
             CodeAssistTheme(dark = true) {
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                    CompositionLocalProvider(LocalAds provides fakeAdController(backend)) {
-                        ChallengeBoardScreen(backend = backend, date = "2026-09-07", onBack = {})
-                    }
+                    ChallengeBoardScreen(backend = backend, date = "2026-09-07", onBack = {})
                 }
             }
         }
@@ -198,19 +194,15 @@ class ChallengeSnapshot {
             CodeAssistTheme(dark = dark) {
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                     val backend = backend(signedIn)
-                    // With a host the tab's ad slot draws; without one it is invisible, and an ad that
-                    // bleeds past the 20dp gutter is exactly what a snapshot of this screen is for.
-                    CompositionLocalProvider(LocalAds provides fakeAdController(backend)) {
-                        DailyChallengeScreen(
-                            backend = backend,
-                            epoch = 0,
-                            signedIn = signedIn,
-                            onSolve = {},
-                            onSignIn = {},
-                            onOpenBoard = {},
-                            onOpenArchive = {},
-                        )
-                    }
+                    DailyChallengeScreen(
+                        backend = backend,
+                        epoch = 0,
+                        signedIn = signedIn,
+                        onSolve = {},
+                        onSignIn = {},
+                        onOpenBoard = {},
+                        onOpenArchive = {},
+                    )
                 }
             }
         }

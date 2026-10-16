@@ -72,7 +72,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.ide.ui.backend.AdPlacement
 import dev.ide.ui.backend.ProjectInfo
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -81,7 +80,6 @@ import dev.ide.ui.editor.preview.ProjectIconRaster
 import dev.ide.ui.itemsIndexedKeyed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import dev.ide.ui.components.AdSlot
 import dev.ide.ui.components.CountFilterChip
 import dev.ide.ui.components.dashedBorder
 import dev.ide.ui.components.Eyebrow
@@ -385,11 +383,6 @@ fun ProjectsHomeScreen(
             } else {
                 item("empty") { EmptyList() }
             }
-
-            // A native ad below the project list — an idle "between tasks" spot, never over the actions.
-            // Renders nothing unless ads are active (host available, enabled, not a supporter). Padded to
-            // the same 16 dp gutter as the cards, so it sits in the list rather than bleeding past it.
-            item("ad") { AdSlot(AdPlacement.PROJECTS, Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) }
         }
       }
     }
@@ -1244,7 +1237,6 @@ private fun WideProjectsHome(
                         onDelete = onRequestDelete?.let { request -> { request(project) } },
                     )
                 }
-                item("ad") { AdSlot(AdPlacement.PROJECTS, Modifier.padding(top = 16.dp)) }
             }
         }
     }

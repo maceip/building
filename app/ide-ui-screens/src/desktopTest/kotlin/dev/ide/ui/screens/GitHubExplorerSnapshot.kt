@@ -12,13 +12,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.StubBackend
-import dev.ide.ui.ads.LocalAds
 import dev.ide.ui.backend.GitHubDiscoveryService
 import dev.ide.ui.backend.UiDiscoveredRepo
 import dev.ide.ui.backend.UiDiscoveryFeed
 import dev.ide.ui.backend.UiNorthStarBenchmark
 import dev.ide.ui.backend.UiPeerProject
-import dev.ide.ui.fakeAdController
 import dev.ide.ui.theme.CodeAssistTheme
 import org.jetbrains.skia.EncodedImageFormat
 import java.io.File
@@ -123,14 +121,12 @@ class GitHubExplorerSnapshot {
         val backend = DiscoveryStubBackend(sampleFeed)
         val scene = ImageComposeScene(width = 824, height = 2400, density = Density(2f)) {
             CodeAssistTheme(dark = dark) {
-                CompositionLocalProvider(LocalAds provides fakeAdController(backend)) {
-                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(vertical = 16.dp)) {
-                        GitHubExplorerFeed(
-                            backend = backend,
-                            onCloneAndOpen = { _, _ -> },
-                            initialFeed = sampleFeed
-                        )
-                    }
+                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(vertical = 16.dp)) {
+                    GitHubExplorerFeed(
+                        backend = backend,
+                        onCloneAndOpen = { _, _ -> },
+                        initialFeed = sampleFeed
+                    )
                 }
             }
         }

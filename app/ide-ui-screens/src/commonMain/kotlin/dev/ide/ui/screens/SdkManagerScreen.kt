@@ -42,11 +42,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.ide.ui.backend.AdPlacement
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.UiSdkDownload
 import dev.ide.ui.backend.UiSdkPackage
-import dev.ide.ui.components.AdSlot
 import dev.ide.ui.components.CenteredDialog
 import dev.ide.ui.components.IconButtonCa
 import dev.ide.ui.components.LinearProgressIndicator
@@ -218,9 +216,6 @@ fun SdkManagerScreen(backend: IdeBackend, onBack: () -> Unit) {
                 "Platforms provide compile APIs; sources add editor documentation, not runtimes. Downloads continue after you leave this page.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-
-            // A native ad at the foot of this browse/download surface — dead time behind the download bars.
-            AdSlot(AdPlacement.SDK_MANAGER)
         }
     }
     state.licensePrompt?.let { prompt ->

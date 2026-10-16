@@ -432,9 +432,6 @@ val bundleComposeDrawablesAsset = tasks.register<Copy>("bundleComposeDrawablesAs
 // environment explicitly; ordinary Gradle builds retain property > environment > shared defaults.
 val releaseConfig = AndroidReleaseConfig.from(project)
 val releaseAdsEnabled = releaseConfig.adsEnabled
-val testAdmobAppId = "ca-app-pub-3940256099942544~3347511713"
-val testAdmobNativeUnitId = "ca-app-pub-3940256099942544/2247696110"
-val testAdmobInterstitialUnitId = "ca-app-pub-3940256099942544/1033173712"
 
 val appEngineDelivery = providers.gradleProperty("IDE_APP_ENGINE_DELIVERY").getOrElse("none")
 val runtimeDelivery = providers.gradleProperty("IDE_RUNTIME_DELIVERY").getOrElse("bundled")
@@ -479,14 +476,11 @@ android {
             ?: "https://pub-a5be92b9c0b14a86ae36e09cb86f0ffa.r2.dev"
         buildConfigField("String", "STORE_MEDIA_URL", "\"$storeMediaUrl\"")
 
-        // AdMob defaults = Google TEST ids. Debug inherits these as-is; `release` overrides to the real ids
-        // below, and `profile` (a local perf build) is forced back to test. The App id reaches the manifest
-        // via ${admobAppId}; the native ad-unit id is read from BuildConfig by AndroidAdHost.
-        manifestPlaceholders["admobAppId"] = testAdmobAppId
-        buildConfigField("String", "AD_NATIVE_UNIT_ID", "\"$testAdmobNativeUnitId\"")
-        buildConfigField("String", "AD_INTERSTITIAL_UNIT_ID", "\"$testAdmobInterstitialUnitId\"")
+        manifestPlaceholders["admobAppId"] = ""
+        buildConfigField("String", "AD_NATIVE_UNIT_ID", "\"\"")
+        buildConfigField("String", "AD_INTERSTITIAL_UNIT_ID", "\"\"")
         buildConfigField("String", "AD_NATIVE_UNIT_IDS", "\"\"")
-        buildConfigField("boolean", "ADS_ENABLED", "true")
+        buildConfigField("boolean", "ADS_ENABLED", "false")
         buildConfigField("boolean", "NATIVE_TOOLCHAIN_DOWNLOADS_ENABLED", "false")
         buildConfigField("boolean", "DEVELOPER_RUNTIME_PACK_BUNDLED", "true")
         buildConfigField("String", "APP_ENGINE_DELIVERY", "\"$appEngineDelivery\"")
@@ -585,12 +579,11 @@ android {
             // Lets the shell attach simpleperf, Perfetto heap/CPU profiling and `am profile` to this
             // non-debuggable build without the debuggable slowdown.
             isProfileable = true
-            // This build is for on-device perf testing, so keep TEST ads (initWith(release) copied the real
-            // ids — undo that) — a tester must never click a live ad.
-            manifestPlaceholders["admobAppId"] = testAdmobAppId
-            buildConfigField("String", "AD_NATIVE_UNIT_ID", "\"$testAdmobNativeUnitId\"")
-            buildConfigField("String", "AD_INTERSTITIAL_UNIT_ID", "\"$testAdmobInterstitialUnitId\"")
+            manifestPlaceholders["admobAppId"] = ""
+            buildConfigField("String", "AD_NATIVE_UNIT_ID", "\"\"")
+            buildConfigField("String", "AD_INTERSTITIAL_UNIT_ID", "\"\"")
             buildConfigField("String", "AD_NATIVE_UNIT_IDS", "\"\"")
+            buildConfigField("boolean", "ADS_ENABLED", "false")
         }
         // EXPERIMENTAL, non-shipping: an R8-minified build used only to measure how far the app's own
         // dex (~61% of the APK, mostly the bundled Kotlin compiler + IntelliJ platform) can shrink. The
@@ -612,11 +605,11 @@ android {
             // Sign with the release/upload key when configured, else the debug key so it installs locally.
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             matchingFallbacks += listOf("release")
-            // Non-shipping: keep Google TEST ad ids (initWith(release) copied the real ones).
-            manifestPlaceholders["admobAppId"] = testAdmobAppId
-            buildConfigField("String", "AD_NATIVE_UNIT_ID", "\"$testAdmobNativeUnitId\"")
-            buildConfigField("String", "AD_INTERSTITIAL_UNIT_ID", "\"$testAdmobInterstitialUnitId\"")
+            manifestPlaceholders["admobAppId"] = ""
+            buildConfigField("String", "AD_NATIVE_UNIT_ID", "\"\"")
+            buildConfigField("String", "AD_INTERSTITIAL_UNIT_ID", "\"\"")
             buildConfigField("String", "AD_NATIVE_UNIT_IDS", "\"\"")
+            buildConfigField("boolean", "ADS_ENABLED", "false")
         }
     }
 
@@ -1084,36 +1077,12 @@ dependencies {
     implementation(compose.material3)
     implementation(compose.ui)
     implementation(libs.androidx.activity.compose)
-    // AdMob native ads (Android launcher only), rendered through the AdHost seam. Excludes protobuf-lite: this
-    // app already dexes full protobuf (via :android-support's bundletool), and the two share the com.google.
-    // protobuf.* package, so keeping both is a D8 duplicate-class failure. The ads SDK's protobuf touchpoints
-    // are API-compatible with the full runtime already present.
     // FCM, for push notifications. Present unconditionally so the messaging code compiles in every
     // checkout; without google-services.json the SDK has no project to talk to and stays dormant, which
     // is exactly what a contributor's build should do.
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
 
-    implementation(libs.play.services.ads) {
-        exclude(group = "com.google.protobuf", module = "protobuf-javalite")
-    }
-    // UMP/GDPR consent (User Messaging Platform). Gathered on launch BEFORE MobileAds.initialize, so EEA/UK
-    // users see a certified consent form and personalized-ad fill isn't blocked. See AdConsentManager.
-    implementation(libs.user.messaging.platform)
-    // AdMob mediation adapters — Meta / Pangle / Mintegral bid against AdMob to fill the same NATIVE slots
-    // (higher eCPM via competition; no new placements). Only native-capable networks are wired. Each pulls its
-    // network SDK transitively; the same protobuf-lite dup-class rule as the ads SDK applies, and their SDKs may
-    // add further transitive collisions that only surface at dex time — so a full assemble must be re-verified
-    // when bumping these. Console-side mediation groups + per-network onboarding are configured in AdMob.
-    implementation(libs.admob.mediation.meta) {
-        exclude(group = "com.google.protobuf", module = "protobuf-javalite")
-    }
-    implementation(libs.admob.mediation.pangle) {
-        exclude(group = "com.google.protobuf", module = "protobuf-javalite")
-    }
-    implementation(libs.admob.mediation.mintegral) {
-        exclude(group = "com.google.protobuf", module = "protobuf-javalite")
-    }
     // FileProvider (androidx.core.content.FileProvider) — hands other apps content:// URIs to our
     // app-private project files for Share / "Open with", and grants read access on inbound intents.
     implementation(libs.androidx.core)

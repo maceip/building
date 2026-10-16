@@ -34,14 +34,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.ide.ui.backend.AdPlacement
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.UiStoreItem
 import dev.ide.ui.backend.UiStoreItemKind
 import dev.ide.ui.backend.UiStoreSection
 import dev.ide.ui.components.inFlight
 import dev.ide.ui.components.installActionLabel
-import dev.ide.ui.components.AdSlot
 import dev.ide.ui.components.CategoryTile
 import dev.ide.ui.components.ComingSoon
 import dev.ide.ui.components.FeaturedHeroCard
@@ -243,13 +241,6 @@ private fun StoreBrowse(
                 )
             }
             storeRows(section, onOpenItem, state.backend)
-            // One native ad between shelves — browse time between topics, never over the hero carousel.
-            // Padded to the same 20 dp gutter as the rows so it sits in the list rather than beside it.
-            if (sectionIndex == 0) {
-                item("ad_${section.id}") {
-                    AdSlot(AdPlacement.STORE, Modifier.padding(horizontal = 20.dp).padding(top = 16.dp))
-                }
-            }
         }
     }
 }

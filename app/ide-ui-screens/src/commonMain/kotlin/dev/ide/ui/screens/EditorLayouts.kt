@@ -72,9 +72,7 @@ import dev.ide.ui.backend.RunStatus
 import dev.ide.ui.backend.TreeNode
 import dev.ide.ui.backend.UiActionContext
 import dev.ide.ui.backend.UiActionPlaces
-import dev.ide.ui.backend.AdPlacement
 import dev.ide.ui.components.ActivityRail
-import dev.ide.ui.components.AdSlot
 import dev.ide.ui.components.BuildConsole
 import dev.ide.ui.components.BuildDock
 import dev.ide.ui.components.DockBarHeight
@@ -711,9 +709,6 @@ internal fun CompactLayout(
                                 headerSlot = id?.let(drawerHeaderSlots::of),
                             )
                         }
-                        // A native ad pinned to the foot of the left drawer, below the tool content (mirrors the
-                        // desktop SidebarPane footer). Self-collapses when ads are inactive.
-                        AdSlot(AdPlacement.SIDEBAR, Modifier.padding(horizontal = 10.dp, vertical = 10.dp))
                     }
                 }
             },

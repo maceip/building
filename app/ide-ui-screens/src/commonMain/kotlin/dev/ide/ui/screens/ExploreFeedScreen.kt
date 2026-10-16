@@ -31,7 +31,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.ide.ui.backend.AdPlacement
 import dev.ide.ui.backend.UiChartEntry
 import dev.ide.ui.backend.UiFeedSection
 import dev.ide.ui.backend.UiShelfLayout
@@ -60,7 +59,6 @@ import dev.ide.ui.generated.resources.store_signin_title
 import dev.ide.ui.components.SquareToneButton
 import dev.ide.ui.components.inFlight
 import dev.ide.ui.components.installActionLabel
-import dev.ide.ui.components.AdSlot
 import dev.ide.ui.components.BundledTemplateRow
 import dev.ide.ui.components.ChartCard
 import dev.ide.ui.components.ChartTabRow
@@ -303,40 +301,9 @@ fun ExploreFeed(
                         }
                     }
                 }
-
-                // The ad cadence belongs to the PAGE, not to a shelf kind. Hung off the ROWS layout it
-                // was both too rare and too often: a feed of carousels and posters showed no ad at all,
-                // while a feed of lists showed one after every single shelf. Counted over sections
-                // instead, so any feed the server sends gets the same spacing.
-                if (adBreakAfter(index)) {
-                    item("ad_$index") {
-                        AdSlot(AdPlacement.STORE, Modifier.padding(horizontal = 20.dp).padding(top = 16.dp))
-                    }
-                }
             }
         }
     }
-}
-
-/** Sections to get through before the first ad break: enough that the store opens on projects. */
-private const val AD_FIRST_BREAK_AFTER = 2
-
-/** Sections between one ad break and the next. */
-private const val AD_BREAK_EVERY = 4
-
-/** Ad breaks one scroll of the feed may contain, however long the feed is. */
-private const val AD_BREAKS_MAX = 3
-
-/**
- * Whether an ad break follows the section at [index].
- *
- * A cap as well as a cadence: a merchandised feed can carry twenty shelves, and "every fourth" alone
- * would turn a long scroll into five ads.
- */
-private fun adBreakAfter(index: Int): Boolean {
-    if (index < AD_FIRST_BREAK_AFTER) return false
-    val since = index - AD_FIRST_BREAK_AFTER
-    return since % AD_BREAK_EVERY == 0 && since / AD_BREAK_EVERY < AD_BREAKS_MAX
 }
 
 @Composable
@@ -843,12 +810,6 @@ private fun ExploreEmpty(
                         onUse = { onUseBundled(item) },
                     )
                 }
-            }
-
-            // Past the pitch, the notify switch and the bundled scaffolds: the empty store's whole job
-            // is to explain itself and offer what IS on the device, and the ad comes after all of it.
-            item("ad") {
-                AdSlot(AdPlacement.STORE, Modifier.padding(horizontal = 20.dp).padding(top = 20.dp))
             }
 
             item("ghosts_head") { SectionHeader(stringResource(Res.string.store_ghost_next_title)) }

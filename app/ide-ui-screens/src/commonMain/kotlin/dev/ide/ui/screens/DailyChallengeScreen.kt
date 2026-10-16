@@ -38,12 +38,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import dev.ide.ui.backend.AdPlacement
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.UiChallengeDay
 import dev.ide.ui.backend.UiChallengeHistoryEntry
 import dev.ide.ui.backend.UiChallengeRank
-import dev.ide.ui.components.AdSlot
 import dev.ide.ui.components.CircularProgressIndicator
 import dev.ide.ui.generated.resources.Res
 import dev.ide.ui.generated.resources.challenge_difficulty_easy
@@ -143,12 +141,6 @@ fun DailyChallengeScreen(
             // rank would be a duplicate lazy-list key, which throws out of the measure pass.
             itemsIndexedKeyed(state.board.rows, key = { i, r -> "$i:${r.rank}" }) { _, row -> BoardRow(row) }
         }
-
-        // Below the problem and the board, never above them: the point of the tab is today's problem, and
-        // an ad between the reader and it would be the one thing they did not open the tab for. Held back
-        // until the day has settled so the slot cannot appear beside a spinner, and it renders nothing at
-        // all when the host has no ad network or the reader has turned ads off.
-        if (settled) item("ad") { AdSlot(AdPlacement.CHALLENGE) }
 
         if (state.profile.signedIn) {
             item { StreakStrip(state) }

@@ -10,7 +10,6 @@ import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Density
 import dev.ide.ui.StubBackend
-import dev.ide.ui.ads.LocalAds
 import dev.ide.ui.backend.UiChartEntry
 import dev.ide.ui.backend.UiChartTab
 import dev.ide.ui.backend.UiFeedSection
@@ -24,7 +23,6 @@ import dev.ide.ui.backend.UiStoreItemKind
 import dev.ide.ui.backend.UiStoreMode
 import dev.ide.ui.backend.UiStorePublisher
 import dev.ide.ui.backend.UiStoreState
-import dev.ide.ui.fakeAdController
 import dev.ide.ui.theme.CodeAssistTheme
 import org.jetbrains.skia.EncodedImageFormat
 import java.io.File
@@ -290,25 +288,23 @@ class ExploreFeedSnapshot {
     ) {
         val scene = ImageComposeScene(width = WIDTH, height = height, density = Density(2f)) {
             CodeAssistTheme(dark = dark) {
-                CompositionLocalProvider(LocalAds provides fakeAdController(backend)) {
-                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                        ExploreFeed(
-                            feed = feed,
-                            onOpenItem = {},
-                            onInstallItem = {},
-                            onOpenSearch = {},
-                            bundled = bundled,
-                            followedPublishers = emptySet(),
-                            submission = submission,
-                            notifyOnLaunch = true,
-                            backend = backend,
-                            // The shipping app always passes these (every build has auth providers), so a
-                            // snapshot without them is not the screen anyone sees: the account button and
-                            // its place in the header went unrendered in every test until now.
-                            onAccount = {},
-                            signedIn = true,
-                        )
-                    }
+                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                    ExploreFeed(
+                        feed = feed,
+                        onOpenItem = {},
+                        onInstallItem = {},
+                        onOpenSearch = {},
+                        bundled = bundled,
+                        followedPublishers = emptySet(),
+                        submission = submission,
+                        notifyOnLaunch = true,
+                        backend = backend,
+                        // The shipping app always passes these (every build has auth providers), so a
+                        // snapshot without them is not the screen anyone sees: the account button and
+                        // its place in the header went unrendered in every test until now.
+                        onAccount = {},
+                        signedIn = true,
+                    )
                 }
             }
         }

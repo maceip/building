@@ -8,7 +8,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import dev.ide.ui.ads.AdController
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.UiSettingControl
 import kotlinx.coroutines.CoroutineScope
@@ -26,12 +25,11 @@ internal sealed interface SettingsToast {
 /**
  * State and intents for the Settings screen: the live mirror of every control's value, the settings actions,
  * and the result toast. The page descriptors themselves stay in composition, since they carry localized
- * titles and the host's injected ad controls.
+ * titles.
  */
 @Stable
 internal class SettingsScreenState(
     private val backend: IdeBackend,
-    private val ads: AdController?,
     private val scope: CoroutineScope,
 ) {
     /**
@@ -63,48 +61,11 @@ internal class SettingsScreenState(
 
     fun onStructuralChange() { structuralRefresh++ }
 
-    /** Set while the "turn off ads?" question is up: turning "Show ads" off first offers to turn off only the
-     *  full-screen ads (see [turnOffFullScreenAdsOnly] / [turnOffAllAds]). */
-    var adsOffPrompt: Boolean by mutableStateOf(false)
-        private set
-
-    /** Apply a control edit: mirror it, then persist it (the injected ads toggles have their own store). */
+    /** Apply a control edit: mirror it, then persist it. */
     fun set(pageId: String, key: String, encoded: String, onSettingsChanged: () -> Unit) {
         values["$pageId.$key"] = encoded
-        if (ads != null && pageId == PRIVACY_PAGE_ID && key == SHOW_ADS_KEY) {
-            val on = encoded.toBooleanStrictOrNull() ?: true
-            if (!on && ads.interstitialsEnabled) {
-                // Ask first: the switch stays on until the user picks what to turn off.
-                values["$pageId.$key"] = true.toString()
-                adsOffPrompt = true
-            } else {
-                ads.updateAdsEnabled(on)
-            }
-        } else if (ads != null && pageId == PRIVACY_PAGE_ID && key == SHOW_INTERSTITIALS_KEY) {
-            ads.updateInterstitialsEnabled(encoded.toBooleanStrictOrNull() ?: true)
-        } else {
-            backend.settings.setSetting(pageId, key, encoded)
-            onSettingsChanged()
-        }
-    }
-
-    /** The prompt's lighter choice: keep the ads in lists and panels, turn off only the full-screen ones. */
-    fun turnOffFullScreenAdsOnly() {
-        adsOffPrompt = false
-        ads?.updateInterstitialsEnabled(false)
-        values["$PRIVACY_PAGE_ID.$SHOW_INTERSTITIALS_KEY"] = false.toString()
-    }
-
-    /** The prompt's full choice: turn every ad off. */
-    fun turnOffAllAds() {
-        adsOffPrompt = false
-        ads?.updateAdsEnabled(false)
-        values["$PRIVACY_PAGE_ID.$SHOW_ADS_KEY"] = false.toString()
-    }
-
-    /** Close the prompt without changing anything. */
-    fun dismissAdsOffPrompt() {
-        adsOffPrompt = false
+        backend.settings.setSetting(pageId, key, encoded)
+        onSettingsChanged()
     }
 
     /** Run a settings action that the backend owns; the host handles the platform ones itself. */
@@ -135,6 +96,5 @@ internal class SettingsScreenState(
 @Composable
 internal fun rememberSettingsScreenState(
     backend: IdeBackend,
-    ads: AdController?,
     scope: CoroutineScope = rememberCoroutineScope(),
-): SettingsScreenState = remember(backend, ads, scope) { SettingsScreenState(backend, ads, scope) }
+): SettingsScreenState = remember(backend, scope) { SettingsScreenState(backend, scope) }

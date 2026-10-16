@@ -1,7 +1,5 @@
 package dev.ide.ui.screens
 
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.AlertDialog
 import dev.ide.ui.itemsKeyed
 import dev.ide.ui.theme.Ide
 import androidx.compose.material3.MaterialTheme
@@ -43,7 +41,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.ide.ui.ads.LocalAds
 import dev.ide.ui.backend.FileActions
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.UiInspection
@@ -79,18 +76,6 @@ import dev.ide.ui.generated.resources.set_sev_error
 import dev.ide.ui.generated.resources.set_sev_hint
 import dev.ide.ui.generated.resources.set_sev_info
 import dev.ide.ui.generated.resources.set_sev_warning
-import dev.ide.ui.generated.resources.support_show_ads
-import dev.ide.ui.generated.resources.cancel
-import dev.ide.ui.generated.resources.ads_off_fullscreen_only
-import dev.ide.ui.generated.resources.ads_off_all
-import dev.ide.ui.generated.resources.ads_off_body
-import dev.ide.ui.generated.resources.ads_off_title
-import dev.ide.ui.generated.resources.support_show_interstitials_desc
-import dev.ide.ui.generated.resources.support_show_interstitials
-import dev.ide.ui.generated.resources.support_show_ads_desc
-import dev.ide.ui.generated.resources.support_ad_privacy
-import dev.ide.ui.generated.resources.support_ad_privacy_desc
-import dev.ide.ui.generated.resources.support_ad_privacy_button
 import dev.ide.ui.icons.CaIcons
 import dev.ide.ui.platform.PlatformBackHandler
 import dev.ide.ui.platform.rememberNotificationPermissionController
@@ -109,17 +94,7 @@ private const val ACTION_BACKUP = "backup"
 /** Build Runtime page action: re-request the runtime notification permission (mirrors
  *  `BuiltInSettingsPages.BUILD_NOTIFICATIONS`). Needs the platform permission launcher, so it's handled here. */
 private const val ACTION_BUILD_NOTIFICATIONS = "buildNotifications"
-/** The ads on/off toggle is injected UI-side onto the Privacy page and routed to the [dev.ide.ui.ads.AdController]
- *  (persisted under its own `ads.enabled` pref), not the backend settings store — ads are a host concern the
- *  backend doesn't know about. [PRIVACY_PAGE_ID] mirrors `BuiltInSettingsPages.PRIVACY`. */
 internal const val PRIVACY_PAGE_ID = "privacy"
-internal const val SHOW_ADS_KEY = "showAds"
-
-/** The full-screen (interstitial) ads toggle, injected under [SHOW_ADS_KEY] and routed to the controller too. */
-internal const val SHOW_INTERSTITIALS_KEY = "showFullScreenAds"
-/** The "Manage ad consent" action injected onto the Privacy page when the host's UMP flow requires a privacy-
- *  options entry point (EEA/UK). Routed to [dev.ide.ui.ads.AdController.showPrivacyOptions], not the store. */
-private const val AD_PRIVACY_KEY = "adPrivacyOptions"
 
 /**
  * The Settings screen. Pages come from [IdeBackend.settingsPages] — built-in categories plus any a plugin
@@ -148,41 +123,12 @@ fun SettingsScreen(
      *  from it must not repeat that list. Null shows every page with its own category navigation. */
     pageId: String? = null,
 ) {
-    // The ads on/off control (moved off the picker's support card). Shown only where an ad network exists
-    // (AdController.manageable, i.e. Android, never desktop) and prepended to the Privacy & Data page; its
-    // writes route to the controller below, not the backend store.
-    val ads = LocalAds.current
-    val showAdsTitle = stringResource(Res.string.support_show_ads)
-    val showAdsDesc = stringResource(Res.string.support_show_ads_desc)
-    val showInterstitialsTitle = stringResource(Res.string.support_show_interstitials)
-    val showInterstitialsDesc = stringResource(Res.string.support_show_interstitials_desc)
-    val adPrivacyTitle = stringResource(Res.string.support_ad_privacy)
-    val adPrivacyDesc = stringResource(Res.string.support_ad_privacy_desc)
-    val adPrivacyButton = stringResource(Res.string.support_ad_privacy_button)
-    // `ads?.privacyOptionsRequired` reads the host's observable consent state, so once UMP resolves and a
-    // privacy-options entry becomes required, this recomputes and the "Manage ad consent" action appears.
-    val privacyOptionsRequired = ads?.privacyOptionsRequired == true
-    val state = rememberSettingsScreenState(backend, ads)
-    val pages = remember(view, state.structuralRefresh, ads?.manageable, privacyOptionsRequired, showAdsTitle, showAdsDesc, adPrivacyTitle) {
-        val base = backend.settings.settingsPages().filter {
+    val state = rememberSettingsScreenState(backend)
+    val pages = remember(view, state.structuralRefresh) {
+        backend.settings.settingsPages().filter {
             when (view) {
                 SettingsView.All -> true
                 SettingsView.Global -> it.scope == "app"
-            }
-        }
-        if (ads?.manageable != true) base
-        else base.map { page ->
-            if (page.id != PRIVACY_PAGE_ID) page
-            else {
-                val injected = buildList {
-                    add(UiSettingControl.Toggle(SHOW_ADS_KEY, showAdsTitle, showAdsDesc, ads.adsEnabled))
-                    add(UiSettingControl.Toggle(SHOW_INTERSTITIALS_KEY, showInterstitialsTitle, showInterstitialsDesc, ads.interstitialsEnabled))
-                    // Only shown where the host's consent flow requires a privacy-options entry point (EEA/UK).
-                    if (privacyOptionsRequired) {
-                        add(UiSettingControl.Action(AD_PRIVACY_KEY, adPrivacyTitle, adPrivacyDesc, buttonLabel = adPrivacyButton))
-                    }
-                }
-                page.copy(controls = injected + page.controls)
             }
         }
     }
@@ -198,8 +144,6 @@ fun SettingsScreen(
     }
     val onAction: (String, UiSettingControl.Action) -> Unit = { pageId, action ->
         when (action.key) {
-            // The injected "Manage ad consent" action: reopen the host's UMP privacy-options form.
-            AD_PRIVACY_KEY -> ads?.showPrivacyOptions()
             ACTION_VIEW_LOGS -> onOpenLogs()
             ACTION_BACKUP -> state.backupProjects(fileActions::share)
             // Re-request the notification permission; if the OS won't re-prompt (permanently denied), route to
@@ -237,7 +181,6 @@ fun SettingsScreen(
                 SettingsToast.NotificationsEnabled -> stringResource(Res.string.build_notif_enabled)
             }
             ToastBar(toastText, Modifier.align(Alignment.BottomCenter))
-            if (state.adsOffPrompt) AdsOffPrompt(state)
         }
     }
 }
@@ -533,27 +476,4 @@ internal fun settingsPageIcon(iconId: String): ImageVector = when (iconId) {
     "image" -> CaIcons.image
     "box" -> CaIcons.box
     else -> CaIcons.gear
-}
-
-/**
- * Asked when "Show ads" is turned off while full-screen ads are still on: the user can turn off only the
- * full-screen ads and keep the smaller ones in lists and panels, or turn every ad off. Neither choice is
- * framed as support for the project, and dismissing it changes nothing.
- */
-@Composable
-private fun AdsOffPrompt(state: SettingsScreenState) {
-    AlertDialog(
-        onDismissRequest = state::dismissAdsOffPrompt,
-        title = { Text(stringResource(Res.string.ads_off_title)) },
-        text = { Text(stringResource(Res.string.ads_off_body)) },
-        confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = state::turnOffAllAds) { Text(stringResource(Res.string.ads_off_all)) }
-                TextButton(onClick = state::turnOffFullScreenAdsOnly) { Text(stringResource(Res.string.ads_off_fullscreen_only)) }
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = state::dismissAdsOffPrompt) { Text(stringResource(Res.string.cancel)) }
-        },
-    )
 }

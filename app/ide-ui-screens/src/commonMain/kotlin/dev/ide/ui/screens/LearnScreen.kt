@@ -44,13 +44,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.ide.ui.backend.AdPlacement
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.UiLearnCatalog
 import dev.ide.ui.backend.UiLearnProgress
 import dev.ide.ui.backend.UiLearnTrack
 import dev.ide.ui.backend.UiResumePoint
-import dev.ide.ui.components.AdSlot
 import dev.ide.ui.components.Eyebrow
 import dev.ide.ui.components.LinearProgressIndicator
 import dev.ide.ui.components.MonoChip
@@ -132,16 +130,9 @@ fun LearnScreen(
                     index = i,
                     onOpen = { onOpenTrack(track.id) },
                 )
-                // Interleave a native ad every few cards, never as the last item (the trailing slot follows).
-                if ((i + 1) % 3 == 0 && i < shown.lastIndex && (i + 1) / 3 <= MAX_INTERLEAVED_ADS) {
-                    AdSlot(AdPlacement.LEARN, Modifier.padding(horizontal = 20.dp).padding(top = 14.dp))
-                }
             }
             if (onOpenDocs != null || onJoinDiscord != null) {
                 item("more") { LearnLinks(onOpenDocs, onJoinDiscord) }
-            }
-            item("trailingAd") {
-                AdSlot(AdPlacement.LEARN, Modifier.padding(horizontal = 20.dp).padding(top = 14.dp))
             }
         }
     }
@@ -432,8 +423,6 @@ private fun LearnLinks(onOpenDocs: (() -> Unit)?, onJoinDiscord: (() -> Unit)?) 
         }
     }
 }
-
-private const val MAX_INTERLEAVED_ADS = 2
 
 /** Category order: the order the catalog declares them in, deduplicated. */
 private fun orderedCategories(tracks: List<UiLearnTrack>): List<String> =

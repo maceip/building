@@ -81,7 +81,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import dev.ide.ui.backend.AdPlacement
 import dev.ide.ui.LocalHostFileActions
 import dev.ide.ui.LocalPluginFileOpener
 import dev.ide.ui.LocalPluginNavigator
@@ -421,11 +420,6 @@ fun SidebarPane(
                                 panels.firstOrNull { it.id == id }, panelState, Modifier.fillMaxSize(),
                                 headerSlot = id?.let(headerSlots::of),
                             )
-                        }
-                        // A native ad pinned to the foot of the LEFT tool pane — below the tool content, off the
-                        // editor canvas entirely. AdSlot self-collapses when ads are inactive (desktop / ads off).
-                        if (side == RailSide.Left) {
-                            AdSlot(AdPlacement.SIDEBAR, Modifier.padding(horizontal = 10.dp, vertical = 10.dp))
                         }
                     }
                 }

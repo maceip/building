@@ -53,8 +53,6 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import dev.ide.ui.backend.AdPlacement
-import dev.ide.ui.components.AdSlot
 import dev.ide.ui.components.IconButtonCa
 import dev.ide.ui.components.LocalEmbeddedPane
 import dev.ide.ui.generated.resources.Res
@@ -130,11 +128,6 @@ fun SettingsHubScreen(
                     }
                 }
             }
-            // A native ad under the destinations: a pure navigation/browse surface, no workflow to interrupt.
-            AdSlot(
-                AdPlacement.SETTINGS,
-                Modifier.widthIn(max = 640.dp).fillMaxWidth().padding(horizontal = 16.dp).padding(top = 24.dp, bottom = 24.dp),
-            )
         }
     }
 }
@@ -233,7 +226,6 @@ fun SettingsHubPane(
                         }
                     }
                 }
-                AdSlot(AdPlacement.SETTINGS, Modifier.fillMaxWidth().padding(top = 24.dp))
             }
         }
         Box(Modifier.width(1.dp).fillMaxHeight().background(scheme.outlineVariant))

@@ -10,9 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Density
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.ide.ui.StubBackend
-import dev.ide.ui.ads.LocalAds
 import dev.ide.ui.backend.ProjectInfo
-import dev.ide.ui.fakeAdController
 import dev.ide.ui.theme.CodeAssistTheme
 import org.jetbrains.skia.EncodedImageFormat
 import java.io.File
@@ -87,34 +85,32 @@ class ProjectsHomeScreenSnapshot {
     ) {
         val scene = ImageComposeScene(width = wDp * 2, height = hDp * 2, density = Density(2f)) {
             CodeAssistTheme(dark = true) {
-                CompositionLocalProvider(LocalAds provides fakeAdController(StubBackend())) {
-                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                        HomeScreen(
-                            tab = dev.ide.ui.HomeTab.Projects,
-                            onSelectTab = {},
-                            projectsContent = {
-                                ProjectsHomeScreen(
-                                    projects = projects,
-                                    onOpen = {},
-                                    onNewProject = {},
-                                    onCloneRepository = {},
-                                    onExportProject = {},
-                                    onDeleteProject = {},
-                                    onImportProject = {},
-                                    onJoinDiscord = {},
-                                    showLegacyRecovery = legacyRecovery,
-                                )
-                            },
-                            storeContent = {},
-                            learnContent = {},
-                            challengesContent = {},
-                            projectCount = projects.size,
-                            sidebarFooter = {
-                                HomeSidebarItem(dev.ide.ui.icons.CaSymbols.inbox, "Notifications", count = 3, countIsAlert = true) {}
-                                HomeSidebarItem(dev.ide.ui.icons.CaSymbols.accountCircle, "Account") {}
-                            },
-                        )
-                    }
+                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                    HomeScreen(
+                        tab = dev.ide.ui.HomeTab.Projects,
+                        onSelectTab = {},
+                        projectsContent = {
+                            ProjectsHomeScreen(
+                                projects = projects,
+                                onOpen = {},
+                                onNewProject = {},
+                                onCloneRepository = {},
+                                onExportProject = {},
+                                onDeleteProject = {},
+                                onImportProject = {},
+                                onJoinDiscord = {},
+                                showLegacyRecovery = legacyRecovery,
+                            )
+                        },
+                        storeContent = {},
+                        learnContent = {},
+                        challengesContent = {},
+                        projectCount = projects.size,
+                        sidebarFooter = {
+                            HomeSidebarItem(dev.ide.ui.icons.CaSymbols.inbox, "Notifications", count = 3, countIsAlert = true) {}
+                            HomeSidebarItem(dev.ide.ui.icons.CaSymbols.accountCircle, "Account") {}
+                        },
+                    )
                 }
             }
         }
@@ -132,7 +128,6 @@ class ProjectsHomeScreenSnapshot {
     private fun snapshot(name: String, projects: List<ProjectInfo>, dark: Boolean) {
         val scene = ImageComposeScene(width = WIDTH, height = HEIGHT, density = Density(2f)) {
             CodeAssistTheme(dark = dark) {
-              CompositionLocalProvider(LocalAds provides fakeAdController(StubBackend())) {
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                     ProjectsHomeScreen(
                         projects = projects,
@@ -147,7 +142,6 @@ class ProjectsHomeScreenSnapshot {
                         onJoinDiscord = {},
                     )
                 }
-              }
             }
         }
         try {

@@ -12,9 +12,7 @@ import androidx.compose.ui.graphics.Color
 import dev.ide.ui.ext.ScreenArgumentHandoff
 import dev.ide.ui.ext.ScreenBackRegistry
 import dev.ide.ui.ext.ScreenRegistry
-import dev.ide.ui.ads.AdController
 import dev.ide.ui.backend.UiProjectFolderKind
-import dev.ide.ui.backend.AdHost
 import dev.ide.ui.backend.FileActions
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.ProjectInfo
@@ -93,7 +91,6 @@ class CodeAssistAppState(
     val backend: IdeBackend,
     private val fileActions: FileActions,
     private val scope: CoroutineScope,
-    adHost: AdHost = AdHost.None,
 ) {
     // ---- settings + theme ----
 
@@ -316,9 +313,6 @@ class CodeAssistAppState(
      *  feature flag is on (or the `feature.projectsStore` preference overrides it). Off = the picker alone. */
     val storeEnabled: Boolean =
         backend.settings.preference("feature.projectsStore")?.toBooleanStrictOrNull() ?: FeatureFlags.PROJECTS_STORE
-
-    /** Ad gating and state, shared with every screen through `LocalAds`. */
-    val adController: AdController = AdController(backend, adHost)
 
     /** Whether the system back gesture has somewhere in-app to go. False on the picker landing, where back
      *  exits the app as usual. */
@@ -1088,10 +1082,9 @@ class CodeAssistAppState(
 fun rememberCodeAssistAppState(
     backend: IdeBackend,
     fileActions: FileActions = FileActions.None,
-    adHost: AdHost = AdHost.None,
     scope: CoroutineScope = rememberCoroutineScope(),
-): CodeAssistAppState = remember(backend, fileActions, adHost, scope) {
-    CodeAssistAppState(backend, fileActions, scope, adHost)
+): CodeAssistAppState = remember(backend, fileActions, scope) {
+    CodeAssistAppState(backend, fileActions, scope)
 }
 
 /** The accent palette a settings profile selects. */

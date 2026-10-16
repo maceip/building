@@ -68,7 +68,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
-import dev.ide.ui.backend.AdPlacement
 import dev.ide.ui.backend.AppLogLineUi
 import dev.ide.ui.backend.AppLogUi
 import dev.ide.ui.backend.BuildDiagnosticUi
@@ -255,9 +254,6 @@ fun BuildConsole(
                 BuildTab.Logcat -> LtrContent { LogcatTab(appLog) { backend?.build?.clearAppLog() } }
             }
         }
-        // A compact native ad in the console footer, only while nothing is building — a natural pause, never
-        // over a running build. Renders nothing unless ads are active.
-        if (!running) AdSlot(AdPlacement.BUILD_CONSOLE)
     }
     }
 }

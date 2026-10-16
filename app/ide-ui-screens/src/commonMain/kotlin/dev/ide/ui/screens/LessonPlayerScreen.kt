@@ -50,7 +50,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.vector.ImageVector
-import dev.ide.ui.ads.rememberAds
 import dev.ide.ui.backend.EditorService
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.UiCompletionResult
@@ -121,9 +120,6 @@ fun LessonPlayerScreen(
     val steps = state.steps
     val step = state.step
 
-    // Ad gating (null on desktop / when hosted without ads). Drives the completion interstitial below.
-    val ads = rememberAds()
-
     Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.TopCenter) {
         Column(Modifier.widthIn(max = 720.dp).fillMaxSize()) {
             // Top bar: close + progress + step counter.
@@ -174,12 +170,6 @@ fun LessonPlayerScreen(
             }
 
             val isLast = state.isLast
-            // Preload the completion interstitial as the learner reaches the final step (once it's solved /
-            // answered) so it's ready the instant they tap Finish. Ads-active gated; a no-op on desktop and when
-            // ads are off. The show itself happens on Finish below, throttled to every 2nd lesson.
-            LaunchedEffect(isLast, state.canAdvance) {
-                if (isLast && state.canAdvance && ads?.interstitialsActive == true) ads.host.preloadInterstitial()
-            }
 
             // Bottom navigation bar: Back + Next / Finish.
             Row(
@@ -198,9 +188,6 @@ fun LessonPlayerScreen(
                     icon = if (isLast) CaIcons.check else CaIcons.chevronRight,
                 ) {
                     state.next {
-                        // Every 2nd finished lesson shows the full-screen interstitial (ads-active gated); it
-                        // overlays as we return to the track. shouldShowLessonInterstitial advances the counter.
-                        if (ads?.shouldShowLessonInterstitial() == true) ads.host.showInterstitial()
                         onExit()
                     }
                 }

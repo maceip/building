@@ -21,9 +21,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
-import dev.ide.ui.ads.BuildAdInterstitial
-import dev.ide.ui.ads.LocalAds
-import dev.ide.ui.backend.AdHost
 import dev.ide.ui.backend.FileActions
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.UiAccent
@@ -58,8 +55,6 @@ fun CodeAssistApp(
     uiFont: FontFamily = rememberUiFont(),
     codeFont: FontFamily = rememberJetBrainsMono(),
     fileActions: FileActions = FileActions.None,
-    /** Platform advertising bridge (AdMob on Android, [AdHost.None] on desktop). Ads render only through this. */
-    adHost: AdHost = AdHost.None,
     composePreviewHost: ComposePreviewHost? = null,
     /** A `.caproj` path handed in from outside the app (Android "Open with"). When it changes to a
      *  non-null value, the import preview opens for it. Null on desktop / normal launch. */
@@ -82,7 +77,7 @@ fun CodeAssistApp(
         UiPluginHost.ensureLoaded()
     }
 
-    val app = rememberCodeAssistAppState(backend, fileActions, adHost)
+    val app = rememberCodeAssistAppState(backend, fileActions)
 
     // The active project changes (create/open) bump the epoch; re-key per-project state on it.
     val state = remember(backend, app.epoch) {
@@ -141,7 +136,6 @@ fun CodeAssistApp(
         // The M3 background fills the whole window edge-to-edge (behind the system bars); content is
         // then inset by `safeDrawing`. On desktop these insets are empty, so this is a no-op there.
         CompositionLocalProvider(
-            LocalAds provides app.adController,
             LocalHostFileActions provides fileActions,
             LocalPluginNavigator provides app::openPluginScreen,
             // A contributed panel can open a file the same way an action's OpenFile effect does, and lands the
@@ -154,9 +148,6 @@ fun CodeAssistApp(
                 }
             },
         ) {
-            // Occasional full-screen ad over a LONG build (Android only; inert on desktop / when ads are off).
-            // Renders nothing — it just observes the build state and asks the host to present an interstitial.
-            BuildAdInterstitial(backend, app.adController)
             // Mouse or touch, from the last pointer event, for the parts of the UI that size and reveal by pointer.
             PointerInputModeHost {
                 // App-wide shortcuts. At the root so they see a key on its way down (the switcher's modal keys,
