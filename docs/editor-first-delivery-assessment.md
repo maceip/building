@@ -1,8 +1,51 @@
-# Editor-first delivery: assessment only
+# Editor-first delivery: measured prototype
 
-2026-10-16. The user has authorized Swift/xtool delivery but requires a check-in
-before coding an editor-only base or another sub-10 MB architecture. No such
-architecture change is included in the runtime delivery work.
+2026-10-16. Following approval of the bounded prototype, an isolated application
+now lives in [`experimental/editor-loader`](../experimental/editor-loader/README.md)
+in the main checkout. It reuses the product's text model and pinned Node payloads.
+It does not replace `ai.building` or change the full product's dependency graph.
+
+## Verified prototype
+
+The optimized, non-debuggable ARM64 release passes both strict **10,000,000-byte**
+gates. Measurements are decimal bytes, not installed disk usage:
+
+| Measurement | Bytes | MB |
+| --- | ---: | ---: |
+| Standalone editor APK | 1,180,023 | 1.18 |
+| Initial Play download estimate, reference device | 1,057,166 | 1.06 |
+| Optional Node feature, additional download | 33,647,082 | 33.65 |
+| Entire AAB upload | 37,055,202 | 37.06 |
+
+The optional feature includes Node's shared native dependencies as well as its
+implementation DEX. Only two small native launch adapters and Compose's small
+graphics-path helper remain in base. Node's code and runtime assets are absent
+before installation. This spike includes Node execution, not npm or the other
+IDE/Swift engines.
+
+Eight device checks passed on the dedicated ARM64/API-36 emulator, with 4 KB
+pages. They cover real Android document-picker open/save and saved bytes;
+Unicode editing, undo/redo and find; draft and settings persistence across a cold
+offline restart; failed download/retry and cancellation; downloaded Node and
+child-process execution; running edited source; cold offline runtime reuse;
+creating a new `.js` document without changing its extension; and independently
+installing the measured standalone APK and repeating both offline editor checks.
+Release build, full release lint and APK v2/v3 signature verification pass.
+Emulator networking was restored to its original state; the physical phone was
+not used.
+
+Delivery uses **bundletool's local Play simulation**, not a Play backend download.
+The signed feature APKs and native execution are real. The standalone APK also
+works as an offline editor when installed directly, but that installation does
+not establish entitlement to fetch features from Play. No new Play release was
+published for this prototype. The main application's initial download remains
+approximately 360 MB until the remaining migration is performed.
+
+Local artifacts, receipt, logs and screenshots: `dist/editor-loader-proof/`.
+Standalone APK SHA-256:
+`d9f4992a5a73478e703cb62a61f9634d9722902cc0437fd822be1e3893a704d2`.
+AAB SHA-256:
+`849a67c30ebb2a800434e69a043f510d6e366bbffd36ebe926007a0216a20db1`.
 
 ## Recommendation
 
@@ -42,7 +85,7 @@ Moving only runtime binaries/assets cannot achieve 10 MB: approximately 126 MB
 of compressed code and root resources would still remain. Processor archives
 include Hilt, Moshi, Room and Glide; this is not primarily an image-size problem.
 
-## Required dependency changes, pending approval
+## Remaining full-product migration
 
 - Keep the editor/document model, file access, preferences and delivery interface
   in base. Reuse the current Compose editor where its dependency closure permits.
@@ -56,11 +99,14 @@ include Hilt, Moshi, Room and Glide; this is not primarily an image-size problem
   cannot statically depend on an optional feature. `:ide-android` currently
   directly depends on `:ide-core`, `:gradle-build`, `:layout-preview-impl`,
   `:android-support`, `:agent-impl` and the full UI.
-- Measure an isolated editor-only release build with shrinking enabled. Verify
-  open/edit/save and cold startup without any optional modules or network. Then
-  exercise download, cancellation/retry, restart and offline reuse.
+- Preserve the prototype's measured size gate and offline checks as the real
+  product's features are migrated. Shared native dependencies will need a shared
+  optional foundation rather than separate copies in each runtime feature.
 
-A sub-10 MB editor is technically plausible, but the current editor's size has
-not been measured in isolation. It is a target to prove with an approved spike,
-not a claimed result or a promised size for the full current IDE. Runtime
-packaging work does not enable global R8 or change the application's initial UI.
+The sub-10 MB plain editor plus later runtime installation is now demonstrated
+locally. This does not establish that the full current IDE fits into that base:
+the prototype uses the existing document/rope model and a small Compose editing
+surface, not the full IDE canvas, previews and language intelligence. No global
+R8 setting or production launcher was changed. Actual Play transport, older API
+levels, 16 KB-page execution, app-version updates and low-storage recovery remain
+separate qualification work.
