@@ -10,7 +10,7 @@ the runtimes. Swift tools and support data occupy two modules, requested togethe
 Keep signing credentials in the existing protected `.env.production`, outside
 version control. Confirm the package, **unused version code above every previous
 upload**, and upload certificate against Play Console before uploading. The local
-previous release **1.0.1 (110)** is published on the internal track. Its upload key
+latest verified release **1.0.2 (111)** is published on the internal track. Its upload key
 matched Console; testers have not yet been enrolled. Always recheck the latest
 uploaded code before preparing another release.
 
@@ -78,6 +78,13 @@ combined Swift tools/support modules. The [delivery evidence](play-runtime-deliv
 includes a fresh local-testing installation, native Swift compilation, unsigned
 iPhone IPA creation, edit/rebuild/export and offline reuse. Local testing is not
 evidence that Google Play has served these modules to a tester.
+
+Console accepted and published release 111 on 2026-10-16, displaying **Available
+to internal testers** and a **360 MB** initial download. The track remains
+**Inactive** because no tester list is selected. Real Play installation/download
+verification therefore still requires the intended tester Google account.
+Console's other non-blocking warnings were missing deobfuscation metadata
+(shrinking is not enabled) and native debug symbols.
 
 ## Console preparation
 
