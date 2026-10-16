@@ -64,27 +64,29 @@ class SwiftProjectIntegrationTest {
     @Test
     fun importsRealGitHubSwiftRepositories() = withTempDir("swift-real-repos") { temp ->
         val reposRoot = Path.of("/Users/mac/.gemini/antigravity/worktrees/building/restructure_settings_and_menus/verification_repos")
-        val swiftLog = reposRoot.resolve("swift-log")
-        val swiftDealer = reposRoot.resolve("swift-dealer")
-        if (!Files.isDirectory(swiftLog) || !Files.isDirectory(swiftDealer)) return@withTempDir
+        val alamofire = reposRoot.resolve("trending-alamofire")
+        val pokeToken = reposRoot.resolve("trending-poketoken")
+        if (!Files.isDirectory(alamofire) || !Files.isDirectory(pokeToken)) return@withTempDir
 
         val manager = ProjectManager.desktop(temp.resolve("projects"))
         val backend = IdeServicesBackend(manager = manager)
         try {
             runBlocking {
-                // 1) swift-log
-                assertEquals(UiProjectFolderKind.SWIFT, backend.projects.inspectProjectFolder(swiftLog.toString()))
-                val importedLog = backend.projects.importExternalProject(swiftLog.toString())
-                assertTrue(importedLog.success, importedLog.message)
+                // 1) Alamofire (GitHub daily trending Swift repo)
+                assertEquals(UiProjectFolderKind.SWIFT, backend.projects.inspectProjectFolder(alamofire.toString()))
+                val importedAlamofire = backend.projects.importExternalProject(alamofire.toString())
+                assertTrue(importedAlamofire.success, importedAlamofire.message)
                 assertTrue(backend.project.isSwift)
+                assertEquals("Alamofire", backend.project.name)
                 assertEquals(1, backend.project.moduleCount)
                 assertFalse(backend.project.compatibility)
 
-                // 2) swift-dealer
-                assertEquals(UiProjectFolderKind.SWIFT, backend.projects.inspectProjectFolder(swiftDealer.toString()))
-                val importedDealer = backend.projects.importExternalProject(swiftDealer.toString())
-                assertTrue(importedDealer.success, importedDealer.message)
+                // 2) PokeTokenBar (GitHub daily trending Swift repo)
+                assertEquals(UiProjectFolderKind.SWIFT, backend.projects.inspectProjectFolder(pokeToken.toString()))
+                val importedPokeToken = backend.projects.importExternalProject(pokeToken.toString())
+                assertTrue(importedPokeToken.success, importedPokeToken.message)
                 assertTrue(backend.project.isSwift)
+                assertEquals("PokeTokenBar", backend.project.name)
                 assertEquals(1, backend.project.moduleCount)
                 assertFalse(backend.project.compatibility)
 
