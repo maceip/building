@@ -665,6 +665,7 @@ android {
         jniLibs {
             useLegacyPackaging = true
             keepDebugSymbols += setOf("**/libaapt2.so", "**/libsdk-*.so", "**/libdevruntime*.so")
+            pickFirsts += setOf("**/libdevruntime*.so", "**/libxtool-exec.so")
         }
     }
 
