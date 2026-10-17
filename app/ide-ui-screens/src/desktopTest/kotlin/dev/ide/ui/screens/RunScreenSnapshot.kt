@@ -151,8 +151,15 @@ class RunScreenSnapshot {
         ): String {
             val idx = json.indexOf("\"text\":\"$label\"")
             if (idx < 0) return json
+            val before = json.substring(0, idx)
             val after = json.substring(idx)
-            val tapId = Regex("\"(?:onTap|onClick)\":(\\d+)").find(after)?.groupValues?.get(1) ?: return json
+            val lastCupertinoBtn = before.lastIndexOf("\"CupertinoButton\"")
+            val lastSwiftBtn = before.lastIndexOf("\"type\":\"Button\"")
+            val tapId = if (lastCupertinoBtn > lastSwiftBtn) {
+                Regex("\"(?:onTap|onClick)\":(\\d+)").findAll(before).lastOrNull()?.groupValues?.get(1)
+            } else {
+                Regex("\"(?:onTap|onClick)\":(\\d+)").find(after)?.groupValues?.get(1)
+            } ?: return json
             writer.write("{\"id\":\"$tapId\",\"kind\":\"void\"}\n")
             writer.flush()
             val next = readJsonLine(reader)
