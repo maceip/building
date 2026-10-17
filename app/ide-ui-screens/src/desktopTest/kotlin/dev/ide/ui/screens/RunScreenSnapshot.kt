@@ -255,7 +255,20 @@ class RunScreenSnapshot {
                 val reader = proc.inputStream.bufferedReader()
                 val writer = proc.outputStream.bufferedWriter()
                 val initialJson = readJsonLine(reader)
-                val afterGen = tapLabel(initialJson, "Generate", writer, reader)
+                // Enter "16" into numCharsInput, check "Include special characters", then click "Generate"
+                val numCharsChangeId = Regex("\"onValueChange\":(\\d+)").find(initialJson)?.groupValues?.get(1)
+                val afterInput = if (numCharsChangeId != null) {
+                    writer.write("{\"id\":\"$numCharsChangeId\",\"kind\":\"string\",\"value\":\"16\"}\n")
+                    writer.flush()
+                    readJsonLine(reader).ifEmpty { initialJson }
+                } else initialJson
+                val checkId = Regex("\"onCheckedChange\":(\\d+)").find(afterInput)?.groupValues?.get(1)
+                val afterCheck = if (checkId != null) {
+                    writer.write("{\"id\":\"$checkId\",\"kind\":\"bool\",\"value\":true}\n")
+                    writer.flush()
+                    readJsonLine(reader).ifEmpty { afterInput }
+                } else afterInput
+                val afterGen = tapLabel(afterCheck, "Generate", writer, reader)
                 val rc = RunConsoleUi(
                     id = 12,
                     moduleName = "nodegui-password-generator",
@@ -263,7 +276,7 @@ class RunScreenSnapshot {
                     phase = RunPhase.Running,
                     acceptsInput = true,
                     transcript = listOf(ConsoleChunk("Running NodeGUI app via Compose GUI Bridge (src/index.js)...\n", ConsoleChunkKind.SYSTEM)),
-                    frame = dev.ide.ui.backend.RunFrameUi(path = afterGen, width = 0, height = 0, seq = 2),
+                    frame = dev.ide.ui.backend.RunFrameUi(path = afterGen, width = 0, height = 0, seq = 4),
                 )
                 snapshot("run-nodegui-password-generator.png", 920, 1800, FakeBackend(rc, BuildState(status = RunStatus.Running)))
             } finally {
