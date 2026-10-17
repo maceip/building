@@ -66,10 +66,31 @@ class PythonProjectImporter : ProjectImporter {
         if (Files.isRegularFile(setupCfg)) {
             return Detection(name = root.fileName?.toString() ?: "python-project", markers = listOf(setupCfg.toAbsolutePath()), confidence = 5)
         }
+        // Also recognize cloned Python repos that have standard top-level Python entrypoints (`main.py`, `app.py`, `run.py`, `cli.py`, `server.py`, `manage.py`)
+        // or any top-level `.py` script directly in the repository root.
+        for (entry in listOf("main.py", "app.py", "run.py", "cli.py", "server.py", "manage.py")) {
+            val candidate = root.resolve(entry)
+            if (Files.isRegularFile(candidate)) {
+                return Detection(name = root.fileName?.toString() ?: "python-project", markers = listOf(candidate.toAbsolutePath()), confidence = 4)
+            }
+        }
+        val anyPy = Files.walk(root, 3).use { stream ->
+            stream.filter { p ->
+                Files.isRegularFile(p) &&
+                    p.fileName.toString().endsWith(".py") &&
+                    root.relativize(p).none { seg -> seg.toString() in setOf(".git", ".platform", "node_modules", "build", ".venv", "venv") }
+            }
+                .sorted()
+                .findFirst()
+                .orElse(null)
+        }
+        if (anyPy != null) {
+            return Detection(name = root.fileName?.toString() ?: "python-project", markers = listOf(anyPy.toAbsolutePath()), confidence = 4)
+        }
         null
     }.getOrNull()
 
-    override fun syncFiles(): List<String> = listOf("pyproject.toml", "requirements.txt", "setup.py")
+    override fun syncFiles(): List<String> = listOf("pyproject.toml", "requirements.txt", "setup.py", "main.py", "app.py")
 
     override suspend fun resolve(request: SyncRequest): SyncOutcome {
         request.progress.checkCanceled()
@@ -87,7 +108,7 @@ class PythonProjectImporter : ProjectImporter {
             ),
             listOf(SyncMessage(
                 SyncSeverity.INFO,
-                "Python project: use Run project in the Runtime workbench to execute Python scripts.",
+                "Python project ready: press Run to execute Python scripts.",
             )),
         )
     }

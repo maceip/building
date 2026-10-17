@@ -135,6 +135,143 @@ class RunScreenSnapshot {
         snapshot("run-tests-running.png", 460, 900, FakeBackend(rc, BuildState(status = RunStatus.Running)))
     }
 
+    @Test
+    fun renderLiveSwiftUiAndNodeGuiThirdPartyApps() {
+        fun readJsonLine(reader: java.io.BufferedReader): String {
+            while (true) {
+                val line = reader.readLine() ?: return ""
+                if (line.startsWith("{")) return line
+            }
+        }
+        fun tapLabel(
+            json: String,
+            label: String,
+            writer: java.io.BufferedWriter,
+            reader: java.io.BufferedReader,
+        ): String {
+            val idx = json.indexOf("\"text\":\"$label\"")
+            if (idx < 0) return json
+            val after = json.substring(idx)
+            val tapId = Regex("\"(?:onTap|onClick)\":(\\d+)").find(after)?.groupValues?.get(1) ?: return json
+            writer.write("{\"id\":\"$tapId\",\"kind\":\"void\"}\n")
+            writer.flush()
+            val next = readJsonLine(reader)
+            return next.ifEmpty { json }
+        }
+
+        // 1. AfrazCodes/SwiftUI-Calculator (real compiled binary from unmodified GitHub repo)
+        val afrazBin = File("/private/tmp/test-SwiftUI-Calculator")
+        if (afrazBin.canExecute()) {
+            val proc = ProcessBuilder(afrazBin.absolutePath).start()
+            try {
+                val reader = proc.inputStream.bufferedReader()
+                val writer = proc.outputStream.bufferedWriter()
+                val initialJson = readJsonLine(reader)
+                val after7 = tapLabel(initialJson, "7", writer, reader)
+                val afterMul = tapLabel(after7, "x", writer, reader)
+                val after8 = tapLabel(afterMul, "8", writer, reader)
+                val afterEq = tapLabel(after8, "=", writer, reader)
+                val rc = RunConsoleUi(
+                    id = 10,
+                    moduleName = "SwiftUI-Calculator",
+                    mainClass = "AfrazCodes/SwiftUI-Calculator",
+                    phase = RunPhase.Running,
+                    acceptsInput = true,
+                    transcript = listOf(ConsoleChunk("Running SwiftUI target (SwiftUI GUI bridge)...\n", ConsoleChunkKind.SYSTEM)),
+                    frame = dev.ide.ui.backend.RunFrameUi(path = afterEq, width = 0, height = 0, seq = 5),
+                )
+                snapshot("run-swiftui-afraz-calculator.png", 920, 1800, FakeBackend(rc, BuildState(status = RunStatus.Running)))
+            } finally {
+                proc.destroyForcibly()
+            }
+        }
+
+        // 2. ricardomongza99/Calculator (real compiled binary from unmodified MVVM GitHub repo)
+        val ricardoBin = File("/private/tmp/test-Calculator")
+        if (ricardoBin.canExecute()) {
+            val proc = ProcessBuilder(ricardoBin.absolutePath).start()
+            try {
+                val reader = proc.inputStream.bufferedReader()
+                val writer = proc.outputStream.bufferedWriter()
+                val initialJson = readJsonLine(reader)
+                val after7 = tapLabel(initialJson, "7", writer, reader)
+                val afterMul = tapLabel(after7, "×", writer, reader)
+                val after8 = tapLabel(afterMul, "8", writer, reader)
+                val afterEq = tapLabel(after8, "=", writer, reader)
+                val rc = RunConsoleUi(
+                    id = 11,
+                    moduleName = "Calculator",
+                    mainClass = "ricardomongza99/Calculator",
+                    phase = RunPhase.Running,
+                    acceptsInput = true,
+                    transcript = listOf(ConsoleChunk("Running SwiftUI target (SwiftUI GUI bridge)...\n", ConsoleChunkKind.SYSTEM)),
+                    frame = dev.ide.ui.backend.RunFrameUi(path = afterEq, width = 0, height = 0, seq = 5),
+                )
+                snapshot("run-swiftui-ricardo-calculator.png", 920, 1800, FakeBackend(rc, BuildState(status = RunStatus.Running)))
+            } finally {
+                proc.destroyForcibly()
+            }
+        }
+
+        // 3. TheAppWizard/CalculatorSwiftUI (real compiled binary from unmodified GitHub repo)
+        val wizardBin = File("/private/tmp/test-CalculatorSwiftUI")
+        if (wizardBin.canExecute()) {
+            val proc = ProcessBuilder(wizardBin.absolutePath).start()
+            try {
+                val reader = proc.inputStream.bufferedReader()
+                val writer = proc.outputStream.bufferedWriter()
+                val initialJson = readJsonLine(reader)
+                val after7 = tapLabel(initialJson, "7", writer, reader)
+                val afterMul = tapLabel(after7, "x", writer, reader)
+                val after8 = tapLabel(afterMul, "8", writer, reader)
+                val afterEq = tapLabel(after8, "=", writer, reader)
+                val rc = RunConsoleUi(
+                    id = 13,
+                    moduleName = "CalculatorSwiftUI",
+                    mainClass = "TheAppWizard/CalculatorSwiftUI",
+                    phase = RunPhase.Running,
+                    acceptsInput = true,
+                    transcript = listOf(ConsoleChunk("Running SwiftUI target (SwiftUI GUI bridge)...\n", ConsoleChunkKind.SYSTEM)),
+                    frame = dev.ide.ui.backend.RunFrameUi(path = afterEq, width = 0, height = 0, seq = 5),
+                )
+                snapshot("run-swiftui-wizard-calculator.png", 920, 1800, FakeBackend(rc, BuildState(status = RunStatus.Running)))
+            } finally {
+                proc.destroyForcibly()
+            }
+        }
+
+        // 4. jameshibbard/nodegui-password-generator (real GitHub NodeGUI repo running on Node.js)
+        val pwDir = File("/private/tmp/nodegui-password-generator")
+        val nodeBin = listOf(
+            "/Users/mac/.nvm/versions/node/v24.15.0/bin/node",
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+        ).map(::File).firstOrNull { it.canExecute() }
+        if (pwDir.isDirectory && nodeBin != null) {
+            val proc = ProcessBuilder(nodeBin.absolutePath, "src/index.js")
+                .directory(pwDir)
+                .start()
+            try {
+                val reader = proc.inputStream.bufferedReader()
+                val writer = proc.outputStream.bufferedWriter()
+                val initialJson = readJsonLine(reader)
+                val afterGen = tapLabel(initialJson, "Generate", writer, reader)
+                val rc = RunConsoleUi(
+                    id = 12,
+                    moduleName = "nodegui-password-generator",
+                    mainClass = "jameshibbard/nodegui-password-generator",
+                    phase = RunPhase.Running,
+                    acceptsInput = true,
+                    transcript = listOf(ConsoleChunk("Running NodeGUI app via Compose GUI Bridge (src/index.js)...\n", ConsoleChunkKind.SYSTEM)),
+                    frame = dev.ide.ui.backend.RunFrameUi(path = afterGen, width = 0, height = 0, seq = 2),
+                )
+                snapshot("run-nodegui-password-generator.png", 920, 1800, FakeBackend(rc, BuildState(status = RunStatus.Running)))
+            } finally {
+                proc.destroyForcibly()
+            }
+        }
+    }
+
     @OptIn(ExperimentalComposeUiApi::class)
     private fun snapshot(name: String, w: Int, h: Int, backend: IdeBackend, dark: Boolean = true, docked: Boolean = false) {
         val scene = ImageComposeScene(width = w, height = h, density = Density(2f)) {

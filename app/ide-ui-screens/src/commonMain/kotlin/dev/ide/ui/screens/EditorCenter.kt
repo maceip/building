@@ -7,11 +7,17 @@ import dev.ide.ui.theme.Ide
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.TextRange
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -162,6 +168,7 @@ internal fun EditorCenter(
     val activeVariant = remember(project.name, variantEpoch, variantModule) {
         variantModule?.let { state.backend.build.activeVariant(it) }
     }
+    var selectedTaskId by remember(project.rootPath, variantEpoch) { mutableStateOf<String?>(null) }
 
     val easedNav by animateFloatAsState(
         if (state.leftOpen) 1f else 0f,
@@ -182,7 +189,22 @@ internal fun EditorCenter(
                 navFraction = navFraction ?: { easedNav },
                 onOpenPalette = { state.paletteOpen = true },
                 runTasks = { state.backend.build.runTasks() },
-                onPickTask = { state.consoleOpen = true; state.requestRun { state.backend.build.runTask(it.id) } },
+                onPickTask = {
+                    selectedTaskId = it.id
+                    state.consoleOpen = true
+                    state.requestRun { state.backend.build.runTask(it.id) }
+                },
+                onRun = {
+                    state.consoleOpen = true
+                    val chosen = selectedTaskId?.let { id ->
+                        state.backend.build.runTasks().firstOrNull { it.id == id }?.id
+                    }
+                    state.requestRun {
+                        if (chosen != null) state.backend.build.runTask(chosen)
+                        else state.backend.build.runBuild()
+                    }
+                },
+                selectedTaskId = selectedTaskId,
                 activeVariant = activeVariant,
                 variants = {
                     variantModule?.let { state.backend.build.listVariants(it) } ?: emptyList()
@@ -518,8 +540,34 @@ internal fun EditorCenter(
                     }
                 }
             }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (frame != null) frame(editorBody) else editorBody()
+            val backP = state.editorBackProgress.coerceIn(0f, 1f)
+            val shrinkShape = RoundedCornerShape((22f * backP).dp)
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            val s = 1f - 0.14f * backP
+                            scaleX = s
+                            scaleY = s
+                            translationY = backP * 14.dp.toPx()
+                        }
+                        .clip(shrinkShape)
+                        .then(
+                            if (backP > 0.02f) {
+                                Modifier.border(1.dp, Ide.colors.glassEdgeTop, shrinkShape)
+                            } else {
+                                Modifier
+                            }
+                        ),
+                ) {
+                    if (frame != null) frame(editorBody) else editorBody()
+                }
             }
         }
     }

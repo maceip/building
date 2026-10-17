@@ -246,6 +246,8 @@ object AndroidIde {
         GradleEnvironment.enabled = true
         GradleEnvironment.installAndLaunch = { apk, pkg, log -> apkInstaller.installAndLaunch(apk, pkg, log) }
         GradleEnvironment.host = gradleHost
+        dev.ide.core.runtime.RuntimeBuildEnvironment.host =
+            dev.ide.android.workbench.runtime.AndroidRuntimeHost(context.applicationContext)
         // The debug-only in-app log bridge: extract the bundled runtime jar (woven into debug builds); the
         // bridge inside the built app binds the IDE's exported AppLogSinkService over Binder and pushes its
         // logs to the IDE's Logcat tab. Best-effort — a missing/failed asset must NEVER stop the IDE from

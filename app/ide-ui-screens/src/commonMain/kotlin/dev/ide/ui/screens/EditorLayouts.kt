@@ -141,6 +141,11 @@ internal fun openTreeFile(node: TreeNode, fileActions: FileActions, open: (Strin
             else open(path, node.name)
         path.endsWith(".aab", ignoreCase = true) ->
             if (fileActions.canReveal) fileActions.reveal(path) else open(path, node.name)
+        path.endsWith(".ipa", ignoreCase = true) ->
+            if (fileActions.canShare) fileActions.share(path)
+            else if (fileActions.canExport) fileActions.exportFile(path)
+            else if (fileActions.canReveal) fileActions.reveal(path)
+            else open(path, node.name)
         else -> open(path, node.name)
     }
 }
@@ -417,8 +422,8 @@ internal fun ExpandedLayout(
                     BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                         val density = LocalDensity.current
                         val minConsole = 140.dp
-                        val maxConsole = (maxHeight - 200.dp).coerceAtLeast(minConsole)
-                        var consoleHeight by remember { mutableStateOf(300.dp) }
+                        val maxConsole = (maxHeight - 105.dp).coerceAtLeast(minConsole)
+                        var consoleHeight by remember { mutableStateOf(330.dp) }
                         val consoleH = consoleHeight.coerceIn(minConsole, maxConsole)
                         val floating = maxWidth < FloatingPanesBelow
                         SideEffect { floatPanes = floating }

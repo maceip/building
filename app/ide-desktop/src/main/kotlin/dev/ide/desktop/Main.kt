@@ -34,6 +34,7 @@ import java.nio.file.Path
 fun main(args: Array<String>) {
     GradleEnvironment.enabled = true
     GradleEnvironment.host = DesktopGradleHost()
+    dev.ide.core.runtime.RuntimeBuildEnvironment.host = dev.ide.core.runtime.DesktopRuntimeHost()
     System.setProperty("apple.awt.application.appearance", "system")
     System.setProperty("apple.awt.application.name", "building")
     // Survive an unexpected exception on the AWT event thread (e.g. the live-preview interpreter crashing deep

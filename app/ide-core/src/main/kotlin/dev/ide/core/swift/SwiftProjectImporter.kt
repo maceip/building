@@ -54,15 +54,52 @@ class SwiftProjectImporter : ProjectImporter {
                 confidence = 6,
             )
         }
+        val xtoolYml = root.resolve("xtool.yml")
+        if (Files.isRegularFile(xtoolYml)) {
+            return Detection(
+                name = root.fileName?.toString() ?: "swift-project",
+                markers = listOf(xtoolYml.toAbsolutePath()),
+                confidence = 6,
+            )
+        }
+        val xcodeproj = Files.list(root).use { stream ->
+            stream.filter { Files.isDirectory(it) && it.fileName.toString().endsWith(".xcodeproj") }
+                .findFirst().orElse(null)
+        }
+        if (xcodeproj != null) {
+            val name = xcodeproj.fileName.toString().removeSuffix(".xcodeproj")
+            return Detection(
+                name = name,
+                markers = listOf(xcodeproj.toAbsolutePath()),
+                confidence = 6,
+            )
+        }
+        val swiftSource = dev.ide.core.runtime.SwiftBuildSystem.findSwiftSourceFiles(root).firstOrNull()
+        if (swiftSource != null) {
+            return Detection(
+                name = root.fileName?.toString() ?: "swift-project",
+                markers = listOf(swiftSource.toAbsolutePath()),
+                confidence = 5,
+            )
+        }
         null
     }.getOrNull()
 
-    override fun syncFiles(): List<String> = listOf("Package.swift")
+    override fun syncFiles(): List<String> = listOf("Package.swift", "xtool.yml")
 
     override suspend fun resolve(request: SyncRequest): SyncOutcome {
         request.progress.checkCanceled()
         val packageSwift = request.root.resolve("Package.swift")
-        val name = if (Files.isRegularFile(packageSwift)) extractPackageName(packageSwift) ?: request.root.fileName?.toString() ?: "swift-project" else request.root.fileName?.toString() ?: "swift-project"
+        val fallbackName = request.root.fileName?.toString() ?: "swift-project"
+        // If a cloned SwiftUI / Xcode repo does not yet have Package.swift or xtool.yml, scaffold them
+        // on import so the project immediately compiles with `swift build` and `xtool dev build --ipa`.
+        val isIos = dev.ide.core.runtime.SwiftBuildSystem.isIosOrSwiftUiProject(request.root)
+        dev.ide.core.runtime.SwiftBuildSystem.ensureSwiftScaffolding(request.root, fallbackName, forIpa = isIos)
+        val name = if (Files.isRegularFile(packageSwift)) {
+            extractPackageName(packageSwift) ?: fallbackName
+        } else {
+            fallbackName
+        }
         return SyncOutcome(
             ExternalProjectModel(
                 name = name,
@@ -76,7 +113,7 @@ class SwiftProjectImporter : ProjectImporter {
             ),
             listOf(SyncMessage(
                 SyncSeverity.INFO,
-                "Swift & iOS project: use Run project in the Runtime workbench to build and run with xtool/Swift.",
+                "Swift & iOS project ready: press Build / Run to build an iOS .ipa or Swift package.",
             )),
         )
     }

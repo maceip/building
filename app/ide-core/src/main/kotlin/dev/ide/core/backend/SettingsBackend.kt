@@ -540,6 +540,14 @@ internal class SettingsBackend(private val ctx: BackendContext) : SettingsServic
         pinchZoom = pinchZoom,
         softKeyboardSuggestions = softKeyboardSuggestions,
         formatOnSave = formatOnSave,
+        hapticsEnabled = hapticsEnabled,
+        hapticsProfile = hapticsProfile,
+        hapticsIntensity = hapticsIntensity,
+        hapticsUiInteractions = hapticsUiInteractions,
+        hapticsGitClone = hapticsGitClone,
+        hapticsBuildEngine = hapticsBuildEngine,
+        hapticsGestureDetents = hapticsGestureDetents,
+        hapticsClonePulseMs = hapticsClonePulseMs,
     )
 
     private fun Severity.toUiSeverity(): UiSeverity = when (this) {

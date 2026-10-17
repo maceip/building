@@ -13,3 +13,22 @@ import androidx.compose.runtime.Composable
  */
 @Composable
 expect fun PlatformBackHandler(enabled: Boolean, onBack: () -> Unit)
+
+/**
+ * Predictive-back gesture handler that streams continuous gesture progress (`0f..1f`) via [onProgress]
+ * while the user drags the Android system back gesture.
+ *
+ * Used for custom IDE predictive-back behaviors:
+ * - In the **Agent Chat view**, swiping back smoothly shrinks the full-screen Agent drawer down to a
+ *   **Half-Screen Multitasking Split** over the code editor so the user can see their code AND watch the
+ *   agent typing simultaneously.
+ * - In the **Code Editor view**, swiping back progressively shrinks and rounds the **code canvas first**
+ *   before committing the back navigation.
+ */
+@Composable
+expect fun PlatformPredictiveBackHandler(
+    enabled: Boolean,
+    onProgress: (Float) -> Unit,
+    onCancel: () -> Unit = {},
+    onBack: () -> Unit,
+)

@@ -99,6 +99,9 @@ object TreeIcons {
         // Groovy Gradle scripts (a `.gradle.kts` shows as Kotlin) + VCS metadata.
         register("gradle", TreeIcon.Badge("G", Color(0xFF6BA84F)))
         register("git", TreeIcon.Glyph(CaIcons.gitBranch, IconTint.Fixed(Color(0xFFDE6E43))))
+        register("swift", TreeIcon.Badge("S", Color(0xFFF05138)))
+        register("python", TreeIcon.Badge("Py", Color(0xFF3776AB)))
+        register("node", TreeIcon.Badge("JS", Color(0xFF68A063)))
     }
 }
 
@@ -123,6 +126,9 @@ fun fileIconId(fileName: String): String = when {
     fileName.endsWith(".aidl") -> "aidl"
     fileName.endsWith(".java") -> "java"
     fileName.endsWith(".kt") || fileName.endsWith(".kts") -> "kotlin"
+    fileName.endsWith(".swift") -> "swift"
+    fileName.endsWith(".py") -> "python"
+    fileName.endsWith(".js") || fileName.endsWith(".mjs") || fileName.endsWith(".cjs") -> "node"
     fileName.endsWith(".gradle") -> "gradle"
     fileName.endsWith(".xml") -> "xml"
     fileName.endsWith(".json") -> "json"

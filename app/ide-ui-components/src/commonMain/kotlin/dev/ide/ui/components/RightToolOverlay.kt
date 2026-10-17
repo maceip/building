@@ -2,33 +2,51 @@ package dev.ide.ui.components
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -36,11 +54,17 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import dev.ide.ui.IdeUiState
 import dev.ide.ui.ext.ToolWindowAnchor
+import dev.ide.ui.platform.PlatformPredictiveBackHandler
 import dev.ide.ui.platform.isMobilePlatform
+import dev.ide.ui.platform.rememberIdeHaptics
+import dev.ide.ui.theme.Ca
+import dev.ide.ui.theme.Ide
 import dev.ide.ui.theme.Motion
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -52,34 +76,71 @@ private val EdgeGrabWidth = 24.dp
 /** Fling speed (px/s, expressed in dp) past which a release commits to open/close regardless of position. */
 private val FlingCommit = 320.dp
 
+/** Resting height fraction when the Agent Chat window shrinks to Half-Screen Multitasking Split mode. */
+private const val AgentHalfScreenFraction = 0.52f
+
 /**
  * The phone right-edge tool-window drawer: an overlay that tracks the finger continuously, mirroring
  * [PushDrawer] (which is left-only). It is fully plugin-derived — it hosts the RIGHT-anchored panels
  * ([pluginPanels]; the AI chat is the first such plugin), so it self-gates: when no plugin contributes a
- * RIGHT tool window it renders nothing, not even the gesture strip. When more than one plugin contributes a
- * RIGHT panel a [SegmentedPanelSwitcher] at the top flips between them (the phone counterpart of the desktop
- * right activity rail).
+ * RIGHT tool window it renders nothing, not even the gesture strip.
  *
- * An [Animatable] `shown` (0 = closed, panel off-screen right → openPx = fully open) is driven live: a
- * leftward swipe from the right edge opens, a drag or tap on the scrim closes, and a release settles to the
- * nearer edge (a fling commits). External toggles ([IdeUiState.selectedRightPanel], the phone swipe, back)
- * animate the same value.
+ * **Custom Predictive Back & Multitasking Split**:
+ * When the Agent view is open at full screen, swiping Back smoothly shrinks the Agent chat window to
+ * **Half-Screen Split Mode ([AgentHalfScreenFraction])** at the bottom of the screen so the user can see
+ * their code behind/above it AND watch what the agent is typing in real time. A second Back gesture from
+ * Half-Screen mode dismisses the panel completely.
  */
 @Composable
 fun RightToolOverlay(state: IdeUiState) {
     val panels = pluginPanels(ToolWindowAnchor.RIGHT, state.backend, state.active?.path)
     if (panels.isEmpty()) return
-    // The drawer opens the currently-selected panel, defaulting to the first.
     val primaryId = panels.first().id
-    // The panels' saveable state (their scroll positions above all), held outside the `if (visible)` below:
-    // a closed drawer composes nothing, so this is what brings a panel back where the user left it.
     val panelState = rememberSaveableStateHolder()
     val headerSlots = rememberToolWindowHeaderSlots()
+    val haptics = rememberIdeHaptics()
+
+    // Live predictive-back gesture progress (0f..1f)
+    var backGestureProgress by remember { mutableFloatStateOf(0f) }
+    var thresholdCrossed by remember { mutableStateOf(false) }
+
+    PlatformPredictiveBackHandler(
+        enabled = isMobilePlatform && state.selectedRightPanel != null,
+        onProgress = { progress ->
+            backGestureProgress = progress
+            if (progress > 0.22f && !thresholdCrossed) {
+                thresholdCrossed = true
+                haptics.predictiveBackThreshold()
+            } else if (progress < 0.15f) {
+                thresholdCrossed = false
+            }
+        },
+        onCancel = {
+            backGestureProgress = 0f
+            thresholdCrossed = false
+        },
+        onBack = {
+            backGestureProgress = 0f
+            thresholdCrossed = false
+            if (!state.rightPanelHalfScreen) {
+                // First Back from Full-Screen Agent: smoothly lock into Half-Screen Multitasking Split
+                // so the user can see the code editor behind it while still watching the agent type!
+                haptics.predictiveBackThreshold()
+                state.rightPanelHalfScreen = true
+            } else {
+                // Second Back from Half-Screen Split: dismiss the Agent overlay completely.
+                haptics.tap()
+                state.selectedRightPanel = null
+                state.rightPanelHalfScreen = false
+            }
+        },
+    )
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val panelWidth = if (maxWidth < 480.dp) maxWidth else 420.dp
         val openPx = with(density) { panelWidth.toPx() }
+        val fullHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
         val flingPx = with(density) { FlingCommit.toPx() }
         val touchSlop = LocalViewConfiguration.current.touchSlop
         val scope = rememberCoroutineScope()
@@ -87,10 +148,29 @@ fun RightToolOverlay(state: IdeUiState) {
         // 0 = fully closed (panel off-screen right), openPx = fully open (panel flush at the right edge).
         val shown = remember { Animatable(0f) }
         shown.updateBounds(0f, openPx)
-        // Composited while open OR mid-animation; a fully closed drawer composes nothing over the editor.
         val visible by remember { derivedStateOf { shown.value > 0.5f || state.selectedRightPanel != null } }
 
-        // A leftward drag (negative delta) opens; a rightward drag closes.
+        // Smoothly animated base height fraction: 1.0f (Full) <-> 0.52f (Half-Screen Split)
+        val baseHeightFraction by animateFloatAsState(
+            targetValue = if (state.rightPanelHalfScreen) AgentHalfScreenFraction else 1f,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioNoBouncy,
+                stiffness = Spring.StiffnessMediumLow,
+            ),
+            label = "agentHeightFraction",
+        )
+
+        // Combine base height with live predictive-back gesture progress:
+        // - If in Full-Screen mode, predictive back smoothly interpolates height from 1.0 -> 0.52
+        // - If already in Half-Screen mode, predictive back smoothly shrinks from 0.52 -> 0.25 and slides out
+        val effectiveHeightFraction = if (!state.rightPanelHalfScreen) {
+            1f - (1f - AgentHalfScreenFraction) * backGestureProgress
+        } else {
+            (baseHeightFraction * (1f - 0.35f * backGestureProgress)).coerceIn(0.28f, 1f)
+        }
+
+        val splitMorphProgress = ((1f - effectiveHeightFraction) / (1f - AgentHalfScreenFraction)).coerceIn(0f, 1f)
+
         fun dragBy(delta: Float) {
             scope.launch { shown.snapTo((shown.value - delta).coerceIn(0f, openPx)) }
         }
@@ -102,20 +182,20 @@ fun RightToolOverlay(state: IdeUiState) {
                 shown.value >= openPx / 2f -> openPx
                 else -> 0f
             }
-            // `shown` moves opposite to the pointer, so its initial velocity is the negated pointer velocity.
             shown.animateTo(target, tween(Motion.BASE, easing = Motion.quiet), initialVelocity = -velocityX)
-            state.selectedRightPanel = if (target >= openPx / 2f) (state.selectedRightPanel ?: primaryId) else null
+            if (target >= openPx / 2f) {
+                state.selectedRightPanel = state.selectedRightPanel ?: primaryId
+            } else {
+                state.selectedRightPanel = null
+                state.rightPanelHalfScreen = false
+            }
         }
 
-        // External toggles (top-bar button, back press, initial state) animate to the same offset.
         LaunchedEffect(state.selectedRightPanel, openPx) {
             val target = if (state.selectedRightPanel != null) openPx else 0f
             if (shown.value != target) shown.animateTo(target, tween(Motion.BASE, easing = Motion.quiet))
         }
 
-        // Persistent thin right-edge catcher: the only thing laid over the editor while closed. A leftward,
-        // horizontal-dominant drag past slop grabs the drawer and drives it continuously; taps and vertical
-        // scrolls in the strip are not consumed, so they fall through to the editor.
         if (isMobilePlatform) {
             Box(
                 Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(EdgeGrabWidth)
@@ -123,12 +203,6 @@ fun RightToolOverlay(state: IdeUiState) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             if (shown.value > 0.5f) return@awaitEachGesture
-                            // Cooperate with the editor's horizontal scroll: if the active editor still has
-                            // content to reveal rightward (it is not at its horizontal end), this leftward
-                            // swipe belongs to it — don't grab it for the drawer. Grabbing unconditionally
-                            // stole horizontal scrolling near the right edge (issue #1493). The drawer still
-                            // opens by swipe once the editor is at its horizontal end or the file has no
-                            // horizontal overflow, and always via the top-bar button.
                             val ed = state.active?.session
                             if (ed != null && ed.hScrollOffsetPx < ed.hScrollMaxPx - 0.5f) return@awaitEachGesture
                             var totalX = 0f
@@ -164,48 +238,111 @@ fun RightToolOverlay(state: IdeUiState) {
         }
 
         if (visible) {
-            // Dimming scrim (modal): it blocks touches to the editor behind it and, on mobile, can be dragged
-            // to close, but a plain tap does NOT dismiss — closing is explicit (the header's hide button, back, or swipe).
-            Box(
-                Modifier.fillMaxSize()
-                    .graphicsLayer { alpha = (shown.value / openPx).coerceIn(0f, 1f) }
-                    .background(Color.Black.copy(alpha = 0.32f))
-                    .draggable(
-                        rememberDraggableState { dragBy(it) },
-                        Orientation.Horizontal,
-                        enabled = isMobilePlatform,
-                        onDragStopped = { velocity -> scope.launch { settle(velocity) } },
-                    ),
-            )
-            // The open panel, falling back to the first so content stays rendered through the close animation.
+            // In Full-Screen mode, dim the background editor; as the Agent shrinks toward Half-Screen Split,
+            // fade the scrim to 0 so the user can clearly see and interact with the code editor in the top half!
+            val scrimOpacity = (shown.value / openPx).coerceIn(0f, 1f) * (1f - splitMorphProgress)
+            if (scrimOpacity > 0.02f) {
+                Box(
+                    Modifier.fillMaxSize()
+                        .graphicsLayer { alpha = scrimOpacity }
+                        .background(Color.Black.copy(alpha = 0.32f))
+                        .draggable(
+                            rememberDraggableState { dragBy(it) },
+                            Orientation.Horizontal,
+                            enabled = isMobilePlatform,
+                            onDragStopped = { velocity -> scope.launch { settle(velocity) } },
+                        ),
+                )
+            }
+
             val selectedId = state.selectedRightPanel
             val effectiveId = selectedId ?: primaryId
+            val topCorner = lerp(0.dp, Ca.radius.sheet, splitMorphProgress)
+            val panelShape = RoundedCornerShape(topStart = topCorner, topEnd = topCorner)
+            val closeSlideOffset = if (state.rightPanelHalfScreen) (backGestureProgress * openPx * 0.45f).roundToInt() else 0
+
+            // Vertical drag on the top handle lets the user manually pull the Agent down to Half-Screen or up to Full
+            val verticalDragState = rememberDraggableState { dy ->
+                if (dy > 18f && !state.rightPanelHalfScreen) {
+                    haptics.predictiveBackThreshold()
+                    state.rightPanelHalfScreen = true
+                } else if (dy < -18f && state.rightPanelHalfScreen) {
+                    haptics.tap()
+                    state.rightPanelHalfScreen = false
+                }
+            }
+
             Box(
-                Modifier.align(Alignment.CenterEnd)
+                Modifier.align(Alignment.BottomEnd)
                     .width(panelWidth)
-                    .fillMaxHeight()
-                    // Slide from the right edge: translationX 0 fully open, off-screen when closed.
-                    .offset { IntOffset((openPx - shown.value).roundToInt(), 0) },
+                    .height(with(density) { (fullHeightPx * effectiveHeightFraction).toDp() })
+                    .offset { IntOffset((openPx - shown.value).roundToInt() + closeSlideOffset, 0) }
+                    .shadow(if (splitMorphProgress > 0.05f) 20.dp else 0.dp, panelShape, clip = false)
+                    .clip(panelShape)
+                    .then(
+                        if (splitMorphProgress > 0.05f) {
+                            Modifier.border(1.dp, Ide.colors.glassEdgeTop, panelShape)
+                        } else {
+                            Modifier
+                        }
+                    ),
             ) {
                 ToolWindowSurface(Modifier.fillMaxSize()) {
                     Column(Modifier.fillMaxSize()) {
+                        // Top multitasking handle + Half-Screen Split toggle bar
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .draggable(verticalDragState, Orientation.Vertical)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) {
+                                    haptics.predictiveBackThreshold()
+                                    state.rightPanelHalfScreen = !state.rightPanelHalfScreen
+                                }
+                                .padding(horizontal = 12.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                if (state.rightPanelHalfScreen) "Agent Peek · Code Live Above" else "Swipe Back for ½ Split",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Box(
+                                Modifier
+                                    .width(36.dp)
+                                    .height(4.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
+                                        RoundedCornerShape(999.dp),
+                                    )
+                            )
+                            Text(
+                                if (state.rightPanelHalfScreen) "Expand ⤢" else "½ Split ⤡",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+
                         ToolWindowSwitcherHeader(
                             panels = panels,
                             selectedId = effectiveId,
                             onSelect = { state.selectRightPanel(it) },
                             slots = headerSlots,
-                            onHide = { state.selectedRightPanel = null },
+                            onHide = {
+                                state.selectedRightPanel = null
+                                state.rightPanelHalfScreen = false
+                            },
                         )
-                        // Key on the stable id (not the panel object) so the crossfade doesn't restart on every
-                        // incidental recompose (e.g. while the drawer slides).
                         AnimatedContent(
                             targetState = effectiveId,
                             transitionSpec = { fadeIn(tween(Motion.BASE)) togetherWith fadeOut(tween(Motion.FAST)) },
                             label = "rightPanelSwitch",
                             modifier = Modifier.weight(1f).fillMaxWidth(),
                         ) { id ->
-                            // Keyed by the id being shown, not by the panel it resolved to: a stale selection
-                            // falls back to the first panel, which the panel it is crossfading with may be.
                             PanelContent(
                                 panels.firstOrNull { it.id == id } ?: panels.first(),
                                 panelState,

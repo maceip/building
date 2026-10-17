@@ -203,6 +203,64 @@ object BuiltInSettingsPages {
                 "Open the project you were working on when the app starts. Off starts on the project list instead",
                 default = true, group = "Startup",
             ),
+            SettingControl.Toggle(
+                "hapticsEnabled", "Tactile haptics",
+                "Physical vibration feedback for multitasking events (Git clone rat-a-tat, build engine steps, predictive back, and tactile buttons)",
+                default = d.hapticsEnabled, group = "Haptics",
+            ),
+            SettingControl.Choice(
+                "hapticsProfile", "Haptics profile",
+                "Overall tactile response character across UI interactions and background tasks",
+                default = d.hapticsProfile,
+                options = listOf(
+                    SettingControl.Choice.Option(IdeSettings.HAPTICS_PROFILE_EXPRESSIVE, "Expressive"),
+                    SettingControl.Choice.Option(IdeSettings.HAPTICS_PROFILE_BALANCED, "Balanced"),
+                    SettingControl.Choice.Option(IdeSettings.HAPTICS_PROFILE_SUBTLE, "Subtle"),
+                    SettingControl.Choice.Option(IdeSettings.HAPTICS_PROFILE_OFF, "Off"),
+                ),
+                group = "Haptics",
+            ),
+            SettingControl.IntSlider(
+                "hapticsIntensity", "Haptics intensity",
+                "Motor drive strength multiplier across all tactile waveforms",
+                default = d.hapticsIntensity,
+                min = IdeSettings.MIN_HAPTICS_INTENSITY,
+                max = IdeSettings.MAX_HAPTICS_INTENSITY,
+                step = 5,
+                unit = "%",
+                group = "Haptics",
+            ),
+            SettingControl.Toggle(
+                "hapticsUiInteractions", "Button & chip haptics",
+                "Crisp micro-taps when pressing elevated buttons, filter chips, and primary actions",
+                default = d.hapticsUiInteractions, group = "Haptics",
+            ),
+            SettingControl.Toggle(
+                "hapticsGitClone", "Git clone rat-a-tat haptics",
+                "Rhythmic triple-pulse heartbeat while cloning repositories and rising 3-beat completion burst",
+                default = d.hapticsGitClone, group = "Haptics",
+            ),
+            SettingControl.Toggle(
+                "hapticsBuildEngine", "Build engine haptics",
+                "Ignition pulse on build start, subtle compiler step detents, and completion confirmation",
+                default = d.hapticsBuildEngine, group = "Haptics",
+            ),
+            SettingControl.Toggle(
+                "hapticsGestureDetents", "Predictive back detents",
+                "Tactile snap when crossing the half-screen split or code-shrink threshold during back gestures",
+                default = d.hapticsGestureDetents, group = "Haptics",
+            ),
+            SettingControl.IntSlider(
+                "hapticsClonePulseMs", "Git clone pulse cadence",
+                "Time between rat-a-tat heartbeat pulses while a repository is actively cloning",
+                default = d.hapticsClonePulseMs,
+                min = IdeSettings.MIN_HAPTICS_CLONE_PULSE_MS,
+                max = IdeSettings.MAX_HAPTICS_CLONE_PULSE_MS,
+                step = 250,
+                unit = "ms",
+                advanced = true,
+                group = "Haptics",
+            ),
         )
     }
 

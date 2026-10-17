@@ -147,15 +147,43 @@ fun RunScreen(
         }
         BuildPhaseStrip(rc, build, onOpenDiagnostic)
         // A windowed program shows its window; a console program shows only its transcript.
-        rc.frame?.let { frame ->
-            RunSurface(
-                frame = frame,
-                onPointer = { action, x, y -> backend.build.sendRunPointer(action, x, y) },
-                onKey = { action, code, char -> backend.build.sendRunKey(action, code, char) },
-                onScroll = { x, y, notches -> backend.build.sendRunScroll(x, y, notches) },
-                onSurfaceSize = { w, h -> backend.build.setRunSurfaceSize(w, h) },
-                modifier = Modifier.weight(1f),
-            )
+        val frame = rc.frame
+        if (frame != null) {
+            val isBridgeJson = frame.width <= 0 || frame.path.endsWith(".json") || frame.path.trimStart().startsWith("{")
+            if (isBridgeJson) {
+                var rawBridgeJson by remember { mutableStateOf<String?>(null) }
+                LaunchedEffect(frame.seq, frame.path) {
+                    val raw = if (frame.path.trimStart().startsWith("{")) {
+                        frame.path
+                    } else {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                            dev.ide.ui.editor.preview.readRunFrame(frame.path)?.decodeToString()
+                        }
+                    }
+                    if (!raw.isNullOrBlank()) {
+                        rawBridgeJson = raw
+                    }
+                }
+                rawBridgeJson?.let { rawJson ->
+                    BridgeGuiWindow(
+                        rawJson = rawJson,
+                        moduleName = rc.moduleName,
+                        mainClass = rc.mainClass,
+                        onSendCallback = { jsonLine -> backend.build.sendRunInput(jsonLine) },
+                        modifier = Modifier.weight(1f),
+                    )
+                } ?: Box(Modifier.weight(1f))
+            } else {
+                RunSurface(
+                    frame = frame,
+                    onPointer = { action, x, y -> backend.build.sendRunPointer(action, x, y) },
+                    onKey = { action, code, char -> backend.build.sendRunKey(action, code, char) },
+                    onScroll = { x, y, notches -> backend.build.sendRunScroll(x, y, notches) },
+                    onSurfaceSize = { w, h -> backend.build.setRunSurfaceSize(w, h) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            return@Column
         }
         val showTests = tests != null && view == RunView.Tests
         if (tests != null) {
@@ -183,7 +211,7 @@ fun RunScreen(
             Transcript(split?.transcript.orEmpty(), rc.phase, Modifier.weight(1f).padding(horizontal = 14.dp))
         }
         when {
-            rc.acceptsInput && !showTests -> InputBar(
+            rc.acceptsInput && !showTests && !rc.mainClass.contains("Bridge", ignoreCase = true) -> InputBar(
                 onSend = { backend.build.sendRunInput(it) },
                 onEof = { backend.build.closeRunInput() },
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),

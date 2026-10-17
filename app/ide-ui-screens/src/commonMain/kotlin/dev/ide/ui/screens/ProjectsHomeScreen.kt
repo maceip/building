@@ -269,6 +269,8 @@ fun ProjectsHomeScreen(
             onOpenHub = onOpenHub,
             onOpenAccount = { sheet = HomeSheet.Account },
             onJoinDiscord = onJoinDiscord,
+            backend = backend,
+            onCloneAndOpen = onCloneAndOpen,
         )
     } else
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.TopCenter) {
@@ -311,12 +313,10 @@ fun ProjectsHomeScreen(
                     bell = bell,
                 )
             }
-            if (onCloneRepository != null || onImportProject != null) {
+            if (onImportProject != null) {
                 item("actions") {
                     HomeActions(
-                        onClone = onCloneRepository,
-                        onImportProject = onImportProject ?: {},
-                        canImport = onImportProject != null,
+                        onImportProject = onImportProject,
                     )
                 }
             }
@@ -478,33 +478,20 @@ private fun HomeHeader(
  */
 @Composable
 private fun HomeActions(
-    onClone: (() -> Unit)?,
     onImportProject: () -> Unit,
-    canImport: Boolean,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (onClone != null) {
-            HeaderButton(
-                glyph = CaSymbols.forkRight,
-                label = stringResource(Res.string.home_clone_repository),
-                primary = false,
-                modifier = Modifier.weight(1f),
-                onClick = onClone,
-            )
-        }
-        if (canImport) {
-            HeaderButton(
-                glyph = CaSymbols.folderOpen,
-                label = stringResource(Res.string.home_import_project),
-                primary = false,
-                modifier = Modifier.weight(1f),
-                onClick = onImportProject,
-            )
-        }
+        HeaderButton(
+            glyph = CaSymbols.folderOpen,
+            label = stringResource(Res.string.home_import_project),
+            primary = false,
+            modifier = Modifier.weight(1f),
+            onClick = onImportProject,
+        )
     }
 }
 
@@ -1042,6 +1029,9 @@ private fun greeting(): String = when (localHourOfDay()) {
 }
 
 private fun symbolForProject(project: ProjectInfo): Char = when {
+    project.isSwift -> CaSymbols.phoneAndroid
+    project.isPython -> CaSymbols.codeBlocks
+    project.isNode -> CaSymbols.terminal
     project.isAndroid -> CaSymbols.phoneAndroid
     project.compatibility -> CaSymbols.construction
     project.unrecognized -> CaSymbols.folder
@@ -1050,6 +1040,9 @@ private fun symbolForProject(project: ProjectInfo): Char = when {
 }
 
 private fun kindLabel(project: ProjectInfo): String = when {
+    project.isSwift -> "Swift & iOS"
+    project.isPython -> "Python"
+    project.isNode -> "Node.js"
     project.isAndroid -> "Android"
     project.compatibility -> "Gradle"
     // A cloned folder nothing recognized is listed so the user can reach it, but calling it a CodeAssist
@@ -1144,6 +1137,8 @@ private fun WideProjectsHome(
     onOpenHub: (() -> Unit)?,
     onOpenAccount: () -> Unit,
     onJoinDiscord: (() -> Unit)?,
+    backend: dev.ide.ui.backend.IdeBackend? = null,
+    onCloneAndOpen: ((String, String) -> Unit)? = null,
 ) {
     val c = MaterialTheme.colorScheme
     var query by rememberSaveable { mutableStateOf("") }
@@ -1173,9 +1168,6 @@ private fun WideProjectsHome(
                 )
                 if (onImportProject != null) {
                     HeaderButton(CaSymbols.folderOpen, stringResource(Res.string.home_import_project), primary = false, onClick = onImportProject)
-                }
-                if (onCloneRepository != null) {
-                    HeaderButton(CaSymbols.forkRight, stringResource(Res.string.home_clone_repository), primary = false, onClick = onCloneRepository)
                 }
                 if (onOpenHub != null) {
                     SquareToneButton(
@@ -1236,6 +1228,15 @@ private fun WideProjectsHome(
                         onShare = onExportProject?.let { export -> { export(project) } },
                         onDelete = onRequestDelete?.let { request -> { request(project) } },
                     )
+                }
+                if (backend != null && backend.discovery.supported()) {
+                    item("discoveryShelf") {
+                        Spacer(Modifier.height(16.dp))
+                        GitHubExplorerFeed(
+                            backend = backend,
+                            onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) },
+                        )
+                    }
                 }
             }
         }

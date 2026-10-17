@@ -256,9 +256,7 @@ private fun AppRoute(
             onCancel = { app.navigateTo(Screen.Projects) },
             onCreated = { app.navigateTo(Screen.Editor) },
             initialTemplateId = app.createTemplateId,
-            onCloneRepository = if (backend.vcs.supported()) {
-                { app.openPluginScreen(VcsService.SCREEN_CLONE) }
-            } else null,
+            onCloneRepository = null,
             onImportProject = if (fileActions.canPickDirectory || fileActions.canPickFile) app::requestProjectImport else null,
         )
 
@@ -734,12 +732,7 @@ private fun ProjectPickerRoute(
         onDeleteProject = app::deleteProject,
         // One "Import project" entry for both sources; it asks which when the host can do both.
         onImportProject = if (fileActions.canPickDirectory || fileActions.canPickFile) app::requestProjectImport else null,
-        // Cloning is the other way into a project, and it is the only one a user with no projects yet can
-        // reach: the Git panel lives in the editor, which needs a project open. Hidden when the version-control
-        // plugin is disabled or this build carries no engine.
-        onCloneRepository = if (app.backend.vcs.supported()) {
-            { app.openPluginScreen(VcsService.SCREEN_CLONE) }
-        } else null,
+        onCloneRepository = null,
         onExportProject = if (fileActions.canShare || fileActions.canExport || fileActions.canReveal) {
             app::startExport
         } else null,
@@ -767,7 +760,10 @@ private fun ProjectPickerRoute(
         loadIcon = { backend.projects.projectIcon(it.rootPath) },
         loadIconImage = { backend.projects.imageBytes(it) },
         backend = backend,
-        onCloneAndOpen = { _, _ -> app.openPluginScreen(VcsService.SCREEN_CLONE) },
+        onCloneAndOpen = { url, _ ->
+            dev.ide.ui.ext.ScreenArgumentHandoff.pending = url
+            app.openPluginScreen(VcsService.SCREEN_CLONE)
+        },
     )
     if (notificationsVisible) {
         NotificationsSheet(
@@ -824,7 +820,10 @@ private fun StoreRoute(app: CodeAssistAppState, fileActions: FileActions) {
                 backend = app.backend,
                 onOpenItem = app::openStoreItem,
                 onOpenHub = { app.openHub(Screen.Projects) },
-                onCloneAndOpen = { _, _ -> app.openPluginScreen(VcsService.SCREEN_CLONE) },
+                onCloneAndOpen = { url, _ ->
+                    dev.ide.ui.ext.ScreenArgumentHandoff.pending = url
+                    app.openPluginScreen(VcsService.SCREEN_CLONE)
+                },
             )
             return
         }
@@ -886,6 +885,10 @@ private fun StoreRoute(app: CodeAssistAppState, fileActions: FileActions) {
             // Where the cards fetch a published screenshot from. Without it every shelf draws the abstract
             // code motif, including for projects that shipped six screenshots.
             backend = app.backend,
+            onCloneAndOpen = { url, _ ->
+                dev.ide.ui.ext.ScreenArgumentHandoff.pending = url
+                app.openPluginScreen(VcsService.SCREEN_CLONE)
+            },
         )
         if (searching) {
             StoreSearchScreen(

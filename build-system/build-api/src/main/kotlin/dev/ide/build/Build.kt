@@ -101,6 +101,12 @@ class BuildContext(
      * needs it should say so rather than assume: report that running is unavailable here.
      */
     val programInterpreter: ProgramInterpreter? = null,
+    /**
+     * Opens an interactive [ProgramIo] session (backed by `RunConsoleUi`) so contributed build systems
+     * (such as SwiftUI Cupertino or NodeGUI runtime bridges) can stream live stdio, receive interactive
+     * stdin callback events, and publish window/view-tree frames to `RunScreen`.
+     */
+    val openProgramIo: ((moduleName: String, mainClass: String) -> ProgramIo)? = null,
 )
 
 data class BuildRequest(

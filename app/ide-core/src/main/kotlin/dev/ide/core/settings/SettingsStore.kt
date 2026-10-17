@@ -31,6 +31,24 @@ class SettingsStore(
             accentColor = get(key("appearance.accentColor"))?.trim()?.toLongOrNull() ?: d.accentColor,
             alwaysShowToolWindowActions = bool("appearance.toolWindowActions", d.alwaysShowToolWindowActions),
             rightToolWindowBar = bool("appearance.rightToolWindowBar", d.rightToolWindowBar),
+            hapticsEnabled = bool("appearance.hapticsEnabled", d.hapticsEnabled),
+            hapticsProfile = oneOf(
+                "appearance.hapticsProfile",
+                d.hapticsProfile,
+                IdeSettings.HAPTICS_PROFILE_OFF,
+                IdeSettings.HAPTICS_PROFILE_SUBTLE,
+                IdeSettings.HAPTICS_PROFILE_BALANCED,
+                IdeSettings.HAPTICS_PROFILE_EXPRESSIVE,
+                IdeSettings.HAPTICS_PROFILE_CUSTOM,
+            ),
+            hapticsIntensity = int("appearance.hapticsIntensity", d.hapticsIntensity)
+                .coerceIn(IdeSettings.MIN_HAPTICS_INTENSITY, IdeSettings.MAX_HAPTICS_INTENSITY),
+            hapticsUiInteractions = bool("appearance.hapticsUiInteractions", d.hapticsUiInteractions),
+            hapticsGitClone = bool("appearance.hapticsGitClone", d.hapticsGitClone),
+            hapticsBuildEngine = bool("appearance.hapticsBuildEngine", d.hapticsBuildEngine),
+            hapticsGestureDetents = bool("appearance.hapticsGestureDetents", d.hapticsGestureDetents),
+            hapticsClonePulseMs = int("appearance.hapticsClonePulseMs", d.hapticsClonePulseMs)
+                .coerceIn(IdeSettings.MIN_HAPTICS_CLONE_PULSE_MS, IdeSettings.MAX_HAPTICS_CLONE_PULSE_MS),
             // Stored as an integer percent (100 = 1.0×) so the generic IntSlider and this typed view agree.
             editorFontScale = (int("editor.fontScale", (d.editorFontScale * 100).toInt()) / 100f).coerceIn(MIN_FONT_SCALE, MAX_FONT_SCALE),
             codeFont = oneOf("editor.codeFont", d.codeFont, IdeSettings.CODE_FONT_JETBRAINS, IdeSettings.CODE_FONT_MONOSPACE),
@@ -136,6 +154,14 @@ class SettingsStore(
         put("appearance.accentColor", s.accentColor.toString())
         put("appearance.toolWindowActions", s.alwaysShowToolWindowActions.toString())
         put("appearance.rightToolWindowBar", s.rightToolWindowBar.toString())
+        put("appearance.hapticsEnabled", s.hapticsEnabled.toString())
+        put("appearance.hapticsProfile", s.hapticsProfile)
+        put("appearance.hapticsIntensity", s.hapticsIntensity.toString())
+        put("appearance.hapticsUiInteractions", s.hapticsUiInteractions.toString())
+        put("appearance.hapticsGitClone", s.hapticsGitClone.toString())
+        put("appearance.hapticsBuildEngine", s.hapticsBuildEngine.toString())
+        put("appearance.hapticsGestureDetents", s.hapticsGestureDetents.toString())
+        put("appearance.hapticsClonePulseMs", s.hapticsClonePulseMs.toString())
         put("editor.fontScale", (s.editorFontScale * 100).toInt().toString())
         put("editor.codeFont", s.codeFont)
         put("editor.fontLigatures", s.fontLigatures.toString())

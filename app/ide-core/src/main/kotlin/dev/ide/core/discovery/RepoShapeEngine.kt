@@ -100,6 +100,8 @@ object RepoShapeEngine {
         val pathSet = filePaths.toSet()
         val topicSet = topics.map { it.lowercase() }.toSet()
 
+        val langLower = language.lowercase().trim()
+
         // 1. Detect Build Toolchain
         val toolchain = when {
             pathSet.any { it.endsWith("settings.gradle.kts") || it.endsWith("build.gradle.kts") } &&
@@ -119,6 +121,22 @@ object RepoShapeEngine {
                 BuildToolchain.GO_MODULE
             pathSet.any { it.endsWith("CMakeLists.txt") } ->
                 BuildToolchain.CMAKE_NDK
+            topicSet.contains("kmp") || topicSet.contains("compose-multiplatform") ->
+                BuildToolchain.GRADLE_KMP
+            langLower == "kotlin" || langLower == "java" || topicSet.contains("android") ->
+                BuildToolchain.GRADLE_ANDROID
+            langLower == "swift" || topicSet.contains("swift") || topicSet.contains("swiftui") || topicSet.contains("ios") ->
+                BuildToolchain.SWIFT_PM
+            langLower == "python" || langLower == "jupyter notebook" || topicSet.contains("python") ->
+                BuildToolchain.PYTHON_UV
+            langLower == "javascript" || langLower == "typescript" || topicSet.contains("nodejs") || topicSet.contains("node") ->
+                BuildToolchain.NPM_NODE_VITE
+            langLower == "rust" || topicSet.contains("rust") ->
+                BuildToolchain.CARGO_RUST
+            langLower == "go" || topicSet.contains("go") ->
+                BuildToolchain.GO_MODULE
+            langLower == "c++" || langLower == "c" || topicSet.contains("ndk") || topicSet.contains("cpp") ->
+                BuildToolchain.CMAKE_NDK
             else -> BuildToolchain.UNKNOWN
         }
 
@@ -126,18 +144,26 @@ object RepoShapeEngine {
         val uiFramework = when {
             topicSet.contains("compose-multiplatform") || pathSet.any { it.contains("composeApp") } ->
                 UiFramework.COMPOSE_MULTIPLATFORM
-            topicSet.contains("jetpack-compose") || pathSet.any { it.contains("ui/theme") || it.contains("Composable") } ->
+            topicSet.contains("jetpack-compose") || topicSet.contains("material3") || pathSet.any { it.contains("ui/theme") || it.contains("Composable") } ->
                 UiFramework.JETPACK_COMPOSE
-            topicSet.contains("swiftui") || pathSet.any { it.endsWith(".swift") && it.contains("View") } ->
+            topicSet.contains("swiftui") || topicSet.contains("ios") || pathSet.any { it.endsWith(".swift") && it.contains("View") } ->
                 UiFramework.SWIFT_UI
-            topicSet.contains("flutter") || pathSet.any { it.endsWith("pubspec.yaml") } ->
+            topicSet.contains("flutter") || langLower == "dart" || pathSet.any { it.endsWith("pubspec.yaml") } ->
                 UiFramework.FLUTTER
-            topicSet.contains("react") || topicSet.contains("nextjs") || pathSet.any { it.endsWith(".tsx") } ->
+            topicSet.contains("react") || topicSet.contains("nextjs") || topicSet.contains("design") || pathSet.any { it.endsWith(".tsx") } ->
                 UiFramework.REACT_WEB
             topicSet.contains("tauri") || pathSet.any { it.contains("src-tauri") } ->
                 UiFramework.TAURI
             topicSet.contains("terminal") || topicSet.contains("tui") || topicSet.contains("cli") ->
                 UiFramework.TERMINAL_TUI
+            langLower == "kotlin" || langLower == "java" ->
+                UiFramework.JETPACK_COMPOSE
+            langLower == "swift" ->
+                UiFramework.SWIFT_UI
+            langLower == "python" || langLower == "jupyter notebook" ->
+                UiFramework.TERMINAL_TUI
+            langLower == "javascript" || langLower == "typescript" ->
+                UiFramework.HEADLESS_DAEMON
             else -> UiFramework.UNKNOWN
         }
 
@@ -196,12 +222,13 @@ object RepoShapeEngine {
         val topicJaccard = sharedTopics.toDouble() / totalTopics
 
         var archScore = 0.0
-        if (targetGenome.toolchain == candidateGenome.toolchain) archScore += 0.35
-        if (targetGenome.uiFramework == candidateGenome.uiFramework) archScore += 0.35
+        if (targetGenome.toolchain != BuildToolchain.UNKNOWN && targetGenome.toolchain == candidateGenome.toolchain) archScore += 0.35
+        if (targetGenome.uiFramework != UiFramework.UNKNOWN && targetGenome.uiFramework == candidateGenome.uiFramework) archScore += 0.35
         if (targetGenome.topology == candidateGenome.topology) archScore += 0.15
-        if (targetGenome.primaryLanguage.equals(candidateGenome.primaryLanguage, ignoreCase = true)) archScore += 0.15
+        if (targetGenome.primaryLanguage.isNotBlank() && targetGenome.primaryLanguage.equals(candidateGenome.primaryLanguage, ignoreCase = true)) archScore += 0.15
 
         val compositeScore = (archScore * 0.7) + (topicJaccard * 0.3)
+        val stackLabel = formatStackLabel(candidateGenome)
 
         // 2. Evaluate lens-specific fit
         return when (lens) {
@@ -213,7 +240,7 @@ object RepoShapeEngine {
                         candidateSlug = candidateSlug,
                         lens = lens,
                         structuralMatchScore = compositeScore,
-                        whyRecommended = "Proven reference architecture: shares your ${candidateGenome.uiFramework.name} + ${candidateGenome.toolchain.name} stack with battle-tested reliability.",
+                        whyRecommended = "Proven reference architecture: shares your $stackLabel stack with battle-tested reliability.",
                         starDifferential = starDiff,
                         onDeviceRunnable = candidateGenome.onDeviceRunnableScore >= 0.75
                     )
@@ -276,12 +303,43 @@ object RepoShapeEngine {
                         candidateSlug = candidateSlug,
                         lens = lens,
                         structuralMatchScore = compositeScore,
-                        whyRecommended = "Permissive MIT/Apache-2.0 alternative with matching ${candidateGenome.uiFramework.name} architecture.",
+                        whyRecommended = "Permissive MIT/Apache-2.0 alternative with matching $stackLabel architecture.",
                         starDifferential = "${candidateGenome.stars} ★",
                         onDeviceRunnable = candidateGenome.onDeviceRunnableScore >= 0.75
                     )
                 } else null
             }
+        }
+    }
+
+    private fun formatStackLabel(genome: RepoGenome): String {
+        val ui = when (genome.uiFramework) {
+            UiFramework.COMPOSE_MULTIPLATFORM -> "Compose Multiplatform"
+            UiFramework.JETPACK_COMPOSE -> "Jetpack Compose"
+            UiFramework.SWIFT_UI -> "SwiftUI"
+            UiFramework.FLUTTER -> "Flutter"
+            UiFramework.REACT_WEB -> "React"
+            UiFramework.TAURI -> "Tauri"
+            UiFramework.TERMINAL_TUI -> "CLI / TUI"
+            UiFramework.HEADLESS_DAEMON -> "Node Runtime"
+            UiFramework.UNKNOWN -> null
+        }
+        val tool = when (genome.toolchain) {
+            BuildToolchain.GRADLE_KMP -> "Kotlin Multiplatform"
+            BuildToolchain.GRADLE_ANDROID -> "Android Gradle"
+            BuildToolchain.CARGO_RUST -> "Cargo Rust"
+            BuildToolchain.NPM_NODE_VITE -> "Node.js / npm"
+            BuildToolchain.SWIFT_PM -> "SwiftPM"
+            BuildToolchain.PYTHON_UV -> "Python 3"
+            BuildToolchain.GO_MODULE -> "Go Modules"
+            BuildToolchain.CMAKE_NDK -> "CMake / NDK"
+            BuildToolchain.UNKNOWN -> null
+        }
+        val parts = listOfNotNull(ui, tool).distinct()
+        return if (parts.isNotEmpty()) {
+            parts.joinToString(" + ")
+        } else {
+            genome.primaryLanguage.ifBlank { "Multiplatform" }
         }
     }
 }

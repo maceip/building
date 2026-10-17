@@ -96,11 +96,12 @@ internal object MainClassDetection {
     }
 }
 
-/** True when [module] is a console-runnable (non-Android) module — the ones the "Run" configuration
- *  (main class) applies to. Android app/library modules run through the APK pipeline instead. */
+/** True when [module] is a console-runnable (Java/Kotlin) module — the ones the "Run" configuration
+ *  (main class) applies to. Android app/library modules run through the APK pipeline instead, and
+ *  Swift, Python, and Node.js modules run through their dedicated runtime build systems. */
 internal fun isConsoleRunModule(module: Module): Boolean =
     module.type.id != "android-app" && module.type.id != "android-lib" &&
-        module.type.id != "node"
+        module.type.id != "node" && module.type.id != "swift" && module.type.id != "python"
 
 /** The user-configured main-class override for [module]'s console Run (`.platform/settings.properties`),
  *  or null when unset/blank (auto-detect). */

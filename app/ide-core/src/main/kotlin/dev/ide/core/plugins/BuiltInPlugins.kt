@@ -409,42 +409,54 @@ private class GradleSupportPlugin : Plugin {
     }
 }
 
-/** package.json import is static; explicit execution uses the host's existing Runtime workbench. */
+/** package.json import is static; explicit execution uses the host's first-class Node.js build system & Runtime workbench. */
 private class NodeSupportPlugin : Plugin {
     override val manifest = PluginManifest(
         id = "node-support", name = "Node.js Support", essential = true,
-        description = "Opens package.json projects for editing and explicit npm script/Node file runs in the Runtime workbench.",
+        description = "Opens package.json projects for editing and builds/runs npm scripts & Node files.",
     )
 
     override fun register(reg: PluginRegistration) {
-        reg.contributeVia { ext, pid -> ModuleTypeRegistry(ext).register(NodeModuleType, pid) }
+        reg.contributeVia { ext, pid ->
+            ModuleTypeRegistry(ext).register(NodeModuleType, pid)
+            ProjectTemplateRegistry(ext).register(dev.ide.core.runtime.NodeAppTemplate, pid)
+        }
         reg.register(PROJECT_IMPORTER_EP, NodeProjectImporter())
+        reg.register(BUILD_SYSTEM_EP, dev.ide.core.runtime.NodeBuildSystem())
     }
 }
 
-/** Swift / XTool package import and Runtime workbench integration. */
+/** Swift / XTool package import, first-class iOS .ipa build system, and Runtime workbench integration. */
 private class SwiftSupportPlugin : Plugin {
     override val manifest = PluginManifest(
         id = "swift-support", name = "Swift & iOS Support", essential = true,
-        description = "Opens Swift and iOS projects for editing and running with xtool/Swift in the Runtime workbench.",
+        description = "Opens Swift and iOS projects for editing and building iOS .ipa apps with Swift 6 & xtool.",
     )
 
     override fun register(reg: PluginRegistration) {
-        reg.contributeVia { ext, pid -> ModuleTypeRegistry(ext).register(SwiftModuleType, pid) }
+        reg.contributeVia { ext, pid ->
+            ModuleTypeRegistry(ext).register(SwiftModuleType, pid)
+            ProjectTemplateRegistry(ext).register(dev.ide.core.runtime.SwiftIosAppTemplate, pid)
+        }
         reg.register(PROJECT_IMPORTER_EP, SwiftProjectImporter())
+        reg.register(BUILD_SYSTEM_EP, dev.ide.core.runtime.SwiftBuildSystem())
     }
 }
 
-/** Python project import and Runtime workbench integration. */
+/** Python project import, first-class Python build/run system, and Runtime workbench integration. */
 private class PythonSupportPlugin : Plugin {
     override val manifest = PluginManifest(
         id = "python-support", name = "Python Support", essential = true,
-        description = "Opens Python projects for editing and running in the Runtime workbench.",
+        description = "Opens Python projects for editing, running, and testing with Python 3.",
     )
 
     override fun register(reg: PluginRegistration) {
-        reg.contributeVia { ext, pid -> ModuleTypeRegistry(ext).register(PythonModuleType, pid) }
+        reg.contributeVia { ext, pid ->
+            ModuleTypeRegistry(ext).register(PythonModuleType, pid)
+            ProjectTemplateRegistry(ext).register(dev.ide.core.runtime.PythonAppTemplate, pid)
+        }
         reg.register(PROJECT_IMPORTER_EP, PythonProjectImporter())
+        reg.register(BUILD_SYSTEM_EP, dev.ide.core.runtime.PythonBuildSystem())
     }
 }
 

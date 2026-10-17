@@ -330,7 +330,10 @@ class IdeUiState(
     // `collectLatest` cancels the pending write when another tab change lands within the debounce window.
     private suspend fun restoreAndPersistTabs() {
         ensureTreeLoaded() // build the real file tree off the main thread before it's shown / walked
-        restoreTabs()
+        val handled = restoreTabs()
+        if (!handled && openFiles.isEmpty()) {
+            openDefaultEntryFile()
+        }
         snapshotFlow {
             // Re-emit when the tab set, the active tab, OR any tab's caret / scroll / view mode changes, so the
             // persisted session records where the user is, not only which files are open.
@@ -342,6 +345,56 @@ class IdeUiState(
             val snapshot = tabsSnapshot() // read the Compose session state on the main thread,
             withContext(ioDispatcher) { backend.projects.saveOpenTabs(snapshot) } // then write off it
         }
+    }
+
+    /**
+     * On a project's first open (no saved `.platform/open-tabs.txt` session yet), automatically open the
+     * primary entrypoint source file so the editor immediately shows real code rather than a blank canvas.
+     */
+    private suspend fun openDefaultEntryFile() {
+        data class Candidate(val node: TreeNode, val ancestors: List<String>, val depth: Int, val rank: Int)
+
+        val priorityNames = listOf(
+            "mainactivity.kt", "mainactivity.java", "mainscreen.kt",
+            "contentview.swift", "app.swift", "main.swift", "dealer.swift", "markdownparser.swift", "defaults.swift", "publish.swift",
+            "main.py", "app.py", "train.py", "engine.py", "model.py", "cli.py", "core.py",
+            "index.js", "index.mjs", "index.ts", "server.js", "app.js", "main.js",
+            "main.kt", "app.kt", "main.java",
+        )
+        val codeExts = setOf("kt", "swift", "py", "js", "mjs", "ts", "tsx", "java")
+        val fallbackNames = listOf("package.swift", "package.json", "pyproject.toml", "build.gradle.kts", "androidmanifest.xml", "readme.md")
+
+        val candidates = ArrayList<Candidate>()
+        fun walk(n: TreeNode, ancestors: List<String>, depth: Int) {
+            if (n.styleHint == "excluded") return
+            val path = n.filePath
+            if (n.kind == NodeKind.File && path != null) {
+                val lowerName = n.name.lowercase()
+                val lowerPath = path.replace('\\', '/').lowercase()
+                val isTest = lowerPath.contains("/test/") || lowerPath.contains("/tests/") || lowerName.contains("test.")
+                val isExampleOrBench = lowerPath.contains("/examples/") || lowerPath.contains("/example/") ||
+                    lowerPath.contains("/bench/") || lowerPath.contains("/benchmarks/")
+                val ext = lowerName.substringAfterLast('.', "")
+                val prioIdx = priorityNames.indexOf(lowerName)
+                val fallbackIdx = fallbackNames.indexOf(lowerName)
+                val rank = when {
+                    prioIdx >= 0 && !isTest && !isExampleOrBench -> prioIdx
+                    ext in codeExts && !isTest && !isExampleOrBench && lowerName != "package.swift" && lowerName != "setup.py" -> 50
+                    prioIdx >= 0 && !isTest -> 70 + prioIdx
+                    fallbackIdx >= 0 -> 100 + fallbackIdx
+                    ext in codeExts -> 200
+                    else -> 500
+                }
+                candidates += Candidate(n, ancestors, depth, rank)
+            }
+            val nextAncestors = ancestors + n.id
+            n.children.forEach { walk(it, nextAncestors, depth + 1) }
+        }
+        walk(tree, emptyList(), 0)
+        val best = candidates.minWithOrNull(compareBy<Candidate> { it.rank }.thenBy { it.depth }.thenBy { it.node.name })
+            ?: return
+        best.ancestors.forEach { treeExpanded[it] = true }
+        runCatching { openSuspend(best.node.filePath!!, best.node.name) }
     }
 
     // Editor-lifecycle events for plugins: the engine republishes these on the message bus
@@ -402,6 +455,14 @@ class IdeUiState(
      *  panels are fully plugin-derived; a disabled plugin contributes nothing and leaves no rail icon. */
     var selectedRightPanel by mutableStateOf<String?>(null)
 
+    /** Whether the mobile RIGHT panel (Agent Chat) is docked at half-screen height so the user can view/edit
+     *  code in the top half while watching the agent type in the bottom half (triggered via Predictive Back
+     *  or the header split toggle). */
+    var rightPanelHalfScreen by mutableStateOf(false)
+
+    /** Continuous predictive-back progress (`0f..1f`) on the Editor screen; shrinks the code canvas first. */
+    var editorBackProgress by mutableStateOf(0f)
+
     /** True while the left sidebar is showing a panel (drives the top-bar toggle glyph, the compact push
      *  drawer's open state, and the back handler). */
     val leftOpen: Boolean get() = selectedLeftPanel != null
@@ -424,7 +485,14 @@ class IdeUiState(
     }
 
     /** RIGHT rail: tap an icon to open/switch; tap the selected one to collapse (the phone swipe routes here too). */
-    fun toggleRightPanel(id: String) { selectedRightPanel = if (selectedRightPanel == id) null else id }
+    fun toggleRightPanel(id: String) {
+        if (selectedRightPanel == id) {
+            selectedRightPanel = null
+            rightPanelHalfScreen = false
+        } else {
+            selectedRightPanel = id
+        }
+    }
     /** Open (and switch to) a RIGHT panel — the mobile right-overlay switcher uses this. */
     fun selectRightPanel(id: String) { selectedRightPanel = id }
 

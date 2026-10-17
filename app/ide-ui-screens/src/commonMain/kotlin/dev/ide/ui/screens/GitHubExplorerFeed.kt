@@ -70,6 +70,7 @@ import dev.ide.ui.components.SquareToneButton
 import dev.ide.ui.components.pressScale
 import dev.ide.ui.editor.preview.decodeImageBytes
 import dev.ide.ui.icons.CaSymbols
+import dev.ide.ui.platform.rememberIdeHaptics
 import dev.ide.ui.theme.Symbol
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -84,6 +85,9 @@ private data class ExplorerCategory(
 
 private val EXPLORER_CATEGORIES = listOf(
     ExplorerCategory("all", "All", "android", CaSymbols.explore),
+    ExplorerCategory("swift", "SwiftUI & iOS", "swiftui", CaSymbols.phoneAndroid),
+    ExplorerCategory("python", "Python", "python", CaSymbols.codeBlocks),
+    ExplorerCategory("node", "Node.js", "nodejs", CaSymbols.terminal),
     ExplorerCategory("agents", "Agents", "agents", CaSymbols.deployedCode),
     ExplorerCategory("llm", "LLMs", "llm", CaSymbols.bolt),
     ExplorerCategory("pentesting", "Pen Testing", "penetration-testing", CaSymbols.terminal),
@@ -109,6 +113,7 @@ fun GitHubExplorerFeed(
     initialFeed: UiDiscoveryFeed? = null
 ) {
     val scope = rememberCoroutineScope()
+    val haptics = rememberIdeHaptics()
     var feed by remember { mutableStateOf<UiDiscoveryFeed?>(initialFeed) }
     var loading by remember { mutableStateOf(feed == null) }
     var selectedCategory by remember { mutableStateOf(EXPLORER_CATEGORIES.first()) }
@@ -217,6 +222,7 @@ fun GitHubExplorerFeed(
                 val interactionSource = remember { MutableInteractionSource() }
                 Surface(
                     onClick = {
+                        haptics.tap()
                         if (selectedCategory.id != category.id) {
                             loadCategory(category)
                         }
@@ -285,7 +291,7 @@ fun GitHubExplorerFeed(
                     contentPadding = PaddingValues(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    items(currentFeed.trendingHero) { repo ->
+                    items(currentFeed.trendingHero, key = { it.htmlUrl }) { repo ->
                         HeroVisualRepoCard(
                             repo = repo,
                             backend = backend,
@@ -316,7 +322,12 @@ fun GitHubExplorerFeed(
                     currentFeed.northStarBenchmarks.forEach { benchmark ->
                         NorthStarBenchmarkCard(
                             benchmark = benchmark,
-                            onClone = { onCloneAndOpen(benchmark.northStarUrl, benchmark.northStarName) }
+                            onClone = {
+                                val folderName = benchmark.targetRepoName
+                                    .ifBlank { benchmark.northStarName }
+                                    .substringAfterLast('/')
+                                onCloneAndOpen(benchmark.northStarUrl, folderName)
+                            }
                         )
                     }
                 }
@@ -340,7 +351,7 @@ fun GitHubExplorerFeed(
                     contentPadding = PaddingValues(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(currentFeed.authorPeerPicks) { peer ->
+                    items(currentFeed.authorPeerPicks, key = { it.htmlUrl }) { peer ->
                         AuthorPeerCard(
                             peer = peer,
                             onClone = { onCloneAndOpen(peer.htmlUrl, peer.name) }
@@ -365,7 +376,8 @@ private fun HeroVisualRepoCard(
 ) {
     val c = MaterialTheme.colorScheme
 
-    val screenshotBitmap by produceState<ImageBitmap?>(null, repo.screenshotUrl) {
+    val screenshotBitmap by produceState<ImageBitmap?>(null, repo.htmlUrl, repo.screenshotUrl) {
+        value = null
         val url = repo.screenshotUrl
         if (!url.isNullOrBlank()) {
             val bytes = backend.discovery.loadScreenshotBytes(url)
@@ -477,10 +489,23 @@ private fun HeroVisualRepoCard(
             // Info Content
             Column(
                 modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    repo.description.ifBlank { "Modern application built with Kotlin & Compose." },
+                    "${repo.owner}/${repo.name}",
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    ),
+                    color = c.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Text(
+                    repo.description.ifBlank {
+                        "Modern ${repo.language.ifBlank { "open-source" }} repository ready to clone and run."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = c.onSurfaceVariant,
                     maxLines = 2,
@@ -492,8 +517,13 @@ private fun HeroVisualRepoCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    if (repo.usesCompose) {
-                        CapabilityTag("Jetpack Compose", Color(0xFF4F46E5), Color(0xFFEEF2FF))
+                    val langLower = repo.language.lowercase()
+                    when {
+                        repo.usesCompose -> CapabilityTag("Jetpack Compose", Color(0xFF4F46E5), Color(0xFFEEF2FF))
+                        langLower == "swift" -> CapabilityTag("Swift & iOS", Color(0xFFEA580C), Color(0xFFFFF7ED))
+                        langLower == "python" || langLower == "jupyter notebook" -> CapabilityTag("Python 3", Color(0xFF2563EB), Color(0xFFEFF6FF))
+                        langLower == "javascript" || langLower == "typescript" -> CapabilityTag("Node.js", Color(0xFF16A34A), Color(0xFFF0FDF4))
+                        repo.language.isNotBlank() -> CapabilityTag(repo.language, Color(0xFF4F46E5), Color(0xFFEEF2FF))
                     }
                     if (repo.isOfflineFirst) {
                         CapabilityTag("Offline First", Color(0xFF0D9488), Color(0xFFCCFBF1))
@@ -507,8 +537,9 @@ private fun HeroVisualRepoCard(
 
                 // Clone & Open CTA Button
                 val ctaInteraction = remember { MutableInteractionSource() }
+                val haptics = rememberIdeHaptics()
                 Surface(
-                    onClick = onClone,
+                    onClick = { haptics.heavyTap(); onClone() },
                     interactionSource = ctaInteraction,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -601,8 +632,9 @@ private fun NorthStarBenchmarkCard(
             }
 
             val cloneInteraction = remember { MutableInteractionSource() }
+            val haptics = rememberIdeHaptics()
             Surface(
-                onClick = onClone,
+                onClick = { haptics.heavyTap(); onClone() },
                 interactionSource = cloneInteraction,
                 modifier = Modifier.pressScale(cloneInteraction),
                 shape = RoundedCornerShape(8.dp),
@@ -684,8 +716,9 @@ private fun AuthorPeerCard(
             Spacer(Modifier.height(2.dp))
 
             val peerInteraction = remember { MutableInteractionSource() }
+            val haptics = rememberIdeHaptics()
             Surface(
-                onClick = onClone,
+                onClick = { haptics.heavyTap(); onClone() },
                 interactionSource = peerInteraction,
                 modifier = Modifier
                     .fillMaxWidth()

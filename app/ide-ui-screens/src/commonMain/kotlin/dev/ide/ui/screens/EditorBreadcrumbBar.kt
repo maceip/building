@@ -102,7 +102,7 @@ internal fun BreadcrumbBar(
 }
 
 /** Shared height for the editor view-mode toggle pill. */
-private val EditorToolbarHeight = 26.dp
+private val EditorToolbarHeight = 24.dp
 
 /**
  * The `Code / Blocks / Preview / Split` segmented control switching the active tab between editor surfaces.
@@ -176,25 +176,26 @@ private fun ViewModeToggle(
 @Composable
 private fun SegmentItem(icon: ImageVector, label: String, active: Boolean, onClick: () -> Unit) {
     // Icon-only; the label rides along as the icon's content description (accessibility) but is never drawn.
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(Ca.radius.xs)
     Box(
-        Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(Ca.radius.xs))
+        Modifier.clip(shape)
             .background(
-                if (active) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent,
-                androidx.compose.foundation.shape.RoundedCornerShape(Ca.radius.xs)
+                if (active) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.10f) else androidx.compose.ui.graphics.Color.Transparent,
+                shape
             )
             .clickable(
                 remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                 null,
                 onClick = onClick
             )
-            .padding(horizontal = 7.dp, vertical = 5.dp),
+            .padding(horizontal = 6.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center,
     ) {
         androidx.compose.material3.Icon(
             icon,
             label,
-            Modifier.size(15.dp),
-            tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            Modifier.size(14.dp),
+            tint = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
         )
     }
 }

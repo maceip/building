@@ -82,8 +82,8 @@ object WorkbenchUiPlugin : UiPlugin {
             order = 60, visible = { runCatching { it.backend.project.isNode }.getOrDefault(false) },
         ) { it.navigate(NODE_SCREEN_ID) })
         scope.action(SimpleUiAction(
-            id = "ui.developerWorkbench", text = "Run project", description = "Run scripts, servers or a terminal",
-            iconId = "run", places = setOf(UiActionPlaces.MORE_MENU, UiActionPlaces.COMMAND_PALETTE),
+            id = "ui.developerWorkbench", text = "Run project", description = "Interactive runtime workbench, servers & terminal",
+            iconId = "run", places = setOf(UiActionPlaces.MORE_MENU, UiActionPlaces.MAIN_OVERFLOW, UiActionPlaces.TOOL_STRIPE, UiActionPlaces.COMMAND_PALETTE),
             order = 65, visible = { !runCatching { it.backend.project.isNode }.getOrDefault(false) },
         ) { it.navigate(SCREEN_ID) })
         scope.action(SimpleUiAction(

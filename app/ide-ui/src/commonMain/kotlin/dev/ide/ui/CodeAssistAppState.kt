@@ -23,6 +23,8 @@ import dev.ide.ui.backend.UiSettings
 import dev.ide.ui.theme.colors.ColorSchemeStore
 import dev.ide.ui.theme.colors.EditorColorScheme
 import dev.ide.ui.backend.UiStoreItem
+import dev.ide.ui.platform.HapticsConfig
+import dev.ide.ui.platform.HapticsStore
 import dev.ide.ui.platform.ioDispatcher
 import dev.ide.ui.screens.ModulesTab
 import dev.ide.ui.screens.doImportGradle
@@ -111,6 +113,17 @@ class CodeAssistAppState(
 
     /** The scheme the editor renders with. Read by the theme; re-read whenever the scheme editor writes. */
     var editorColorScheme: EditorColorScheme by mutableStateOf(colorSchemes.active())
+        private set
+
+    /**
+     * The user's haptics configuration and custom per-event waveforms, persisted on the app preference store
+     * (`settings.appearance.haptics*` and `settings.haptics.pattern.<eventId>`).
+     */
+    val hapticsStore: HapticsStore =
+        HapticsStore(backend.settings::preference, backend.settings::setPreference)
+
+    /** Live haptics engine configuration consumed by [dev.ide.ui.platform.LocalIdeHaptics]. */
+    var hapticsConfig: HapticsConfig by mutableStateOf(hapticsStore.load())
         private set
 
     // ---- navigation ----
@@ -384,6 +397,14 @@ class CodeAssistAppState(
 
     /** Re-read the persisted settings after the Settings screen (or a quick toggle) wrote them. */
     fun reloadSettings() {
+        settings = backend.settings.settings()
+        hapticsConfig = hapticsStore.load()
+    }
+
+    /** Persist and immediately apply a new [HapticsConfig] (e.g., from a future Haptics Studio or quick toggle). */
+    fun applyHapticsConfig(config: HapticsConfig) {
+        hapticsStore.save(config)
+        hapticsConfig = config
         settings = backend.settings.settings()
     }
 

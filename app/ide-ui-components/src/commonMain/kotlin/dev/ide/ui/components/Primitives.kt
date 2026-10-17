@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -35,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -44,7 +46,9 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.ide.ui.platform.rememberIdeHaptics
 import dev.ide.ui.theme.Ide
 import dev.ide.ui.theme.Motion
 
@@ -153,7 +157,81 @@ fun Modifier.pressScale(interaction: MutableInteractionSource): Modifier {
         ),
         label = "pressScale",
     )
-    return this.graphicsLayer { scaleX = scale; scaleY = scale }
+    val lift by animateFloatAsState(
+        targetValue = if (pressed) 1f else 0f,
+        animationSpec = tween(durationMillis = Motion.FAST),
+        label = "pressLift",
+    )
+    return this.graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+        translationY = lift * 1.2.dp.toPx()
+    }
+}
+
+/**
+ * COSS UI (`coss.com`) elevated keycap/control treatment:
+ * - Layered physical drop shadow that compresses on press ([restElevation] → `1.dp`)
+ * - Subtle top-to-bottom luminance gradient across the face
+ * - Crisp `1.dp` top specular highlight rim + bottom depth hairline
+ */
+@Composable
+fun Modifier.cossElevation(
+    interaction: MutableInteractionSource,
+    shape: Shape,
+    restElevation: Dp = 4.dp,
+    topHighlight: Color = Color.White.copy(alpha = 0.24f),
+    bottomRim: Color = Color.Black.copy(alpha = 0.26f),
+): Modifier {
+    val pressed by interaction.collectIsPressedAsState()
+    val elevFraction by animateFloatAsState(
+        targetValue = if (pressed) 0.25f else 1f,
+        animationSpec = tween(durationMillis = Motion.FAST),
+        label = "cossElev",
+    )
+    val currentElevation = restElevation * elevFraction
+    return this
+        .shadow(
+            elevation = currentElevation,
+            shape = shape,
+            ambientColor = Color.Black.copy(alpha = 0.45f),
+            spotColor = Color.Black.copy(alpha = 0.55f),
+        )
+        .drawWithContent {
+            // Subtle top-down COSS surface sheen
+            drawRect(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        topHighlight.copy(alpha = topHighlight.alpha * 0.45f),
+                        Color.Transparent,
+                        bottomRim.copy(alpha = bottomRim.alpha * 0.35f),
+                    ),
+                ),
+            )
+            drawContent()
+            val strokePx = 1.dp.toPx()
+            when (val outline = shape.createOutline(size, layoutDirection, this)) {
+                is Outline.Rounded -> {
+                    val path = Path().apply { addRoundRect(outline.roundRect) }
+                    drawPath(
+                        path = path,
+                        brush = Brush.verticalGradient(listOf(topHighlight, bottomRim)),
+                        style = Stroke(width = strokePx),
+                    )
+                }
+                is Outline.Rectangle -> {
+                    drawLine(topHighlight, Offset(0f, 0f), Offset(size.width, 0f), strokeWidth = strokePx)
+                    drawLine(bottomRim, Offset(0f, size.height), Offset(size.width, size.height), strokeWidth = strokePx)
+                }
+                is Outline.Generic -> {
+                    drawPath(
+                        path = outline.path,
+                        brush = Brush.verticalGradient(listOf(topHighlight, bottomRim)),
+                        style = Stroke(width = strokePx),
+                    )
+                }
+            }
+        }
 }
 
 /**
@@ -214,19 +292,42 @@ fun IconButtonCa(
     iconSize: Int = 20,
     boxSize: Int = 38,
     tint: Color? = null,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
+    val haptics = rememberIdeHaptics()
     val resolvedTint = tint ?: if (active) scheme.onSecondaryContainer else scheme.onSurfaceVariant
+    val shape = MaterialTheme.shapes.small
+    val clickMod = if (onLongClick != null) {
+        Modifier.combinedClickable(
+            interactionSource = interaction,
+            indication = null,
+            onClick = { haptics.tap(); onClick() },
+            onLongClick = { haptics.heavyTap(); onLongClick() },
+        )
+    } else {
+        Modifier.clickable(interaction, indication = null, onClick = { haptics.tap(); onClick() })
+    }
+    val surfaceMod = if (active) {
+        Modifier
+            .cossElevation(
+                interaction = interaction,
+                shape = shape,
+                restElevation = 3.dp,
+                topHighlight = Ide.colors.glassEdgeTop,
+                bottomRim = Color.Black.copy(alpha = 0.22f),
+            )
+            .background(scheme.secondaryContainer, shape)
+    } else {
+        Modifier.background(Color.Transparent, shape)
+    }
     Box(
         modifier
             .size(boxSize.dp)
             .pressScale(interaction)
-            .background(
-                if (active) scheme.secondaryContainer else Color.Transparent,
-                MaterialTheme.shapes.small,
-            )
-            .clickable(interaction, indication = null, onClick = onClick),
+            .then(surfaceMod)
+            .then(clickMod),
         contentAlignment = Alignment.Center,
     ) {
         Icon(icon, contentDescription, Modifier.size(iconSize.dp), tint = resolvedTint)
@@ -235,8 +336,8 @@ fun IconButtonCa(
 
 /**
  * Filled primary button (e.g. Run), a native M3 [Button] on the expressive shape scale, 38dp tall with an
- * optional leading icon. When [iconOnly] (and [icon] is set) it collapses to a fixed-width square
- * [FilledIconButton] — the label is dropped but kept as the accessibility description.
+ * optional leading icon and COSS elevated keycap depth. When [iconOnly] (and [icon] is set) it collapses to a
+ * fixed-width square [FilledIconButton] — the label is dropped but kept as the accessibility description.
  */
 @Composable
 fun PrimaryButton(
@@ -246,20 +347,31 @@ fun PrimaryButton(
     icon: ImageVector? = null,
     iconOnly: Boolean = false,
 ) {
+    val interaction = remember { MutableInteractionSource() }
+    val haptics = rememberIdeHaptics()
+    val shape = MaterialTheme.shapes.small
     val collapsed = iconOnly && icon != null
     if (collapsed) {
         FilledIconButton(
-            onClick = onClick,
-            modifier = modifier.size(width = 44.dp, height = 38.dp),
-            shape = MaterialTheme.shapes.small,
+            onClick = { haptics.heavyTap(); onClick() },
+            interactionSource = interaction,
+            modifier = modifier
+                .size(width = 44.dp, height = 38.dp)
+                .pressScale(interaction)
+                .cossElevation(interaction, shape, restElevation = 5.dp),
+            shape = shape,
         ) {
             Icon(icon!!, text, Modifier.size(18.dp))
         }
     } else {
         Button(
-            onClick = onClick,
-            modifier = modifier.height(38.dp),
-            shape = MaterialTheme.shapes.small,
+            onClick = { haptics.heavyTap(); onClick() },
+            interactionSource = interaction,
+            modifier = modifier
+                .height(38.dp)
+                .pressScale(interaction)
+                .cossElevation(interaction, shape, restElevation = 5.dp),
+            shape = shape,
             contentPadding = PaddingValues(horizontal = 16.dp),
         ) {
             if (icon != null) {
@@ -271,7 +383,7 @@ fun PrimaryButton(
     }
 }
 
-/** A soft pill/chip with a tonal fill (used for status, hints, meta). Denser than an M3 AssistChip. */
+/** A soft pill/chip with a tonal fill and subtle COSS top specular rim (used for status, hints, meta). */
 @Composable
 fun Chip(
     text: String,
@@ -279,10 +391,25 @@ fun Chip(
     fill: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
     textColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
 ) {
+    val shape = RoundedCornerShape(999.dp)
+    val edgeTop = Ide.colors.glassEdgeTop
     Box(
         modifier
             .defaultMinSize(minHeight = 22.dp)
-            .background(fill, RoundedCornerShape(999.dp))
+            .shadow(1.5.dp, shape, ambientColor = Color.Black.copy(alpha = 0.25f), spotColor = Color.Black.copy(alpha = 0.3f))
+            .background(fill, shape)
+            .drawWithContent {
+                drawContent()
+                val path = Path().apply {
+                    val o = shape.createOutline(size, layoutDirection, this@drawWithContent)
+                    if (o is Outline.Rounded) addRoundRect(o.roundRect)
+                }
+                drawPath(
+                    path = path,
+                    brush = Brush.verticalGradient(listOf(edgeTop, Color.Black.copy(alpha = 0.16f))),
+                    style = Stroke(width = 1.dp.toPx()),
+                )
+            }
             .padding(horizontal = 9.dp, vertical = 3.dp),
         contentAlignment = Alignment.Center,
     ) {

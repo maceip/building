@@ -14,7 +14,7 @@ dependencies {
     // The JSON reader the notification store and the challenge backend parse with. Its own module (rather
     // than platform-core) because the store transport shares it and now has to compile for iOS too.
     implementation(project(":platform-json"))
-    implementation(project(":developer-workbench"))
+    api(project(":developer-workbench")) // RuntimeHost/RuntimeBuildEnvironment wired by launcher shells
     implementation(project(":project-model-api"))
     implementation(project(":project-model-impl"))
     // The built-in Kotlin templates and the shared scaffolding helpers, in the framework because the iOS

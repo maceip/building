@@ -28,6 +28,24 @@ data class IdeSettings(
      *  context menu; the top bar then carries the primary right tool window's toggle). */
     val rightToolWindowBar: Boolean = true,
 
+    // ---- haptics (stored under settings.appearance.haptics*) ----
+    /** Master switch for tactile feedback across the IDE. */
+    val hapticsEnabled: Boolean = true,
+    /** [HAPTICS_PROFILE_EXPRESSIVE], [HAPTICS_PROFILE_BALANCED], [HAPTICS_PROFILE_SUBTLE], or [HAPTICS_PROFILE_OFF]. */
+    val hapticsProfile: String = HAPTICS_PROFILE_EXPRESSIVE,
+    /** Overall tactile motor intensity percentage (`20..150`, default `100`). */
+    val hapticsIntensity: Int = 100,
+    /** Tactile feedback for elevated buttons, filter chips, and primary actions. */
+    val hapticsUiInteractions: Boolean = true,
+    /** Tactile feedback for Git clone initiation, rat-a-tat streaming heartbeat, and completion burst. */
+    val hapticsGitClone: Boolean = true,
+    /** Tactile feedback for build start ignition, compiler step ticks, and build completion. */
+    val hapticsBuildEngine: Boolean = true,
+    /** Tactile detent snaps for predictive-back half-screen and code-shrink thresholds. */
+    val hapticsGestureDetents: Boolean = true,
+    /** Interval in milliseconds between rat-a-tat pulses while a Git clone streams (`500..5000`). */
+    val hapticsClonePulseMs: Int = 1750,
+
     // ---- editor ----
     /** Code-font zoom, 1.0 = the theme's default size (also driven live by pinch / Ctrl-+ / Ctrl--). */
     val editorFontScale: Float = 1f,
@@ -95,11 +113,20 @@ data class IdeSettings(
         const val ACCENT_CUSTOM = "custom"
         const val CODE_FONT_JETBRAINS = "jetbrains"
         const val CODE_FONT_MONOSPACE = "monospace"
+        const val HAPTICS_PROFILE_OFF = "off"
+        const val HAPTICS_PROFILE_SUBTLE = "subtle"
+        const val HAPTICS_PROFILE_BALANCED = "balanced"
+        const val HAPTICS_PROFILE_EXPRESSIVE = "expressive"
+        const val HAPTICS_PROFILE_CUSTOM = "custom"
 
         // Bounds the UI sliders enforce and the store clamps to (a hand-edited prefs file can't push the
         // editor into an unusable state).
         const val MIN_FONT_SCALE = 0.7f
         const val MAX_FONT_SCALE = 2.0f
+        const val MIN_HAPTICS_INTENSITY = 20
+        const val MAX_HAPTICS_INTENSITY = 150
+        const val MIN_HAPTICS_CLONE_PULSE_MS = 500
+        const val MAX_HAPTICS_CLONE_PULSE_MS = 5000
         const val MIN_COMPLETION_DELAY_MS = 0
         const val MAX_COMPLETION_DELAY_MS = 1000
         const val MIN_COMPLETION_MAX_ITEMS = 10

@@ -560,8 +560,9 @@ class IdeServicesBackend(
         DiscoveryBackend(
             client = dev.ide.core.discovery.GitHubDiscoveryClient(
                 token = null,
-                cacheDir = manager?.projectsRoot?.parent
-            )
+                cacheDir = manager?.projectsRoot?.parent,
+            ),
+            cacheDir = manager?.projectsRoot?.parent,
         )
 
     // The Compose UI facets of the enabled built-in plugins (see BuiltInPlugins). The shell registers them into
@@ -615,6 +616,7 @@ class IdeServicesBackend(
                 svc.build.buildState.collectLatest { bs ->
                     val terminal = bs.status == dev.ide.ui.backend.RunStatus.Succeeded || bs.status == dev.ide.ui.backend.RunStatus.Failed
                     if (terminal && prev == dev.ide.ui.backend.RunStatus.Running) {
+                        bumpFileSystemEpoch()
                         // Attach this build's heap peak (Phase-0 build-isolation instrumentation): the signal
                         // for whether a build/run is the dominant OOM driver vs. the project-open warm-up storm.
                         val peak = svc.build.lastBuildPeak

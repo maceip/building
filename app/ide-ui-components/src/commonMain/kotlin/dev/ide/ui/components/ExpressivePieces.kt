@@ -262,8 +262,9 @@ fun PrimaryActionButton(
     modifier: Modifier = Modifier,
 ) {
     val interaction = remember { MutableInteractionSource() }
+    val haptics = dev.ide.ui.platform.rememberIdeHaptics()
     Surface(
-        onClick = onClick,
+        onClick = { haptics.heavyTap(); onClick() },
         shape = CaShapes.PrimaryAction,
         color = MaterialTheme.colorScheme.primary,
         contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -295,8 +296,9 @@ fun SquareToneButton(
     size: Dp = 36.dp,
 ) {
     val interaction = remember { MutableInteractionSource() }
+    val haptics = dev.ide.ui.platform.rememberIdeHaptics()
     Surface(
-        onClick = onClick,
+        onClick = { haptics.tap(); onClick() },
         shape = shape,
         color = container,
         contentColor = content,

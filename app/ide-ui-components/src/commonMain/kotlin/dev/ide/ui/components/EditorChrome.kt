@@ -2,6 +2,7 @@ package dev.ide.ui.components
 
 import dev.ide.ui.itemsIndexedKeyed
 import dev.ide.ui.platform.claimWindowTitleBar
+import dev.ide.ui.platform.rememberIdeHaptics
 import dev.ide.ui.platform.touchInput
 import dev.ide.ui.ext.AppCommands
 import androidx.compose.foundation.layout.widthIn
@@ -179,6 +180,10 @@ fun EditorTopBar(
     onOpenPalette: () -> Unit,
     runTasks: () -> List<RunTaskOption> = { emptyList() },
     onPickTask: (RunTaskOption) -> Unit = {},
+    /** Default action when the Play button is tapped directly (long-press opens the task picker dropdown). */
+    onRun: () -> Unit = { runTasks().firstOrNull()?.let(onPickTask) },
+    /** Currently active/default task id highlighted in the long-press task picker dropdown. */
+    selectedTaskId: String? = null,
     /** The active build variant to show in the switcher chip, or null to hide it (non-Android project). */
     activeVariant: String? = null,
     variants: () -> List<String> = { emptyList() },
@@ -224,22 +229,22 @@ fun EditorTopBar(
     // On a desktop window with a custom title bar, the wide bar IS the title bar (IntelliJ's main toolbar):
     // its empty space drags the window, and it leaves room for the native window controls.
     val titleBar = if (compact) null else claimWindowTitleBar(TopBarHeight)
-    Surface(
+    val barHeight = if (compact) CompactTopBarHeight else TopBarHeight
+    GlassSurface(
         modifier = Modifier.fillMaxWidth().then(titleBar?.run { Modifier.titleBarArea() } ?: Modifier),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        tonalElevation = 2.dp,
+        material = GlassMaterial.Thick,
     ) {
         Row(
-            Modifier.fillMaxWidth().height(TopBarHeight).padding(
+            Modifier.fillMaxWidth().height(barHeight).padding(
                 start = when {
-                    compact -> 12.dp
+                    compact -> 8.dp
                     titleBar != null && titleBar.startInset > 0.dp -> titleBar.startInset
                     else -> 0.dp
                 },
-                end = 12.dp + (titleBar?.endInset ?: 0.dp),
+                end = (if (compact) 8.dp else 12.dp) + (titleBar?.endInset ?: 0.dp),
             ),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 10.dp),
         ) {
             // The back arrow leads, then the sidebar toggle. Whichever comes first is centred over the left
             // tool-window stripe below, so the bar's first button caps that column.
@@ -259,7 +264,7 @@ fun EditorTopBar(
             Text(
                 projectName,
                 color = MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.bodyLarge,
+                style = if (compact) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -269,19 +274,21 @@ fun EditorTopBar(
             IndexStatusChip(indexStatus, compact = compact, onClick = onIndexClick)
             // Accent-tinted while there are unsaved changes; saves the active tab (Cmd/Ctrl-S also works). A desktop
             // has the keyboard for it and the tab's unsaved dot for the state, so only touch hosts show it.
-            if (compact || touchInput) {
+            if ((compact && hasUnsavedChanges) || (!compact && touchInput)) {
                 IconButtonCa(CaIcons.save, stringResource(Res.string.save), onSave, active = hasUnsavedChanges)
             }
             if (compact) {
                 // Save · Undo · Redo · Run are the prioritized inline actions even on a phone — one tap away,
                 // never buried. Everything else (find, reformat, palette, inlay hints, console, preview, the AI
                 // panel, and the build-variant switcher) collapses into the single ⋯ overflow menu.
-                if (hasActiveFile) {
-                    IconButtonCa(CaIcons.undo, stringResource(Res.string.undo), onUndo, tint = if (canUndo) null else dim)
-                    IconButtonCa(CaIcons.redo, stringResource(Res.string.redo), onRedo, tint = if (canRedo) null else dim)
+                if (hasActiveFile && canUndo) {
+                    IconButtonCa(CaIcons.undo, stringResource(Res.string.undo), onUndo)
+                }
+                if (hasActiveFile && canRedo) {
+                    IconButtonCa(CaIcons.redo, stringResource(Res.string.redo), onRedo)
                 }
                 PluginToolbarActions(pluginActions, dim, onPluginAction)
-                RunControl(runTasks, onPickTask, compact = true)
+                RunControl(runTasks, onPickTask, onRun = onRun, selectedTaskId = selectedTaskId, compact = true)
                 EditorOverflowMenu(
                     onOpenPalette = onOpenPalette,
                     hasActiveFile = hasActiveFile,
@@ -313,7 +320,7 @@ fun EditorTopBar(
                 }
                 IconButtonCa(CaIcons.command, stringResource(Res.string.edchrome_command_palette), onOpenPalette)
                 PluginToolbarActions(pluginActions, dim, onPluginAction)
-                RunCluster(activeVariant, variants, onPickVariant, runTasks, onPickTask)
+                RunCluster(activeVariant, variants, onPickVariant, runTasks, onPickTask, onRun = onRun, selectedTaskId = selectedTaskId)
                 if (rightToolInBar && rightToolIconId != null) {
                     IconButtonCa(actionIcon(rightToolIconId), rightToolTitle, onToggleRightTool, active = rightToolOpen)
                 }
@@ -348,6 +355,7 @@ fun EditorTopBar(
 
 /** Height of the editor's top bar (and, on a desktop window with a custom title bar, of the title bar). */
 private val TopBarHeight = 46.dp
+private val CompactTopBarHeight = 40.dp
 
 /** The top bar's back arrow: leaves the project for the project list (the host confirms first). */
 @Composable
@@ -808,16 +816,28 @@ private fun RunCluster(
     onPickVariant: (String) -> Unit,
     runTasks: () -> List<RunTaskOption>,
     onPickTask: (RunTaskOption) -> Unit,
+    onRun: () -> Unit,
+    selectedTaskId: String? = null,
 ) {
+    val clusterInteraction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(Ca.radius.sm)
     Row(
-        Modifier.clip(RoundedCornerShape(Ca.radius.sm)).background(MaterialTheme.colorScheme.surfaceContainerHigh),
+        Modifier
+            .cossElevation(
+                interaction = clusterInteraction,
+                shape = shape,
+                restElevation = 3.dp,
+                topHighlight = Ide.colors.glassEdgeTop,
+            )
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (activeVariant != null) {
             VariantChip(activeVariant, variants, onPickVariant, compact = false)
             Box(Modifier.width(1.dp).height(18.dp).background(MaterialTheme.colorScheme.outlineVariant))
         }
-        RunControl(runTasks, onPickTask, compact = false)
+        RunControl(runTasks, onPickTask, onRun = onRun, selectedTaskId = selectedTaskId, compact = false)
     }
 }
 
@@ -825,27 +845,61 @@ private fun RunCluster(
 private fun RunControl(
     tasks: () -> List<RunTaskOption>,
     onPickTask: (RunTaskOption) -> Unit,
+    onRun: () -> Unit = { tasks().firstOrNull()?.let(onPickTask) },
+    selectedTaskId: String? = null,
     compact: Boolean = false,
 ) {
     var open by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var items by remember { mutableStateOf(emptyList<RunTaskOption>()) }
     val interaction = remember { MutableInteractionSource() }
+    val haptics = rememberIdeHaptics()
     val keyboard = LocalSoftwareKeyboardController.current
     Box {
-        // The Run button opens the task dropdown directly — no separate chevron, no filled background. The task
-        // list is resolved lazily here (it scans sources), not on every recomposition. `keyboard.hide()` drops
-        // any editor keyboard so the task list isn't covered; the search field stays unfocusable until tapped
-        // (below) so the menu's focusable popup can't auto-focus it and pop the keyboard on open.
-        val openMenu = { keyboard?.hide(); query = ""; items = tasks(); open = true }
+        // Short tap immediately runs the default build configuration; long-press opens the task picker dropdown.
+        // The task list is resolved lazily on long-press (it scans sources), not on every recomposition.
+        val openMenu = { keyboard?.hide(); haptics.heavyTap(); query = ""; items = tasks(); open = true }
+        val triggerRun = { keyboard?.hide(); haptics.buildStart(); onRun() }
         if (compact) {
-            IconButtonCa(CaIcons.play, stringResource(Res.string.run), onClick = openMenu, tint = MaterialTheme.colorScheme.primary)
+            val shape = RoundedCornerShape(Ca.radius.control)
+            Box(
+                Modifier
+                    .size(32.dp)
+                    .pressScale(interaction)
+                    .cossElevation(
+                        interaction = interaction,
+                        shape = shape,
+                        restElevation = 3.dp,
+                        topHighlight = Ide.colors.glassEdgeTop,
+                    )
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.20f), shape)
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.38f), shape)
+                    .combinedClickable(
+                        interactionSource = interaction,
+                        indication = null,
+                        onClick = triggerRun,
+                        onLongClick = openMenu,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    CaIcons.play,
+                    stringResource(Res.string.run),
+                    Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
         } else {
             Row(
                 Modifier.height(34.dp)
                     .clip(RoundedCornerShape(Ca.radius.sm))
                     .pressScale(interaction)
-                    .clickable(interaction, indication = null, onClick = openMenu)
+                    .combinedClickable(
+                        interactionSource = interaction,
+                        indication = null,
+                        onClick = triggerRun,
+                        onLongClick = openMenu,
+                    )
                     .padding(horizontal = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -899,19 +953,23 @@ private fun RunControl(
                     ignoreCase = true
                 )
             }
+            val activeId = selectedTaskId ?: items.firstOrNull()?.id
             if (items.isEmpty()) {
                 CaMenuItem(stringResource(Res.string.edchrome_nothing_to_run), onClick = {}, enabled = false)
             }
-            if (filtered.isEmpty()) {
+            if (filtered.isEmpty() && items.isNotEmpty()) {
                 CaMenuItem(stringResource(Res.string.edchrome_no_matching_tasks), onClick = {}, enabled = false)
             }
             Box(Modifier.heightIn(max = 320.dp)) {
                 Column {
                     filtered.forEach { task ->
+                        val isDefault = task.id == activeId
                         CaMenuItem(
                             label = task.label,
                             onClick = { open = false; onPickTask(task) },
                             supporting = task.group,
+                            selected = isDefault,
+                            trailing = if (isDefault) ({ CaMenuCheck() }) else null,
                             // Accented rather than the usual row tint: the glyph is what says "this runs".
                             leading = {
                                 Icon(
@@ -1034,23 +1092,30 @@ fun IndexStatusChip(
     if (status.building) {
         Row(
             base.background(MaterialTheme.colorScheme.primaryContainer, shape)
-                .padding(horizontal = 10.dp, vertical = 5.dp),
+                .padding(horizontal = if (compact) 7.dp else 10.dp, vertical = if (compact) 4.dp else 5.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 6.dp),
         ) {
             CircularProgressIndicator(
                 Modifier.size(13.dp),
                 color = MaterialTheme.colorScheme.primary,
                 strokeWidth = 2.dp
             )
-            val label =
-                if (status.fraction in 0.0..1.0) stringResource(Res.string.edchrome_indexing_percent, (status.fraction * 100).toInt()) else stringResource(Res.string.edchrome_indexing)
-            Text(
-                label,
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium
-            )
+            val label = when {
+                compact && status.fraction in 0.0..1.0 -> "${(status.fraction * 100).toInt()}%"
+                compact -> null
+                status.fraction in 0.0..1.0 -> stringResource(Res.string.edchrome_indexing_percent, (status.fraction * 100).toInt())
+                else -> stringResource(Res.string.edchrome_indexing)
+            }
+            if (label != null) {
+                Text(
+                    label,
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                )
+            }
         }
     } else {
         Row(
@@ -1106,7 +1171,7 @@ fun TabsStrip(
     Row(
         Modifier
             .fillMaxWidth()
-            .height(34.dp)
+            .height(30.dp)
             .padding(vertical = 2.dp)
             .background(Ide.colors.editorBg),
         verticalAlignment = Alignment.CenterVertically,
@@ -1147,7 +1212,7 @@ fun TabsStrip(
         }
     }
     // a hairline under the tabs
-    Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
+    Box(Modifier.fillMaxWidth().height(1.dp).background(Ide.colors.glassEdge))
 }
 
 /**
@@ -1238,21 +1303,25 @@ private fun EditorTab(
             Modifier
                 .fillMaxHeight()
                 .background(
-                    color = if (active) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                    shape = RoundedCornerShape(Ca.radius.md)
+                    color = if (active) Color.White.copy(alpha = 0.08f) else Color.Transparent,
+                    shape = RoundedCornerShape(Ca.radius.control)
+                )
+                .then(
+                    if (active) Modifier.border(1.dp, Ide.colors.glassEdgeTop, RoundedCornerShape(Ca.radius.control))
+                    else Modifier
                 )
                 .combinedClickable(onClick = onSelect, onLongClick = { menuOpen = true })
                 .secondaryClickable { menuOpen = true }
-                .padding(horizontal = 14.dp),
+                .padding(horizontal = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Leading file-type icon (same glyph/badge as the file tree), so a tab is identifiable at a glance.
             TabFileIcon(file.name)
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(7.dp))
             Text(
                 file.name,
-                color = if (active) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium,
+                color = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
                 fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
             )
             TabStatusDot(file, active, backend)
@@ -1514,10 +1583,10 @@ fun Breadcrumb(segments: List<String>) {
     Row(
         Modifier
             .fillMaxWidth()
-            .height(26.dp)
+            .height(24.dp)
             .background(Ide.colors.editorBg)
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AnimatedContent(
@@ -1527,21 +1596,21 @@ fun Breadcrumb(segments: List<String>) {
         ) { segs ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 segs.forEachIndexed { index, seg ->
                     val last = index == segs.lastIndex
                     Text(
                         seg,
-                        color = if (last) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (last) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = if (last) FontWeight.SemiBold else FontWeight.Normal,
                     )
                     if (!last) Icon(
                         CaIcons.chevronRight,
                         null,
-                        Modifier.size(13.dp),
-                        tint = MaterialTheme.colorScheme.outline
+                        Modifier.size(12.dp),
+                        tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)
                     )
                 }
             }

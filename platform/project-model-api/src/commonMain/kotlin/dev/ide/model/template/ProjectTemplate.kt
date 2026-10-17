@@ -66,6 +66,9 @@ val ProjectTemplateExtensionPoint: ExtensionPoint<ProjectTemplate> = ExtensionPo
 /** Buckets templates in the gallery. Open enough that a plugin can drop into [OTHER]. */
 enum class TemplateCategory(val displayName: String) {
     ANDROID("Android"),
+    SWIFT("Swift & iOS"),
+    PYTHON("Python"),
+    NODE("Node.js"),
     JAVA("Java"),
     KOTLIN("Kotlin"),
     /** Projects that extend the IDE itself rather than targeting a device. */

@@ -2043,6 +2043,22 @@ data class UiSettings(
     val softKeyboardSuggestions: Boolean = true,
     /** Reformat the active file when it is saved (the editor's save handler reads this). */
     val formatOnSave: Boolean = false,
+    /** Master switch for tactile feedback across the IDE. */
+    val hapticsEnabled: Boolean = true,
+    /** "expressive" | "balanced" | "subtle" | "off" | "custom". */
+    val hapticsProfile: String = "expressive",
+    /** Overall tactile motor intensity percentage (`20..150`). */
+    val hapticsIntensity: Int = 100,
+    /** Tactile feedback for elevated buttons, filter chips, and primary actions. */
+    val hapticsUiInteractions: Boolean = true,
+    /** Tactile feedback for Git clone initiation, rat-a-tat streaming heartbeat, and completion burst. */
+    val hapticsGitClone: Boolean = true,
+    /** Tactile feedback for build start ignition, compiler step ticks, and build completion. */
+    val hapticsBuildEngine: Boolean = true,
+    /** Tactile detent snaps for predictive-back half-screen and code-shrink thresholds. */
+    val hapticsGestureDetents: Boolean = true,
+    /** Interval in milliseconds between rat-a-tat pulses while a Git clone streams (`500..5000`). */
+    val hapticsClonePulseMs: Int = 1750,
 ) {
     companion object {
         const val MIN_FONT_SCALE = 0.7f

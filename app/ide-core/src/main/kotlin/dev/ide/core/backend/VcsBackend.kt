@@ -471,14 +471,22 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
         command {
             val git = provider ?: throw VcsException(VcsText.of(VcsMessage.NO_ENGINE))
             val manager = ctx.manager ?: throw VcsException(VcsText.of(VcsMessage.NO_PROJECT))
-            val name = directoryName.trim().ifBlank { url.trim().substringAfterLast('/').removeSuffix(".git") }
+            val rawName = directoryName.trim().substringAfterLast('/').substringAfterLast('\\').removeSuffix(".git")
+            val name = rawName.ifBlank { url.trim().substringAfterLast('/').removeSuffix(".git") }
             if (name.isBlank()) throw VcsException(VcsText.of(VcsMessage.CLONE_FOLDER_REQUIRED))
             // A pasted URL may carry a token (`https://ghp_x@github.com/...`); only the clone itself may see it.
             val shownUrl = redactUrl(url.trim())
             val target = manager.projectsRoot.resolve(name)
+            // If this repository was already cloned in an earlier take, clear the stale directory so re-cloning
+            // from the Explorer feed succeeds cleanly instead of failing with FOLDER_NOT_EMPTY.
+            val targetDir = target.toFile()
+            if (targetDir.exists()) {
+                runCatching { targetDir.deleteRecursively() }
+            }
             val auth = store?.credentialsFor(url) ?: VcsCredentials.Anonymous
+            val cloneDepth = if (url.trim().startsWith("http://") || url.trim().startsWith("https://")) 1 else 0
             withContext(Dispatchers.IO) {
-                git.clone(url.trim(), target, auth = auth, progress = progressSink()).close()
+                git.clone(url.trim(), target, depth = cloneDepth, auth = auth, progress = progressSink()).close()
             }
             // A repository is not a CodeAssist project. Adopt whatever landed so it is listable and openable,
             // and report what it turned out to be: a clone that no build system recognizes is a real outcome

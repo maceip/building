@@ -9,7 +9,9 @@ import dev.ide.ui.components.WindowTitleStrip
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
@@ -29,9 +31,11 @@ import dev.ide.ui.generated.resources.Res
 import dev.ide.ui.generated.resources.import_gradle_failed
 import dev.ide.ui.generated.resources.import_unrecognized
 import dev.ide.ui.navigation.ScreenHost
+import dev.ide.ui.platform.LocalIdeHaptics
 import dev.ide.ui.platform.PlatformBackHandler
 import dev.ide.ui.platform.PointerInputModeHost
 import dev.ide.ui.platform.PlatformSystemBars
+import dev.ide.ui.platform.rememberConfiguredIdeHaptics
 import dev.ide.ui.screens.GradleImportModeDialog
 import dev.ide.ui.screens.ImportSourceDialog
 import dev.ide.ui.theme.CodeAssistTheme
@@ -129,6 +133,7 @@ fun CodeAssistApp(
         codeFont = resolvedCodeFont,
         editorColorScheme = app.editorColorScheme,
     ) {
+        val haptics = rememberConfiguredIdeHaptics(app.hapticsConfig)
         // Route the system back gesture through in-app navigation instead of letting it close the app (#997).
         // Registered above the editor's own overlay handler, so an open sheet/dialog is closed first (the
         // deeper handler wins); this one only fires for screen-level back.
@@ -136,6 +141,7 @@ fun CodeAssistApp(
         // The M3 background fills the whole window edge-to-edge (behind the system bars); content is
         // then inset by `safeDrawing`. On desktop these insets are empty, so this is a no-op there.
         CompositionLocalProvider(
+            LocalIdeHaptics provides haptics,
             LocalHostFileActions provides fileActions,
             LocalPluginNavigator provides app::openPluginScreen,
             // A contributed panel can open a file the same way an action's OpenFile effect does, and lands the
@@ -157,7 +163,13 @@ fun CodeAssistApp(
                     Modifier.fillMaxSize().onPreviewKeyEvent(AppKeys::onPreviewKey).onKeyEvent(AppKeys::onKey),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .windowInsetsPadding(
+                                WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
+                            )
+                    ) {
                         // Desktop with a custom title bar: the title strip for screens that draw none of their own.
                         WindowTitleStrip(title = "building")
                         Box(Modifier.weight(1f).fillMaxWidth()) {

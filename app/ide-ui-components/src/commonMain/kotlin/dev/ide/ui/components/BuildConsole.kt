@@ -188,9 +188,12 @@ fun BuildConsole(
 
     var tab by remember { mutableStateOf(BuildTab.Log) }
     var activePluginTab by remember { mutableStateOf<String?>(null) }
-    // Pull the errors front-and-center the moment a build fails (but never override the user otherwise).
+    // Immediately focus the streaming Log tab when a build starts; pull Problems front-and-center only if a build fails with diagnostics.
     LaunchedEffect(buildState.status) {
-        if (buildState.status == RunStatus.Failed && (errors > 0 || warnings > 0)) {
+        if (buildState.status == RunStatus.Running) {
+            tab = BuildTab.Log
+            activePluginTab = null
+        } else if (buildState.status == RunStatus.Failed && (errors > 0 || warnings > 0)) {
             tab = BuildTab.Problems
             activePluginTab = null
         }
@@ -249,7 +252,7 @@ fun BuildConsole(
                 // columns and strand each line's indent on the wrong edge, so they opt out of RTL while the
                 // console's own chrome (tabs, filters, header) stays mirrored with the rest of the app.
                 BuildTab.Problems -> LtrContent { Box(Modifier.chromePadding()) { ProblemsTab(buildState.diagnostics, onOpenDiagnostic) } }
-                BuildTab.Log -> LtrContent { LogTab(buildState.log, running) }
+                BuildTab.Log -> LtrContent { LogTab(buildState.log, buildState.steps, running) }
                 BuildTab.Steps -> Box(Modifier.chromePadding()) { StepsTab(buildState.steps) }
                 BuildTab.Logcat -> LtrContent { LogcatTab(appLog) { backend?.build?.clearAppLog() } }
             }
@@ -833,23 +836,58 @@ private fun severityColor(s: UiSeverity): Color = when (s) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun LogTab(log: List<BuildLogLine>, running: Boolean) {
+private fun LogTab(log: List<BuildLogLine>, steps: List<BuildStepUi>, running: Boolean) {
     var level by remember { mutableStateOf(LogLevelFilter.All) }
     var query by remember { mutableStateOf("") }
-    var grouped by remember { mutableStateOf(true) }
-    // Off by default: the build's own bookkeeping (cache hits, per-class dex accounting, a crashed tool's
-    // stack frames) is logged at DEBUG and stays out of the way until someone is actually diagnosing the
-    // build rather than their code. The header's Copy always takes the whole log, verbose or not, so a bug
-    // report carries the detail without the user having to find this switch first.
-    var verbose by remember { mutableStateOf(false) }
+    var grouped by remember { mutableStateOf(false) }
+    // Default verbose = true so live build output streams immediately in the multitasking bottom sheet
+    // without hiding compiler/dex/task lines marked Debug.
+    var verbose by remember { mutableStateOf(true) }
     val collapsed = remember { mutableStateMapOf<String, Boolean>() }
 
-    val q = query.trim()
-    val hiddenByVerbose = remember(log, verbose) {
-        if (verbose) 0 else log.count { it.level == UiLogLevel.Debug }
+    val effectiveLog = remember(log, steps, running) {
+        if (log.isNotEmpty()) {
+            log
+        } else if (running) {
+            if (steps.isNotEmpty()) {
+                steps.map { step ->
+                    val statusTag = when (step.status) {
+                        StepStatus.Running -> "RUNNING"
+                        StepStatus.Done -> "DONE"
+                        StepStatus.UpToDate -> "UP-TO-DATE"
+                        StepStatus.Failed -> "FAILED"
+                        StepStatus.Skipped -> "SKIPPED"
+                        StepStatus.NoSource -> "NO-SOURCE"
+                        else -> "QUEUED"
+                    }
+                    BuildLogLine(
+                        level = if (step.status == StepStatus.Failed) UiLogLevel.Error else UiLogLevel.Info,
+                        message = "> Task ${step.name} $statusTag",
+                        task = step.name,
+                        timeLabel = "",
+                    )
+                }
+            } else {
+                listOf(
+                    BuildLogLine(
+                        level = UiLogLevel.Info,
+                        message = "> Starting build daemon & resolving task graph…",
+                        task = ":build",
+                        timeLabel = "",
+                    )
+                )
+            }
+        } else {
+            emptyList()
+        }
     }
-    val filtered = remember(log, level, q, verbose) {
-        log.filter {
+
+    val q = query.trim()
+    val hiddenByVerbose = remember(effectiveLog, verbose) {
+        if (verbose) 0 else effectiveLog.count { it.level == UiLogLevel.Debug }
+    }
+    val filtered = remember(effectiveLog, level, q, verbose) {
+        effectiveLog.filter {
             (verbose || it.level != UiLogLevel.Debug) && level.keep(it.level) && (q.isEmpty() || it.message.contains(
                 q,
                 true

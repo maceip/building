@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -18,11 +17,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.components.CenteredDialog
+import dev.ide.ui.components.GlassMaterial
+import dev.ide.ui.components.GlassSurface
 import dev.ide.ui.generated.resources.Res
 import dev.ide.ui.generated.resources.cancel
 import dev.ide.ui.generated.resources.close
@@ -32,6 +36,7 @@ import dev.ide.ui.generated.resources.close_project_save_and_close
 import dev.ide.ui.generated.resources.close_project_title
 import dev.ide.ui.generated.resources.close_project_unsaved
 import dev.ide.ui.theme.Ca
+import dev.ide.ui.theme.Ide
 import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
 
@@ -48,42 +53,63 @@ internal fun CloseProjectDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
+    val cardShape = RoundedCornerShape(Ca.radius.xl)
     CenteredDialog(visible = visible, onDismiss = onDismiss) {
         Column(
-            Modifier.widthIn(max = 400.dp).padding(horizontal = 24.dp)
-                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(Ca.radius.lg))
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.lg))
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            Modifier
+                .widthIn(max = 400.dp)
+                .padding(horizontal = 24.dp)
+                .clip(cardShape)
+                .background(Ide.colors.glassThick, cardShape)
+                .border(1.dp, Ide.colors.glassEdgeTop, cardShape),
         ) {
-            Text(
-                stringResource(Res.string.close_project_title, projectName),
-                color = MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            val body = MaterialTheme.typography.bodyMedium
-            Text(stringResource(Res.string.close_project_body), color = MaterialTheme.colorScheme.onSurfaceVariant, style = body)
-            if (unsavedFiles > 0) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(
-                    pluralStringResource(Res.plurals.close_project_unsaved, unsavedFiles, unsavedFiles),
+                    stringResource(Res.string.close_project_title, projectName),
                     color = MaterialTheme.colorScheme.onSurface,
-                    style = body,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
+                val body = MaterialTheme.typography.bodyMedium
+                Text(stringResource(Res.string.close_project_body), color = MaterialTheme.colorScheme.onSurfaceVariant, style = body)
+                if (unsavedFiles > 0) {
+                    Text(
+                        pluralStringResource(Res.plurals.close_project_unsaved, unsavedFiles, unsavedFiles),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = body,
+                    )
+                }
+                if (building) {
+                    Text(stringResource(Res.string.close_project_building), color = MaterialTheme.colorScheme.onSurface, style = body)
+                }
             }
-            if (building) {
-                Text(stringResource(Res.string.close_project_building), color = MaterialTheme.colorScheme.onSurface, style = body)
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp, androidx.compose.ui.Alignment.End)) {
-                DialogButton(stringResource(Res.string.cancel), primary = false, onClick = onDismiss)
-                DialogButton(
-                    stringResource(if (unsavedFiles > 0) Res.string.close_project_save_and_close else Res.string.close),
-                    primary = true,
-                    onClick = onConfirm,
-                )
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Ide.colors.glassEdge))
+            GlassSurface(
+                modifier = Modifier.fillMaxWidth(),
+                material = GlassMaterial.Thin,
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Color.White.copy(alpha = 0.03f))
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    DialogButton(stringResource(Res.string.cancel), primary = false, onClick = onDismiss)
+                    DialogButton(
+                        stringResource(if (unsavedFiles > 0) Res.string.close_project_save_and_close else Res.string.close),
+                        primary = true,
+                        onClick = onConfirm,
+                    )
+                }
             }
         }
     }
@@ -92,14 +118,23 @@ internal fun CloseProjectDialog(
 @Composable
 private fun DialogButton(label: String, primary: Boolean, onClick: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(Ca.radius.control)
     Box(
-        Modifier.background(if (primary) scheme.primary else scheme.surfaceContainerHighest, RoundedCornerShape(Ca.radius.control))
+        Modifier
+            .clip(shape)
+            .background(
+                if (primary) scheme.primary else Color.White.copy(alpha = 0.08f),
+                shape,
+            )
+            .then(
+                if (!primary) Modifier.border(1.dp, Ide.colors.glassEdgeTop, shape) else Modifier
+            )
             .clickable(remember { MutableInteractionSource() }, null, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 9.dp),
     ) {
         Text(
             label,
-            color = if (primary) scheme.onPrimary else scheme.onSurfaceVariant,
+            color = if (primary) scheme.onPrimary else scheme.onSurface,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold,
         )

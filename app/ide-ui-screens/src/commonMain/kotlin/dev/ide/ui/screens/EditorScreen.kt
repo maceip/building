@@ -23,6 +23,7 @@ import dev.ide.ui.IdeUiState
 import dev.ide.ui.backend.FileActions
 import dev.ide.ui.backend.PackageSegment
 import dev.ide.ui.backend.RunStatus
+import dev.ide.ui.backend.StepStatus
 import dev.ide.ui.backend.TreeNode
 import dev.ide.ui.components.AddSourceRootDialog
 import dev.ide.ui.components.AddSourceRootRequest
@@ -44,7 +45,9 @@ import dev.ide.ui.editor.engine.OpenTabDiagnosticsEffect
 import dev.ide.ui.generated.resources.Res
 import dev.ide.ui.generated.resources.edscreen_project_root
 import dev.ide.ui.platform.PlatformBackHandler
+import dev.ide.ui.platform.PlatformPredictiveBackHandler
 import dev.ide.ui.platform.isMobilePlatform
+import dev.ide.ui.platform.rememberIdeHaptics
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeMark
@@ -88,14 +91,46 @@ fun EditorScreen(
     val indexStatus by state.backend.search.indexStatus.collectAsState()
     val buildState by state.backend.build.buildState.collectAsState()
     val scope = rememberCoroutineScope()
+    val haptics = rememberIdeHaptics()
     // The project is open now — kick off any deferred template-dependency resolution (e.g. the Compose AAR
     // graph of a freshly-created project). Idempotent + a no-op for an opened existing project; progress
     // streams on depsState so the user can work elsewhere while it resolves.
     LaunchedEffect(state.backend) { state.backend.deps.startPendingDependencyResolution() }
-    // A finished build (re)writes artifacts under `<module>/build/` — refresh the tree so the dimmed
-    // "build outputs" node (and the All-Files `build/` subtree) pick up the new APK/AAB/jar.
+    // Immediately expand the bottom build sheet/dock to show streaming build log output when a build starts,
+    // and trigger distinct multitasking haptics for build start, step transitions, success, and failure.
+    var prevBuildStatus by remember { mutableStateOf(buildState.status) }
     LaunchedEffect(buildState.status) {
-        if (buildState.status == RunStatus.Succeeded || buildState.status == RunStatus.Failed) state.refreshTree()
+        if (buildState.status == RunStatus.Running) {
+            state.consoleOpen = true
+            if (prevBuildStatus != RunStatus.Running) {
+                haptics.buildStart()
+            }
+        } else if (buildState.status == RunStatus.Succeeded) {
+            if (prevBuildStatus == RunStatus.Running) {
+                haptics.buildSuccess()
+            }
+            state.refreshTree()
+        } else if (buildState.status == RunStatus.Failed) {
+            if (prevBuildStatus == RunStatus.Running) {
+                haptics.buildFailed()
+            }
+            state.refreshTree()
+        }
+        prevBuildStatus = buildState.status
+    }
+    val settledStepCount = buildState.steps.count {
+        it.status == StepStatus.Done || it.status == StepStatus.UpToDate
+    }
+    var lastSettledSteps by remember { mutableStateOf(0) }
+    LaunchedEffect(settledStepCount, buildState.status) {
+        if (buildState.status == RunStatus.Running) {
+            if (settledStepCount > lastSettledSteps) {
+                haptics.buildStepTick()
+            }
+            lastSettledSteps = settledStepCount
+        } else {
+            lastSettledSteps = 0
+        }
     }
     // Diagnostics for the tabs that are open but not focused (the daemon in EditorCenter covers the focused
     // one), so every tab's status dot reports its own file rather than only the file on screen.
@@ -124,11 +159,16 @@ fun EditorScreen(
         { node, kind -> fileOp = FileOpRequest(node, kind) }
 
     // Back closes an open editor overlay (dialog, palette, or — on mobile — a navigator/console/search/more
-    // sheet) before the app-level handler pops the screen (#997). Desktop has no system back, so this is inert
-    // there; the mobile-only panes are gated on [isMobilePlatform] since on wide layouts they're docked panes.
-    PlatformBackHandler(
-        enabled = closeProjectConfirm || newEntry != null || newXmlTarget != null || newSource != null || fileOp != null || state.addSourceRootModule != null || state.symbolEditorOpen || state.indexDetailOpen || state.paletteOpen || state.moreOpen || state.selectedRightPanel != null || (isMobilePlatform && (state.leftOpen || state.consoleOpen)),
-    ) {
+    // sheet) before the app-level handler pops the screen (#997). On mobile, `state.selectedRightPanel` (Agent)
+    // is handled by `RightToolOverlay`'s own `PlatformPredictiveBackHandler` so swiping Back shrinks the Agent
+    // chat window to Half-Screen Split first before closing.
+    val overlayBackEnabled = closeProjectConfirm || newEntry != null || newXmlTarget != null ||
+        newSource != null || fileOp != null || state.addSourceRootModule != null ||
+        state.symbolEditorOpen || state.indexDetailOpen || state.paletteOpen || state.moreOpen ||
+        (!isMobilePlatform && state.selectedRightPanel != null) ||
+        (isMobilePlatform && (state.leftOpen || state.consoleOpen))
+
+    PlatformBackHandler(enabled = overlayBackEnabled) {
         when {
             closeProjectConfirm -> onCloseProjectConfirmChange(false)
             fileOp != null -> fileOp = null
@@ -140,11 +180,37 @@ fun EditorScreen(
             state.indexDetailOpen -> state.indexDetailOpen = false
             state.paletteOpen -> state.paletteOpen = false
             state.moreOpen -> state.moreOpen = false
-            state.selectedRightPanel != null -> state.selectedRightPanel = null
+            !isMobilePlatform && state.selectedRightPanel != null -> state.selectedRightPanel = null
             isMobilePlatform && state.consoleOpen -> state.consoleOpen = false
             isMobilePlatform && state.leftOpen -> state.selectedLeftPanel = null
         }
     }
+
+    // Custom Predictive Back for the Code Editor: when no overlay or Agent drawer is open, swiping Back on
+    // Android progressively shrinks the code canvas first (`state.editorBackProgress`) before prompting to close.
+    var codeShrinkThresholdTicked by remember { mutableStateOf(false) }
+    PlatformPredictiveBackHandler(
+        enabled = isMobilePlatform && !overlayBackEnabled && state.selectedRightPanel == null,
+        onProgress = { progress ->
+            state.editorBackProgress = progress
+            if (progress > 0.28f && !codeShrinkThresholdTicked) {
+                codeShrinkThresholdTicked = true
+                haptics.predictiveBackThreshold()
+            } else if (progress < 0.15f) {
+                codeShrinkThresholdTicked = false
+            }
+        },
+        onCancel = {
+            state.editorBackProgress = 0f
+            codeShrinkThresholdTicked = false
+        },
+        onBack = {
+            state.editorBackProgress = 0f
+            codeShrinkThresholdTicked = false
+            haptics.predictiveBackThreshold()
+            requestCloseProject()
+        },
+    )
     // Mirrors the layout choice below for the overlays outside it (the running-run pill).
     var wideLayout by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {

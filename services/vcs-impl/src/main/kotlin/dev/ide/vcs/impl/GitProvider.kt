@@ -93,7 +93,10 @@ class GitProvider(configDir: Path) : VcsProvider {
                 .setCredentialsProvider(auth.toJGit())
                 .setTimeout(CLONE_TIMEOUT_SECONDS)
             if (!branch.isNullOrBlank()) command.setBranch(branch)
-            if (depth > 0) command.setDepth(depth)
+            if (depth > 0) {
+                command.setDepth(depth)
+                command.setCloneAllBranches(false)
+            }
             GitRepository(command.call(), target)
         } catch (e: Throwable) {
             // A failed clone leaves a partial directory behind; clearing it keeps a retry from tripping the

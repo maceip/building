@@ -392,11 +392,15 @@ class ProjectManager private constructor(
     fun open(rootPath: String, buildOnly: Boolean = false): IdeServices {
         applyMemoryMode()
         val root = Paths.get(rootPath)
-        // Earlier versions adopted package.json clones as UNKNOWN with an empty model. Re-read only that
-        // explicit legacy case; never change a native/Gradle project because somebody added package.json.
+        // Earlier versions adopted package.json / Swift / Python clones as UNKNOWN with an empty model.
+        // Re-read only that explicit legacy case; never change a native/Gradle project because somebody added a file.
         if (UnrecognizedProjectMarker.exists(root) &&
             runCatching { ModelPersistence.load(root.toString()).projects.all { it.modules.isEmpty() } }.getOrDefault(false) &&
-            ProjectSyncService.importerFor(env.platform.extensions, root)?.id == NodeModuleType.BUILD_SYSTEM) {
+            ProjectSyncService.importerFor(env.platform.extensions, root)?.id in setOf(
+                NodeModuleType.BUILD_SYSTEM,
+                SwiftModuleType.BUILD_SYSTEM,
+                PythonModuleType.BUILD_SYSTEM,
+            )) {
             if (IdeServices.importExternalProjectAt(root, sdk(), languageLevel, env)) UnrecognizedProjectMarker.clear(root)
         }
         return IdeServices.openAt(root, sdk(), sharedCachesRoot = homeDir, env = env, buildOnly = buildOnly)

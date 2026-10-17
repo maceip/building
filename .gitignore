@@ -99,3 +99,10 @@ verification_repos/
 
 # Session design mockups (product-design Image Gen scratch)
 generated-*.png
+
+# Agent session handoff notes (not part of the public project)
+AGENT_HANDOFF*.md
+
+# Local device evidence / demo recordings (kept out of git; they are multi-MB and machine-local)
+*.mp4
+*.mov

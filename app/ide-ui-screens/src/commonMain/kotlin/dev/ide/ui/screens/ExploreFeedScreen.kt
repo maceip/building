@@ -143,6 +143,7 @@ fun ExploreFeed(
      * artwork reached the client at all.
      */
     backend: dev.ide.ui.backend.IdeBackend? = null,
+    onCloneAndOpen: ((String, String) -> Unit)? = null,
 ) {
     // Empty is a FIXED layout rather than a server-driven one: the feed carries no renderable sections
     // by definition, so the client composes the zero-data page and reads only storeState + bundled from
@@ -164,6 +165,8 @@ fun ExploreFeed(
             notifyMessage = notifyMessage,
             onAccount = onAccount,
             signedIn = signedIn,
+            backend = backend,
+            onCloneAndOpen = onCloneAndOpen,
             modifier = modifier,
         )
         return
@@ -185,6 +188,16 @@ fun ExploreFeed(
                     onAccount = onAccount,
                     signedIn = signedIn,
                 )
+            }
+
+            if (backend != null && backend.discovery.supported()) {
+                item("githubExplorer") {
+                    GitHubExplorerFeed(
+                        backend = backend,
+                        onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) },
+                        modifier = Modifier.padding(bottom = 14.dp),
+                    )
+                }
             }
 
             feed.sections.forEachIndexed { index, section ->
@@ -732,6 +745,8 @@ private fun ExploreEmpty(
     /** The same account entry the populated header carries. Its absence here was the whole bug. */
     onAccount: (() -> Unit)? = null,
     signedIn: Boolean = false,
+    backend: dev.ide.ui.backend.IdeBackend? = null,
+    onCloneAndOpen: ((String, String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val accepting = feed.state.acceptingSubmissions
@@ -750,6 +765,16 @@ private fun ExploreEmpty(
                     onAccount = onAccount,
                     signedIn = signedIn,
                 )
+            }
+
+            if (backend != null && backend.discovery.supported()) {
+                item("githubExplorer") {
+                    GitHubExplorerFeed(
+                        backend = backend,
+                        onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) },
+                        modifier = Modifier.padding(bottom = 14.dp),
+                    )
+                }
             }
 
             // Above the hero: once the user has submitted, their own submission outranks the pitch.

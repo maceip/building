@@ -201,21 +201,8 @@ class GradleProjectImporter : ProjectImporter {
         return ExternalFacet(KotlinFacetCodec.tomlTable, KotlinFacetCodec.encode(KotlinFacet(commonSourceRoots = common)))
     }
 
-    private fun androidFacet(spec: GradleImport.ModuleSpec): AndroidFacet = AndroidFacet(
-        namespace = spec.namespace ?: "com.example.${spec.name}",
-        manifest = spec.manifest ?: DEFAULT_MANIFEST,
-        compileSdk = spec.compileSdk ?: DEFAULT_COMPILE_SDK,
-        minSdk = spec.minSdk ?: DEFAULT_MIN_SDK,
-        targetSdk = spec.targetSdk ?: spec.minSdk ?: DEFAULT_MIN_SDK,
-        // Only override the facet defaults when actually parsed, so an unset value keeps deferring to the
-        // manifest (AndroidFacet's DSL-wins rule).
-        versionCode = spec.versionCode ?: AndroidFacet.DEFAULT_VERSION_CODE,
-        versionName = spec.versionName ?: AndroidFacet.DEFAULT_VERSION_NAME,
-        manifestPlaceholders = spec.manifestPlaceholders,
-        isApplication = spec.kind == GradleImport.Kind.ANDROID_APP,
-        flavorDimensions = spec.flavorDimensions,
-        buildTypes = if (spec.buildTypes.isEmpty()) AndroidFacet.DEFAULT_BUILD_TYPES
-        else spec.buildTypes.map {
+    private fun androidFacet(spec: GradleImport.ModuleSpec): AndroidFacet {
+        val parsedBuildTypes = spec.buildTypes.map {
             BuildType(
                 it.name,
                 debuggable = it.debuggable ?: (it.name == "debug"),
@@ -226,19 +213,36 @@ class GradleProjectImporter : ProjectImporter {
                 versionNameSuffix = it.versionNameSuffix,
                 manifestPlaceholders = it.manifestPlaceholders,
             )
-        },
-        productFlavors = spec.productFlavors.map {
-            ProductFlavor(it.name, dimension = it.dimension, manifestPlaceholders = it.manifestPlaceholders)
-        },
-        buildFeatures = BuildFeatures(
-            viewBinding = spec.viewBinding,
-            compose = spec.isCompose,
-            parcelize = spec.parcelize,
-            serialization = spec.serialization,
-            kspProcessors = spec.kspProcessors,
-        ),
-        packaging = AndroidPackaging(noCompress = spec.noCompress),
-    )
+        }.associateBy { it.name }
+        val mergedBuildTypes = AndroidFacet.DEFAULT_BUILD_TYPES.map { parsedBuildTypes[it.name] ?: it } +
+            parsedBuildTypes.values.filter { bt -> AndroidFacet.DEFAULT_BUILD_TYPES.none { it.name == bt.name } }
+        return AndroidFacet(
+            namespace = spec.namespace ?: "com.example.${spec.name}",
+            manifest = spec.manifest ?: DEFAULT_MANIFEST,
+            compileSdk = spec.compileSdk ?: DEFAULT_COMPILE_SDK,
+            minSdk = spec.minSdk ?: DEFAULT_MIN_SDK,
+            targetSdk = spec.targetSdk ?: spec.minSdk ?: DEFAULT_MIN_SDK,
+            // Only override the facet defaults when actually parsed, so an unset value keeps deferring to the
+            // manifest (AndroidFacet's DSL-wins rule).
+            versionCode = spec.versionCode ?: AndroidFacet.DEFAULT_VERSION_CODE,
+            versionName = spec.versionName ?: AndroidFacet.DEFAULT_VERSION_NAME,
+            manifestPlaceholders = spec.manifestPlaceholders,
+            isApplication = spec.kind == GradleImport.Kind.ANDROID_APP,
+            flavorDimensions = spec.flavorDimensions,
+            buildTypes = mergedBuildTypes,
+            productFlavors = spec.productFlavors.map {
+                ProductFlavor(it.name, dimension = it.dimension, manifestPlaceholders = it.manifestPlaceholders)
+            },
+            buildFeatures = BuildFeatures(
+                viewBinding = spec.viewBinding,
+                compose = spec.isCompose,
+                parcelize = spec.parcelize,
+                serialization = spec.serialization,
+                kspProcessors = spec.kspProcessors,
+            ),
+            packaging = AndroidPackaging(noCompress = spec.noCompress),
+        )
+    }
 
     /** A declared `group:name[:version[:classifier]]`, or null when the text isn't a coordinate. The
      *  four-part form names a secondary artifact of the module (libGDX's per-ABI `natives-*` jars); it used

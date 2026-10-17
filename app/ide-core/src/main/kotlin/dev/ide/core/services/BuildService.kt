@@ -429,7 +429,10 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
         val io = currentRunIo ?: return
         if (_runConsole.value?.acceptsInput != true) return
         io.input.feed(text + "\n")
-        appendConsoleChunk(ConsoleChunkKind.INPUT, text + "\n")
+        val isBridgeEvent = text.trimStart().startsWith("{\"id\":") && text.contains("\"kind\":")
+        if (!isBridgeEvent) {
+            appendConsoleChunk(ConsoleChunkKind.INPUT, text + "\n")
+        }
     }
 
     /** Signal end-of-input (EOF) to the running program's stdin. */
@@ -681,6 +684,13 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
         // So a contributed Run row can run what it built: an `InterpretExecTask` in a plugin's own graph gets
         // the same VM, sandbox and I/O plumbing the built-in console run uses.
         programInterpreter = ctx.programInterpreter,
+        openProgramIo = { moduleName, mainClass ->
+            val sessionId = runConsoleSeq.incrementAndGet()
+            val io = RunProgramIo(sessionId, moduleName, mainClass)
+            currentRunIo = io
+            _runConsole.value = RunConsoleUi(sessionId, moduleName, mainClass)
+            io
+        },
     )
 
     /** Messages from [buildContext]'s error channel, awaiting the next [launch]. */
@@ -813,17 +823,22 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
 
     private fun runTaskRetained(id: String) {
         if (_buildState.value.status == RunStatus.Running) {
-            // Dropped, but never silently: in the remote (:build daemon) flow the UI has already shown an
-            // optimistic Running for ITS request, and a silent drop here would leave it waiting forever on
-            // deltas that never come.
-            _buildState.update {
-                it.copy(
-                    log = it.log + logLine(
-                        "Run request ignored — a build is already running.", UiLogLevel.Warn
+            // If an interactive console/GUI session is active, stop it automatically so a new Run request proceeds cleanly.
+            if (currentRunIo != null) {
+                stopBuild()
+            } else {
+                // Dropped, but never silently: in the remote (:build daemon) flow the UI has already shown an
+                // optimistic Running for ITS request, and a silent drop here would leave it waiting forever on
+                // deltas that never come.
+                _buildState.update {
+                    it.copy(
+                        log = it.log + logLine(
+                            "Run request ignored — a build is already running.", UiLogLevel.Warn
+                        )
                     )
-                )
+                }
+                return
             }
-            return
         }
         ctx.flushOpenDocuments() // save unsaved editor buffers so the compiler sees the latest source
         runCatching { ctx.ensureKotlinStdlib() } // a newly-added .kt module needs the stdlib dep before it builds/runs
@@ -1183,6 +1198,9 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                         action.graph,
                         action.header,
                         action.banner,
+                        onComplete = { succeeded ->
+                            if (currentRunIo != null) finalizeRunConsole(succeeded)
+                        },
                         onSuccess = action.onSuccess
                     )
                 }
@@ -1194,11 +1212,25 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
         }
     }
 
-    /** Run the default task (first of [runTasks]) — the plain Run button + existing callers. */
+    /** Run the default task (first runnable/app configuration of [runTasks]) — the plain Run button + existing callers. */
     override fun runBuild() = sourceStart {
-        val first =
-            runTasks().firstOrNull() ?: return@sourceStart fail("Nothing to run or assemble in this project.")
+        val tasks = runTasks()
+        val first = defaultRunTask(tasks) ?: return@sourceStart fail("Nothing to run or assemble in this project.")
         runTaskRetained(first.id)
+    }
+
+    private fun defaultRunTask(tasks: List<RunTaskOption>): RunTaskOption? {
+        if (tasks.isEmpty()) return null
+        for (m in ctx.modules().filter { it.type.id == "android-app" }) {
+            val active = ctx.activeVariant(m)
+            tasks.firstOrNull { it.id == "androidRun:${m.name}:$active" || it.id.startsWith("androidRun:${m.name}:$active:") }?.let { return it }
+            tasks.firstOrNull { it.id == "assemble:${m.name}:$active" }?.let { return it }
+        }
+        tasks.firstOrNull { it.id.startsWith("run:") }?.let { return it }
+        tasks.firstOrNull { it.id.startsWith("androidRun:") }?.let { return it }
+        tasks.firstOrNull { it.id.startsWith("assemble:") }?.let { return it }
+        tasks.firstOrNull { !it.id.startsWith("test:") && !it.id.startsWith("${TestOutput.INSTRUMENTED}:") }?.let { return it }
+        return tasks.firstOrNull()
     }
 
     /**
