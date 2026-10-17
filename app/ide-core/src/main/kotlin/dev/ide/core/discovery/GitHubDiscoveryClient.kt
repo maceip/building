@@ -124,8 +124,8 @@ class GitHubDiscoveryClient(
 
         return GitHubDiscoveryEngine.DiscoveryFeed(
             trendingHero = enriched,
-            northStarBenchmarks = northStars.take(5),
-            highVelocityRising = highVelocity.take(5),
+            northStarBenchmarks = northStars,
+            highVelocityRising = highVelocity,
             authorPeerPicks = peerPicks
         )
     }

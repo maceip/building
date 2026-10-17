@@ -172,16 +172,16 @@ class DiscoveryBackend(
     }
 
     private fun RepoShapeEngine.ComparisonResult.toUi(): UiNorthStarBenchmark {
-        val cleanSlug = if ('/' in candidateSlug) candidateSlug else candidateSlug.replaceFirst('-', '/')
-        val targetName = cleanSlug.substringAfterLast('/').ifBlank { cleanSlug }
+        val cleanCandidateSlug = if ('/' in candidateSlug) candidateSlug else candidateSlug.replaceFirst('-', '/')
+        val cleanTargetSlug = if ('/' in targetSlug) targetSlug else targetSlug.replaceFirst('-', '/')
         return UiNorthStarBenchmark(
-            targetRepoName = targetName,
-            northStarName = cleanSlug,
+            targetRepoName = cleanTargetSlug,
+            northStarName = cleanCandidateSlug,
             starMultiplierText = starDifferential,
             matchPercentage = (structuralMatchScore * 100).toInt(),
             whyRecommended = whyRecommended,
             privacyOrCapabilityAdvantage = null,
-            northStarUrl = "https://github.com/$cleanSlug"
+            northStarUrl = "https://github.com/$cleanCandidateSlug"
         )
     }
 

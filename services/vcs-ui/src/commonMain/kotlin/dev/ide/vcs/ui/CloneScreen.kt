@@ -331,14 +331,13 @@ internal fun CloneScreen(ctx: ScreenContext) {
             contentPadding = PaddingValues(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // 1. Live Clone Status Card + Tactile Rat-a-tat Telemetry
+            // 1. Live Clone Status Card
             if (activeCloneUrl.isNotBlank() || activity.busy) {
                 item("activeCloneCard") {
                     ActiveCloneTelemetryCard(
                         repoName = activeCloneName.ifBlank { activeCloneUrl },
                         repoUrl = activeCloneUrl,
                         busy = activity.busy,
-                        hapticsEnabled = cloneHapticsActive,
                         taskLabel = localizedText(activity.taskText, activity.task),
                         fraction = activity.fraction,
                         queuedCount = queuedClones.size,
@@ -397,7 +396,7 @@ internal fun CloneScreen(ctx: ScreenContext) {
                     }
                     Text(
                         if (activity.busy) {
-                            "Queue complementary libraries & reference projects now — tactile rat-a-tat haptics will pulse as each clone completes."
+                            "Queue complementary libraries & reference projects now — they will be cloned into your workspace automatically next."
                         } else {
                             "1-tap clone directly into your workspace without leaving the app."
                         },
@@ -476,7 +475,6 @@ private fun ActiveCloneTelemetryCard(
     repoName: String,
     repoUrl: String,
     busy: Boolean,
-    hapticsEnabled: Boolean,
     taskLabel: String,
     fraction: Float,
     queuedCount: Int,
@@ -534,11 +532,7 @@ private fun ActiveCloneTelemetryCard(
                 )
             }
             Chip(
-                text = when {
-                    busy && hapticsEnabled -> "Rat-a-tat Haptics Active"
-                    busy -> "Cloning…"
-                    else -> "Clone Ready"
-                },
+                text = if (busy) "Cloning…" else "Clone Ready",
                 fill = if (busy) scheme.primaryContainer else scheme.secondaryContainer,
                 textColor = if (busy) scheme.onPrimaryContainer else scheme.onSecondaryContainer,
             )

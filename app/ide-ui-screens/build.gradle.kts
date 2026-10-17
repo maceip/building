@@ -86,6 +86,7 @@ kotlin {
                 kotlin.srcDir(cupertinoRoot.resolve("$mod/src/androidMain/kotlin"))
             }
             kotlin.srcDir(composeUiRoot.resolve("androidMain/kotlin"))
+            kotlin.exclude("**/SwiftUIHostView.kt")
             dependencies {
                 implementation(libs.androidx.activity.compose)
                 implementation("androidx.media3:media3-exoplayer:1.4.1")
@@ -107,3 +108,8 @@ kotlin {
         }
     }
 }
+
+tasks.named<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>("compileAndroidMain") {
+    exclude("**/SwiftUIHostView.kt")
+}
+

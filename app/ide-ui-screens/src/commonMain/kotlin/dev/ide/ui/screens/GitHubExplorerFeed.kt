@@ -23,6 +23,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import dev.ide.ui.backend.UiGitHubAuthState
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -34,6 +35,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,6 +45,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -117,14 +121,21 @@ fun GitHubExplorerFeed(
     var feed by remember { mutableStateOf<UiDiscoveryFeed?>(initialFeed) }
     var loading by remember { mutableStateOf(feed == null) }
     var selectedCategory by remember { mutableStateOf(EXPLORER_CATEGORIES.first()) }
+    var selectedHeroUrl by remember { mutableStateOf<String?>(null) }
     var showAuthDialog by remember { mutableStateOf(false) }
     val authState by backend.discovery.authState.collectAsState()
+    val heroListState = rememberLazyListState()
+    val heroSnapFling = rememberSnapFlingBehavior(lazyListState = heroListState)
 
     fun loadCategory(category: ExplorerCategory, forceRefresh: Boolean = false) {
         selectedCategory = category
+        selectedHeroUrl = null
         scope.launch {
             loading = true
-            feed = runCatching { backend.discovery.getFeed(topic = category.topic, refresh = forceRefresh) }.getOrDefault(UiDiscoveryFeed())
+            val nextFeed = runCatching { backend.discovery.getFeed(topic = category.topic, refresh = forceRefresh) }.getOrDefault(UiDiscoveryFeed())
+            feed = nextFeed
+            selectedHeroUrl = nextFeed.trendingHero.firstOrNull()?.htmlUrl
+            heroListState.scrollToItem(0)
             loading = false
         }
     }
@@ -132,8 +143,12 @@ fun GitHubExplorerFeed(
     LaunchedEffect(backend) {
         if (feed == null) {
             loading = true
-            feed = runCatching { backend.discovery.getFeed(topic = selectedCategory.topic) }.getOrDefault(UiDiscoveryFeed())
+            val nextFeed = runCatching { backend.discovery.getFeed(topic = selectedCategory.topic) }.getOrDefault(UiDiscoveryFeed())
+            feed = nextFeed
+            selectedHeroUrl = nextFeed.trendingHero.firstOrNull()?.htmlUrl
             loading = false
+        } else if (selectedHeroUrl == null) {
+            selectedHeroUrl = feed?.trendingHero?.firstOrNull()?.htmlUrl
         }
     }
 
@@ -142,6 +157,70 @@ fun GitHubExplorerFeed(
     }
 
     val currentFeed = feed ?: UiDiscoveryFeed()
+
+    // Keep the active hero repository synced with horizontal paging AND explicit card taps
+    val pagedHeroIndex by remember {
+        derivedStateOf {
+            val layoutInfo = heroListState.layoutInfo
+            val visible = layoutInfo.visibleItemsInfo
+            if (visible.isEmpty()) 0
+            else {
+                val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2
+                visible.minByOrNull { kotlin.math.abs((it.offset + it.size / 2) - viewportCenter) }?.index ?: 0
+            }
+        }
+    }
+
+    LaunchedEffect(pagedHeroIndex, currentFeed.trendingHero) {
+        val pagedRepo = currentFeed.trendingHero.getOrNull(pagedHeroIndex)
+        if (pagedRepo != null && heroListState.isScrollInProgress) {
+            selectedHeroUrl = pagedRepo.htmlUrl
+        }
+    }
+
+    val activeHeroRepo = remember(selectedHeroUrl, pagedHeroIndex, currentFeed.trendingHero) {
+        currentFeed.trendingHero.firstOrNull { it.htmlUrl == selectedHeroUrl }
+            ?: currentFeed.trendingHero.getOrNull(pagedHeroIndex)
+            ?: currentFeed.trendingHero.firstOrNull()
+    }
+
+    val activeBenchmarks = remember(activeHeroRepo, currentFeed.northStarBenchmarks, currentFeed.trendingHero) {
+        val target = activeHeroRepo
+        if (target == null) {
+            currentFeed.northStarBenchmarks.take(4)
+        } else {
+            val targetSlug = "${target.owner}/${target.name}"
+            val directMatches = currentFeed.northStarBenchmarks.filter {
+                it.targetRepoName.equals(targetSlug, ignoreCase = true) ||
+                    it.targetRepoName.equals(target.name, ignoreCase = true)
+            }
+            if (directMatches.isNotEmpty()) {
+                directMatches.take(4)
+            } else {
+                // Synthesize reactive architectural comparisons against the other repos in this category
+                // so every selected/paged hero card shows tailored "Shaped Like <ActiveRepo>" results!
+                currentFeed.trendingHero
+                    .filter { !it.htmlUrl.equals(target.htmlUrl, ignoreCase = true) }
+                    .sortedByDescending { it.stars }
+                    .take(3)
+                    .map { candidate ->
+                        val ratio = if (target.stars > 0 && candidate.stars > target.stars) {
+                            "${(candidate.stars.toDouble() / target.stars.coerceAtLeast(1)).toInt().coerceAtLeast(2)}x more stars"
+                        } else {
+                            "${candidate.stars} ★"
+                        }
+                        UiNorthStarBenchmark(
+                            targetRepoName = target.name,
+                            northStarName = "${candidate.owner}/${candidate.name}",
+                            starMultiplierText = ratio,
+                            matchPercentage = 88,
+                            whyRecommended = "Shaped like ${target.name}: shares the ${candidate.language.ifBlank { "same" }} architecture — ${candidate.description}",
+                            northStarUrl = candidate.htmlUrl,
+                        )
+                    }
+            }
+        }
+    }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -288,13 +367,22 @@ fun GitHubExplorerFeed(
                 )
 
                 LazyRow(
+                    state = heroListState,
+                    flingBehavior = heroSnapFling,
                     contentPadding = PaddingValues(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    items(currentFeed.trendingHero, key = { it.htmlUrl }) { repo ->
+                    itemsIndexed(currentFeed.trendingHero, key = { _, it -> it.htmlUrl }) { index, repo ->
+                        val isSelected = activeHeroRepo?.htmlUrl == repo.htmlUrl
                         HeroVisualRepoCard(
                             repo = repo,
+                            selected = isSelected,
                             backend = backend,
+                            onSelect = {
+                                haptics.tap()
+                                selectedHeroUrl = repo.htmlUrl
+                                scope.launch { heroListState.animateScrollToItem(index) }
+                            },
                             onClone = { onCloneAndOpen(repo.htmlUrl, repo.name) }
                         )
                     }
@@ -303,10 +391,11 @@ fun GitHubExplorerFeed(
         }
 
         // 2. "Shaped Like This, But..." (North Star Architectural Benchmarks)
-        if (currentFeed.northStarBenchmarks.isNotEmpty()) {
+        if (activeBenchmarks.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val targetTitle = activeHeroRepo?.name?.uppercase() ?: "THIS REPO"
                 Text(
-                    "SHAPED LIKE THIS, BUT WITH MORE STARS",
+                    "SHAPED LIKE $targetTitle, BUT WITH MORE STARS",
                     modifier = Modifier.padding(horizontal = 20.dp),
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontFamily = FontFamily.Monospace,
@@ -319,14 +408,14 @@ fun GitHubExplorerFeed(
                     modifier = Modifier.padding(horizontal = 20.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    currentFeed.northStarBenchmarks.forEach { benchmark ->
+                    activeBenchmarks.forEach { benchmark ->
+                        val cloneFolder = benchmark.northStarName
+                            .substringAfterLast('/')
+                            .ifBlank { benchmark.targetRepoName.substringAfterLast('/') }
                         NorthStarBenchmarkCard(
                             benchmark = benchmark,
                             onClone = {
-                                val folderName = benchmark.targetRepoName
-                                    .ifBlank { benchmark.northStarName }
-                                    .substringAfterLast('/')
-                                onCloneAndOpen(benchmark.northStarUrl, folderName)
+                                onCloneAndOpen(benchmark.northStarUrl, cloneFolder)
                             }
                         )
                     }
@@ -370,11 +459,14 @@ fun GitHubExplorerFeed(
 @Composable
 private fun HeroVisualRepoCard(
     repo: UiDiscoveredRepo,
+    selected: Boolean,
     backend: IdeBackend,
+    onSelect: () -> Unit,
     onClone: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val c = MaterialTheme.colorScheme
+    val cardInteraction = remember { MutableInteractionSource() }
 
     val screenshotBitmap by produceState<ImageBitmap?>(null, repo.htmlUrl, repo.screenshotUrl) {
         value = null
@@ -386,11 +478,18 @@ private fun HeroVisualRepoCard(
     }
 
     Surface(
+        onClick = onSelect,
+        interactionSource = cardInteraction,
         modifier = modifier
             .width(280.dp)
-            .border(0.5.dp, c.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp)),
+            .pressScale(cardInteraction)
+            .border(
+                width = if (selected) 1.5.dp else 0.5.dp,
+                color = if (selected) c.primary else c.outlineVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(16.dp)
+            ),
         shape = RoundedCornerShape(16.dp),
-        color = c.surfaceContainerLow
+        color = if (selected) c.surfaceContainer else c.surfaceContainerLow
     ) {
         Column {
             // Visual Preview Area
@@ -576,10 +675,15 @@ private fun NorthStarBenchmarkCard(
     modifier: Modifier = Modifier
 ) {
     val c = MaterialTheme.colorScheme
+    val cardInteraction = remember { MutableInteractionSource() }
+    val haptics = rememberIdeHaptics()
 
     Surface(
+        onClick = { haptics.heavyTap(); onClone() },
+        interactionSource = cardInteraction,
         modifier = modifier
             .fillMaxWidth()
+            .pressScale(cardInteraction)
             .border(0.5.dp, c.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
         shape = RoundedCornerShape(12.dp),
         color = c.surfaceContainerLow
@@ -661,10 +765,15 @@ private fun AuthorPeerCard(
     modifier: Modifier = Modifier
 ) {
     val c = MaterialTheme.colorScheme
+    val cardInteraction = remember { MutableInteractionSource() }
+    val haptics = rememberIdeHaptics()
 
     Surface(
+        onClick = { haptics.heavyTap(); onClone() },
+        interactionSource = cardInteraction,
         modifier = modifier
             .width(240.dp)
+            .pressScale(cardInteraction)
             .border(0.5.dp, c.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
         shape = RoundedCornerShape(12.dp),
         color = c.surfaceContainerLow

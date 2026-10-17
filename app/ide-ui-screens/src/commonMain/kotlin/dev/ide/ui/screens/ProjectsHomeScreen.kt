@@ -336,6 +336,26 @@ fun ProjectsHomeScreen(
             }
 
             if (segment == HomeSegment.Projects && ordered.isNotEmpty()) {
+                if (backend != null && backend.discovery.supported()) {
+                    item("discoveryShelf") {
+                        Spacer(Modifier.height(10.dp))
+                        GitHubExplorerFeed(
+                            backend = backend,
+                            onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) }
+                        )
+                        Spacer(Modifier.height(18.dp))
+                        Text(
+                            "LOCAL WORKSPACE",
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = dev.ide.ui.theme.Ca.type.codeFamily,
+                                fontWeight = FontWeight.Bold,
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
                 itemsIndexedKeyed(ordered, key = { _, p -> p.rootPath }) { i, project ->
                     LocalProjectCard(
                         project = project,
@@ -353,16 +373,6 @@ fun ProjectsHomeScreen(
                             null
                         },
                     )
-                }
-
-                if (backend != null && backend.discovery.supported()) {
-                    item("discoveryShelf") {
-                        Spacer(Modifier.height(16.dp))
-                        GitHubExplorerFeed(
-                            backend = backend,
-                            onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) }
-                        )
-                    }
                 }
             } else if (segment == HomeSegment.Projects && ordered.isEmpty()) {
                 if (backend != null && backend.discovery.supported()) {
@@ -1203,6 +1213,25 @@ private fun WideProjectsHome(
                 Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(bottom = 24.dp),
             ) {
+                if (backend != null && backend.discovery.supported()) {
+                    item("discoveryShelf") {
+                        Spacer(Modifier.height(8.dp))
+                        GitHubExplorerFeed(
+                            backend = backend,
+                            onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) },
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "LOCAL WORKSPACE",
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = dev.ide.ui.theme.Ca.type.codeFamily,
+                                fontWeight = FontWeight.Bold,
+                            ),
+                            color = c.onSurfaceVariant,
+                        )
+                    }
+                }
                 if (shown.isEmpty()) {
                     item("empty") {
                         if (projects.isEmpty()) {
@@ -1228,15 +1257,6 @@ private fun WideProjectsHome(
                         onShare = onExportProject?.let { export -> { export(project) } },
                         onDelete = onRequestDelete?.let { request -> { request(project) } },
                     )
-                }
-                if (backend != null && backend.discovery.supported()) {
-                    item("discoveryShelf") {
-                        Spacer(Modifier.height(16.dp))
-                        GitHubExplorerFeed(
-                            backend = backend,
-                            onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) },
-                        )
-                    }
                 }
             }
         }

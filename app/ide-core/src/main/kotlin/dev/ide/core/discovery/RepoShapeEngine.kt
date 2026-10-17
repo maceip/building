@@ -78,6 +78,7 @@ object RepoShapeEngine {
     )
 
     data class ComparisonResult(
+        val targetSlug: String,
         val candidateSlug: String,
         val lens: ComparisonLens,
         val structuralMatchScore: Double,
@@ -229,18 +230,20 @@ object RepoShapeEngine {
 
         val compositeScore = (archScore * 0.7) + (topicJaccard * 0.3)
         val stackLabel = formatStackLabel(candidateGenome)
+        val targetShort = targetSlug.substringAfterLast('/').ifBlank { targetSlug }
 
         // 2. Evaluate lens-specific fit
         return when (lens) {
             ComparisonLens.NORTH_STAR -> {
-                // Must have substantially more stars (at least 3x, ideally 10x-50x)
+                // Must have substantially more stars (at least 2x, ideally 10x-50x)
                 if (candidateGenome.stars > targetGenome.stars * 2 && compositeScore >= 0.50) {
-                    val starDiff = "${candidateGenome.stars / max(1, targetGenome.stars)}x more stars"
+                    val starDiff = "${candidateGenome.stars / max(1, targetGenome.stars)}x more stars than $targetShort"
                     ComparisonResult(
+                        targetSlug = targetSlug,
                         candidateSlug = candidateSlug,
                         lens = lens,
                         structuralMatchScore = compositeScore,
-                        whyRecommended = "Proven reference architecture: shares your $stackLabel stack with battle-tested reliability.",
+                        whyRecommended = "Shaped like $targetShort: shares the $stackLabel stack with battle-tested scale.",
                         starDifferential = starDiff,
                         onDeviceRunnable = candidateGenome.onDeviceRunnableScore >= 0.75
                     )
@@ -253,10 +256,11 @@ object RepoShapeEngine {
                 val isFast = candidateGenome.starsLastMonth >= 200 || candidateGenome.stars >= 1000
                 if (isRecent && isFast && compositeScore >= 0.40) {
                     ComparisonResult(
+                        targetSlug = targetSlug,
                         candidateSlug = candidateSlug,
                         lens = lens,
                         structuralMatchScore = compositeScore,
-                        whyRecommended = "Surging in momentum: +${candidateGenome.starsLastMonth} stars this month with active commits in the same technical domain.",
+                        whyRecommended = "Surging in momentum alongside $targetShort: +${candidateGenome.starsLastMonth} stars this month in the same $stackLabel domain.",
                         starDifferential = "${candidateGenome.stars} ★",
                         onDeviceRunnable = candidateGenome.onDeviceRunnableScore >= 0.75
                     )
@@ -269,10 +273,11 @@ object RepoShapeEngine {
                 val candidateIsModern = candidateGenome.uiFramework in listOf(UiFramework.JETPACK_COMPOSE, UiFramework.COMPOSE_MULTIPLATFORM)
                 if ((targetIsLegacy && candidateIsModern) || (candidateGenome.uiFramework == UiFramework.COMPOSE_MULTIPLATFORM && targetGenome.uiFramework == UiFramework.JETPACK_COMPOSE)) {
                     ComparisonResult(
+                        targetSlug = targetSlug,
                         candidateSlug = candidateSlug,
                         lens = lens,
                         structuralMatchScore = compositeScore,
-                        whyRecommended = "Modern architectural upgrade: migrated from legacy patterns to ${candidateGenome.uiFramework.name}.",
+                        whyRecommended = "Modern architectural upgrade to $targetShort: migrated to $stackLabel.",
                         starDifferential = "${candidateGenome.stars} ★",
                         onDeviceRunnable = candidateGenome.onDeviceRunnableScore >= 0.75
                     )
@@ -285,10 +290,11 @@ object RepoShapeEngine {
                     (targetGenome.uiFramework == UiFramework.SWIFT_UI && candidateGenome.uiFramework in listOf(UiFramework.JETPACK_COMPOSE, UiFramework.COMPOSE_MULTIPLATFORM))
                 if (isCrossTwin && (sharedTopics > 0 || topicJaccard >= 0.20)) {
                     ComparisonResult(
+                        targetSlug = targetSlug,
                         candidateSlug = candidateSlug,
                         lens = lens,
                         structuralMatchScore = compositeScore,
-                        whyRecommended = "Platform twin: solves the exact same problem for ${candidateGenome.uiFramework.name} with native ergonomics.",
+                        whyRecommended = "Platform twin of $targetShort: solves the same problem with $stackLabel.",
                         starDifferential = "${candidateGenome.stars} ★",
                         onDeviceRunnable = candidateGenome.onDeviceRunnableScore >= 0.75
                     )
@@ -300,10 +306,11 @@ object RepoShapeEngine {
                 val candidateIsPermissive = candidateGenome.license in listOf("MIT", "Apache-2.0", "BSD-3-Clause")
                 if (candidateIsPermissive && compositeScore >= 0.50) {
                     ComparisonResult(
+                        targetSlug = targetSlug,
                         candidateSlug = candidateSlug,
                         lens = lens,
                         structuralMatchScore = compositeScore,
-                        whyRecommended = "Permissive MIT/Apache-2.0 alternative with matching $stackLabel architecture.",
+                        whyRecommended = "Permissive MIT/Apache-2.0 alternative to $targetShort with matching $stackLabel architecture.",
                         starDifferential = "${candidateGenome.stars} ★",
                         onDeviceRunnable = candidateGenome.onDeviceRunnableScore >= 0.75
                     )
