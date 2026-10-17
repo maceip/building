@@ -13,12 +13,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.io.File
 
 class PreviewActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val libraries = File(applicationInfo.nativeLibraryDir)
         val title = runCatching { assets.open("preview-title.txt").bufferedReader().use { it.readText() } }
             .getOrDefault("Swift preview")
         setContent {
@@ -29,8 +27,7 @@ class PreviewActivity : ComponentActivity() {
                     Text(title, fontSize = 30.sp, fontWeight = FontWeight.Bold)
                     Text("Running on Android · Cupertino", fontSize = 14.sp, color = Color(0xFF636366))
                     Spacer(Modifier.height(24.dp))
-                    SwiftPreview(File(libraries, "libbuilding-preview.so"), libraries,
-                        Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(24.dp)).background(Color.White))
+                    SwiftPreview(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(24.dp)).background(Color.White))
                     Spacer(Modifier.height(12.dp))
                     Text("Compiled Swift → native Compose view", fontSize = 12.sp, color = Color(0xFF636366))
                 }

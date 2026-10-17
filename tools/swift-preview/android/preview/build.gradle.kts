@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "dev.ide.swiftpreview"
     compileSdk = 35
-    defaultConfig { minSdk = 28 }
+    defaultConfig { minSdk = 28; consumerProguardFiles("consumer-rules.pro") }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -16,6 +16,7 @@ android {
 }
 dependencies {
     api(project(":composeui"))
+    api(project(":androidbridge"))
     implementation(compose.runtime)
     implementation(compose.foundation)
     implementation(compose.material3)

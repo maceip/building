@@ -13,6 +13,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters += "arm64-v8a" }
     }
     compileOptions {
@@ -20,7 +21,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
     kotlinOptions { jvmTarget = "11" }
-    packaging { jniLibs { useLegacyPackaging = true; keepDebugSymbols += "**/libbuilding-preview.so" } }
+    packaging { jniLibs { useLegacyPackaging = true; keepDebugSymbols += "**/libjson-baseline.so" } }
 }
 dependencies {
     implementation(project(":preview"))
@@ -28,4 +29,7 @@ dependencies {
     implementation(compose.runtime)
     implementation(compose.foundation)
     implementation(compose.material3)
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation(libs.kotlinx.serialization.json)
 }

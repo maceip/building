@@ -1,99 +1,104 @@
 # Swift → Cupertino preview on Android
 
-An executable proof for the Swift runtime: compile Swift view sources against
-the open-source `SwiftUICore` shim, run the resulting ARM64 executable **on
-Android**, render its view tree with AndroidSwiftUI / Compose Cupertino, and
-send native control events back to Swift. `@State` and application actions stay
-in Swift. This is not a screenshot, JavaScript translation, or remote simulator.
+Compile Swift view sources against the open-source `SwiftUICore` shim and run
+native ARM64 Swift **inside the Android preview app**. The default path uses
+AndroidSwiftUI's existing typed JNI materializer, generated `BridgeExport`
+callbacks, `ViewHost.evaluateUpdate()` and Kotlin `TreeStore.patch()`.
+State and application actions stay in Swift; Compose Cupertino renders the UI.
+No live source translation, model inference or TPU is involved.
 
-The first deliverable is a separate preview APK and an embeddable
-`SwiftPreview(executable, libraries, modifier)` composable. It does not yet add a
-clone/build/run command to Building's editor. Compilation happens on the Mac;
-execution and UI happen on Android. The sample executable is packaged in the
-APK's executable native-library directory. Running newly compiled files on a
-phone must use Building's runtime launcher, not execute files from writable app
-storage directly.
+This is a standalone preview APK and an embeddable `SwiftPreview(modifier)`
+composable. Building's editor Run action is not integrated yet. Compilation
+happens on the Mac; execution and UI happen on Android. A newly built native
+library must be packaged with the host; arbitrary binary hot-loading is not
+implemented.
 
 ## Run
 
 Requires macOS, Swift **6.3.2**, its Android SDK, Android SDK 35, JDK 21 and an
-ARM64 Android 9+ device/emulator. The first run fetches pinned source dependencies
-and Gradle. `SWIFT`, `JAVA_HOME`, `ANDROID_HOME` and `ANDROID_SERIAL` can override
-the defaults. Nothing is downloaded at app runtime.
+ARM64 Android 9+ device/emulator. The first build fetches pinned sources and
+builds the SwiftJava/JExtract tools. `SWIFT`, `ANDROID_HOME` and `ANDROID_SERIAL`
+can override defaults. The compiler's matching toolchain and JDK 21 are selected
+explicitly for nested generators. Nothing is downloaded at app runtime.
+The current SwiftPM cross-build can rebuild host generator dependencies on
+subsequent invocations; build-cache optimization remains separate work.
 
 ```sh
 python3 tools/swift-preview/preview.py --install
 python3 tools/swift-preview/verify_device.py --case sample
 
-# Clone an independent MIT-licensed SwiftUI counter and compile its original
-# ContentView.swift without editing it:
+# Compile the pinned third-party counter's unchanged ContentView.swift:
 python3 tools/swift-preview/preview.py --github-counter --install
 python3 tools/swift-preview/verify_device.py --case github
 
-# Compile your own root view and any supporting model/view files:
 python3 tools/swift-preview/preview.py --source /path/ContentView.swift \
   --source /path/Model.swift --root ContentView --install
 ```
 
-The GitHub proof uses [Takenori Kabeya's SwiftUI counter](https://github.com/takenori-kabeya/SwiftUIStateManagementBook-Counter/tree/05bb80af3d0700eb926bf4031da50729ab1d78f3),
+The GitHub example is [Takenori Kabeya's SwiftUI counter](https://github.com/takenori-kabeya/SwiftUIStateManagementBook-Counter/tree/05bb80af3d0700eb926bf4031da50729ab1d78f3),
 specifically `SimpleCounterSwiftUI/SimpleCounterSwiftUI/ContentView.swift`.
-The iOS `@main App` entry is replaced by the Android preview host; the view source
-and actions remain unchanged. This does not build the upstream Xcode project or
-its separate TCA example.
+The Android host supplies the entry point; the view source and actions remain
+unchanged. This does not build its Xcode project or separate TCA example.
 
-Build outputs are under `.build/android/preview-app/build/outputs/apk/debug/`
-and `.build/android/preview/build/outputs/aar/`. The AAR's renderer/Compose
-dependencies must also be included by an embedding app; it is not a fat AAR.
-Task source checkouts and generated products remain under ignored `.build/`;
-Gradle uses its standard user cache.
-`build-receipt.json` records the compiler, source hashes, dependency revision and
-APK hash. The device verifier separately saves screenshots, UI hierarchy and
-interaction/process-lifecycle receipts in `.build/evidence/`.
+Outputs are under `.build/android/preview-app/build/outputs/apk/debug/` and
+`.build/android/preview/build/outputs/aar/`. An embedding app needs the native
+libraries and Gradle dependencies as well as the AAR. `.build/build-receipt.json`
+records compiler, source and binary hashes. `.build/evidence/` holds device
+screenshots, interaction receipts and benchmarks. Generated products stay ignored.
 
-## Scope
+## Reused bridge and small host adaptations
 
-The shim exposes the existing SwiftUICore API, and the renderer is reused from
-[AndroidSwiftUI in the SwiftKey fork](https://github.com/maceip/Swiftkey/tree/9bbcc0bc008d43fa3e204fe5856cd41cc03f4d7c/AndroidSwiftUI).
-That fork includes [Compose Cupertino](https://github.com/slanos/compose-cupertino).
-Ordinary `Text`, `Button`, `Toggle`, and nonsecure `TextField` nodes receive
-Cupertino controls; stacks, modifiers and other nodes use the existing renderer.
-Two common counter symbols have explicit mappings (minus uses a minus glyph).
-Unsupported symbols retain the renderer's visible diagnostic.
+The pinned [AndroidSwiftUI fork](https://github.com/maceip/Swiftkey/tree/9bbcc0bc008d43fa3e204fe5856cd41cc03f4d7c/AndroidSwiftUI)
+includes [Compose Cupertino](https://github.com/slanos/compose-cupertino).
+Its `Materializer`, typed `ViewNode` constructor, `JextractCallbackSink` and
+`AndroidBridgeHost` are reused. The existing materializer transports scalar and
+homogeneous-array values in typed JNI slots; nested/mixed property arrays retain
+its JSON fallback. There is no whole-tree JSON serialization in the preview path.
 
-This transport supports one live view, synchronous actions, and full tree
-updates. Lazy provider containers fail explicitly. Async tasks/timers, native
-UIKit/AppKit, SwiftData, entitlements, assets, arbitrary package dependencies,
-multiple windows and full SwiftUI conformance are not provided by this harness.
-Compiler errors remain build failures: there is no success stub or automatic
-source rewrite. SwiftUI syntax coverage is not a claim that every supported API
-has been exercised through this host.
+The host adds a small SwiftJava bootstrap and `BridgeRuntime.stop()` so disposal
+clears the active root and invalidates queued renders. A per-node styling hook
+maps ordinary Text, Button, Toggle and nonsecure TextField to Cupertino controls.
+It does not recursively copy the tree. Stacks and other supported nodes use the
+existing renderer. Two counter symbols have explicit mappings; minus uses a
+glyph. Unsupported symbols retain the renderer's diagnostic.
 
-The single-view limitation is enforced because the upstream renderer has a
-global callback sink. Closing the pane terminates its process and restores the
-previous sink. A second simultaneous pane shows an error.
+Subtree savings depend on where state lives. A row with its own `@State` can
+produce a small patch. State owned by the root may re-evaluate/materialize the
+whole root, even though the operation is called a patch. The existing tree
+splice may also search siblings; this is not a promise of constant-time updates.
 
-## Verify the Swift state round trip
+Only one live Swift pane is supported by the upstream global registry. Closing
+it stops the native runtime and restores the prior callback sink. This harness
+is not an isolation boundary for untrusted native code. UIKit/AppKit, SwiftData,
+entitlements, arbitrary assets/dependencies, multiple windows and full SwiftUI
+conformance are not provided. The existing JNI lazy-provider and scheduling
+paths are connected; broad lazy-view/async behavior needs separate validation.
+
+## Android benchmark
+
+See [measured results and limitations](BENCHMARK.md).
 
 ```sh
-python3 tools/swift-preview/preview.py --host-only
-python3 tools/swift-preview/verify_protocol.py \
-  tools/swift-preview/.build/swift/.build/arm64-apple-macosx/debug/PreviewApp
+python3 tools/swift-preview/benchmark.py
+# Reuse an existing --benchmark build:
+python3 tools/swift-preview/benchmark.py --skip-build
 ```
 
-This sends real button/toggle/text events to the compiled sample and checks
-increment, reset, Unicode text binding and clean EOF. Device interaction is a
-separate check; a host test alone does not establish Android execution.
+The opt-in build includes the previous JSON process protocol **only as a
+benchmark baseline**. Both paths compile the same eager 10/100/1,000-row workload
+with Swift release optimization. Each case performs 15 warmups and 50 measured
+callbacks targeting the middle row. Tests assert state advancement, subtree delivery, untouched sibling
+identity, disposal with a pending update, and reopening with fresh state.
 
-Validated on 2026-10-16 on the connected ARM64 API 36 emulator: both APKs built,
-installed and rendered; the sample's counter, toggle, text binding and reset
-passed, and the unchanged GitHub view's increment/decrement passed. Closing
-each view terminated its Swift child. Installed APK hashes matched the build
-receipts. The host protocol checks passed; unknown callbacks and UIKit imports
-failed explicitly. These checks do not establish physical-device or editor
-integration support.
+Timing starts immediately before callback dispatch on Android's main thread
+and ends after `TreeStore` assignment. It includes evaluation, transport,
+materialization/JSON decoding, main-thread scheduling and tree splicing.
+It excludes Compose rendering and display frames: these numbers are not FPS or
+end-to-end touch latency. The baseline omits the old recursive styling pass,
+which makes the comparison conservative. Initial-tree timing is diagnostic only;
+process startup and JNI library loading are not equivalent.
 
-Electron remains a separate renderer route: its Chromium/native desktop shell
-needs a platform port and a display host (for example Termux:X11), or an explicit
-adaptation of its web UI and Electron APIs. Node's runtime alone does not create
-that desktop window. The existing Node/Python local-server WebView path and
-their CLI/TUI paths do not depend on this Swift bridge.
+Electron remains separate: Node alone supplies neither Chromium's desktop shell
+nor a display host. Its web UI needs an explicit Android adaptation or a desktop
+runtime/display route. The existing Node/Python CLI/TUI and local-server WebView
+paths do not depend on this Swift bridge.

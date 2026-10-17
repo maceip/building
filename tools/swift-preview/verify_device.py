@@ -46,6 +46,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path(__file__).parent / ".build/evidence")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
+    adb("logcat", "-c")
     adb("shell", "am", "force-stop", PACKAGE)
     adb("shell", "am", "start", "-n", f"{PACKAGE}/dev.ide.swiftpreview.PreviewActivity")
     if args.case == "sample":
@@ -76,21 +77,21 @@ def main():
     screenshot = args.output / f"{args.case}-android.png"
     screenshot.write_bytes(adb("exec-out", "screencap", "-p", binary=True))
     (args.output / f"{args.case}-ui.xml").write_text(adb("shell", "cat", "/sdcard/building-swift-preview.xml"))
-    processes = adb("shell", "ps", "-A", "-o", "PID,ARGS")
-    assert "libbuilding-preview.so" in processes, "No Swift child is running on Android"
+    logs = adb("logcat", "-d", "-s", "BuildingSwiftPreview:I", "*:S")
+    assert "JNI preview started" in logs, "Native JNI session did not start"
     if args.case == "sample":
         tap(text("Reset"))
         text("0")
-    # Back destroys the activity/composition; its Swift child must exit too.
+    # Back disposes the in-process runtime; the session checks native state.
     adb("shell", "input", "keyevent", "KEYCODE_BACK")
     deadline = time.monotonic() + 10
-    while "libbuilding-preview.so" in adb("shell", "ps", "-A", "-o", "PID,ARGS"):
-        assert time.monotonic() < deadline, "Swift process survived closing its view"
+    while "JNI preview disposed" not in adb("logcat", "-d", "-s", "BuildingSwiftPreview:I", "*:S"):
+        assert time.monotonic() < deadline, "Native Swift runtime survived closing its view"
         time.sleep(.2)
     receipt = dict(case=args.case, device=adb("shell", "getprop", "ro.product.model").strip(),
                    abi=adb("shell", "getprop", "ro.product.cpu.abi").strip(),
                    sdk=adb("shell", "getprop", "ro.build.version.sdk").strip(),
-                   interactions="passed", swift_child="observed", dispose="child exited",
+                   interactions="passed", transport="typed JNI", dispose="native runtime stopped",
                    screenshot=str(screenshot.resolve()))
     installed = adb("shell", "pm", "path", PACKAGE).strip().splitlines()[0].removeprefix("package:")
     receipt["installed_apk_sha256"] = adb("shell", "sha256sum", installed).split()[0]
