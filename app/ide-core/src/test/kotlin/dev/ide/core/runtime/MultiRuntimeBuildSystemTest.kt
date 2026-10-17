@@ -114,49 +114,20 @@ class MultiRuntimeBuildSystemTest {
                 assertTrue(backend.project.isSwift, "ProjectInfo.isSwift must be true")
                 val tasks = backend.build.runTasks()
                 assertTrue(tasks.isNotEmpty(), "Swift project must expose first-class Run/Build tasks")
-                // Instant Preview is the default Run for SwiftUI: no toolchain, sub-second UI.
-                assertEquals(SwiftBuildSystem.TASK_PREVIEW, tasks.first().id, "Default task for SwiftUI project must be Instant Preview")
+                // Default Run is REAL Swift Cupertino execution (or bridge); Quick Peek is secondary.
+                assertEquals(SwiftBuildSystem.TASK_RUN, tasks.first().id, "Default task for SwiftUI project must be Run iOS GUI (Cupertino Bridge)")
+                assertTrue(tasks.any { it.id == SwiftBuildSystem.TASK_PREVIEW }, "Quick Peek must remain available")
                 assertTrue(tasks.any { it.id == SwiftBuildSystem.TASK_IPA }, "Export IPA task must remain available")
 
-                // Default Run button → Instant Preview (no toolchain required).
-                // Instant Preview is a live session: wait for its first ViewNode frame, not for the build to end.
-                backend.build.runBuild()
-                val previewConsole = runBlocking {
-                    withTimeout(30_000) {
-                        backend.build.runConsole.first { rc ->
-                            rc?.frame?.path?.contains("Hello") == true ||
-                                rc?.frame?.path?.contains("Text") == true
-                        }
-                    }
-                }
-                assertTrue(previewConsole?.frame != null, "Instant Preview must stream a ViewNode frame")
-
                 // Explicit Export IPA still goes through the toolchain path and produces the archive.
-                // Stop the live preview session first and wait until the engine is idle again.
-                backend.build.stopBuild()
-                runBlocking {
-                    withTimeout(15_000) {
-                        while (backend.build.buildState.value.status == RunStatus.Running) {
-                            kotlinx.coroutines.delay(50)
-                        }
-                    }
-                }
-                // Brief settle so the engine accepts the next Run request.
-                Thread.sleep(250)
                 val beforeIpa = backend.build.buildState.value
-                var finalState = beforeIpa
-                repeat(5) { attempt ->
-                    backend.build.runTask(SwiftBuildSystem.TASK_IPA)
-                    finalState = runBlocking {
-                        withTimeout(30_000) {
-                            backend.build.buildState.first {
-                                it !== beforeIpa && it.status != RunStatus.Running && it.log.isNotEmpty()
-                            }
+                backend.build.runTask(SwiftBuildSystem.TASK_IPA)
+                val finalState = runBlocking {
+                    withTimeout(30_000) {
+                        backend.build.buildState.first {
+                            it !== beforeIpa && it.status != RunStatus.Running && it.log.isNotEmpty()
                         }
                     }
-                    if (finalState.status == RunStatus.Succeeded) return@repeat
-                    if (finalState.log.none { "prior build work is still finishing" in it.message }) return@repeat
-                    Thread.sleep(400)
                 }
                 assertEquals(RunStatus.Succeeded, finalState.status, "Log:\n${finalState.log.joinToString("\n") { it.message }}")
                 assertTrue(cloned.resolve("xtool/IceCubesApp.ipa").exists(), "Build button must produce xtool/IceCubesApp.ipa")
@@ -288,7 +259,7 @@ class MultiRuntimeBuildSystemTest {
             assertFalse(ide.isUnrecognizedProject())
             assertTrue(ide.workspaceRoot.resolve("Package.swift").exists())
             assertTrue(ide.workspaceRoot.resolve("xtool.yml").exists())
-            assertEquals(SwiftBuildSystem.TASK_PREVIEW, backend.build.runTasks().first().id)
+            assertEquals(SwiftBuildSystem.TASK_RUN, backend.build.runTasks().first().id)
         }
 
         manager.create("python-app", mapOf("name" to "DemoPythonApp", "packageName" to "dev.building.py")).use { ide ->
@@ -574,7 +545,9 @@ class MultiRuntimeBuildSystemTest {
             manager.adoptFolderInPlace(swiftProjDir)
             manager.open(swiftProjDir.toString()).use { ide ->
                 val backend = IdeServicesBackend(ide, manager)
-                backend.build.runBuild()
+                // This test owns the RunScreen frame/callback pipe. Drive Quick Peek (no host
+                // swiftc required); RealSwiftCupertinoRunTest owns real Swift compile+execute.
+                backend.build.runTask(SwiftBuildSystem.TASK_PREVIEW)
                 val initialConsole = runBlocking {
                     withTimeout(30_000) {
                         backend.build.runConsole.first { rc ->

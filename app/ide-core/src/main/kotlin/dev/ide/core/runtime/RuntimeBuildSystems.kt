@@ -194,10 +194,10 @@ class SwiftBuildSystem : BuildSystem {
         val execTargets = extractSwiftExecutableTargets(root)
         val specs = ArrayList<RunTaskSpec>()
         if (hasSwiftUi) {
-            // Instant Preview first: interpret a SwiftUI subset with no toolchain/download.
-            // Fidelity Run (compiled Cupertino Bridge) and Export IPA (xtool) remain behind it.
-            specs += RunTaskSpec(TASK_PREVIEW, "Instant Preview (SwiftUI)", "run")
+            // Default Run executes REAL Swift against the Cupertino shim (ViewHost → ViewNode).
+            // xtool IPA export stays separate; Quick Peek is the no-compiler sketch fallback.
             specs += RunTaskSpec(TASK_RUN, "Run iOS GUI (Cupertino Bridge)", "run")
+            specs += RunTaskSpec(TASK_PREVIEW, "Quick Peek (no compile)", "run")
             specs += RunTaskSpec(TASK_IPA, "Build iOS App (.ipa)", "build")
             specs += RunTaskSpec(TASK_BUILD, "Build Swift Package", "build")
             specs += RunTaskSpec(TASK_TEST, "Test Swift Package", "verification")
@@ -223,8 +223,8 @@ class SwiftBuildSystem : BuildSystem {
             }
             else -> {
                 val root = Paths.get(project.rootDir.path)
-                // Default run goal prefers Instant Preview for SwiftUI projects.
-                if (isIosOrSwiftUiProject(root)) TASK_PREVIEW else TASK_BUILD
+                // Default run goal: real Swift Cupertino execution for SwiftUI projects.
+                if (isIosOrSwiftUiProject(root)) TASK_RUN else TASK_BUILD
             }
         }
         return buildGraphFor(project, specId)
@@ -292,31 +292,19 @@ class SwiftBuildSystem : BuildSystem {
         cleanStaleSyntheticXtoolYmlIfNeeded(projectRoot)
         val isIos = specId == TASK_IPA || isIosOrSwiftUiProject(projectRoot)
 
-        // Instant Preview runs BEFORE any toolchain/scaffolding work: interpret SwiftUI
-        // source with zero downloads. Preferred for `swift:preview`, and for `swift:run`
-        // on iOS/SwiftUI projects so the common edit→see-UI loop stays sub-second.
+        // Quick Peek (TASK_PREVIEW) is a no-compiler sketch. TASK_RUN always prefers REAL
+        // Swift (swiftc + Cupertino shim → ViewHost → ViewNode); it never silently becomes
+        // the interpreter — that path is opt-in and labeled as a peek.
         val previewSources = findSwiftSourceFiles(projectRoot)
         val previewTexts = previewSources.map { runCatching { it.readText() }.getOrDefault("") }
-        if ((specId == TASK_PREVIEW || (specId == TASK_RUN && isIos)) &&
-            previewSources.isNotEmpty() &&
-            SwiftUiPreviewInterpreter.canInterpret(previewTexts)
-        ) {
-            val previewResult = runInstantPreview(projectRoot, projectName, previewSources, ctx, buildCtx)
-            if (specId == TASK_PREVIEW || previewResult !is TaskResult.Failed) {
-                return previewResult
-            }
-            ctx.buildLog.log(
-                BuildLogEntry(
-                    "Instant Preview could not cover this project; falling back to Cupertino Bridge.",
-                    BuildLogLevel.INFO,
-                ),
-            )
-        }
         if (specId == TASK_PREVIEW) {
+            if (previewSources.isNotEmpty() && SwiftUiPreviewInterpreter.canInterpret(previewTexts)) {
+                return runInstantPreview(projectRoot, projectName, previewSources, ctx, buildCtx)
+            }
             val msg = if (previewSources.isEmpty()) {
                 "No Swift source files found in $projectRoot"
             } else {
-                "Instant Preview does not cover this SwiftUI project yet. Use Run iOS GUI (Cupertino Bridge) or Build iOS App (.ipa)."
+                "Quick Peek does not cover this SwiftUI project yet. Use Run iOS GUI (Cupertino Bridge) or Build iOS App (.ipa)."
             }
             ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.ERROR))
             return TaskResult.Failed(msg)
@@ -568,7 +556,7 @@ class SwiftBuildSystem : BuildSystem {
         ctx.reportStep(":swift:instantPreview", "started")
         val texts = sources.map { runCatching { it.readText() }.getOrDefault("") }
         val session = SwiftUiPreviewInterpreter.PreviewSession()
-        val io = buildCtx?.openProgramIo?.invoke(projectName, "$projectName (Instant Preview)")
+        val io = buildCtx?.openProgramIo?.invoke(projectName, "$projectName (Quick Peek)")
         io?.started()
 
         fun emitFrame(seq: Long): String {
@@ -581,11 +569,11 @@ class SwiftBuildSystem : BuildSystem {
             val first = emitFrame(1L)
             ctx.buildLog.log(
                 BuildLogEntry(
-                    "✓ Instant Preview live — SwiftUI interpreted with no toolchain (${first.length} byte ViewNode tree)",
+                    "✓ Quick Peek live — SwiftUI sketched with no compiler (${first.length} byte ViewNode tree)",
                     BuildLogLevel.INFO,
                 ),
             )
-            io?.stdout("✓ Instant Preview (SwiftUI) — state lives in the interpreter; edits re-interpret instantly\n")
+            io?.stdout("✓ Quick Peek (sketch) — use Run iOS GUI (Cupertino Bridge) for real Swift execution\n")
 
             // Headless (no UI session): one frame is enough for tests / build-only hosts.
             if (io == null) {
