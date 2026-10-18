@@ -4,6 +4,7 @@ package dev.ide.ios
 
 import dev.ide.deps.impl.ArtifactFetcher
 import dev.ide.ios.store.IosPreferences
+import dev.ide.ios.android.*
 import dev.ide.ui.backend.NodeKind
 import dev.ide.ui.backend.TreeViewMode
 import dev.ide.ui.backend.UiHighlightModifier
@@ -1728,6 +1729,206 @@ class IosBackendTest {
         val console = backend.build.runConsole.value
         assertNotNull(console, "console exists after sending input")
         assertTrue(console.transcript.any { "echo test" in it.text }, "input echoed to transcript")
+    }
+
+    @Test
+    fun androidManifestAndResourceParsing() = runTest {
+        val appDir = IosFiles.join(root, "sample-android-app")
+        val resDir = IosFiles.join(appDir, "app", "src", "main", "res", "values")
+        IosFiles.mkdirs(resDir)
+
+        val manifestPath = IosFiles.join(appDir, "app", "src", "main", "AndroidManifest.xml")
+        IosFiles.writeText(
+            manifestPath,
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+                package="com.example.counterapp">
+                <uses-permission android:name="android.permission.INTERNET" />
+                <application
+                    android:label="@string/app_name"
+                    android:theme="@style/Theme.CounterApp">
+                    <activity
+                        android:name=".MainActivity"
+                        android:exported="true">
+                        <intent-filter>
+                            <action android:name="android.intent.action.MAIN" />
+                            <category android:name="android.intent.category.LAUNCHER" />
+                        </intent-filter>
+                    </activity>
+                </application>
+            </manifest>
+            """.trimIndent()
+        )
+
+        val stringsPath = IosFiles.join(resDir, "strings.xml")
+        IosFiles.writeText(
+            stringsPath,
+            """
+            <resources>
+                <string name="app_name">Counter App</string>
+                <string name="welcome_msg">Welcome!</string>
+            </resources>
+            """.trimIndent()
+        )
+
+        val colorsPath = IosFiles.join(resDir, "colors.xml")
+        IosFiles.writeText(
+            colorsPath,
+            """
+            <resources>
+                <color name="primary">#FF6200EE</color>
+                <color name="accent">#03DAC5</color>
+            </resources>
+            """.trimIndent()
+        )
+
+        // Verify Manifest parsing
+        val foundManifest = AndroidProjectParser.findManifestFile(appDir)
+        assertNotNull(foundManifest, "found AndroidManifest.xml")
+        val manifest = AndroidProjectParser.parseManifest(IosFiles.readText(foundManifest))
+        assertEquals("com.example.counterapp", manifest.packageName)
+        assertEquals("com.example.counterapp.MainActivity", manifest.mainActivity)
+        assertEquals("@string/app_name", manifest.appLabel)
+        assertEquals(listOf("android.permission.INTERNET"), manifest.permissions)
+
+        // Verify Resource parsing
+        val foundRes = AndroidProjectParser.findResDir(appDir)
+        assertNotNull(foundRes, "found res dir")
+        val resTable = AndroidProjectParser.loadResources(foundRes)
+        assertEquals("Counter App", resTable.getString("app_name"))
+        assertEquals("Welcome!", resTable.getString("welcome_msg"))
+        assertEquals("Counter App", resTable.resolve("@string/app_name"))
+        assertEquals(0xFF6200EEL, resTable.getColor("primary"))
+        assertEquals(0xFF03DAC5L, resTable.getColor("accent"))
+    }
+
+    @Test
+    fun androidVirtualAppHostAndLifecycle() = runTest {
+        val appDir = IosFiles.join(root, "hosted-android-app")
+        val manifestPath = IosFiles.join(appDir, "AndroidManifest.xml")
+        IosFiles.writeText(
+            manifestPath,
+            """
+            <manifest package="com.example.virtualapp">
+                <application android:label="Virtual App">
+                    <activity android:name=".HomeActivity">
+                        <intent-filter>
+                            <action android:name="android.intent.action.MAIN" />
+                        </intent-filter>
+                    </activity>
+                </application>
+            </manifest>
+            """.trimIndent()
+        )
+
+        val logs = mutableListOf<String>()
+        val host = AndroidAppHost(appDir) { logs.add(it) }
+        assertTrue(host.initialize(), "host initialized")
+
+        val ctx = host.context
+        assertNotNull(ctx, "context exists")
+        assertEquals("com.example.virtualapp", ctx.packageName)
+        assertEquals("Virtual App", ctx.appName)
+        assertTrue(IosFiles.exists(ctx.filesDir), "filesDir created")
+        assertTrue(IosFiles.exists(ctx.cacheDir), "cacheDir created")
+
+        // Test Virtual SharedPreferences
+        val prefs = ctx.getSharedPreferences("user_settings")
+        prefs.putString("username", "alice")
+        prefs.putInt("login_count", 5)
+        prefs.putBoolean("dark_mode", true)
+        prefs.commit()
+
+        // Reload prefs
+        val reloadedPrefs = ctx.getSharedPreferences("user_settings")
+        assertEquals("alice", reloadedPrefs.getString("username", null))
+        assertEquals(5, reloadedPrefs.getInt("login_count", 0))
+        assertEquals(true, reloadedPrefs.getBoolean("dark_mode", false))
+
+        // Test Activity Lifecycle
+        val activity = host.launch()
+        assertEquals("com.example.virtualapp.HomeActivity", activity.activityName)
+        assertEquals(ActivityLifecycleState.RESUMED, activity.state)
+        assertTrue(host.isRunning, "host is running")
+
+        // Test BackStack navigation
+        activity.pushRoute("details_screen")
+        activity.pushRoute("settings_screen")
+        assertEquals(2, activity.backStack.size)
+
+        assertTrue(activity.onBackPressed(), "popped settings_screen")
+        assertEquals(1, activity.backStack.size)
+        assertTrue(activity.onBackPressed(), "popped details_screen")
+        assertEquals(0, activity.backStack.size)
+
+        // Final back finishes activity
+        assertFalse(activity.onBackPressed(), "finishes activity")
+        assertEquals(ActivityLifecycleState.DESTROYED, activity.state)
+    }
+
+    @Test
+    fun androidApkBuildAndPackaging() = runTest {
+        val appDir = IosFiles.join(root, "apk-test-app")
+        val resDir = IosFiles.join(appDir, "src", "main", "res", "values")
+        IosFiles.mkdirs(resDir)
+
+        IosFiles.writeText(
+            IosFiles.join(appDir, "src", "main", "AndroidManifest.xml"),
+            """
+            <manifest package="com.example.apktest">
+                <application android:label="Apk Test">
+                    <activity android:name=".MainActivity">
+                        <intent-filter>
+                            <action android:name="android.intent.action.MAIN" />
+                        </intent-filter>
+                    </activity>
+                </application>
+            </manifest>
+            """.trimIndent()
+        )
+        IosFiles.writeText(
+            IosFiles.join(resDir, "strings.xml"),
+            """<resources><string name="test_string">Hello APK</string></resources>"""
+        )
+
+        val result = IosApkBuilder.buildApk(appDir)
+        assertTrue(IosFiles.exists(result.apkPath), "APK file was created on disk")
+        assertTrue(result.apkSize > 0, "APK file is non-empty")
+        assertEquals("com.example.apktest", result.packageName)
+        assertTrue(result.fileCount >= 5, "APK includes manifest, arsc, dex, signatures: ${result.fileCount}")
+
+        // Verify ZIP header
+        val apkBytes = IosFiles.readBytes(result.apkPath)
+        assertNotNull(apkBytes, "read APK bytes")
+        // Standard ZIP local file header starts with PK\x03\x04 (0x50, 0x4B, 0x03, 0x04)
+        assertEquals(0x50.toByte(), apkBytes[0], "ZIP magic 1")
+        assertEquals(0x4B.toByte(), apkBytes[1], "ZIP magic 2")
+        assertEquals(0x03.toByte(), apkBytes[2], "ZIP magic 3")
+        assertEquals(0x04.toByte(), apkBytes[3], "ZIP magic 4")
+    }
+
+    @Test
+    fun androidAppTasksDiscoveredAndRun() = runTest {
+        val appDir = IosFiles.join(root, "run-test-app")
+        val manifestDir = IosFiles.join(appDir, "app", "src", "main")
+        IosFiles.mkdirs(manifestDir)
+        IosFiles.writeText(
+            IosFiles.join(manifestDir, "AndroidManifest.xml"),
+            """<manifest package="com.example.runapp"><application android:label="Run App"/></manifest>"""
+        )
+
+        assertTrue(backend.openProject(appDir), "opens android project")
+        val tasks = backend.build.runTasks()
+        assertTrue(tasks.any { it.id == "android:app:run" }, "found android:app:run task")
+        assertTrue(tasks.any { it.id == "android:apk:build" }, "found android:apk:build task")
+
+        // Trigger APK build task
+        backend.build.runTask("android:apk:build")
+        delay(200)
+        val console = backend.build.runConsole.value
+        assertNotNull(console, "console created for APK build")
+        assertTrue(console.transcript.any { "Building Android APK" in it.text }, "started APK build")
     }
 
 }
