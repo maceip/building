@@ -182,6 +182,7 @@ kotlin {
             implementation(project(":store-api"))
             implementation(project(":store-impl"))
             implementation(project(":store-bridge"))
+            implementation(project(":platform-json"))
             // Kotlin syntax analysis that needs no JVM: the compiler's own parser, vendored and built for
             // this target. It backs the outline and code folding.
             implementation(project(":kotlin-syntax"))

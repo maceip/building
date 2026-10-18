@@ -1,7 +1,9 @@
 package dev.ide.ios.discovery
 
 import dev.ide.ios.IosFiles
+import dev.ide.ios.http.IosHttpClient
 import dev.ide.ios.store.IosPreferences
+import dev.ide.platform.JsonReader
 import dev.ide.ui.backend.GitHubDiscoveryService
 import dev.ide.ui.backend.UiDiscoveredRepo
 import dev.ide.ui.backend.UiDiscoveryFeed
@@ -22,13 +24,14 @@ import platform.Foundation.NSURL
 import platform.Foundation.dataWithContentsOfURL
 
 /**
- * Concrete [GitHubDiscoveryService] powering the GitHub Explorer feed on iOS.
+ * Real, functional [GitHubDiscoveryService] powering GitHub Explorer on iOS via GitHub's live REST API.
  *
  * Implements:
- * 1. Trending hero repository cards with multi-tier tags (Jetpack Compose, Offline First, Zero-Cloud).
- * 2. Architectural Genome and North Star benchmark cards ("Shaped like X, but with more stars").
- * 3. Author social graph and peer circle traversal ("Created by @cortinico, whom @Ackites follows").
- * 4. Image/screenshot caching and offline fallbacks matching Android feature parity.
+ * 1. Live queries to `https://api.github.com/search/repositories` using native [IosHttpClient].
+ * 2. Token authentication against `https://api.github.com/user` with live rate limits extracted from headers.
+ * 3. Dynamic JSON response parsing via [JsonReader].
+ * 4. Image/screenshot downloading and disk caching.
+ * 5. Automatic disk persistence of feed for offline resilience.
  */
 class IosDiscoveryBackend(
     private val preferences: IosPreferences = IosPreferences(),
@@ -47,6 +50,19 @@ class IosDiscoveryBackend(
 
     private val feedCache = mutableMapOf<String, UiDiscoveryFeed>()
 
+    init {
+        val savedToken = preferences.get("github.pat")
+        if (!savedToken.isNullOrBlank()) {
+            _authState.value = UiGitHubAuthState(
+                isAuthenticated = true,
+                username = preferences.get("github.username") ?: "authenticated-user",
+                tokenPreview = "..." + savedToken.takeLast(4),
+                rateLimit = preferences.get("github.rate_limit")?.toIntOrNull() ?: 5000,
+                rateRemaining = preferences.get("github.rate_remaining")?.toIntOrNull() ?: 5000,
+            )
+        }
+    }
+
     override fun supported(): Boolean = true
 
     override suspend fun getFeed(topic: String, language: String, refresh: Boolean): UiDiscoveryFeed =
@@ -56,20 +72,53 @@ class IosDiscoveryBackend(
                 return@withContext feedCache.getValue(key)
             }
 
-            val feed = buildCategoryFeed(topic, language)
-            feedCache[key] = feed
-            feed
+            // 1. Check local persistent disk cache first if not refreshing
+            val diskCacheFile = IosFiles.join(cacheDir, "feeds/${urlEncode(key)}.json")
+            if (!refresh && IosFiles.exists(diskCacheFile)) {
+                val cachedText = IosFiles.readText(diskCacheFile)
+                val parsed = parseFeedJson(cachedText)
+                if (parsed != null && parsed.trendingHero.isNotEmpty()) {
+                    feedCache[key] = parsed
+                    return@withContext parsed
+                }
+            }
+
+            // 2. Fetch live data from GitHub REST API
+            val liveFeed = fetchLiveFeed(topic, language)
+            if (liveFeed.trendingHero.isNotEmpty()) {
+                feedCache[key] = liveFeed
+                saveFeedToDisk(diskCacheFile, liveFeed)
+                return@withContext liveFeed
+            }
+
+            // Fallback to disk cache if live request failed (e.g. rate-limited or offline)
+            if (IosFiles.exists(diskCacheFile)) {
+                val cachedText = IosFiles.readText(diskCacheFile)
+                val parsed = parseFeedJson(cachedText)
+                if (parsed != null) {
+                    feedCache[key] = parsed
+                    return@withContext parsed
+                }
+            }
+
+            liveFeed
         }
 
     override suspend fun search(query: String): List<UiDiscoveredRepo> = withContext(Dispatchers.Default) {
-        val q = query.lowercase().trim()
-        val allRepos = sampleRepos("all") + sampleRepos("agents") + sampleRepos("llm")
-        allRepos.filter {
-            it.name.contains(q, ignoreCase = true) ||
-                it.description.contains(q, ignoreCase = true) ||
-                it.owner.contains(q, ignoreCase = true) ||
-                it.topics.any { t -> t.contains(q, ignoreCase = true) }
-        }.distinctBy { it.slug }
+        val q = query.trim()
+        if (q.isEmpty()) return@withContext emptyList()
+
+        val url = "https://api.github.com/search/repositories?q=${urlEncode(q)}&sort=stars&order=desc&per_page=20"
+        val response = IosHttpClient.get(url, authHeaders())
+        updateRateLimits(response.headers)
+
+        if (!response.isSuccessful) {
+            return@withContext emptyList()
+        }
+
+        val json = JsonReader.parseOrNull(response.body) ?: return@withContext emptyList()
+        val items = JsonReader.arr(JsonReader.obj(json)?.get("items"))
+        items.mapNotNull { parseRepo(it) }
     }
 
     override suspend fun downloadScreenshot(url: String): String? = withContext(Dispatchers.Default) {
@@ -94,7 +143,7 @@ class IosDiscoveryBackend(
             if (length <= 0) return@withContext null
             val bytes = ByteArray(length)
             bytes.usePinned { pinned ->
-                platform.posix.memcpy(pinned.addressOf(0), data.bytes, data.length)
+                memcpy(pinned.addressOf(0), data.bytes, data.length)
             }
             bytes
         } catch (_: Throwable) {
@@ -108,19 +157,46 @@ class IosDiscoveryBackend(
             clearToken()
             return@withContext false
         }
+
+        // Live validation against GitHub /user endpoint
+        val response = IosHttpClient.get(
+            url = "https://api.github.com/user",
+            headers = mapOf(
+                "Accept" to "application/vnd.github+json",
+                "User-Agent" to "CodeAssist-iOS",
+                "Authorization" to "Bearer $trimmed",
+            ),
+        )
+
+        if (!response.isSuccessful) {
+            return@withContext false
+        }
+
+        val userJson = JsonReader.parseOrNull(response.body)
+        val username = JsonReader.str(userJson, "login") ?: "github-user"
+        val limit = response.headers["x-ratelimit-limit"]?.toIntOrNull() ?: 5000
+        val remaining = response.headers["x-ratelimit-remaining"]?.toIntOrNull() ?: 5000
+
         preferences.put("github.pat", trimmed)
+        preferences.put("github.username", username)
+        preferences.put("github.rate_limit", limit.toString())
+        preferences.put("github.rate_remaining", remaining.toString())
+
         _authState.value = UiGitHubAuthState(
             isAuthenticated = true,
-            username = "github-user",
+            username = username,
             tokenPreview = "..." + trimmed.takeLast(4),
-            rateLimit = 5000,
-            rateRemaining = 4990,
+            rateLimit = limit,
+            rateRemaining = remaining,
         )
         true
     }
 
     override suspend fun clearToken() {
         preferences.remove("github.pat")
+        preferences.remove("github.username")
+        preferences.remove("github.rate_limit")
+        preferences.remove("github.rate_remaining")
         _authState.value = UiGitHubAuthState(
             isAuthenticated = false,
             username = null,
@@ -129,254 +205,188 @@ class IosDiscoveryBackend(
         )
     }
 
-    private fun buildCategoryFeed(topic: String, language: String): UiDiscoveryFeed {
-        val repos = sampleRepos(topic)
-        val northStars = when {
-            topic.contains("agent") -> listOf(
-                UiNorthStarBenchmark(
-                    targetRepoName = "Significant-Gravitas/AutoGPT",
-                    northStarName = "run-llama/llama_index",
-                    starMultiplierText = "3x more modular architecture",
-                    matchPercentage = 88,
-                    whyRecommended = "Shared multi-agent reasoning primitives with enterprise RAG indexing.",
-                    northStarUrl = "https://github.com/run-llama/llama_index",
-                )
+    // ---- Private Helpers ----
+
+    private fun authHeaders(): Map<String, String> {
+        val headers = mutableMapOf(
+            "Accept" to "application/vnd.github+json",
+            "User-Agent" to "CodeAssist-iOS",
+        )
+        val token = preferences.get("github.pat")
+        if (!token.isNullOrBlank()) {
+            headers["Authorization"] = "Bearer $token"
+        }
+        return headers
+    }
+
+    private fun updateRateLimits(headers: Map<String, String>) {
+        val limit = headers["x-ratelimit-limit"]?.toIntOrNull()
+        val remaining = headers["x-ratelimit-remaining"]?.toIntOrNull()
+        if (limit != null && remaining != null) {
+            _authState.value = _authState.value.copy(
+                rateLimit = limit,
+                rateRemaining = remaining,
             )
-            topic.contains("llm") -> listOf(
+        }
+    }
+
+    private fun fetchLiveFeed(topic: String, language: String): UiDiscoveryFeed {
+        val searchQuery = when (topic.lowercase().trim()) {
+            "agents" -> "topic:agents stars:>500"
+            "llm", "large language models", "llms" -> "topic:llm stars:>1000"
+            "penetration-testing", "pentesting", "pen testing" -> "topic:penetration-testing OR topic:security stars:>300"
+            "reverse-engineering", "reverse engineering", "reverse eng" -> "topic:reverse-engineering stars:>300"
+            "gaming" -> "topic:game-engine OR topic:android-game stars:>300"
+            "science" -> "topic:science stars:>300"
+            "all", "", "android" -> if (language.isNotBlank()) "topic:android language:$language" else "topic:android"
+            else -> if (topic.startsWith("topic:") || topic.contains(' ')) topic else "topic:$topic"
+        }
+
+        val url = "https://api.github.com/search/repositories?q=${urlEncode(searchQuery)}&sort=stars&order=desc&per_page=12"
+        val response = IosHttpClient.get(url, authHeaders())
+        updateRateLimits(response.headers)
+
+        if (!response.isSuccessful) {
+            return UiDiscoveryFeed(emptyList(), emptyList(), emptyList(), emptyList())
+        }
+
+        val root = JsonReader.parseOrNull(response.body) ?: return UiDiscoveryFeed(emptyList(), emptyList(), emptyList(), emptyList())
+        val items = JsonReader.arr(JsonReader.obj(root)?.get("items"))
+        val repos = items.mapNotNull { parseRepo(it) }
+
+        // Build North Star architectural benchmark comparisons from live items
+        val benchmarks = mutableListOf<UiNorthStarBenchmark>()
+        for (i in 0 until (repos.size - 1).coerceAtMost(3)) {
+            val a = repos[i]
+            val b = repos[i + 1]
+            val mult = if (b.stars > 0) a.stars / b.stars else 2
+            benchmarks.add(
                 UiNorthStarBenchmark(
-                    targetRepoName = "ggerganov/llama.cpp",
-                    northStarName = "ollama/ollama",
-                    starMultiplierText = "Higher ease-of-use with bundled packaging",
-                    matchPercentage = 92,
-                    whyRecommended = "Packages pure C/C++ inference behind an intuitive, single-command HTTP daemon.",
-                    northStarUrl = "https://github.com/ollama/ollama",
-                )
-            )
-            else -> listOf(
-                UiNorthStarBenchmark(
-                    targetRepoName = "Ackites/Nrfr",
-                    northStarName = "localsend/localsend",
-                    starMultiplierText = "6x more stars than Nrfr",
-                    matchPercentage = 94,
-                    whyRecommended = "Shaped like Nrfr: shares the Jetpack Compose + Android Gradle stack with battle-tested scale.",
-                    northStarUrl = "https://github.com/localsend/localsend",
-                ),
-                UiNorthStarBenchmark(
-                    targetRepoName = "Chethan616/ClearPDF",
-                    northStarName = "kushagrasinghx/BitChord",
-                    starMultiplierText = "2x faster offline render cycles",
-                    matchPercentage = 89,
-                    whyRecommended = "Modern Jetpack Compose architecture with local SQLite persistence and zero-telemetry.",
-                    northStarUrl = "https://github.com/kushagrasinghx/BitChord",
+                    targetRepoName = b.slug,
+                    northStarName = a.slug,
+                    starMultiplierText = "${mult.coerceAtLeast(2)}x more community adoption",
+                    matchPercentage = (78 + (i * 7)).coerceAtMost(98),
+                    whyRecommended = "${a.name} provides clean, verified architectural primitives.",
+                    privacyOrCapabilityAdvantage = "Offline-first local execution",
+                    northStarUrl = a.htmlUrl,
                 )
             )
         }
 
-        val peerProjects = listOf(
-            UiPeerProject(
-                slug = "cortinico/kotlin-android-template",
-                name = "kotlin-android-template",
-                owner = "cortinico",
-                description = "Fast-building Android + Kotlin + Gradle KTS app template",
-                stars = 1913,
-                language = "Kotlin",
-                attributionText = "Created by @cortinico, whom @Ackites follows",
-                htmlUrl = "https://github.com/cortinico/kotlin-android-template",
-            ),
-            UiPeerProject(
-                slug = "karn/notify",
-                name = "notify",
-                owner = "karn",
-                description = "Simplified notification delivery for Android apps",
-                stars = 840,
-                language = "Kotlin",
-                attributionText = "Created by @karn, whom @Chethan616 follows",
-                htmlUrl = "https://github.com/karn/notify",
-            )
-        )
+        // Author Peer Network from the top repository's author
+        val peers = mutableListOf<UiPeerProject>()
+        val topAuthor = repos.firstOrNull()?.owner
+        if (!topAuthor.isNullOrBlank()) {
+            val authorReposUrl = "https://api.github.com/users/$topAuthor/repos?sort=pushed&per_page=4"
+            val authorResp = IosHttpClient.get(authorReposUrl, authHeaders())
+            if (authorResp.isSuccessful) {
+                val authorItems = JsonReader.arr(JsonReader.parseOrNull(authorResp.body))
+                for (item in authorItems) {
+                    val p = parseRepo(item) ?: continue
+                    if (p.slug != repos.firstOrNull()?.slug) {
+                        peers.add(
+                            UiPeerProject(
+                                slug = p.slug,
+                                name = p.name,
+                                owner = p.owner,
+                                description = p.description,
+                                stars = p.stars,
+                                language = p.language,
+                                attributionText = "Authored by @$topAuthor",
+                                htmlUrl = p.htmlUrl,
+                            )
+                        )
+                    }
+                }
+            }
+        }
 
         return UiDiscoveryFeed(
             trendingHero = repos,
-            northStarBenchmarks = northStars,
-            authorPeerPicks = peerProjects,
-            highVelocityRising = northStars,
+            northStarBenchmarks = benchmarks,
+            authorPeerPicks = peers,
+            highVelocityRising = benchmarks.takeLast(4),
         )
     }
 
-    private fun sampleRepos(category: String): List<UiDiscoveredRepo> {
-        val cat = category.lowercase().trim()
-        return when {
-            cat.contains("agent") -> listOf(
-                UiDiscoveredRepo(
-                    slug = "Significant-Gravitas/AutoGPT",
-                    owner = "Significant-Gravitas",
-                    name = "AutoGPT",
-                    description = "An experimental open-source autonomous agent framework powered by LLMs",
-                    stars = 168000,
-                    forks = 44000,
-                    language = "Python",
-                    htmlUrl = "https://github.com/Significant-Gravitas/AutoGPT",
-                    isZeroCloud = false,
-                    isOfflineFirst = false,
-                    featureTags = listOf("Autonomous", "LLM", "Multi-Agent"),
-                    topics = listOf("agents", "autonomous-agents", "llm", "ai"),
-                ),
-                UiDiscoveredRepo(
-                    slug = "run-llama/llama_index",
-                    owner = "run-llama",
-                    name = "llama_index",
-                    description = "Data framework for LLM-based agentic workflows and multi-agent systems",
-                    stars = 42000,
-                    forks = 6100,
-                    language = "Python",
-                    htmlUrl = "https://github.com/run-llama/llama_index",
-                    isZeroCloud = false,
-                    isOfflineFirst = false,
-                    featureTags = listOf("RAG", "Data Framework", "Agents"),
-                    topics = listOf("agents", "rag", "llm", "python"),
-                )
-            )
-            cat.contains("llm") -> listOf(
-                UiDiscoveredRepo(
-                    slug = "ggerganov/llama.cpp",
-                    owner = "ggerganov",
-                    name = "llama.cpp",
-                    description = "LLM inference in C/C++ with zero dependencies and Android NDK support",
-                    stars = 79000,
-                    forks = 11800,
-                    language = "C++",
-                    htmlUrl = "https://github.com/ggerganov/llama.cpp",
-                    isZeroCloud = true,
-                    isOfflineFirst = true,
-                    usesNativeNdk = true,
-                    featureTags = listOf("Zero Cloud", "Offline First", "NDK", "Quantized"),
-                    topics = listOf("llm", "cpp", "inference", "mobile", "ndk"),
-                ),
-                UiDiscoveredRepo(
-                    slug = "ollama/ollama",
-                    owner = "ollama",
-                    name = "ollama",
-                    description = "Get up and running with Llama, Mistral, and other large language models locally",
-                    stars = 125000,
-                    forks = 10500,
-                    language = "Go",
-                    htmlUrl = "https://github.com/ollama/ollama",
-                    isZeroCloud = true,
-                    isOfflineFirst = true,
-                    featureTags = listOf("Local AI", "Private", "Zero Cloud"),
-                    topics = listOf("llm", "local-ai", "go", "quantization"),
-                )
-            )
-            cat.contains("pen") || cat.contains("security") -> listOf(
-                UiDiscoveredRepo(
-                    slug = "nmap/nmap",
-                    owner = "nmap",
-                    name = "nmap",
-                    description = "Free and open source utility for network discovery and security scanning",
-                    stars = 32000,
-                    forks = 5800,
-                    language = "C",
-                    htmlUrl = "https://github.com/nmap/nmap",
-                    isZeroCloud = true,
-                    isOfflineFirst = true,
-                    featureTags = listOf("Security", "Network Discovery", "Scanner"),
-                    topics = listOf("security", "penetration-testing", "scanner", "networking"),
-                )
-            )
-            cat.contains("reverse") -> listOf(
-                UiDiscoveredRepo(
-                    slug = "skylot/jadx",
-                    owner = "skylot",
-                    name = "jadx",
-                    description = "Dex to Java decompiler and CLI/GUI reverse engineering tool for Android APKs",
-                    stars = 43000,
-                    forks = 5200,
-                    language = "Java",
-                    htmlUrl = "https://github.com/skylot/jadx",
-                    isZeroCloud = true,
-                    isOfflineFirst = true,
-                    featureTags = listOf("Decompiler", "Bytecode", "Reverse Eng"),
-                    topics = listOf("reverse-engineering", "decompiler", "android", "apk", "bytecode"),
-                )
-            )
-            cat.contains("game") || cat.contains("gaming") -> listOf(
-                UiDiscoveredRepo(
-                    slug = "godotengine/godot",
-                    owner = "godotengine",
-                    name = "godot",
-                    description = "Free and open source 2D and 3D game engine for Desktop, Android, and Web",
-                    stars = 92000,
-                    forks = 21000,
-                    language = "C++",
-                    htmlUrl = "https://github.com/godotengine/godot",
-                    isZeroCloud = true,
-                    isOfflineFirst = true,
-                    usesNativeNdk = true,
-                    featureTags = listOf("Game Engine", "2D/3D", "Vulkan"),
-                    topics = listOf("game-engine", "gaming", "vulkan", "android", "graphics"),
-                )
-            )
-            else -> listOf(
-                UiDiscoveredRepo(
-                    slug = "Ackites/Nrfr",
-                    owner = "Ackites",
-                    name = "Nrfr",
-                    description = "Android SIM carrier configuration tool built with Kotlin and Jetpack Compose",
-                    stars = 9200,
-                    forks = 675,
-                    language = "Kotlin",
-                    htmlUrl = "https://github.com/Ackites/Nrfr",
-                    isZeroCloud = true,
-                    isOfflineFirst = true,
-                    usesCompose = true,
-                    featureTags = listOf("Jetpack Compose", "Offline First", "Zero Cloud"),
-                    topics = listOf("android", "kotlin", "jetpack-compose", "offline-first"),
-                ),
-                UiDiscoveredRepo(
-                    slug = "Chethan616/ClearPDF",
-                    owner = "Chethan616",
-                    name = "ClearPDF",
-                    description = "Modern Android document reader & editor without cloud trackers",
-                    stars = 4200,
-                    forks = 310,
-                    language = "Kotlin",
-                    htmlUrl = "https://github.com/Chethan616/ClearPDF",
-                    isZeroCloud = true,
-                    isOfflineFirst = true,
-                    usesCompose = true,
-                    featureTags = listOf("Jetpack Compose", "Offline First"),
-                    topics = listOf("pdf", "android", "offline-first", "material3", "kotlin"),
-                ),
-                UiDiscoveredRepo(
-                    slug = "kushagrasinghx/BitChord",
-                    owner = "kushagrasinghx",
-                    name = "BitChord",
-                    description = "Aesthetic YouTube Music Client with Compose and lossless audio",
-                    stars = 6100,
-                    forks = 480,
-                    language = "Kotlin",
-                    htmlUrl = "https://github.com/kushagrasinghx/BitChord",
-                    isZeroCloud = false,
-                    isOfflineFirst = false,
-                    usesCompose = true,
-                    featureTags = listOf("Compose Multiplatform", "Music Player"),
-                    topics = listOf("youtube-music", "compose-multiplatform", "kotlin", "music-player"),
-                ),
-                UiDiscoveredRepo(
-                    slug = "localsend/localsend",
-                    owner = "localsend",
-                    name = "localsend",
-                    description = "An open-source cross-platform alternative to AirDrop",
-                    stars = 58200,
-                    forks = 3900,
-                    language = "Dart",
-                    htmlUrl = "https://github.com/localsend/localsend",
-                    isZeroCloud = true,
-                    isOfflineFirst = true,
-                    featureTags = listOf("AirDrop Alternative", "P2P", "Offline First"),
-                    topics = listOf("p2p", "airdrop", "file-sharing", "offline-first"),
-                )
-            )
+    private fun parseRepo(json: Any?): UiDiscoveredRepo? {
+        val obj = JsonReader.obj(json) ?: return null
+        val name = JsonReader.str(obj, "name") ?: return null
+        val ownerObj = JsonReader.obj(obj["owner"])
+        val owner = JsonReader.str(ownerObj, "login") ?: ""
+        val slug = if (owner.isNotEmpty()) "$owner/$name" else name
+        val description = JsonReader.str(obj, "description").orEmpty()
+        val stars = JsonReader.int(obj, "stargazers_count", 0)
+        val forks = JsonReader.int(obj, "forks_count", 0)
+        val language = JsonReader.str(obj, "language").orEmpty()
+        val topics = JsonReader.strings(obj, "topics")
+        val defaultBranch = JsonReader.str(obj, "default_branch") ?: "main"
+        val htmlUrl = JsonReader.str(obj, "html_url") ?: "https://github.com/$slug"
+
+        val previewUrl = "https://raw.githubusercontent.com/$slug/$defaultBranch/screenshot.png"
+
+        return UiDiscoveredRepo(
+            slug = slug,
+            owner = owner,
+            name = name,
+            description = description,
+            stars = stars,
+            forks = forks,
+            language = language,
+            htmlUrl = htmlUrl,
+            screenshotUrl = previewUrl,
+            isZeroCloud = topics.any { it.contains("local") } || !description.contains("cloud", ignoreCase = true),
+            isOfflineFirst = topics.any { it.contains("offline") } || description.contains("offline", ignoreCase = true),
+            usesCompose = language.equals("Kotlin", ignoreCase = true),
+            topics = topics,
+            featureTags = topics.take(3),
+        )
+    }
+
+    private fun parseFeedJson(text: String): UiDiscoveryFeed? {
+        val root = JsonReader.parseOrNull(text) ?: return null
+        val obj = JsonReader.obj(root) ?: return null
+        val heroes = JsonReader.arr(obj["trendingHero"]).mapNotNull { parseRepo(it) }
+        return UiDiscoveryFeed(
+            trendingHero = heroes,
+            northStarBenchmarks = emptyList(),
+            authorPeerPicks = emptyList(),
+            highVelocityRising = emptyList(),
+        )
+    }
+
+    private fun saveFeedToDisk(filePath: String, feed: UiDiscoveryFeed) {
+        try {
+            IosFiles.parentOf(filePath)?.let { if (!IosFiles.exists(it)) IosFiles.mkdirs(it) }
+            val sb = StringBuilder()
+            sb.append("{\"trendingHero\":[")
+            feed.trendingHero.forEachIndexed { idx, r ->
+                if (idx > 0) sb.append(",")
+                sb.append("{\"name\":\"${r.name}\",\"owner\":{\"login\":\"${r.owner}\"},\"description\":\"${escapeJson(r.description)}\",\"stargazers_count\":${r.stars},\"forks_count\":${r.forks},\"language\":\"${r.language}\",\"html_url\":\"${r.htmlUrl}\",\"topics\":[${r.topics.joinToString(",") { "\"$it\"" }}]}")
+            }
+            sb.append("]}")
+            IosFiles.writeText(filePath, sb.toString())
+        } catch (_: Throwable) {
+            // Best effort cache write
+        }
+    }
+
+    private fun escapeJson(s: String): String = s
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\n", " ")
+        .replace("\r", "")
+
+    private fun urlEncode(s: String): String = buildString {
+        for (b in s.encodeToByteArray()) {
+            val c = b.toInt().toChar()
+            if (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c in "-_.~") {
+                append(c)
+            } else {
+                append('%')
+                append(((b.toInt() shr 4) and 0xF).toString(16).uppercase())
+                append((b.toInt() and 0xF).toString(16).uppercase())
+            }
         }
     }
 }
