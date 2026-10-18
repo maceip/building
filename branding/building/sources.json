@@ -1,10 +1,11 @@
 {
-  "sourceFile": "/Users/mac/Downloads/file_0000000043c48230ab61ec37d228652d.png",
-  "selectedArtwork": "file_0000000043c48230ab61ec37d228652d.png",
-  "monochromeArtwork": "icon-dark.png (luminance-derived alpha)",
-  "notificationArtwork": "power-symbol crop (385,265,870,720) luminance-derived alpha",
+  "sourceArchive": "/Users/mac/building/use.zip",
+  "selectedArtwork": "sq_512.png",
+  "monochromeArtwork": "sq_512.png (luminance-derived alpha)",
+  "notificationArtwork": "sq_512.png play-button glyph",
   "sourceSha256": {
-    "icon-clear-dark.png": "3e91ea4150a2a044b4e393b135efb65bd7d9951364296e5c8eac778270d42905",
-    "icon-dark.png": "3e91ea4150a2a044b4e393b135efb65bd7d9951364296e5c8eac778270d42905"
+    "icon-clear-dark.png": "490415956d851ba4409ad752c90fa4c999ada1ce6d8b91c2f4dfb15744c6dc3f",
+    "icon-dark.png": "f3e6d65498c7cbfbb53e9d09e8b49aa01f38b59e034fe5a6c6a2f80195bf4226",
+    "play-store-icon.png": "0493eb83341de27839513435c0867ab0132a3375d13f276f44cdc4fb2e1b442f"
   }
 }

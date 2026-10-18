@@ -7,12 +7,14 @@
 
 /* Begin PBXBuildFile section */
 		000000000000000000000009 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000008 /* App.swift */; };
+		000000000000000000000015 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000016 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		000000000000000000000003 /* CodeAssist.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodeAssist.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		000000000000000000000008 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		00000000000000000000000A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		000000000000000000000016 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -21,7 +23,7 @@
 
 /* Begin PBXGroup section */
 		000000000000000000000007 = {isa = PBXGroup; children = (000000000000000000000005 /* iosApp */, 000000000000000000000006 /* Products */, ); sourceTree = "<group>"; };
-		000000000000000000000005 /* iosApp */ = {isa = PBXGroup; children = (000000000000000000000008 /* App.swift */, 00000000000000000000000A /* Info.plist */, ); path = iosApp; sourceTree = "<group>"; };
+		000000000000000000000005 /* iosApp */ = {isa = PBXGroup; children = (000000000000000000000008 /* App.swift */, 00000000000000000000000A /* Info.plist */, 000000000000000000000016 /* Assets.xcassets */, ); path = iosApp; sourceTree = "<group>"; };
 		000000000000000000000006 /* Products */ = {isa = PBXGroup; children = (000000000000000000000003 /* CodeAssist.app */, ); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
@@ -56,7 +58,7 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		00000000000000000000000D /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		00000000000000000000000D /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (000000000000000000000015 /* Assets.xcassets in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
