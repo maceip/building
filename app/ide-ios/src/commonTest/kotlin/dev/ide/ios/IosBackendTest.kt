@@ -1925,10 +1925,45 @@ class IosBackendTest {
 
         // Trigger APK build task
         backend.build.runTask("android:apk:build")
-        delay(200)
+        withContext(Dispatchers.Default) {
+            withTimeout(10_000) {
+                while (backend.build.runConsole.value?.transcript?.any { "Building Android APK" in it.text } != true) {
+                    delay(50)
+                }
+            }
+        }
         val console = backend.build.runConsole.value
         assertNotNull(console, "console created for APK build")
         assertTrue(console.transcript.any { "Building Android APK" in it.text }, "started APK build")
+    }
+
+    @Test
+    fun guestAppTasksDiscoveredAndRun() = runTest {
+        val guestProject = IosFiles.join(root, "guest-test-project")
+        val buildDir = IosFiles.join(guestProject, "build")
+        val testApp = IosFiles.join(buildDir, "GuestDemo.app")
+        IosFiles.mkdirs(testApp)
+        IosFiles.writeText(
+            IosFiles.join(testApp, "Info.plist"),
+            """<plist><dict><key>CFBundleIdentifier</key><string>com.demo.guest</string></dict></plist>"""
+        )
+
+        assertTrue(backend.openProject(guestProject), "opens guest project")
+        val tasks = backend.build.runTasks()
+        assertTrue(tasks.any { it.id == "ios:guest:run" }, "found ios:guest:run task")
+        assertTrue(tasks.any { it.id == "ios:guest:patch" }, "found ios:guest:patch task")
+
+        backend.build.runTask("ios:guest:patch")
+        withContext(Dispatchers.Default) {
+            withTimeout(10_000) {
+                while (backend.build.runConsole.value?.transcript?.any { "Patching Mach-O" in it.text } != true) {
+                    delay(50)
+                }
+            }
+        }
+        val console = backend.build.runConsole.value
+        assertNotNull(console, "console created for guest patch")
+        assertTrue(console.transcript.any { "Patching Mach-O" in it.text }, "started Mach-O patch task")
     }
 
 }

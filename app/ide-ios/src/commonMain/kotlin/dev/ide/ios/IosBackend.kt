@@ -5,6 +5,7 @@ import dev.ide.ios.store.IosPreferences
 import dev.ide.ios.store.IosStoreService
 import dev.ide.ios.store.StoreConfig
 import dev.ide.ios.android.*
+import dev.ide.ios.guest.*
 import dev.ide.deps.ArtifactKind
 import dev.ide.lang.kotlin.NavKind
 import dev.ide.model.Coordinate
@@ -623,6 +624,11 @@ class IosBackend(
                 options.add(RunTaskOption("android:app:run", "Run Android App (Host)", "Application"))
                 options.add(RunTaskOption("android:apk:build", "Build Android APK", "Build"))
             }
+            val guestArtifacts = GuestAppRunner.findGuestArtifacts(root)
+            if (guestArtifacts.isNotEmpty()) {
+                options.add(RunTaskOption("ios:guest:run", "Run in LiveContainer (Live Session)", "Application"))
+                options.add(RunTaskOption("ios:guest:patch", "Patch Mach-O to Dylib (LiveContainer)", "Build"))
+            }
             val discovered = IosRuntimeRunner.discoverTasks(root)
             if (discovered.isNotEmpty()) {
                 options.addAll(discovered.map { it.option })
@@ -645,6 +651,14 @@ class IosBackend(
                 runAndroidAppHost(root)
                 return
             }
+            "ios:guest:run" -> {
+                runGuestAppSession(root)
+                return
+            }
+            "ios:guest:patch" -> {
+                patchGuestAppArtifacts(root)
+                return
+            }
             "run" -> {
                 runBuild()
                 return
@@ -664,6 +678,11 @@ class IosBackend(
             runAndroidAppHost(root)
             return
         }
+        val guestArtifacts = GuestAppRunner.findGuestArtifacts(root)
+        if (guestArtifacts.isNotEmpty()) {
+            runGuestAppSession(root)
+            return
+        }
         val tasks = IosRuntimeRunner.discoverTasks(root)
         val primaryTask = tasks.firstOrNull()
         if (primaryTask != null) {
@@ -676,6 +695,7 @@ class IosBackend(
     private fun isAndroidProject(root: String): Boolean =
         AndroidProjectParser.findManifestFile(root) != null ||
             IosFiles.exists(IosFiles.join(root, "app", "src", "main")) ||
+            IosFiles.exists(IosFiles.join(root, "androidApp", "src", "main")) ||
             IosFiles.exists(IosFiles.join(root, "src", "main"))
 
     private fun buildAndroidApk(root: String) {
@@ -686,22 +706,20 @@ class IosBackend(
         val sessionId = (activeRunSession ?: 0) + 1
         activeRunSession = sessionId
 
-        val transcriptList = mutableListOf<ConsoleChunk>()
         _buildState.value = BuildState(status = RunStatus.Running)
         _runConsole.value = RunConsoleUi(
             id = sessionId,
             moduleName = active?.name ?: "app",
             mainClass = "Build Android APK",
             phase = RunPhase.Building,
-            transcript = transcriptList,
+            transcript = emptyList(),
             acceptsInput = false,
         )
 
         runJob = backendScope.launch {
             val onChunk: (ConsoleChunk) -> Unit = { chunk ->
-                transcriptList.add(chunk)
                 _runConsole.update { console ->
-                    console?.copy(transcript = transcriptList.toList())
+                    console?.copy(transcript = console.transcript + chunk)
                 }
             }
 
@@ -733,22 +751,20 @@ class IosBackend(
         val sessionId = (activeRunSession ?: 0) + 1
         activeRunSession = sessionId
 
-        val transcriptList = mutableListOf<ConsoleChunk>()
         _buildState.value = BuildState(status = RunStatus.Running)
         _runConsole.value = RunConsoleUi(
             id = sessionId,
             moduleName = active?.name ?: "app",
             mainClass = "Android App Host",
             phase = RunPhase.Building,
-            transcript = transcriptList,
+            transcript = emptyList(),
             acceptsInput = true,
         )
 
         runJob = backendScope.launch {
             val onChunk: (ConsoleChunk) -> Unit = { chunk ->
-                transcriptList.add(chunk)
                 _runConsole.update { console ->
-                    console?.copy(transcript = transcriptList.toList())
+                    console?.copy(transcript = console.transcript + chunk)
                 }
             }
 
@@ -788,6 +804,125 @@ class IosBackend(
         }
     }
 
+    private fun runGuestAppSession(root: String) {
+        val currentRunning = activeRunSession
+        if (currentRunning != null) {
+            stopBuild()
+        }
+        val sessionId = (activeRunSession ?: 0) + 1
+        activeRunSession = sessionId
+
+        _buildState.value = BuildState(status = RunStatus.Running)
+        _runConsole.value = RunConsoleUi(
+            id = sessionId,
+            moduleName = active?.name ?: "app",
+            mainClass = "LiveContainer Guest Runner",
+            phase = RunPhase.Running,
+            transcript = emptyList(),
+            acceptsInput = true,
+        )
+
+        runJob = backendScope.launch {
+            val onChunk: (ConsoleChunk) -> Unit = { chunk ->
+                _runConsole.update { console ->
+                    console?.copy(transcript = console.transcript + chunk)
+                }
+            }
+
+            onChunk(ConsoleChunk("=== Launching Guest App in LiveContainer Session ===\n", ConsoleChunkKind.SYSTEM))
+            val artifacts = GuestAppRunner.findGuestArtifacts(root)
+            if (artifacts.isEmpty()) {
+                onChunk(ConsoleChunk("No guest app artifact (.ipa, .app, or .kexe) found in $root\n", ConsoleChunkKind.SYSTEM))
+                _buildState.value = BuildState(status = RunStatus.Failed)
+                _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = 1) }
+                activeRunSession = null
+                return@launch
+            }
+
+            val primaryArtifact = artifacts.first()
+            onChunk(ConsoleChunk("Selected target artifact: $primaryArtifact\n", ConsoleChunkKind.SYSTEM))
+
+            val result = withContext(ioDispatcher) {
+                GuestAppRunner.runGuestApp(primaryArtifact) { logLine ->
+                    onChunk(ConsoleChunk("$logLine\n", ConsoleChunkKind.OUTPUT))
+                }
+            }
+
+            val success = result.success
+            onChunk(ConsoleChunk("\n[LiveContainer session: ${if (success) "ACTIVE" else "FAILED"}]\n", ConsoleChunkKind.SYSTEM))
+            _buildState.value = BuildState(
+                status = if (success) RunStatus.Succeeded else RunStatus.Failed,
+                log = result.logs.map { BuildLogLine(it, if (success) UiLogLevel.Info else UiLogLevel.Error) },
+            )
+            _runConsole.update {
+                it?.copy(phase = if (success) RunPhase.Running else RunPhase.Finished, acceptsInput = true, exitCode = if (success) 0 else 1)
+            }
+            if (!success) {
+                activeRunSession = null
+            }
+        }
+    }
+
+    private fun patchGuestAppArtifacts(root: String) {
+        val currentRunning = activeRunSession
+        if (currentRunning != null) {
+            stopBuild()
+        }
+        val sessionId = (activeRunSession ?: 0) + 1
+        activeRunSession = sessionId
+
+        _buildState.value = BuildState(status = RunStatus.Running)
+        _runConsole.value = RunConsoleUi(
+            id = sessionId,
+            moduleName = active?.name ?: "app",
+            mainClass = "LiveContainer Mach-O Patcher",
+            phase = RunPhase.Building,
+            transcript = emptyList(),
+            acceptsInput = false,
+        )
+
+        runJob = backendScope.launch {
+            val onChunk: (ConsoleChunk) -> Unit = { chunk ->
+                _runConsole.update { console ->
+                    console?.copy(transcript = console.transcript + chunk)
+                }
+            }
+
+            onChunk(ConsoleChunk("=== Patching Mach-O Executable (MH_EXECUTE → MH_DYLIB) ===\n", ConsoleChunkKind.SYSTEM))
+            val artifacts = GuestAppRunner.findGuestArtifacts(root)
+            if (artifacts.isEmpty()) {
+                onChunk(ConsoleChunk("No Mach-O binary found to patch in $root\n", ConsoleChunkKind.SYSTEM))
+                _buildState.value = BuildState(status = RunStatus.Failed)
+                _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = 1) }
+                activeRunSession = null
+                return@launch
+            }
+
+            var anyPatched = false
+            withContext(ioDispatcher) {
+                for (artifact in artifacts) {
+                    val execPath = if (artifact.endsWith(".app")) {
+                        val meta = GuestAppContainer.inspectApp(artifact)
+                        meta?.executablePath ?: IosFiles.join(artifact, IosFiles.nameOf(artifact).removeSuffix(".app"))
+                    } else artifact
+
+                    if (IosFiles.exists(execPath) && !IosFiles.isDirectory(execPath)) {
+                        val outDylib = "$execPath.dylib"
+                        onChunk(ConsoleChunk("Patching: $execPath -> $outDylib\n", ConsoleChunkKind.SYSTEM))
+                        val res = MachoPatcher.patchExecutable(execPath, outDylib)
+                        onChunk(ConsoleChunk("${res.message}\n", ConsoleChunkKind.OUTPUT))
+                        if (res.success) anyPatched = true
+                    }
+                }
+            }
+
+            onChunk(ConsoleChunk("\n[Mach-O Patch: ${if (anyPatched) "SUCCESS" else "FAILED"}]\n", ConsoleChunkKind.SYSTEM))
+            _buildState.value = BuildState(status = if (anyPatched) RunStatus.Succeeded else RunStatus.Failed)
+            _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = if (anyPatched) 0 else 1) }
+            activeRunSession = null
+        }
+    }
+
     private fun runExternalRuntimeTask(task: IosRuntimeRunner.DiscoveredTask, root: String) {
         val currentRunning = activeRunSession
         if (currentRunning != null) {
@@ -796,22 +931,20 @@ class IosBackend(
         val sessionId = (activeRunSession ?: 0) + 1
         activeRunSession = sessionId
 
-        val transcriptList = mutableListOf<ConsoleChunk>()
         _buildState.value = BuildState(status = RunStatus.Running)
         _runConsole.value = RunConsoleUi(
             id = sessionId,
             moduleName = active?.name ?: "app",
             mainClass = task.option.label,
             phase = RunPhase.Running,
-            transcript = transcriptList,
+            transcript = emptyList(),
             acceptsInput = true,
         )
 
         runJob = backendScope.launch {
             val onChunk: (ConsoleChunk) -> Unit = { chunk ->
-                transcriptList.add(chunk)
                 _runConsole.update { console ->
-                    console?.copy(transcript = transcriptList.toList())
+                    console?.copy(transcript = console.transcript + chunk)
                 }
             }
 

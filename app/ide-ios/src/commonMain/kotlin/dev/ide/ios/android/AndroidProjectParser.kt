@@ -74,6 +74,7 @@ object AndroidProjectParser {
     fun findManifestFile(projectRoot: String): String? {
         val candidates = listOf(
             IosFiles.join(projectRoot, "app", "src", "main", "AndroidManifest.xml"),
+            IosFiles.join(projectRoot, "androidApp", "src", "main", "AndroidManifest.xml"),
             IosFiles.join(projectRoot, "src", "main", "AndroidManifest.xml"),
             IosFiles.join(projectRoot, "composeApp", "src", "androidMain", "AndroidManifest.xml"),
             IosFiles.join(projectRoot, "AndroidManifest.xml"),
@@ -87,6 +88,7 @@ object AndroidProjectParser {
     fun findResDir(projectRoot: String): String? {
         val candidates = listOf(
             IosFiles.join(projectRoot, "app", "src", "main", "res"),
+            IosFiles.join(projectRoot, "androidApp", "src", "main", "res"),
             IosFiles.join(projectRoot, "src", "main", "res"),
             IosFiles.join(projectRoot, "composeApp", "src", "androidMain", "res"),
             IosFiles.join(projectRoot, "res"),
