@@ -187,8 +187,76 @@ internal object GuiBridgeRuntime {
     }
 
     /**
+     * Build a disposable **shadow workspace** for Cupertino Run so the cloned GitHub/Xcode
+     * project is never rewritten for the Android bridge. Copies the selected SwiftUI sources
+     * and, when the tree has no bridge entry, a tiny `@main` that calls `runPreview { … }`.
+     * xtool always runs on the original project root for the real IPA.
+     */
+    internal fun prepareCupertinoShadow(
+        projectRoot: Path,
+        scratchDir: Path?,
+    ): Path {
+        val shadow = (scratchDir ?: projectRoot.resolve(".building")).resolve("cupertino-shadow")
+        if (Files.isDirectory(shadow)) {
+            Files.walk(shadow).use { stream ->
+                stream.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
+        }
+        Files.createDirectories(shadow)
+        val allSwiftFiles = SwiftBuildSystem.findSwiftSourceFiles(projectRoot)
+        val filteredFiles = allSwiftFiles.filter { f ->
+            val name = f.fileName.toString()
+            if (name.endsWith("Main.swift")) {
+                val text = runCatching { f.readText() }.getOrDefault("")
+                !text.contains("Swift TargetReady")
+            } else true
+        }.ifEmpty { allSwiftFiles }
+        val swiftUiFiles = selectSwiftUiTargetFiles(projectRoot, filteredFiles)
+        val copied = ArrayList<Path>()
+        for (src in swiftUiFiles) {
+            val rel = runCatching { projectRoot.relativize(src) }.getOrDefault(src.fileName)
+            val dst = shadow.resolve(rel.toString())
+            Files.createDirectories(dst.parent)
+            Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING)
+            copied.add(dst)
+        }
+        val hasBridgeEntry = copied.any { f ->
+            val text = runCatching { f.readText() }.getOrDefault("")
+            text.contains("runPreview") || text.contains("ViewHost(")
+        }
+        if (!hasBridgeEntry) {
+            val rootName = copied.firstOrNull()?.fileName?.toString()?.removeSuffix(".swift")
+                ?.let { name -> name.replaceFirstChar { it.uppercaseChar() } }
+                ?: "ContentView"
+            // Prefer an existing View type named like ContentView / App root if present.
+            val text = copied.joinToString("\n") { runCatching { it.readText() }.getOrDefault("") }
+            val viewType = Regex("""struct\s+(\w+)\s*:\s*View\b""").findAll(text)
+                .map { it.groupValues[1] }
+                .firstOrNull { it.contains("Content") || it.contains("App") || it.contains("View") }
+                ?: Regex("""struct\s+(\w+)\s*:\s*View\b""").findAll(text).firstOrNull()?.groupValues?.get(1)
+                ?: rootName
+            shadow.resolve("CupertinoShadowMain.swift").writeText(
+                """
+                import SwiftUI
+
+                @main
+                struct CupertinoShadowMain {
+                    static func main() throws {
+                        try runPreview { $viewType() }
+                    }
+                }
+                """.trimIndent() + "\n",
+            )
+        }
+        return shadow
+    }
+
+    /**
      * Compiles a SwiftUI project's `.swift` sources against the on-device `SwiftUI` bridge module
      * and launches the interactive Cupertino GUI session in `RunScreen`.
+     *
+     * Compiles from [shadowRoot] when provided (see [prepareCupertinoShadow]); [projectRoot]
+     * remains the original clone and is what xtool exports from.
      */
     suspend fun compileAndRunSwiftUiBridge(
         host: RuntimeHost,
@@ -200,9 +268,11 @@ internal object GuiBridgeRuntime {
         env: Map<String, String>,
         ctx: TaskContext,
         buildCtx: BuildContext?,
+        shadowRoot: Path? = null,
         onPackageIpa: suspend () -> Unit = {},
     ): TaskResult {
-        val allSwiftFiles = SwiftBuildSystem.findSwiftSourceFiles(projectRoot)
+        val compileRoot = shadowRoot ?: projectRoot
+        val allSwiftFiles = SwiftBuildSystem.findSwiftSourceFiles(compileRoot)
         // Prefer real SwiftUI source files over any synthetic stub *Main.swift
         val filteredFiles = allSwiftFiles.filter { f ->
             val name = f.fileName.toString()
@@ -211,14 +281,14 @@ internal object GuiBridgeRuntime {
                 !text.contains("Swift TargetReady")
             } else true
         }.ifEmpty { allSwiftFiles }
-        val swiftUiFiles = selectSwiftUiTargetFiles(projectRoot, filteredFiles)
+        val swiftUiFiles = selectSwiftUiTargetFiles(compileRoot, filteredFiles)
 
         if (swiftUiFiles.isEmpty()) {
-            return TaskResult.Failed("No Swift source files found in $projectRoot")
+            return TaskResult.Failed("No Swift source files found in $compileRoot")
         }
 
         val pkgName = SwiftBuildSystem.extractSwiftPackageName(projectRoot)
-        val outDir = (scratchDir ?: projectRoot.resolve(".build")).resolve("debug")
+        val outDir = (scratchDir ?: projectRoot.resolve(".building")).resolve("cupertino-shadow/debug")
         Files.createDirectories(outDir)
         val outBin = outDir.resolve("$pkgName-cupertino")
 
@@ -262,10 +332,12 @@ internal object GuiBridgeRuntime {
                 add(outBin.toString())
             }
             ctx.reportStep(":swift:compileCupertinoBridge", "started")
-            val relNames = swiftUiFiles.joinToString(" ") { projectRoot.relativize(it).toString() }
+            val relNames = swiftUiFiles.joinToString(" ") {
+                runCatching { compileRoot.relativize(it).toString() }.getOrDefault(it.fileName.toString())
+            }
             ctx.buildLog.log(BuildLogEntry("$ swiftc -parse-as-library $relNames -lSwiftUI -o ${outBin.fileName}", BuildLogLevel.INFO))
             val compileLines = ArrayList<String>()
-            val code = execSimple(host, compileCmd, projectRoot, env, ctx, compileLines)
+            val code = execSimple(host, compileCmd, compileRoot, env, ctx, compileLines)
             ctx.reportToolDiagnostics("swiftc", compileLines)
             if (code != 0) {
                 ctx.reportStep(":swift:compileCupertinoBridge", "failed")
@@ -332,7 +404,7 @@ internal object GuiBridgeRuntime {
             return execInteractiveBridge(
                 host = host,
                 command = listOf(outBin.toString()),
-                workingDir = projectRoot,
+                workingDir = compileRoot,
                 env = runEnv,
                 projectName = projectName,
                 displayCommand = "$pkgName (iOS Cupertino Bridge)",

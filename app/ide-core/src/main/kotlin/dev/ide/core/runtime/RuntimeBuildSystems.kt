@@ -346,8 +346,16 @@ class SwiftBuildSystem : BuildSystem {
         val hasSwiftUiBridge = GuiBridgeRuntime.ensureSwiftUiBridgeSdk(installation)
 
         if (isIos && hasSwiftUiBridge && swiftcBin != null && specId == TASK_RUN) {
-            // Dual pipeline: spawn the shim app immediately for interactive Run, then
-            // rebuild for real iPhone/macOS in the background with xtool (no shim).
+            // Dual pipeline:
+            //  - Cupertino Run compiles a disposable shadow copy (original clone untouched)
+            //  - xtool rebuilds the **original** project with no shim → real iPhoneOS IPA
+            val shadowRoot = GuiBridgeRuntime.prepareCupertinoShadow(projectRoot, scratchDir)
+            ctx.buildLog.log(
+                BuildLogEntry(
+                    "Cupertino Run uses a shadow workspace; xtool exports the original project as IPA.",
+                    BuildLogLevel.INFO,
+                ),
+            )
             val bgEnv = env
             val bgFlags = androidFlags
             val bgScratch = scratchFlags
@@ -367,9 +375,9 @@ class SwiftBuildSystem : BuildSystem {
                 env = env,
                 ctx = ctx,
                 buildCtx = buildCtx,
+                shadowRoot = shadowRoot,
                 onPackageIpa = {
-                    // Background real build (xtool → iPhoneOS IPA). Fallback zip only if
-                    // xtool is unavailable so the project still leaves with an artifact.
+                    // Real export from the original tree (xtool, no shim). Only this IPA is the deliverable.
                     if (bgXtool != null) {
                         runIpaBuild(bgHost, bgInstall, bgXtool, bgSwift, bgRoot, scratchDir, bgFlags, bgScratch, bgEnv, bgCtx)
                     } else {
