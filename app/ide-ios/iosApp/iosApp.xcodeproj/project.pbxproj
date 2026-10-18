@@ -70,7 +70,7 @@
 			outputPaths = ();
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\ncd \"$SRCROOT/../../..\"\nexport JAVA_HOME=\"${JAVA_HOME:-/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home}\"\n# The Kotlin target follows what Xcode is building for: the device links iosArm64, the\n# simulator iosSimulatorArm64. Reading SDK_NAME rather than the destination keeps one phase\n# correct for both.\ncase \"$SDK_NAME\" in\n  iphoneos*) KOTLIN_TARGET=IosArm64 ;;\n  *) KOTLIN_TARGET=IosSimulatorArm64 ;;\nesac\n./gradlew --quiet \":ide-ios:link${CONFIGURATION}Framework${KOTLIN_TARGET}\" :ide-ios:syncComposeResourcesForIos :ide-ios:syncPreviewRuntimeForIos\n";
+			shellScript = "set -e\ncd \"$SRCROOT/../../..\"\nexport JAVA_HOME=\"${JAVA_HOME:-/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home}\"\n# The Kotlin target follows what Xcode is building for: the device links iosArm64, the\n# simulator iosSimulatorArm64. Reading SDK_NAME rather than the destination keeps one phase\n# correct for both.\ncase \"$SDK_NAME\" in\n  iphoneos*) KOTLIN_TARGET=IosArm64 ;;\n  *) KOTLIN_TARGET=IosSimulatorArm64; export ARCHS=\"arm64\" ;;\nesac\n./gradlew --quiet \":ide-ios:link${CONFIGURATION}Framework${KOTLIN_TARGET}\" :ide-ios:syncComposeResourcesForIos :ide-ios:syncPreviewRuntimeForIos\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -119,6 +119,7 @@
 		000000000000000000000012 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"ARCHS[sdk=iphonesimulator*]" = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
 				"CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]" = NO;
@@ -147,6 +148,7 @@
 		000000000000000000000013 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"ARCHS[sdk=iphonesimulator*]" = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
 				"CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]" = NO;

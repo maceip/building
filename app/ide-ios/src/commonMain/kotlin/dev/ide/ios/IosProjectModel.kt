@@ -20,8 +20,12 @@ import dev.ide.model.impl.ProjectModelStore
 import dev.ide.model.impl.StoreScaffold
 import dev.ide.model.bridge.DependencyModelBridge
 import dev.ide.model.bridge.toUi
+import dev.ide.model.template.ProjectScaffold
+import dev.ide.model.template.ProjectTemplate
 import dev.ide.model.template.TemplateArgs
+import dev.ide.model.template.TemplateCategory
 import dev.ide.model.template.TemplateId
+import dev.ide.model.template.TemplateParameter
 import dev.ide.platform.ConcurrentMap
 import dev.ide.platform.Lock
 import dev.ide.platform.PluginId
@@ -218,28 +222,72 @@ internal class IosProjectModel {
      */
     private fun adopt(store: ProjectModelStore) {
         val name = IosFiles.nameOf(store.root).ifBlank { "project" }
+        val isNode = IosFiles.exists(IosFiles.join(store.root, "package.json"))
+        val isPython = IosFiles.exists(IosFiles.join(store.root, "pyproject.toml")) ||
+            IosFiles.exists(IosFiles.join(store.root, "requirements.txt")) ||
+            IosFiles.exists(IosFiles.join(store.root, "setup.py"))
+        val isSwift = IosFiles.exists(IosFiles.join(store.root, "Package.swift"))
+
+        val buildSystem = when {
+            isNode -> BuildSystemId("node")
+            isPython -> BuildSystemId("python")
+            isSwift -> BuildSystemId("swift")
+            else -> BuildSystemId.NATIVE
+        }
+        val modType = when {
+            isNode -> moduleType("node") ?: JavaLibModuleType
+            isPython -> moduleType("python") ?: JavaLibModuleType
+            isSwift -> moduleType("swift") ?: JavaLibModuleType
+            else -> JavaLibModuleType
+        }
+        val sourceDir = when {
+            isNode || isPython || isSwift -> "."
+            else -> adoptedSourceDir(store.root)
+        }
+        val contentRole = when {
+            isNode -> ContentRole("node-source")
+            isPython -> ContentRole("python-source")
+            isSwift -> ContentRole("swift-source")
+            else -> ContentRole.SOURCE
+        }
+
         store.workspace.beginModification().apply {
-            addProject(name, BuildSystemId.NATIVE, store.vfs.root())
+            addProject(name, buildSystem, store.vfs.root())
             commit()
         }
         val project = store.workspace.projects.firstOrNull() ?: return
         project.beginModification().apply {
-            addModule(IosFiles.sanitize(name), JavaLibModuleType).apply {
+            addModule(IosFiles.sanitize(name), modType).apply {
                 dirRelPath = ""
                 languageLevel = LanguageLevel.JAVA_17
                 addSourceSet(
                     SourceSetTemplate(
                         "main",
                         DependencyScope.IMPLEMENTATION,
-                        mapOf(adoptedSourceDir(store.root) to setOf(ContentRole.SOURCE)),
+                        mapOf(sourceDir to setOf(contentRole)),
                     ),
                 )
             }
             commit()
         }
         store.save()
-        log.info("adopted ${store.root} as a single-module project")
+        log.info("adopted ${store.root} as a single-module $buildSystem project")
     }
+
+    fun isNode(root: String): Boolean =
+        IosFiles.exists(IosFiles.join(root, "package.json")) ||
+            storeFor(root)?.workspace?.projects?.any { it.buildSystemId.value == "node" } == true
+
+    fun isPython(root: String): Boolean =
+        IosFiles.exists(IosFiles.join(root, "pyproject.toml")) ||
+            IosFiles.exists(IosFiles.join(root, "requirements.txt")) ||
+            IosFiles.exists(IosFiles.join(root, "setup.py")) ||
+            IosFiles.exists(IosFiles.join(root, "main.py")) ||
+            storeFor(root)?.workspace?.projects?.any { it.buildSystemId.value == "python" } == true
+
+    fun isSwift(root: String): Boolean =
+        IosFiles.exists(IosFiles.join(root, "Package.swift")) ||
+            storeFor(root)?.workspace?.projects?.any { it.buildSystemId.value == "swift" } == true
 
     /** The first conventional source directory that exists under [root], or the convention itself. */
     private fun adoptedSourceDir(root: String): String =
@@ -333,7 +381,7 @@ internal class IosProjectModel {
      * persisted under this id reads as what it is. No supported build system either, which is the honest
      * answer here and the reason it is not offered for creation.
      */
-    private class RecognizedModuleType(
+    internal class RecognizedModuleType(
         override val id: String,
         override val displayName: String,
     ) : ModuleType {
@@ -342,17 +390,117 @@ internal class IosProjectModel {
         override fun supportedBuildSystems(): Set<BuildSystemId> = emptySet()
     }
 
+    internal object NodeConsoleAppTemplate : ProjectTemplate {
+        override val id = TemplateId("node-app")
+        override val displayName = "Node.js Application"
+        override val description = "A Node.js application with package.json and index.js."
+        override val category = TemplateCategory.OTHER
+        override val iconId = "javascript"
+        override fun parameters(): List<TemplateParameter> = emptyList()
+        override fun generate(scaffold: ProjectScaffold, args: TemplateArgs) {
+            val name = args.name.ifBlank { "node-app" }
+            scaffold.workspace.beginModification().apply {
+                addProject(name, BuildSystemId("node"), scaffold.rootDir)
+                commit()
+            }
+            val project = scaffold.workspace.projects.first()
+            project.beginModification().apply {
+                addModule(IosFiles.sanitize(name), RecognizedModuleType("node", "Node.js")).apply {
+                    dirRelPath = ""
+                    languageLevel = LanguageLevel.JAVA_17
+                    addSourceSet(
+                        SourceSetTemplate(
+                            "main",
+                            DependencyScope.IMPLEMENTATION,
+                            mapOf("." to setOf(ContentRole("node-source"))),
+                        ),
+                    )
+                }
+                commit()
+            }
+            scaffold.writeText(
+                "package.json",
+                """
+                {
+                  "name": "${IosFiles.sanitize(name).lowercase()}",
+                  "version": "1.0.0",
+                  "description": "$name Node.js project",
+                  "main": "index.js",
+                  "scripts": {
+                    "start": "node index.js",
+                    "test": "echo \"Tests completed.\" && exit 0"
+                  }
+                }
+                """.trimIndent() + "\n",
+            )
+            scaffold.writeText(
+                "index.js",
+                """
+                console.log("Hello from $name (Node.js runtime)!");
+                """.trimIndent() + "\n",
+            )
+        }
+    }
+
+    internal object PythonConsoleAppTemplate : ProjectTemplate {
+        override val id = TemplateId("python-app")
+        override val displayName = "Python Application"
+        override val description = "A Python application with main.py."
+        override val category = TemplateCategory.OTHER
+        override val iconId = "python"
+        override fun parameters(): List<TemplateParameter> = emptyList()
+        override fun generate(scaffold: ProjectScaffold, args: TemplateArgs) {
+            val name = args.name.ifBlank { "python-app" }
+            scaffold.workspace.beginModification().apply {
+                addProject(name, BuildSystemId("python"), scaffold.rootDir)
+                commit()
+            }
+            val project = scaffold.workspace.projects.first()
+            project.beginModification().apply {
+                addModule(IosFiles.sanitize(name), RecognizedModuleType("python", "Python")).apply {
+                    dirRelPath = ""
+                    languageLevel = LanguageLevel.JAVA_17
+                    addSourceSet(
+                        SourceSetTemplate(
+                            "main",
+                            DependencyScope.IMPLEMENTATION,
+                            mapOf("." to setOf(ContentRole("python-source"))),
+                        ),
+                    )
+                }
+                commit()
+            }
+            scaffold.writeText(
+                "main.py",
+                """
+                def main():
+                    print("Hello from $name (Python runtime)!")
+
+                if __name__ == "__main__":
+                    main()
+                """.trimIndent() + "\n",
+            )
+            scaffold.writeText(
+                "requirements.txt",
+                """
+                # Dependencies for $name
+                """.trimIndent() + "\n",
+            )
+        }
+    }
+
     private companion object {
         private val log = Log.logger("ios-model")
 
         /**
-         * Ids and names held in lockstep with `:android-support`'s `AndroidAppModuleType` /
-         * `AndroidLibModuleType`, which this host cannot depend on (it is JVM: aapt2, d8, the manifest
-         * merger). Two strings duplicated on purpose; the alternative is a project opening as unknown.
+         * Ids and names recognized by this host.
          */
         val RECOGNIZED_TYPES = listOf(
             RecognizedModuleType("android-app", "Android Application"),
             RecognizedModuleType("android-lib", "Android Library"),
+            RecognizedModuleType("node", "Node.js"),
+            RecognizedModuleType("python", "Python"),
+            RecognizedModuleType("swift", "Swift & iOS"),
         )
 
         /** Who the built-ins are contributed as. The JVM hosts use a plugin id here for the same reason. */

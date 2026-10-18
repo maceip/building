@@ -4,7 +4,7 @@ import dev.ide.store.StoreAuth
 import dev.ide.ui.backend.FileActions
 import kotlinx.cinterop.ExperimentalForeignApi
 import platform.Foundation.NSURL
-import platform.UIKit.UIApplication
+import platform.UIKit.*
 
 /**
  * The host's link handling.
@@ -37,13 +37,27 @@ class IosFileActions(
         UIApplication.sharedApplication.openURL(target)
     }
 
-    // Importing and sharing are the document-picker and share-sheet integrations this host has not built
-    // yet; the affordances are hidden rather than offered and inert.
     override val canImport: Boolean = false
 
     override fun importInto(targetDir: String, onImported: (List<String>) -> Unit) = onImported(emptyList())
 
-    override val canShare: Boolean = false
+    override val canShare: Boolean = true
 
-    override fun share(path: String) = Unit
+    override fun share(path: String) {
+        val target = NSURL.fileURLWithPath(path)
+        val activity = platform.UIKit.UIActivityViewController(
+            activityItems = listOf(target),
+            applicationActivities = null,
+        )
+        val app = UIApplication.sharedApplication
+        val window = app.keyWindow ?: app.windows.firstOrNull() as? platform.UIKit.UIWindow
+        var top = window?.rootViewController
+        while (top?.presentedViewController != null) {
+            top = top.presentedViewController
+        }
+        activity.popoverPresentationController?.apply {
+            sourceView = top?.view
+        }
+        top?.presentViewController(activity, animated = true, completion = null)
+    }
 }

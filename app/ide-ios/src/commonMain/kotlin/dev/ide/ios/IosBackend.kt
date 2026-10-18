@@ -76,6 +76,8 @@ import dev.ide.ui.backend.RunConsoleUi
 import dev.ide.ui.backend.RunFrameUi
 import dev.ide.ui.backend.RunPhase
 import dev.ide.ui.backend.RunStatus
+import dev.ide.ui.backend.ConsoleChunk
+import dev.ide.ui.backend.ConsoleChunkKind
 import dev.ide.ui.backend.RunTaskOption
 import dev.ide.ui.backend.UiLogLevel
 import dev.ide.ui.icons.fileIconId
@@ -611,16 +613,105 @@ class IosBackend(
     private var runSurfaceHeight = 640
     private var runFrameSeq = 0L
 
-    override fun runTasks(): List<RunTaskOption> = listOf(
-        RunTaskOption("run", "Run App", "Application")
-    )
+    override fun runTasks(): List<RunTaskOption> {
+        val root = active?.rootPath?.takeIf { it.isNotEmpty() }
+        if (root != null) {
+            val discovered = IosRuntimeRunner.discoverTasks(root)
+            if (discovered.isNotEmpty()) {
+                return discovered.map { it.option }
+            }
+        }
+        return listOf(RunTaskOption("run", "Run App", "Application"))
+    }
 
     override fun runTask(id: String) {
-        runBuild()
+        val root = active?.rootPath?.takeIf { it.isNotEmpty() } ?: return
+        val tasks = IosRuntimeRunner.discoverTasks(root)
+        val matched = tasks.firstOrNull { it.option.id == id }
+        if (matched != null) {
+            runExternalRuntimeTask(matched, root)
+            return
+        }
+        if (id == "run") {
+            runBuild()
+        }
     }
 
     override fun runBuild() {
         val root = active?.rootPath?.takeIf { it.isNotEmpty() } ?: return
+        val tasks = IosRuntimeRunner.discoverTasks(root)
+        val primaryTask = tasks.firstOrNull()
+        if (primaryTask != null) {
+            runExternalRuntimeTask(primaryTask, root)
+            return
+        }
+        runKotlinComposeBuild(root)
+    }
+
+    private fun runExternalRuntimeTask(task: IosRuntimeRunner.DiscoveredTask, root: String) {
+        val currentRunning = activeRunSession
+        if (currentRunning != null) {
+            stopBuild()
+        }
+        val sessionId = (activeRunSession ?: 0) + 1
+        activeRunSession = sessionId
+
+        val transcriptList = mutableListOf<ConsoleChunk>()
+        _buildState.value = BuildState(status = RunStatus.Running)
+        _runConsole.value = RunConsoleUi(
+            id = sessionId,
+            moduleName = active?.name ?: "app",
+            mainClass = task.option.label,
+            phase = RunPhase.Running,
+            transcript = transcriptList,
+            acceptsInput = true,
+        )
+
+        runJob = backendScope.launch {
+            val onChunk: (ConsoleChunk) -> Unit = { chunk ->
+                transcriptList.add(chunk)
+                _runConsole.update { console ->
+                    console?.copy(transcript = transcriptList.toList())
+                }
+            }
+
+            onChunk(ConsoleChunk("=== Launching ${task.option.label} ===\n", ConsoleChunkKind.SYSTEM))
+
+            val exitCode: Int
+            if (task.runtime == IosRuntimeRunner.RuntimeKind.NODE && task.targetFile != null && !hasNodeExecutable()) {
+                val script = IosFiles.readText(task.targetFile)
+                val success = IosRuntimeRunner.runJavaScriptInProcess(script, IosFiles.nameOf(task.targetFile), root, onChunk)
+                exitCode = if (success) 0 else 1
+            } else {
+                val cmd = task.command ?: task.targetFile ?: "echo 'No command specified'"
+                exitCode = withContext(ioDispatcher) {
+                    IosRuntimeRunner.runProcess(cmd, root, onChunk)
+                }
+            }
+
+            onChunk(ConsoleChunk("\n[Process finished with exit code $exitCode]\n", ConsoleChunkKind.SYSTEM))
+            _buildState.value = BuildState(
+                status = if (exitCode == 0) RunStatus.Succeeded else RunStatus.Failed,
+                log = listOf(
+                    BuildLogLine(
+                        "${task.option.label} finished with code $exitCode",
+                        if (exitCode == 0) UiLogLevel.Info else UiLogLevel.Error,
+                    ),
+                ),
+            )
+            _runConsole.update {
+                it?.copy(phase = RunPhase.Finished, exitCode = exitCode, acceptsInput = false)
+            }
+            activeRunSession = null
+        }
+    }
+
+    private fun hasNodeExecutable(): Boolean =
+        IosFiles.exists("/usr/local/bin/node") ||
+            IosFiles.exists("/opt/homebrew/bin/node") ||
+            IosFiles.exists("/usr/bin/node")
+
+    private fun runKotlinComposeBuild(root: String) {
         val currentRunning = activeRunSession
         if (currentRunning != null) {
             stopBuild()
@@ -752,6 +843,27 @@ class IosBackend(
         }
         _runConsole.update { it?.copy(phase = RunPhase.Finished) }
         _buildState.value = BuildState(status = RunStatus.Idle)
+    }
+
+    override fun sendRunInput(text: String) {
+        val line = if (text.endsWith("\n")) text else "$text\n"
+        val chunk = ConsoleChunk(line, ConsoleChunkKind.INPUT)
+        if (_runConsole.value == null) {
+            _runConsole.value = RunConsoleUi(
+                id = 1,
+                moduleName = active?.name ?: "app",
+                mainClass = "Console",
+                phase = RunPhase.Running,
+                transcript = listOf(chunk),
+                acceptsInput = true,
+            )
+        } else {
+            _runConsole.update { console ->
+                console?.copy(
+                    transcript = console.transcript + chunk,
+                )
+            }
+        }
     }
 
     override fun sendRunPointer(action: Int, x: Float, y: Float) {
@@ -1241,8 +1353,8 @@ class IosBackend(
     override suspend fun openProject(rootPath: String): Boolean {
         if (!IosFiles.isDirectory(rootPath)) return false
         resetAnalysis()
-        active = projectInfo(rootPath)
         withContext(ioDispatcher) { projectModel.reopen(rootPath) }
+        active = projectInfo(rootPath)
         ensureClasspath(rootPath)
         bumpProjects()
         return true
@@ -1734,18 +1846,34 @@ class IosBackend(
     /** A project change moves files too, so the tree is re-read alongside the project switch. */
     private fun bumpProjects() { projEpoch.value += 1; bumpFs() }
 
+    override fun uiPlugins(): List<dev.ide.ui.ext.UiPlugin> = listOf(IosWorkbenchUiPlugin)
+
     /**
-     * A project as the picker shows it, with the module count read from the model.
-     *
-     * One place rather than three, because the count is the part that used to be a lie: it was hard-coded
-     * to 1, so a two-module project created on the desktop and opened here described itself as one.
+     * A project as the picker shows it, with the module count and multi-runtime metadata read from the model.
      */
-    private fun projectInfo(root: String) = ProjectInfo(
-        name = IosFiles.nameOf(root),
-        rootPath = root,
-        moduleCount = projectModel.moduleNames(root).size.coerceAtLeast(1),
-        lastOpened = IosFiles.modifiedMs(root),
-    )
+    private fun projectInfo(root: String): ProjectInfo {
+        val store = projectModel.storeFor(root)
+        val isNode = projectModel.isNode(root)
+        val isPython = projectModel.isPython(root)
+        val isSwift = projectModel.isSwift(root)
+        val isAndroid = store?.workspace?.projects?.any { p ->
+            p.modules.any { it.type.id in listOf("android-app", "android-lib") }
+        } ?: false
+        val unrecognized = !isNode && !isPython && !isSwift && !isAndroid &&
+            (store?.workspace?.projects?.isEmpty() == true ||
+                store?.workspace?.projects?.all { it.modules.isEmpty() } == true)
+        return ProjectInfo(
+            name = IosFiles.nameOf(root),
+            rootPath = root,
+            moduleCount = projectModel.moduleNames(root).size.coerceAtLeast(1),
+            lastOpened = IosFiles.modifiedMs(root),
+            isNode = isNode,
+            isPython = isPython,
+            isSwift = isSwift,
+            isAndroid = isAndroid,
+            unrecognized = unrecognized,
+        )
+    }
 
     private companion object {
         const val MAX_TREE_DEPTH = 12
