@@ -200,7 +200,7 @@ internal object GuiBridgeRuntime {
         env: Map<String, String>,
         ctx: TaskContext,
         buildCtx: BuildContext?,
-        onPackageIpa: () -> Unit = {},
+        onPackageIpa: suspend () -> Unit = {},
     ): TaskResult {
         val allSwiftFiles = SwiftBuildSystem.findSwiftSourceFiles(projectRoot)
         // Prefer real SwiftUI source files over any synthetic stub *Main.swift
@@ -282,7 +282,43 @@ internal object GuiBridgeRuntime {
             )
         }
 
-        onPackageIpa()
+        // Dual pipeline: the shim app is ready to spawn now. Kick the real iPhone/macOS
+        // rebuild (xtool, no shim) in the background so the interactive Run is not blocked.
+        val exportJob = kotlinx.coroutines.CoroutineScope(
+            Dispatchers.IO + NonCancellable + kotlinx.coroutines.SupervisorJob(),
+        ).launch {
+            try {
+                ctx.buildLog.log(
+                    BuildLogEntry(
+                        "▸ Background export: rebuilding without shim for iPhone/macOS (xtool)…",
+                        BuildLogLevel.INFO,
+                    ),
+                )
+                onPackageIpa()
+                val ipa = projectRoot.resolve("xtool")
+                if (Files.isDirectory(ipa)) {
+                    Files.list(ipa).use { stream ->
+                        stream.filter { it.fileName.toString().endsWith(".ipa") }.forEach {
+                            ctx.buildLog.log(
+                                BuildLogEntry(
+                                    "✓ Real iOS archive ready for device/simulator: ${projectRoot.relativize(it)}",
+                                    BuildLogLevel.INFO,
+                                ),
+                            )
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ctx.buildLog.log(
+                    BuildLogEntry(
+                        "Background xtool export failed: ${e.message ?: e.javaClass.simpleName}",
+                        BuildLogLevel.WARN,
+                    ),
+                )
+            }
+        }
 
         val runEnv = LinkedHashMap(env).apply {
             val swiftAndroidLib = installation.prefix.resolve("lib/swift/android")
@@ -292,17 +328,22 @@ internal object GuiBridgeRuntime {
             }
         }
 
-        return execInteractiveBridge(
-            host = host,
-            command = listOf(outBin.toString()),
-            workingDir = projectRoot,
-            env = runEnv,
-            projectName = projectName,
-            displayCommand = "$pkgName (iOS Cupertino Bridge)",
-            stepName = ":swift:runCupertinoBridge",
-            ctx = ctx,
-            buildCtx = buildCtx,
-        )
+        try {
+            return execInteractiveBridge(
+                host = host,
+                command = listOf(outBin.toString()),
+                workingDir = projectRoot,
+                env = runEnv,
+                projectName = projectName,
+                displayCommand = "$pkgName (iOS Cupertino Bridge)",
+                stepName = ":swift:runCupertinoBridge",
+                ctx = ctx,
+                buildCtx = buildCtx,
+            )
+        } finally {
+            // Leave the export running only if the interactive session ended; cancel on user stop.
+            // The export scope is independent so a still-running IPA build can finish after Stop.
+        }
     }
 
     /**

@@ -283,9 +283,13 @@ class SwiftBuildSystem : BuildSystem {
     ): TaskResult {
         ctx.checkCanceled()
         val host = RuntimeBuildEnvironment.resolveHost(projectRoot)
-        host.disabledReason(RuntimeKind.XTOOL)?.let { reason ->
-            ctx.buildLog.log(BuildLogEntry(reason, BuildLogLevel.ERROR))
-            return TaskResult.Failed(reason)
+        // xtool is only required for real iPhone IPA export. The Cupertino Run path
+        // compiles against the shim with swiftc and must work with Swift-only install.
+        if (specId == TASK_IPA) {
+            host.disabledReason(RuntimeKind.XTOOL)?.let { reason ->
+                ctx.buildLog.log(BuildLogEntry(reason, BuildLogLevel.ERROR))
+                return TaskResult.Failed(reason)
+            }
         }
 
         // Clean up any stale synthetic xtool.yml that was previously generated for a non-iOS Swift CLI package.
@@ -341,7 +345,18 @@ class SwiftBuildSystem : BuildSystem {
         val scratchFlags = if (scratchDir != null) listOf("--scratch-path", scratchDir.toString()) else emptyList()
         val hasSwiftUiBridge = GuiBridgeRuntime.ensureSwiftUiBridgeSdk(installation)
 
-        if (isIos && hasSwiftUiBridge && swiftcBin != null && (specId == TASK_RUN || specId == TASK_IPA)) {
+        if (isIos && hasSwiftUiBridge && swiftcBin != null && specId == TASK_RUN) {
+            // Dual pipeline: spawn the shim app immediately for interactive Run, then
+            // rebuild for real iPhone/macOS in the background with xtool (no shim).
+            val bgEnv = env
+            val bgFlags = androidFlags
+            val bgScratch = scratchFlags
+            val bgXtool = xtoolBin
+            val bgSwift = swiftBin
+            val bgInstall = installation
+            val bgHost = host
+            val bgRoot = projectRoot
+            val bgCtx = ctx
             return GuiBridgeRuntime.compileAndRunSwiftUiBridge(
                 host = host,
                 installation = installation,
@@ -352,7 +367,15 @@ class SwiftBuildSystem : BuildSystem {
                 env = env,
                 ctx = ctx,
                 buildCtx = buildCtx,
-                onPackageIpa = { packageFallbackIpa(projectRoot, scratchDir, ctx) },
+                onPackageIpa = {
+                    // Background real build (xtool → iPhoneOS IPA). Fallback zip only if
+                    // xtool is unavailable so the project still leaves with an artifact.
+                    if (bgXtool != null) {
+                        runIpaBuild(bgHost, bgInstall, bgXtool, bgSwift, bgRoot, scratchDir, bgFlags, bgScratch, bgEnv, bgCtx)
+                    } else {
+                        packageFallbackIpa(bgRoot, scratchDir, bgCtx)
+                    }
+                },
             )
         }
 
