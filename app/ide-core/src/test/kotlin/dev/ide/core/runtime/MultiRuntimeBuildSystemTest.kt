@@ -115,7 +115,7 @@ class MultiRuntimeBuildSystemTest {
                 val tasks = backend.build.runTasks()
                 assertTrue(tasks.isNotEmpty(), "Swift project must expose first-class Run/Build tasks")
                 // Default Run is REAL Swift Cupertino execution (or bridge); Quick Peek is secondary.
-                assertEquals(SwiftBuildSystem.TASK_RUN, tasks.first().id, "Default task for SwiftUI project must be Run iOS GUI (Cupertino Bridge)")
+                assertEquals(SwiftBuildSystem.TASK_RUN, tasks.first().id, "Default task for SwiftUI project must be Run App")
                 assertTrue(tasks.any { it.id == SwiftBuildSystem.TASK_PREVIEW }, "Quick Peek must remain available")
                 assertTrue(tasks.any { it.id == SwiftBuildSystem.TASK_IPA }, "Export IPA task must remain available")
 

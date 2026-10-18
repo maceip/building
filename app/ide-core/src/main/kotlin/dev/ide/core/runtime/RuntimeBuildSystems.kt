@@ -196,7 +196,7 @@ class SwiftBuildSystem : BuildSystem {
         if (hasSwiftUi) {
             // Default Run executes REAL Swift against the Cupertino shim (ViewHost → ViewNode).
             // xtool IPA export stays separate; Quick Peek is the no-compiler sketch fallback.
-            specs += RunTaskSpec(TASK_RUN, "Run iOS GUI (Cupertino Bridge)", "run")
+            specs += RunTaskSpec(TASK_RUN, "Run App", "run")
             specs += RunTaskSpec(TASK_PREVIEW, "Quick Peek (no compile)", "run")
             specs += RunTaskSpec(TASK_IPA, "Build iOS App (.ipa)", "build")
             specs += RunTaskSpec(TASK_BUILD, "Build Swift Package", "build")
@@ -308,7 +308,7 @@ class SwiftBuildSystem : BuildSystem {
             val msg = if (previewSources.isEmpty()) {
                 "No Swift source files found in $projectRoot"
             } else {
-                "Quick Peek does not cover this SwiftUI project yet. Use Run iOS GUI (Cupertino Bridge) or Build iOS App (.ipa)."
+                "Quick Peek does not cover this SwiftUI project yet. Use Run App or Build iOS App (.ipa)."
             }
             ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.ERROR))
             return TaskResult.Failed(msg)
@@ -604,7 +604,7 @@ class SwiftBuildSystem : BuildSystem {
                     BuildLogLevel.INFO,
                 ),
             )
-            io?.stdout("✓ Quick Peek (sketch) — use Run iOS GUI (Cupertino Bridge) for real Swift execution\n")
+            io?.stdout("✓ Quick Peek (sketch) — use Run App for real Swift execution\n")
 
             // Headless (no UI session): one frame is enough for tests / build-only hosts.
             if (io == null) {

@@ -3,10 +3,9 @@ package dev.ide.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -76,65 +75,54 @@ actual fun BridgeGuiWindow(
         mainClass.endsWith(".js", ignoreCase = true) ||
         mainClass.endsWith(".ts", ignoreCase = true) ||
         moduleName.contains("nodegui", ignoreCase = true)
-    val bridgeLabel = if (!isNodeGui) "SwiftUI \u2192 Cupertino Bridge" else "NodeGUI \u2192 Compose Bridge"
+    // App shell: no IDE bridge/preview chrome. The guest owns the surface like a real app.
     val windowBgProp = parsedNode?.props?.get("windowBackground")?.jsonPrimitive?.contentOrNull
+    val windowTitle = parsedNode?.props?.get("windowTitle")?.jsonPrimitive?.contentOrNull
+        ?: moduleName.ifBlank { mainClass }
 
-    Column(
+    Box(
         modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+            .fillMaxSize()
             .background(MaterialTheme.colorScheme.surface),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Box(Modifier.size(10.dp).clip(CircleShape).background(Color(0xFFFF5F56)))
-                Box(Modifier.size(10.dp).clip(CircleShape).background(Color(0xFFFFBD2E)))
-                Box(Modifier.size(10.dp).clip(CircleShape).background(Color(0xFF27C93F)))
-            }
-            Spacer(Modifier.width(4.dp))
-            val windowTitle = parsedNode?.props?.get("windowTitle")?.jsonPrimitive?.contentOrNull
-                ?: moduleName.ifBlank { mainClass }
-            Text(
-                text = windowTitle,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Surface(
-                shape = RoundedCornerShape(6.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
-            ) {
-                Text(
-                    text = bridgeLabel,
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                )
-            }
-        }
-
         val rootBgColor = remember(parsedNode) { extractRootBackgroundColor(parsedNode) }
         val isDark = when {
             windowBgProp != null -> isDarkHex(windowBgProp)
-            rootBgColor != null -> (0.299f * rootBgColor.red + 0.587f * rootBgColor.green + 0.114f * rootBgColor.blue) < 0.45f
+            rootBgColor != null -> (0.299f * rootBgColor.red + 0.587f * rootBgColor.green + 0.113f * rootBgColor.blue) < 0.45
             else -> androidx.compose.foundation.isSystemInDarkTheme()
         }
         val contentBg = windowBgProp?.let(::parseHexColor)
             ?: rootBgColor
             ?: if (isDark) Color(0xFF1C1C1E) else Color(0xFFF2F2F7)
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(contentBg)
+                .statusBarsPadding()
+                .padding(horizontal = 18.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = rememberClockLabel(),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = if (isDark) Color.White else Color.Black,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                repeat(4) { bar ->
+                    Box(
+                        Modifier
+                            .size(width = 3.dp, height = (6 + bar * 2).dp)
+                            .background(
+                                if (isDark) Color.White else Color.Black,
+                                RoundedCornerShape(1.dp),
+                            ),
+                    )
+                }
+            }
+        }
 
         CupertinoTheme(
             colorScheme = if (isDark) darkColorScheme() else lightColorScheme(),
@@ -143,21 +131,53 @@ actual fun BridgeGuiWindow(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(contentBg)
-                    .padding(12.dp),
-                contentAlignment = Alignment.Center,
+                    .padding(top = 32.dp, start = 8.dp, end = 8.dp, bottom = 8.dp),
+                contentAlignment = Alignment.TopCenter,
             ) {
                 if (parsedNode != null) {
                     Render(parsedNode, isDark = isDark)
                 } else {
-                    Text(
-                        text = "Starting GUI bridge\u2026",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(28.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = windowTitle.ifBlank { "App" },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = if (isDark) Color.White else Color.Black,
+                        )
+                    }
                 }
             }
         }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 8.dp)
+                .width(120.dp)
+                .height(4.dp)
+                .background(
+                    (if (isDark) Color.White else Color.Black).copy(alpha = 0.35f),
+                    RoundedCornerShape(2.dp),
+                ),
+        )
     }
+}
+
+@Composable
+private fun rememberClockLabel(): String {
+    val now = remember { java.util.Calendar.getInstance() }
+    val h = now.get(java.util.Calendar.HOUR_OF_DAY)
+    val m = now.get(java.util.Calendar.MINUTE)
+    return "%d:%02d".format(h, m)
 }
 
 /**

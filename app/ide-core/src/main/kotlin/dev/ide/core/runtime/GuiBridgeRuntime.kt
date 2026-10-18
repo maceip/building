@@ -407,7 +407,7 @@ internal object GuiBridgeRuntime {
                 workingDir = compileRoot,
                 env = runEnv,
                 projectName = projectName,
-                displayCommand = "$pkgName (iOS Cupertino Bridge)",
+                displayCommand = "$pkgName",
                 stepName = ":swift:runCupertinoBridge",
                 ctx = ctx,
                 buildCtx = buildCtx,
