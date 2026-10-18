@@ -6,8 +6,14 @@ import dev.ide.kotlin.syntax.KotlinOutline
 import dev.ide.ios.store.IosPreferences
 import dev.ide.ios.store.IosStoreService
 import dev.ide.ios.store.StoreConfig
+import dev.ide.ios.discovery.IosDiscoveryBackend
+import dev.ide.ios.agent.IosAgentService
 import dev.ide.ios.android.*
 import dev.ide.ios.guest.*
+import dev.ide.ui.backend.GitHubDiscoveryService
+import dev.ide.ui.backend.AgentService
+import dev.ide.ui.backend.UiRenameTarget
+import dev.ide.ui.backend.UiRenameResult
 import dev.ide.deps.ArtifactKind
 import dev.ide.lang.kotlin.NavKind
 import dev.ide.model.Coordinate
@@ -207,6 +213,10 @@ class IosBackend(
             }
         },
     )
+
+    override val discovery: GitHubDiscoveryService = IosDiscoveryBackend(preferences)
+
+    override val agent: AgentService by lazy { IosAgentService(this, preferences, backendScope) }
 
     override val vcs: VcsService = object : VcsService {
         private val _status = MutableStateFlow(UiVcsStatus())
@@ -1627,6 +1637,71 @@ class IosBackend(
         val fix = k.codeActions(path, text, selStart).getOrNull(actionId) ?: return@withAnalysis UiActionEdits()
         UiActionEdits(focal = fix.edits.map { UiTextEdit(it.offset, it.offset + it.oldLength, it.newText.toString()) })
     }
+
+    override suspend fun prepareRename(path: String, text: String, offset: Int): UiRenameTarget? {
+        if (offset < 0 || offset >= text.length) return null
+        val (start, end) = identifierRangeAt(text, offset) ?: return null
+        val word = text.substring(start, end)
+        if (word.isBlank() || !isValidIdentifier(word)) return null
+        return UiRenameTarget(oldName = word, kind = "symbol")
+    }
+
+    override suspend fun rename(path: String, text: String, offset: Int, newName: String): UiRenameResult {
+        val trimmedNew = newName.trim()
+        if (!isValidIdentifier(trimmedNew)) {
+            return UiRenameResult(false, "'$trimmedNew' is not a valid identifier")
+        }
+        val target = prepareRename(path, text, offset)
+            ?: return UiRenameResult(false, "No symbol under caret to rename")
+        val oldName = target.oldName
+        if (oldName == trimmedNew) {
+            return UiRenameResult(true, "Name is unchanged", occurrences = 0, filesChanged = 0)
+        }
+
+        val root = active?.rootPath ?: return UiRenameResult(false, "No active project")
+        val files = findKotlinSourceFiles(root)
+        var totalOccurrences = 0
+        var totalFiles = 0
+        val wordRegex = Regex("\\b${Regex.escape(oldName)}\\b")
+
+        for (f in files) {
+            val content = buffers[f] ?: IosFiles.readText(f)
+            if (wordRegex.containsMatchIn(content)) {
+                val matches = wordRegex.findAll(content).count()
+                totalOccurrences += matches
+                totalFiles++
+                val updated = wordRegex.replace(content, trimmedNew)
+                IosFiles.writeText(f, updated)
+                if (buffers[f] != null) {
+                    buffers[f] = updated
+                }
+            }
+        }
+        fsEpoch.update { it + 1 }
+        resetAnalysis()
+        return UiRenameResult(
+            success = true,
+            message = "Renamed '$oldName' to '$trimmedNew'",
+            occurrences = totalOccurrences,
+            filesChanged = totalFiles,
+        )
+    }
+
+    private fun identifierRangeAt(text: String, offset: Int): Pair<Int, Int>? {
+        if (text.isEmpty()) return null
+        var o = offset.coerceIn(0, text.length - 1)
+        if (!isIdentifierPart(text[o])) {
+            if (o > 0 && isIdentifierPart(text[o - 1])) o-- else return null
+        }
+        var start = o
+        while (start > 0 && isIdentifierPart(text[start - 1])) start--
+        var end = o
+        while (end < text.length && isIdentifierPart(text[end])) end++
+        return if (start < end) start to end else null
+    }
+
+    private fun isIdentifierPart(c: Char): Boolean = c.isLetterOrDigit() || c == '_' || c == '$'
+    private fun isValidIdentifier(s: String): Boolean = s.isNotEmpty() && (s[0].isLetter() || s[0] == '_') && s.all { isIdentifierPart(it) }
 
     /**
      * The three text-driven editor commands, which share a shape: Kotlin only, degrade to no edits, and

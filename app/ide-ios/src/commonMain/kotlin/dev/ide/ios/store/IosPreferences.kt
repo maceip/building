@@ -15,4 +15,8 @@ class IosPreferences(private val defaults: NSUserDefaults = NSUserDefaults.stand
     fun put(key: String, value: String) {
         defaults.setObject(value, forKey = key)
     }
+
+    fun remove(key: String) {
+        defaults.removeObjectForKey(key)
+    }
 }
