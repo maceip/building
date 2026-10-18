@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package dev.ide.ios
 
 import dev.ide.kotlin.syntax.KotlinOutline
@@ -95,8 +97,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import platform.Foundation.NSTemporaryDirectory
+import platform.Foundation.NSData
+import platform.Foundation.NSURL
+import platform.Foundation.dataWithContentsOfURL
+import platform.Foundation.writeToFile
+import dev.ide.ui.backend.VcsService
+import dev.ide.ui.backend.UiVcsStatus
+import dev.ide.ui.backend.UiVcsActivity
+import dev.ide.ui.backend.UiVcsAccount
+import dev.ide.ui.backend.UiVcsSignIn
+import dev.ide.ui.backend.UiVcsResult
+import dev.ide.ui.backend.UiProjectFolderKind
 import dev.ide.platform.log.Log
 import kotlin.time.TimeSource
+
 
 /**
  * The iOS host's [dev.ide.ui.backend.IdeBackend]: real files, real projects, a real Kotlin editor.
@@ -194,8 +208,118 @@ class IosBackend(
         },
     )
 
+    override val vcs: VcsService = object : VcsService {
+        private val _status = MutableStateFlow(UiVcsStatus())
+        private val _activity = MutableStateFlow(UiVcsActivity())
+        private val _accounts = MutableStateFlow<List<UiVcsAccount>>(emptyList())
+        private val _signIn = MutableStateFlow<UiVcsSignIn>(UiVcsSignIn.Idle)
+
+        override val status: StateFlow<UiVcsStatus> = _status
+        override val activity: StateFlow<UiVcsActivity> = _activity
+        override val accounts: StateFlow<List<UiVcsAccount>> = _accounts
+        override val signIn: StateFlow<UiVcsSignIn> = _signIn
+
+        override fun supported(): Boolean = true
+
+        override fun underVersionControl(): Boolean {
+            val root = active?.rootPath ?: return false
+            return IosFiles.exists("$root/.git")
+        }
+
+        override suspend fun refresh() {
+            val root = active?.rootPath ?: run {
+                _status.value = UiVcsStatus(present = false)
+                return
+            }
+            if (!IosFiles.exists("$root/.git")) {
+                _status.value = UiVcsStatus(present = false)
+                return
+            }
+            val head = runCatching { IosFiles.readText("$root/.git/HEAD").trim() }.getOrNull()
+            val branch = head?.removePrefix("ref: refs/heads/") ?: "main"
+            _status.value = UiVcsStatus(present = true, branch = branch)
+        }
+
+        override suspend fun cloneRepository(url: String, directoryName: String): UiVcsResult {
+            val trimmedUrl = url.trim()
+            val targetName = directoryName.trim().ifBlank {
+                trimmedUrl.substringAfterLast('/').removeSuffix(".git")
+            }
+            if (targetName.isBlank()) {
+                return UiVcsResult(false, "Repository name cannot be blank")
+            }
+            val targetPath = IosFiles.join(projectsRoot, targetName)
+            if (IosFiles.exists(targetPath)) {
+                return UiVcsResult(false, "Directory already exists: $targetName")
+            }
+
+            _activity.value = UiVcsActivity(busy = true, task = "Cloning $targetName...")
+            try {
+                var success = false
+                val cmd = "git clone --depth 1 \"$trimmedUrl\" \"$targetPath\""
+                val pipe = platform.posix.popen(cmd, "r")
+                if (pipe != null) {
+                    val code = platform.posix.pclose(pipe)
+                    if (code == 0 && IosFiles.exists(targetPath)) {
+                        success = true
+                    }
+                }
+
+                if (!success) {
+                    val cleanUrl = trimmedUrl.removeSuffix(".git").trimEnd('/')
+                    if (cleanUrl.startsWith("https://github.com/")) {
+                        val parts = cleanUrl.removePrefix("https://github.com/").split('/')
+                        if (parts.size >= 2) {
+                            val owner = parts[0]
+                            val repo = parts[1]
+                            for (b in listOf("main", "master")) {
+                                val zipUrl = "https://codeload.github.com/$owner/$repo/zip/refs/heads/$b"
+                                val nsUrl = platform.Foundation.NSURL.URLWithString(zipUrl)
+                                if (nsUrl != null) {
+                                    val data = NSData.dataWithContentsOfURL(nsUrl)
+                                    if (data != null && data.length.toLong() > 100L) {
+                                        val tempZip = "${platform.Foundation.NSTemporaryDirectory()}/$repo-$b.zip"
+                                        data.writeToFile(tempZip, true)
+                                        val p = platform.posix.popen("unzip -q \"$tempZip\" -d \"${platform.Foundation.NSTemporaryDirectory()}\"", "r")
+                                        if (p != null) {
+                                            platform.posix.pclose(p)
+                                            val extracted = "${platform.Foundation.NSTemporaryDirectory()}/$repo-$b"
+                                            if (IosFiles.exists(extracted)) {
+                                                IosFiles.move(extracted, targetPath)
+                                                success = true
+                                                break
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (!success) {
+                    if (IosFiles.exists(targetPath)) IosFiles.delete(targetPath)
+                    return UiVcsResult(false, "Failed to clone repository: $url")
+                }
+
+                bumpProjects()
+                val kind = inspectProjectFolder(targetPath)
+                openProject(targetPath)
+                return UiVcsResult(
+                    ok = true,
+                    message = "Cloned $targetName",
+                    path = targetPath,
+                    projectKind = kind,
+                )
+            } finally {
+                _activity.value = UiVcsActivity(busy = false)
+            }
+        }
+    }
+
     private val fsEpoch = MutableStateFlow(0)
     private val projEpoch = MutableStateFlow(0)
+
 
     init {
         if (!IosFiles.exists(projectsRoot)) IosFiles.mkdirs(projectsRoot)
@@ -1658,6 +1782,50 @@ class IosBackend(
         return true
     }
 
+    override suspend fun inspectProjectFolder(path: String): UiProjectFolderKind {
+        val p = path.trimEnd('/', '\\')
+        return when {
+            IosFiles.exists("$p/.platform/workspace.json") || IosFiles.exists("$p/module.toml") -> UiProjectFolderKind.CODE_ASSIST
+            IosFiles.exists("$p/build.gradle") || IosFiles.exists("$p/build.gradle.kts") ||
+                IosFiles.exists("$p/settings.gradle") || IosFiles.exists("$p/settings.gradle.kts") -> UiProjectFolderKind.GRADLE
+            IosFiles.exists("$p/Package.swift") -> UiProjectFolderKind.SWIFT
+            IosFiles.exists("$p/package.json") -> UiProjectFolderKind.NODE
+            IosFiles.exists("$p/requirements.txt") || IosFiles.exists("$p/pyproject.toml") -> UiProjectFolderKind.PYTHON
+            else -> UiProjectFolderKind.CODE_ASSIST
+        }
+    }
+
+    override suspend fun importExternalProject(sourceRootPath: String): UiProjectResult {
+        if (!IosFiles.isDirectory(sourceRootPath)) {
+            return UiProjectResult(false, "Selected source is not a directory: $sourceRootPath")
+        }
+        val name = IosFiles.sanitize(sourceRootPath.substringAfterLast('/').substringAfterLast('\\').ifBlank { "ImportedProject" })
+        var dest = IosFiles.join(projectsRoot, name)
+        if (dest != sourceRootPath) {
+            var counter = 1
+            while (IosFiles.exists(dest)) {
+                dest = IosFiles.join(projectsRoot, "${name}_${counter++}")
+            }
+            val ok = IosFiles.copy(sourceRootPath, dest)
+            if (!ok && !IosFiles.exists(dest)) {
+                return UiProjectResult(false, "Could not copy project files into storage")
+            }
+        }
+        bumpProjects()
+        val opened = openProject(dest)
+        return if (opened) {
+            UiProjectResult(true, "Imported $name", dest)
+        } else {
+            UiProjectResult(false, "Could not open imported project")
+        }
+    }
+
+    override suspend fun openFolderInPlace(rootPath: String): UiProjectResult {
+        val opened = openProject(rootPath)
+        return if (opened) UiProjectResult(true, "Opened folder", rootPath) else UiProjectResult(false, "Could not open folder")
+    }
+
+
 
     // ---- ModuleService ------------------------------------------------------------------------------
 
@@ -2119,7 +2287,11 @@ class IosBackend(
     /** A project change moves files too, so the tree is re-read alongside the project switch. */
     private fun bumpProjects() { projEpoch.value += 1; bumpFs() }
 
-    override fun uiPlugins(): List<dev.ide.ui.ext.UiPlugin> = listOf(IosWorkbenchUiPlugin)
+    override fun uiPlugins(): List<dev.ide.ui.ext.UiPlugin> = listOf(
+        IosWorkbenchUiPlugin,
+        dev.ide.vcs.ui.VcsUiPlugin,
+        dev.ide.agent.ui.AgentUiPlugin,
+    )
 
     /**
      * A project as the picker shows it, with the module count and multi-runtime metadata read from the model.

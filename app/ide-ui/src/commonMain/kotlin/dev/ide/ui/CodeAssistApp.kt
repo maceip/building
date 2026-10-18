@@ -9,6 +9,8 @@ import dev.ide.ui.components.WindowTitleStrip
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -157,7 +159,13 @@ fun CodeAssistApp(
                     Modifier.fillMaxSize().onPreviewKeyEvent(AppKeys::onPreviewKey).onKeyEvent(AppKeys::onKey),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .windowInsetsPadding(
+                                WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+                            )
+                    ) {
                         // Desktop with a custom title bar: the title strip for screens that draw none of their own.
                         WindowTitleStrip(title = "building")
                         Box(Modifier.weight(1f).fillMaxWidth()) {

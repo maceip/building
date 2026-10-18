@@ -172,6 +172,8 @@ kotlin {
             // `api`, not `implementation`: it is the supertype of a public class here.
             api(project(":ide-ui-testing"))
             implementation(project(":kotlin-classfile"))
+            implementation(project(":vcs-ui"))
+            implementation(project(":agent-ui"))
 
             // The Projects Store. The transport (:store-impl) and its translation onto the UI contract
             // (:store-bridge) are the same code the Android and desktop hosts run; what this host supplies

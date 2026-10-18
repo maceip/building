@@ -28,6 +28,9 @@ kotlin {
         }
     }
 
+    iosSimulatorArm64()
+    iosArm64()
+
     sourceSets {
         commonMain.dependencies {
             // The IDE shell: GlassSurface, the Ca theme, Primitives, and the markdown helpers the chat reuses.
