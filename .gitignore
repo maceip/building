@@ -106,3 +106,6 @@ AGENT_HANDOFF*.md
 # Local device evidence / demo recordings (kept out of git; they are multi-MB and machine-local)
 *.mp4
 *.mov
+
+# Scratch icon export zip (contains __MACOSX junk; extract to branding/ if needed)
+use.zip
