@@ -33,7 +33,7 @@ class ClonedFolderAdoptionTest {
             val manager = ProjectManager.desktop(root.resolve("projects"))
             val cloned = manager.projectsRoot.resolve("some-repo")
             write(cloned, "README.md", "# some-repo")
-            write(cloned, "src/main.py", "print('hi')")
+            write(cloned, "src/main.txt", "plain content")
 
             assertEquals(ImportableKind.NONE, manager.adoptFolderInPlace(cloned, origin = "https://host/some-repo.git"))
 
@@ -56,7 +56,7 @@ class ClonedFolderAdoptionTest {
             val manager = ProjectManager.desktop(root.resolve("projects"))
             val cloned = manager.projectsRoot.resolve("some-repo")
             write(cloned, "README.md", "# some-repo")
-            write(cloned, "src/main.py", "print('hi')")
+            write(cloned, "src/main.txt", "plain content")
             manager.adoptFolderInPlace(cloned)
 
             manager.open(cloned.toString()).use { ide ->

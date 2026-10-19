@@ -498,7 +498,7 @@ class SwiftBuildSystem : BuildSystem {
                 if (swiftcBin != null && hasFallbackMain) {
                     return compileAndRunSwiftSourcesDirectly(host, installation, swiftcBin, swiftFiles, projectRoot, scratchDir, env, ctx)
                 }
-                if (isIos) {
+                if (isIos && specId == TASK_IPA) {
                     return runIpaBuild(host, installation, xtoolBin, swiftBin, projectRoot, scratchDir, androidFlags, scratchFlags, env, ctx)
                 }
                 val buildCmd = buildList {
@@ -717,32 +717,41 @@ class SwiftBuildSystem : BuildSystem {
         if (xtoolBin != null) {
             ensureXtoolLibraryProductIfNeeded(projectRoot)
             ensureDarwinSdkInstalled(host, installation, xtoolBin, projectRoot, env, ctx)
-            seedIosSwiftModuleCacheIfNeeded(installation, projectRoot)
-            ctx.reportStep(":swift:xtoolPackageIpa", "started")
-            val xtoolCmd = listOf(xtoolBin.toString(), "dev", "build", "--build-system", "native", "--ipa")
-            ctx.buildLog.log(BuildLogEntry("$ xtool dev build --build-system native --ipa", BuildLogLevel.INFO))
-            val lines = ArrayList<String>()
-            val code = execStreaming(host, xtoolCmd, projectRoot, env, ctx) { line ->
-                lines += line
-            }
-            if (code == 0) {
-                persistIosSwiftModuleCacheIfNeeded(installation, projectRoot)
-                val ipa = findBuiltIpa(projectRoot)
-                if (ipa != null) {
-                    ctx.buildLog.log(
-                        BuildLogEntry(
-                            "✓ Built iOS application archive: ${projectRoot.relativize(ipa)} (${Files.size(ipa)} bytes)",
-                            BuildLogLevel.INFO,
-                        ),
-                    )
+            if (hasDarwinSdk(env)) {
+                seedIosSwiftModuleCacheIfNeeded(installation, projectRoot)
+                ctx.reportStep(":swift:xtoolPackageIpa", "started")
+                val xtoolCmd = listOf(xtoolBin.toString(), "dev", "build", "--build-system", "native", "--ipa")
+                ctx.buildLog.log(BuildLogEntry("$ xtool dev build --build-system native --ipa", BuildLogLevel.INFO))
+                val lines = ArrayList<String>()
+                val code = execStreaming(host, xtoolCmd, projectRoot, env, ctx) { line ->
+                    lines += line
                 }
-                ctx.reportStep(":swift:xtoolPackageIpa", "succeeded")
-                return TaskResult.Success
-            }
+                if (code == 0) {
+                    persistIosSwiftModuleCacheIfNeeded(installation, projectRoot)
+                    val ipa = findBuiltIpa(projectRoot)
+                    if (ipa != null) {
+                        ctx.buildLog.log(
+                            BuildLogEntry(
+                                "✓ Built iOS application archive: ${projectRoot.relativize(ipa)} (${Files.size(ipa)} bytes)",
+                                BuildLogLevel.INFO,
+                            ),
+                        )
+                    }
+                    ctx.reportStep(":swift:xtoolPackageIpa", "succeeded")
+                    return TaskResult.Success
+                }
 
-            ctx.reportToolDiagnostics("swiftc", lines)
-            ctx.reportStep(":swift:xtoolPackageIpa", "failed")
-            return TaskResult.Failed("xtool dev build --ipa exited with code $code")
+                ctx.reportToolDiagnostics("swiftc", lines)
+                ctx.reportStep(":swift:xtoolPackageIpa", "failed")
+                return TaskResult.Failed("xtool dev build --ipa exited with code $code")
+            } else {
+                ctx.buildLog.log(
+                    BuildLogEntry(
+                        "Apple Darwin SDK is not installed in xtool; falling back to native Swift compilation.",
+                        BuildLogLevel.INFO,
+                    ),
+                )
+            }
         }
 
         // Desktop / Swift-only fallback when xtool binary isn't installed on host
@@ -826,6 +835,16 @@ class SwiftBuildSystem : BuildSystem {
                 pkg.writeText(updated)
             }
         }
+    }
+
+    private fun hasDarwinSdk(env: Map<String, String>): Boolean {
+        val homeDir = env["HOME"]?.let { Paths.get(it) } ?: return false
+        val xtoolSdkDir = homeDir.resolve(".config/xtool/sdk")
+        val swiftSdksDir = homeDir.resolve(".swiftpm/swift-sdks")
+        return runCatching {
+            (Files.isDirectory(xtoolSdkDir) && Files.list(xtoolSdkDir).use { it.findFirst().isPresent }) ||
+                (Files.isDirectory(swiftSdksDir) && Files.list(swiftSdksDir).use { it.findFirst().isPresent })
+        }.getOrDefault(false)
     }
 
     private suspend fun ensureDarwinSdkInstalled(
