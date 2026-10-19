@@ -72,6 +72,13 @@ object RuntimeBuildEnvironment {
     @Volatile
     var onArtifactsProduced: (() -> Unit)? = null
 
+    /**
+     * Spike B: xtool finished a real IPA. The iOS host unpacks it into a guest
+     * container and launches it (LiveContainer-style). Research only.
+     */
+    @Volatile
+    var onGuestIpaReady: ((Path) -> Unit)? = null
+
     fun resolveHost(projectRoot: Path): RuntimeHost = host ?: DesktopRuntimeHost(projectRoot)
 }
 
@@ -246,6 +253,9 @@ class SwiftBuildSystem : BuildSystem {
                     for (ipa in ipas) {
                         val sizeKb = Files.size(ipa) / 1024
                         log("iOS App Artifact ready: ${root.relativize(ipa)} (${sizeKb} KB)")
+                        // Spike B: hand the IPA to the guest container (iOS host launches it).
+                        log("Open guest: ${root.relativize(ipa)}")
+                        RuntimeBuildEnvironment.onGuestIpaReady?.invoke(ipa)
                     }
                 }
                 RuntimeBuildEnvironment.onArtifactsProduced?.invoke()
