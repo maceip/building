@@ -258,12 +258,39 @@ internal object GuiBridgeRuntime {
         }.ifEmpty { allSwiftFiles }
         val swiftUiFiles = selectSwiftUiTargetFiles(projectRoot, filteredFiles)
         val copied = ArrayList<Path>()
+        fun copyAndSanitize(src: Path, dst: Path) {
+            Files.createDirectories(dst.parent)
+            var content = runCatching { src.readText() }.getOrDefault("")
+            if (content.contains("#Preview")) {
+                content = content.replace(Regex("""#Preview\s*(\([^\)]*\))?\s*\{[^\}]*\}"""), "// [sanitized #Preview]")
+            }
+            dst.writeText(content)
+            copied.add(dst)
+        }
+
         for (src in swiftUiFiles) {
             val rel = runCatching { projectRoot.relativize(src) }.getOrDefault(src.fileName)
             val dst = shadow.resolve(rel.toString())
-            Files.createDirectories(dst.parent)
-            Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING)
-            copied.add(dst)
+            copyAndSanitize(src, dst)
+        }
+
+        // Also copy any sibling pure Swift model files in the same directory as the chosen SwiftUI views
+        val targetDirs = swiftUiFiles.mapNotNull { it.parent }.distinct()
+        for (dir in targetDirs) {
+            if (Files.isDirectory(dir)) {
+                Files.list(dir).use { stream ->
+                    stream.filter { f ->
+                        f.fileName.toString().endsWith(".swift") && f !in swiftUiFiles
+                    }.forEach { sibling ->
+                        val text = runCatching { sibling.readText() }.getOrDefault("")
+                        if (!text.contains("import AppKit") && !text.contains("import WebKit") && !text.contains("import XCTest")) {
+                            val rel = runCatching { projectRoot.relativize(sibling) }.getOrDefault(sibling.fileName)
+                            val dst = shadow.resolve(rel.toString())
+                            copyAndSanitize(sibling, dst)
+                        }
+                    }
+                }
+            }
         }
         val hasBridgeEntry = copied.any { f ->
             val text = runCatching { f.readText() }.getOrDefault("")
