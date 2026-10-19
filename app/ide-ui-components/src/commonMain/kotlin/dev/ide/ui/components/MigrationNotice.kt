@@ -53,29 +53,7 @@ import org.jetbrains.compose.resources.stringResource
  */
 @Composable
 fun MigrationNotice(visible: Boolean, onBackup: suspend () -> Unit, onDismiss: () -> Unit) {
-    if (isMobilePlatform) {
-        BottomSheet(visible = visible, onDismiss = onDismiss, heightFraction = 0.6f) {
-            NoticeBody(
-                onBackup = onBackup,
-                onDismiss = onDismiss,
-                modifier = Modifier.fillMaxWidth().widthIn(max = 560.dp)
-                    .padding(horizontal = 24.dp, vertical = 8.dp),
-            )
-        }
-    } else {
-        CenteredDialog(visible = visible, onDismiss = onDismiss) {
-            val shape = RoundedCornerShape(Ca.radius.sheet)
-            NoticeBody(
-                onBackup = onBackup,
-                onDismiss = onDismiss,
-                modifier = Modifier
-                    .width(460.dp)
-                    .background(Ide.colors.glassThick, shape)
-                    .border(1.dp, Ide.colors.glassEdge, shape)
-                    .padding(28.dp),
-            )
-        }
-    }
+    // Intentionally no-op: "A new build system" migration notice is removed permanently.
 }
 
 @Composable

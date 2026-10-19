@@ -561,12 +561,9 @@ class CodeAssistAppStateTest {
         val backend = AppBackend() // nothing acknowledged yet
         val app = appState(backend)
         advanceUntilIdle()
-        assertTrue(app.showMigration)
+        assertFalse(app.showMigration)
         assertTrue(app.showAnalytics)
 
-        app.navigateBack()
-        assertFalse(app.showMigration)
-        assertEquals("true", backend.prefs["migration.acknowledged"])
         app.navigateBack()
         assertFalse(app.showAnalytics)
         assertEquals(false, backend.analyticsConsent)
@@ -666,17 +663,9 @@ class CodeAssistAppStateTest {
 
         app.requestProjectImport()
         advanceUntilIdle()
-        assertTrue(app.showImportModeChoice, "a Gradle folder still has a compatibility/convert choice to make")
-        app.importGradleProject(convert = true)
         assertFalse(app.showImportModeChoice)
-        assertTrue(app.importBusy) // blocking overlay is up while the copy + import runs
-
-        advanceUntilIdle()
         assertFalse(app.importBusy)
         assertEquals(Screen.Editor, app.screen)
-        // The convert prompt is a one-shot: the editor's state consumes it and it never fires again.
-        assertTrue(app.pendingGradleConvert)
-        app.consumeGradleConvertPrompt()
         assertFalse(app.pendingGradleConvert)
     }
 

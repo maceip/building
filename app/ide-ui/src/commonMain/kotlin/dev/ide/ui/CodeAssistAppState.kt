@@ -256,10 +256,8 @@ class CodeAssistAppState(
 
     // ---- first-launch sheets ----
 
-    var showMigration: Boolean by mutableStateOf(backend.settings.preference(MIGRATION_ACK_PREF) != "true")
-        private set
-    var showLegacyRecovery: Boolean by mutableStateOf(backend.settings.preference(LEGACY_RECOVERY_SEEN_PREF) != "true")
-        private set
+    val showMigration: Boolean = false
+    val showLegacyRecovery: Boolean = false
 
     /** Opt-in analytics: prompt only when collection is available and the user has not decided yet (null). The
      *  re-toggle lives in the editor's More menu (a settings surface), not permanently on the project picker. */
@@ -330,7 +328,7 @@ class CodeAssistAppState(
     /** Whether the system back gesture has somewhere in-app to go. False on the picker landing, where back
      *  exits the app as usual. */
     val canNavigateBack: Boolean
-        get() = screen != Screen.Projects || homeTab != HomeTab.Projects || showMigration ||
+        get() = screen != Screen.Projects || homeTab != HomeTab.Projects ||
             showAnalytics || showImportSourceChoice || showImportModeChoice
 
     // Session resume across a process kill: the project that was on screen last run (captured up-front, before
@@ -705,13 +703,8 @@ class CodeAssistAppState(
                 when (backend.projects.inspectProjectFolder(path)) {
                     // Nothing to translate: adopt it and open it.
                     UiProjectFolderKind.CODE_ASSIST, UiProjectFolderKind.NODE, UiProjectFolderKind.SWIFT, UiProjectFolderKind.PYTHON -> runImport(path, convert = false)
-                    // Foreign build system: it still has a mode to choose.
-                    // The question is the user's to answer, so drop the overlay while it is on screen.
-                    UiProjectFolderKind.GRADLE -> {
-                        importBusy = false
-                        pendingImportPath = path
-                        showImportModeChoice = true
-                    }
+                    // Foreign build system: open directly without prompting the user to convert formats.
+                    UiProjectFolderKind.GRADLE -> runImport(path, convert = false)
                     UiProjectFolderKind.UNKNOWN -> {
                         importBusy = false
                         importError = ImportError.GradleFailed("")
@@ -733,24 +726,23 @@ class CodeAssistAppState(
         pendingImportPath = null
         if (path != null) {
             importBusy = true
-            scope.launch { runImport(path, convert) }
+            scope.launch { runImport(path, false) }
         }
     }
 
-    /** Import [path] and open it; [convert] flags the freshly-opened editor to run the Gradle convert flow. */
+    /** Import [path] and open it. */
     private suspend fun runImport(path: String, convert: Boolean) {
         val result = backend.projects.importExternalProject(path)
         importBusy = false
         if (result.success) {
-            if (convert) pendingGradleConvert = true
+            pendingGradleConvert = false
             screen = Screen.Editor
         } else {
             importError = ImportError.GradleFailed(result.message)
         }
     }
 
-    /** Clear the convert one-shot once it has been baked into the (re-created) per-project state, so navigating
-     *  back to a project later never re-triggers the convert prompt. */
+    /** Clear the convert one-shot once it has been baked into the (re-created) per-project state. */
     fun consumeGradleConvertPrompt() {
         pendingGradleConvert = false
     }
@@ -1009,12 +1001,10 @@ class CodeAssistAppState(
     // ---- first-launch sheets ----
 
     fun dismissMigration() {
-        showMigration = false
         backend.settings.setPreference(MIGRATION_ACK_PREF, "true")
     }
 
     fun dismissLegacyRecovery() {
-        showLegacyRecovery = false
         backend.settings.setPreference(LEGACY_RECOVERY_SEEN_PREF, "true")
     }
 
@@ -1035,7 +1025,6 @@ class CodeAssistAppState(
         when {
             showImportSourceChoice -> dismissImportSourceChoice()
             showImportModeChoice -> dismissImportModeChoice()
-            showMigration -> dismissMigration()
             showAnalytics -> setAnalyticsConsent(false)
 
             // A contributed screen holding its own claim on Back answers first: it is the deeper handler,

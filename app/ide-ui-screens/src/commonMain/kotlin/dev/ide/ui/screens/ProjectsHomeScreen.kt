@@ -331,10 +331,6 @@ fun ProjectsHomeScreen(
                 )
             }
 
-            if (showLegacyRecovery) {
-                item("legacy") { LegacyRecoveryNotice(onDismissLegacyRecovery) }
-            }
-
             if (segment == HomeSegment.Projects && ordered.isNotEmpty()) {
                 if (backend != null && backend.discovery.supported()) {
                     item("discoveryShelf") {
@@ -957,37 +953,7 @@ private fun SheetAction(glyph: Char, label: String, onClick: () -> Unit) {
 
 @Composable
 private fun LegacyRecoveryNotice(onDismiss: () -> Unit) {
-    val c = MaterialTheme.colorScheme
-    Surface(
-        shape = RoundedCornerShape(24.dp),
-        color = c.secondaryContainer,
-        contentColor = c.onSecondaryContainer,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 16.dp),
-    ) {
-        Row(
-            Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Symbol(CaSymbols.info, contentDescription = null, size = 22.dp)
-            Text(
-                stringResource(Res.string.home_legacy_recovery),
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f),
-            )
-            Surface(
-                onClick = onDismiss,
-                shape = CircleShape,
-                color = c.onSecondaryContainer,
-                contentColor = c.secondaryContainer,
-                modifier = Modifier.height(34.dp),
-            ) {
-                Box(Modifier.padding(horizontal = 14.dp), contentAlignment = Alignment.Center) {
-                    Text(stringResource(Res.string.home_dismiss), style = MaterialTheme.typography.labelMedium)
-                }
-            }
-        }
-    }
+    // Intentionally no-op: legacy recovery banner removed permanently.
 }
 
 /** Discord's brand colour, used only for the community card's tile and edge. */
@@ -1208,7 +1174,6 @@ private fun WideProjectsHome(
                 Spacer(Modifier.weight(0.0001f))
                 SortChooser(sort) { sort = it }
             }
-            if (showLegacyRecovery) LegacyRecoveryNotice(onDismissLegacyRecovery)
             LazyColumn(
                 Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(bottom = 24.dp),

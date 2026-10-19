@@ -207,9 +207,9 @@ fun CodeAssistApp(
                         onDismiss = app::dismissImportSourceChoice,
                     )
                     GradleImportModeDialog(
-                        visible = app.showImportModeChoice,
+                        visible = false,
                         onCompat = { app.importGradleProject(convert = false) },
-                        onConvert = { app.importGradleProject(convert = true) },
+                        onConvert = { app.importGradleProject(convert = false) },
                         onDismiss = app::dismissImportModeChoice,
                     )
                 }

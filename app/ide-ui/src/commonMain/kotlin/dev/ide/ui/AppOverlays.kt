@@ -45,11 +45,9 @@ internal fun AppOverlays(
     /** True while a picked Gradle folder is being copied + imported — shows the blocking busy overlay. */
     importBusy: Boolean = false,
 ) {
-    // Upgrade notice first (the build-system migration warning), over the picker only, one at a time.
-    MigrationNotice(visible = showMigration && onPicker, onBackup = onBackup, onDismiss = onDismissMigration)
-    // Opt-in analytics consent — last of the first-launch sheets, after migration.
+    // Opt-in analytics consent — first-launch sheet over the picker.
     AnalyticsConsentSheet(
-        visible = showAnalytics && !showMigration && onPicker,
+        visible = showAnalytics && onPicker,
         onAllow = onAllowAnalytics,
         onDecline = onDeclineAnalytics,
         onLearnMore = if (fileActions.canOpenUrl) ({ fileActions.openUrl(BetaInfo.PRIVACY_URL) }) else null,

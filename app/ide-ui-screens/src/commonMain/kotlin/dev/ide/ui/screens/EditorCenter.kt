@@ -110,31 +110,19 @@ internal fun EditorCenter(
     // on large projects and slow storage. `compatLoaded` gates what must wait for the first read.
     var compatInfo by remember(project.rootPath) { mutableStateOf<UiCompatibilityInfo?>(null) }
     var compatLoaded by remember(project.rootPath) { mutableStateOf(false) }
-    var showCompatBanner by remember(project.rootPath) { mutableStateOf(false) }
+    val showCompatBanner = false
     LaunchedEffect(project.rootPath, compatEpoch) {
         val info = withContext(Dispatchers.Default) { state.backend.projects.compatibilityInfo() }
         compatInfo = info
-        if (!compatLoaded) {
-            showCompatBanner = info != null
-            compatLoaded = true
-        }
+        compatLoaded = true
     }
     var showConvertDialog by remember(project.rootPath) { mutableStateOf(false) }
     // A project adopted from a folder nothing recognized (a clone). Read once per project: the marker only
     // changes when the project gains a module, which re-opens the editor anyway.
     val unrecognizedInfo = remember(project.rootPath) { state.backend.projects.unrecognizedProjectInfo() }
     var showUnrecognizedBanner by remember(project.rootPath) { mutableStateOf(unrecognizedInfo != null) }
-    // One-shot: an import where "Convert to CodeAssist project" was chosen at the picker. Now that the editor
-    // is open (so the reader's notes are known), run the convert flow — the confirm dialog is the gate when
-    // `gradle.convert.warnUnresolved` is on (default); otherwise convert straight away. Waits for the first
-    // compat read, so a compat project isn't mistaken for a native one.
     LaunchedEffect(project.rootPath, compatLoaded) {
-        if (!compatLoaded || !state.pendingGradleConvertPrompt) return@LaunchedEffect
         state.pendingGradleConvertPrompt = false
-        if (compatInfo == null) return@LaunchedEffect
-        val warn = state.backend.settings.preference("gradle.convert.warnUnresolved")?.toBooleanStrictOrNull() != false
-        if (warn) showConvertDialog = true
-        else if (state.backend.projects.convertToNative().ok) { compatEpoch++; showCompatBanner = false }
     }
     // @Preview presence (enables the Design view-mode toggle + top-bar shortcut) is set by the editor daemon's
     // PREVIEWS pass below — no separate detection effect.
@@ -237,8 +225,8 @@ internal fun EditorCenter(
                 previewBusy = active?.viewMode == EditorViewMode.Preview,
                 onPreview = { active?.let { it.viewMode = EditorViewMode.Preview } },
                 onIndexClick = { state.indexDetailOpen = true },
-                compatibilityMode = compatInfo != null,
-                onCompatClick = { showCompatBanner = true },
+                compatibilityMode = false,
+                onCompatClick = {},
                 pluginActions = toolbarActions,
                 onPluginAction = { id ->
                     depsScope.launch {
@@ -269,17 +257,6 @@ internal fun EditorCenter(
                     // The three that are a single sentence live in the strip; the three that need a card of their own
                     // contribute a summary line whose action reveals that card, so at most one card is ever open.
                     val notices = buildList {
-                        if (compatInfo != null && !showCompatBanner) {
-                            add(
-                                EditorNotice(
-                                    id = "gradle-compat",
-                                    level = NoticeLevel.Warning,
-                                    summary = stringResource(Res.string.gradle_mode_title),
-                                    actionLabel = stringResource(Res.string.show_details),
-                                    onAction = { showCompatBanner = true },
-                                ),
-                            )
-                        }
                         if (unrecognizedInfo != null && !showUnrecognizedBanner) {
                             add(
                                 EditorNotice(
@@ -313,29 +290,6 @@ internal fun EditorCenter(
                         }
                     }
                     EditorNoticeStrip(notices)
-                    compatInfo?.let { info ->
-                        GradleCompatBanner(
-                            state = state,
-                            info = info,
-                            visible = showCompatBanner,
-                            compact = compact,
-                            onDismiss = { showCompatBanner = false },
-                            onConvert = { showConvertDialog = true },
-                            // Re-read the notes (and the multiplatform target) the sync just rewrote.
-                            onSynced = { compatEpoch++ },
-                        )
-                    }
-                    // Hosted outside the compatInfo guard so it survives the marker being dropped on convert (which
-                    // nulls compatInfo) and can still show its Undo/Done result step.
-                    if (showConvertDialog) {
-                        ConvertToNativeDialog(
-                            notes = compatInfo?.notes ?: emptyList(),
-                            backend = state.backend,
-                            onConverted = { compatEpoch++; showCompatBanner = false },
-                            onReverted = { compatEpoch++; showCompatBanner = true },
-                            onClose = { showConvertDialog = false },
-                        )
-                    }
                     if (unrecognizedInfo != null) {
                         UnrecognizedProjectBanner(
                             info = unrecognizedInfo,

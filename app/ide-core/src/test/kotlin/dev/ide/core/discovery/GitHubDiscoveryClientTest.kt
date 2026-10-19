@@ -18,22 +18,11 @@ class GitHubDiscoveryClientTest {
             cacheDir = tempDir
         )
 
-        // When offline or without API token, getDiscoveryFeed must fall back to curated discovery apps
+        // When offline or without API token, getDiscoveryFeed must not fabricate fake trending apps
         val feed = client.getDiscoveryFeed(limit = 3)
 
         assertNotNull(feed)
-        assertTrue(feed.trendingHero.isNotEmpty(), "Trending hero list must not be empty")
-
-        val clearPdf = feed.trendingHero.find { it.name == "ClearPDF" }
-        assertNotNull(clearPdf)
-        assertEquals("Chethan616", clearPdf.owner)
-        assertTrue(clearPdf.capabilities.isZeroCloud)
-        assertTrue(clearPdf.screenshots.isNotEmpty())
-
-        val bitChord = feed.trendingHero.find { it.name == "BitChord" }
-        assertNotNull(bitChord)
-        assertEquals("kushagrasinghx", bitChord.owner)
-        assertTrue(bitChord.screenshots.isNotEmpty())
+        assertTrue(feed.trendingHero.isEmpty(), "Trending hero list must not contain fabricated apps when offline")
     }
 
     @Test
