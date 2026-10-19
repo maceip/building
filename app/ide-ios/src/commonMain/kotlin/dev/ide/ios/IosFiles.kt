@@ -116,6 +116,9 @@ internal object IosFiles {
 
     fun join(dir: String, name: String): String = "${dir.trimEnd('/')}/$name"
 
+    fun join(first: String, vararg parts: String): String =
+        parts.fold(first.trimEnd('/')) { acc, part -> "$acc/${part.trimStart('/')}" }
+
     /** A filename-safe form of [name], so a project title with spaces or slashes still makes a valid folder. */
     fun sanitize(name: String): String =
         name.trim().map { if (it.isLetterOrDigit() || it == '-' || it == '_' || it == '.') it else '_' }

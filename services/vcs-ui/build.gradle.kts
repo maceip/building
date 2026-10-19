@@ -28,6 +28,9 @@ kotlin {
         }
     }
 
+    iosSimulatorArm64()
+    iosArm64()
+
     sourceSets {
         commonMain.dependencies {
             // The IDE shell: GlassSurface, the Ca theme, Primitives. `:ide-ui` re-exposes `:ide-ui-api`
@@ -43,6 +46,7 @@ kotlin {
         }
     }
 }
+
 
 // The module's own generated resource accessor for the vcs_* strings. Kept non-public and pinned to this
 // module's package so it stays a `dev.ide.vcs.ui` detail.

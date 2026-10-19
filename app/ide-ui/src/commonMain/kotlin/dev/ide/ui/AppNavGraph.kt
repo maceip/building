@@ -8,6 +8,11 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.collectAsState
@@ -127,8 +132,16 @@ internal fun AppNavGraph(
                     }
                 }
             } else {
-                AppRoute(s, app, state, fileActions, codeFont, dark, scope)
+                val bottomModifier = if (s != Screen.Projects && s != Screen.Editor) {
+                    Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+                } else {
+                    Modifier.fillMaxSize()
+                }
+                Box(bottomModifier) {
+                    AppRoute(s, app, state, fileActions, codeFont, dark, scope)
+                }
             }
+
         }
     }
 }

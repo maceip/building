@@ -8,8 +8,15 @@ from PIL import Image, ImageChops, ImageDraw, ImageOps
 ROOT = Path(__file__).resolve().parents[1]
 BRAND = ROOT / "branding/building"
 RES = ROOT / "app/ide-android/src/main/res"
-BACKGROUND = "#151716"
-DENSITIES = {"mdpi": 1, "hdpi": 1.5, "xhdpi": 2, "xxhdpi": 3, "xxxhdpi": 4}
+USE = Path("/tmp/use_icons")
+BACKGROUND = "#141414"
+DENSITIES = {
+    "mdpi": (1.0, 48),
+    "hdpi": (1.5, 72),
+    "xhdpi": (2.0, 96),
+    "xxhdpi": (3.0, 144),
+    "xxxhdpi": (4.0, 192),
+}
 
 
 def inset(image, canvas, artwork):
@@ -22,44 +29,65 @@ def inset(image, canvas, artwork):
 def main():
     dark = Image.open(BRAND / "icon-dark.png").convert("RGBA")
     clear = Image.open(BRAND / "icon-clear-dark.png").convert("RGBA")
-    # Themed launcher artwork follows the color source; alpha preserves its dark cutouts.
+    # Themed launcher artwork follows the color source; alpha preserves dark cutouts.
     luminance = ImageOps.grayscale(dark)
     alpha = luminance.point(lambda n: max(0, min(255, round((n - 55) * 255 / 160))))
-    alpha = ImageChops.multiply(alpha, dark.getchannel("A"))
     mono = Image.new("RGBA", dark.size, "white")
     mono.putalpha(alpha)
-    # At notification size the artwork's speech/sparkle emblem reads more clearly
-    # than the complete stack. Preserve its dark star cutouts in the alpha mask.
-    glyph = clear.crop((385, 76, 623, 290))
-    glyph_alpha = ImageOps.grayscale(glyph).point(lambda n: max(0, min(255, round((n - 180) * 255 / 45))))
-    glyph_alpha = ImageChops.multiply(glyph_alpha, glyph.getchannel("A"))
-    glyph = Image.new("RGBA", glyph.size, "white")
-    glyph.putalpha(glyph_alpha)
+
+    # Extract play emblem from the bottom control area
+    button = dark.crop((170, 350, 345, 505))
+    gray = button.convert("L")
+    tri_mask = Image.new("L", button.size, 0)
+    for y in range(45, 140):
+        for x in range(35, 145):
+            val = gray.getpixel((x, y))
+            if val > 120:
+                tri_mask.putpixel((x, y), min(255, int((val - 120) * 255 / 80)))
+    glyph = Image.new("RGBA", button.size, "white")
+    glyph.putalpha(tri_mask)
     glyph = glyph.crop(glyph.getbbox())
-    for density, scale in DENSITIES.items():
+
+    for density, (scale, px) in DENSITIES.items():
         mipmap = RES / f"mipmap-{density}"
         mipmap.mkdir(exist_ok=True)
         size = round(108 * scale)
-        foreground = inset(dark, size, round(66 * scale))
+        art_size = round(66 * scale)
+
+        # Legacy square and round icons
+        sq_src = USE / f"sq_{px}.png"
+        if sq_src.exists():
+            legacy = Image.open(sq_src).convert("RGBA")
+        else:
+            legacy = dark.resize((px, px), Image.Resampling.LANCZOS)
+        legacy.save(mipmap / "ic_launcher.webp", format="WEBP", lossless=True)
+
+        rd_src = USE / f"rd_{px}.png"
+        if rd_src.exists():
+            legacy_round = Image.open(rd_src).convert("RGBA")
+        else:
+            legacy_round = clear.resize((px, px), Image.Resampling.LANCZOS)
+        legacy_round.save(mipmap / "ic_launcher_round.webp", format="WEBP", lossless=True)
+
+        # Adaptive icon layers
         background = Image.new("RGBA", (size, size), BACKGROUND)
-        background.save(mipmap / "ic_launcher_background.png", optimize=True)
-        foreground.save(mipmap / "ic_launcher_foreground.png", optimize=True)
-        inset(mono, size, round(66 * scale)).save(mipmap / "ic_launcher_monochrome.png", optimize=True)
-        background.alpha_composite(foreground)
-        edge = round(18 * scale)
-        legacy = background.crop((edge, edge, size - edge, size - edge))
-        legacy = legacy.resize((round(48 * scale),) * 2, Image.Resampling.LANCZOS)
-        legacy.save(mipmap / "ic_launcher.png", optimize=True)
-        mask = Image.new("L", legacy.size)
-        ImageDraw.Draw(mask).ellipse((0, 0, legacy.width - 1, legacy.height - 1), fill=255)
-        legacy.putalpha(mask)
-        legacy.save(mipmap / "ic_launcher_round.png", optimize=True)
+        background.save(mipmap / "ic_launcher_background.webp", format="WEBP", lossless=True)
+
+        foreground = inset(dark, size, art_size)
+        foreground.save(mipmap / "ic_launcher_foreground.webp", format="WEBP", lossless=True)
+
+        inset(mono, size, art_size).save(mipmap / "ic_launcher_monochrome.webp", format="WEBP", lossless=True)
+
+        # Notification status icon
         drawable = RES / f"drawable-{density}"
         drawable.mkdir(exist_ok=True)
-        small = ImageOps.contain(glyph, (round(20 * scale),) * 2, Image.Resampling.LANCZOS)
-        notification = Image.new("RGBA", (round(24 * scale),) * 2)
-        notification.alpha_composite(small, ((notification.width - small.width) // 2, (notification.height - small.height) // 2))
-        notification.save(drawable / "ic_stat_building.png", optimize=True)
+        stat_size = round(24 * scale)
+        stat_fit = round(20 * scale)
+        small = ImageOps.contain(glyph, (stat_fit, stat_fit), Image.Resampling.LANCZOS)
+        notification = Image.new("RGBA", (stat_size, stat_size), (0, 0, 0, 0))
+        notification.alpha_composite(small, ((stat_size - small.width) // 2, (stat_size - small.height) // 2))
+        notification.save(drawable / "ic_stat_building.webp", format="WEBP", lossless=True)
+
     store = Image.new("RGBA", dark.size, BACKGROUND)
     store.alpha_composite(dark)
     store.convert("RGB").resize((512, 512), Image.Resampling.LANCZOS).save(BRAND / "play-store-icon.png", optimize=True)

@@ -1,9 +1,18 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package dev.ide.ios
 
 import dev.ide.kotlin.syntax.KotlinOutline
 import dev.ide.ios.store.IosPreferences
 import dev.ide.ios.store.IosStoreService
 import dev.ide.ios.store.StoreConfig
+import dev.ide.ios.discovery.IosDiscoveryBackend
+import dev.ide.ios.agent.IosAgentService
+import dev.ide.ios.guest.*
+import dev.ide.ui.backend.GitHubDiscoveryService
+import dev.ide.ui.backend.AgentService
+import dev.ide.ui.backend.UiRenameTarget
+import dev.ide.ui.backend.UiRenameResult
 import dev.ide.deps.ArtifactKind
 import dev.ide.lang.kotlin.NavKind
 import dev.ide.model.Coordinate
@@ -76,6 +85,8 @@ import dev.ide.ui.backend.RunConsoleUi
 import dev.ide.ui.backend.RunFrameUi
 import dev.ide.ui.backend.RunPhase
 import dev.ide.ui.backend.RunStatus
+import dev.ide.ui.backend.ConsoleChunk
+import dev.ide.ui.backend.ConsoleChunkKind
 import dev.ide.ui.backend.RunTaskOption
 import dev.ide.ui.backend.UiLogLevel
 import dev.ide.ui.icons.fileIconId
@@ -91,8 +102,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import platform.Foundation.NSTemporaryDirectory
+import platform.Foundation.NSData
+import platform.Foundation.NSURL
+import platform.Foundation.dataWithContentsOfURL
+import platform.Foundation.writeToFile
+import dev.ide.ui.backend.VcsService
+import dev.ide.ui.backend.UiVcsStatus
+import dev.ide.ui.backend.UiVcsActivity
+import dev.ide.ui.backend.UiVcsAccount
+import dev.ide.ui.backend.UiVcsSignIn
+import dev.ide.ui.backend.UiVcsResult
+import dev.ide.ui.backend.UiProjectFolderKind
 import dev.ide.platform.log.Log
 import kotlin.time.TimeSource
+
 
 /**
  * The iOS host's [dev.ide.ui.backend.IdeBackend]: real files, real projects, a real Kotlin editor.
@@ -190,8 +213,122 @@ class IosBackend(
         },
     )
 
+    override val discovery: GitHubDiscoveryService = IosDiscoveryBackend(preferences)
+
+    override val agent: AgentService by lazy { IosAgentService(this, preferences, backendScope) }
+
+    override val vcs: VcsService = object : VcsService {
+        private val _status = MutableStateFlow(UiVcsStatus())
+        private val _activity = MutableStateFlow(UiVcsActivity())
+        private val _accounts = MutableStateFlow<List<UiVcsAccount>>(emptyList())
+        private val _signIn = MutableStateFlow<UiVcsSignIn>(UiVcsSignIn.Idle)
+
+        override val status: StateFlow<UiVcsStatus> = _status
+        override val activity: StateFlow<UiVcsActivity> = _activity
+        override val accounts: StateFlow<List<UiVcsAccount>> = _accounts
+        override val signIn: StateFlow<UiVcsSignIn> = _signIn
+
+        override fun supported(): Boolean = true
+
+        override fun underVersionControl(): Boolean {
+            val root = active?.rootPath ?: return false
+            return IosFiles.exists("$root/.git")
+        }
+
+        override suspend fun refresh() {
+            val root = active?.rootPath ?: run {
+                _status.value = UiVcsStatus(present = false)
+                return
+            }
+            if (!IosFiles.exists("$root/.git")) {
+                _status.value = UiVcsStatus(present = false)
+                return
+            }
+            val head = runCatching { IosFiles.readText("$root/.git/HEAD").trim() }.getOrNull()
+            val branch = head?.removePrefix("ref: refs/heads/") ?: "main"
+            _status.value = UiVcsStatus(present = true, branch = branch)
+        }
+
+        override suspend fun cloneRepository(url: String, directoryName: String): UiVcsResult {
+            val trimmedUrl = url.trim()
+            val targetName = directoryName.trim().ifBlank {
+                trimmedUrl.substringAfterLast('/').removeSuffix(".git")
+            }
+            if (targetName.isBlank()) {
+                return UiVcsResult(false, "Repository name cannot be blank")
+            }
+            val targetPath = IosFiles.join(projectsRoot, targetName)
+            if (IosFiles.exists(targetPath)) {
+                return UiVcsResult(false, "Directory already exists: $targetName")
+            }
+
+            _activity.value = UiVcsActivity(busy = true, task = "Cloning $targetName...")
+            try {
+                var success = false
+                val cmd = "git clone --depth 1 \"$trimmedUrl\" \"$targetPath\""
+                val pipe = platform.posix.popen(cmd, "r")
+                if (pipe != null) {
+                    val code = platform.posix.pclose(pipe)
+                    if (code == 0 && IosFiles.exists(targetPath)) {
+                        success = true
+                    }
+                }
+
+                if (!success) {
+                    val cleanUrl = trimmedUrl.removeSuffix(".git").trimEnd('/')
+                    if (cleanUrl.startsWith("https://github.com/")) {
+                        val parts = cleanUrl.removePrefix("https://github.com/").split('/')
+                        if (parts.size >= 2) {
+                            val owner = parts[0]
+                            val repo = parts[1]
+                            for (b in listOf("main", "master")) {
+                                val zipUrl = "https://codeload.github.com/$owner/$repo/zip/refs/heads/$b"
+                                val nsUrl = platform.Foundation.NSURL.URLWithString(zipUrl)
+                                if (nsUrl != null) {
+                                    val data = NSData.dataWithContentsOfURL(nsUrl)
+                                    if (data != null && data.length.toLong() > 100L) {
+                                        val tempZip = "${platform.Foundation.NSTemporaryDirectory()}/$repo-$b.zip"
+                                        data.writeToFile(tempZip, true)
+                                        val p = platform.posix.popen("unzip -q \"$tempZip\" -d \"${platform.Foundation.NSTemporaryDirectory()}\"", "r")
+                                        if (p != null) {
+                                            platform.posix.pclose(p)
+                                            val extracted = "${platform.Foundation.NSTemporaryDirectory()}/$repo-$b"
+                                            if (IosFiles.exists(extracted)) {
+                                                IosFiles.move(extracted, targetPath)
+                                                success = true
+                                                break
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (!success) {
+                    if (IosFiles.exists(targetPath)) IosFiles.delete(targetPath)
+                    return UiVcsResult(false, "Failed to clone repository: $url")
+                }
+
+                bumpProjects()
+                val kind = inspectProjectFolder(targetPath)
+                openProject(targetPath)
+                return UiVcsResult(
+                    ok = true,
+                    message = "Cloned $targetName",
+                    path = targetPath,
+                    projectKind = kind,
+                )
+            } finally {
+                _activity.value = UiVcsActivity(busy = false)
+            }
+        }
+    }
+
     private val fsEpoch = MutableStateFlow(0)
     private val projEpoch = MutableStateFlow(0)
+
 
     init {
         if (!IosFiles.exists(projectsRoot)) IosFiles.mkdirs(projectsRoot)
@@ -611,16 +748,250 @@ class IosBackend(
     private var runSurfaceHeight = 640
     private var runFrameSeq = 0L
 
-    override fun runTasks(): List<RunTaskOption> = listOf(
-        RunTaskOption("run", "Run App", "Application")
-    )
+    override fun runTasks(): List<RunTaskOption> {
+        val root = active?.rootPath?.takeIf { it.isNotEmpty() }
+        val options = mutableListOf<RunTaskOption>()
+        if (root != null) {
+            val guestArtifacts = GuestAppRunner.findGuestArtifacts(root)
+            if (guestArtifacts.isNotEmpty()) {
+                options.add(RunTaskOption("ios:guest:run", "Run in LiveContainer (Live Session)", "Application"))
+                options.add(RunTaskOption("ios:guest:patch", "Patch Mach-O to Dylib (LiveContainer)", "Build"))
+            } else {
+                options.add(RunTaskOption("ios:guest:run", "Run in LiveContainer (Live Session)", "Application"))
+                options.add(RunTaskOption("ios:guest:patch", "Patch Mach-O to Dylib (LiveContainer)", "Build"))
+            }
+            val discovered = IosRuntimeRunner.discoverTasks(root)
+            if (discovered.isNotEmpty()) {
+                options.addAll(discovered.map { it.option })
+            }
+        }
+        if (options.isEmpty()) {
+            options.add(RunTaskOption("run", "Run App", "Application"))
+        }
+        return options
+    }
 
     override fun runTask(id: String) {
-        runBuild()
+        val root = active?.rootPath?.takeIf { it.isNotEmpty() } ?: return
+        when (id) {
+            "ios:guest:run" -> {
+                runGuestAppSession(root)
+                return
+            }
+            "ios:guest:patch" -> {
+                patchGuestAppArtifacts(root)
+                return
+            }
+            "run" -> {
+                runBuild()
+                return
+            }
+        }
+        val tasks = IosRuntimeRunner.discoverTasks(root)
+        val matched = tasks.firstOrNull { it.option.id == id }
+        if (matched != null) {
+            runExternalRuntimeTask(matched, root)
+            return
+        }
     }
 
     override fun runBuild() {
         val root = active?.rootPath?.takeIf { it.isNotEmpty() } ?: return
+        val guestArtifacts = GuestAppRunner.findGuestArtifacts(root)
+        if (guestArtifacts.isNotEmpty()) {
+            runGuestAppSession(root)
+            return
+        }
+        val tasks = IosRuntimeRunner.discoverTasks(root)
+        val primaryTask = tasks.firstOrNull()
+        if (primaryTask != null) {
+            runExternalRuntimeTask(primaryTask, root)
+            return
+        }
+        runKotlinComposeBuild(root)
+    }
+
+    private fun runGuestAppSession(root: String) {
+        val currentRunning = activeRunSession
+        if (currentRunning != null) {
+            stopBuild()
+        }
+        val sessionId = (activeRunSession ?: 0) + 1
+        activeRunSession = sessionId
+
+        _buildState.value = BuildState(status = RunStatus.Running)
+        _runConsole.value = RunConsoleUi(
+            id = sessionId,
+            moduleName = active?.name ?: "app",
+            mainClass = "LiveContainer Guest Runner",
+            phase = RunPhase.Running,
+            transcript = emptyList(),
+            acceptsInput = true,
+        )
+
+        runJob = backendScope.launch {
+            val onChunk: (ConsoleChunk) -> Unit = { chunk ->
+                _runConsole.update { console ->
+                    console?.copy(transcript = console.transcript + chunk)
+                }
+            }
+
+            onChunk(ConsoleChunk("=== Launching Guest App in LiveContainer Session ===\n", ConsoleChunkKind.SYSTEM))
+            val artifacts = GuestAppRunner.findGuestArtifacts(root)
+            if (artifacts.isEmpty()) {
+                onChunk(ConsoleChunk("No guest app artifact (.ipa, .app, or .kexe) found in $root\n", ConsoleChunkKind.SYSTEM))
+                _buildState.value = BuildState(status = RunStatus.Failed)
+                _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = 1) }
+                activeRunSession = null
+                return@launch
+            }
+
+            val primaryArtifact = artifacts.first()
+            onChunk(ConsoleChunk("Selected target artifact: $primaryArtifact\n", ConsoleChunkKind.SYSTEM))
+
+            val result = withContext(ioDispatcher) {
+                GuestAppRunner.runGuestApp(primaryArtifact) { logLine ->
+                    onChunk(ConsoleChunk("$logLine\n", ConsoleChunkKind.OUTPUT))
+                }
+            }
+
+            val success = result.success
+            onChunk(ConsoleChunk("\n[LiveContainer session: ${if (success) "ACTIVE" else "FAILED"}]\n", ConsoleChunkKind.SYSTEM))
+            _buildState.value = BuildState(
+                status = if (success) RunStatus.Succeeded else RunStatus.Failed,
+                log = result.logs.map { BuildLogLine(it, if (success) UiLogLevel.Info else UiLogLevel.Error) },
+            )
+            _runConsole.update {
+                it?.copy(phase = if (success) RunPhase.Running else RunPhase.Finished, acceptsInput = true, exitCode = if (success) 0 else 1)
+            }
+            if (!success) {
+                activeRunSession = null
+            }
+        }
+    }
+
+    private fun patchGuestAppArtifacts(root: String) {
+        val currentRunning = activeRunSession
+        if (currentRunning != null) {
+            stopBuild()
+        }
+        val sessionId = (activeRunSession ?: 0) + 1
+        activeRunSession = sessionId
+
+        _buildState.value = BuildState(status = RunStatus.Running)
+        _runConsole.value = RunConsoleUi(
+            id = sessionId,
+            moduleName = active?.name ?: "app",
+            mainClass = "LiveContainer Mach-O Patcher",
+            phase = RunPhase.Building,
+            transcript = emptyList(),
+            acceptsInput = false,
+        )
+
+        runJob = backendScope.launch {
+            val onChunk: (ConsoleChunk) -> Unit = { chunk ->
+                _runConsole.update { console ->
+                    console?.copy(transcript = console.transcript + chunk)
+                }
+            }
+
+            onChunk(ConsoleChunk("=== Patching Mach-O Executable (MH_EXECUTE → MH_DYLIB) ===\n", ConsoleChunkKind.SYSTEM))
+            val artifacts = GuestAppRunner.findGuestArtifacts(root)
+            if (artifacts.isEmpty()) {
+                onChunk(ConsoleChunk("No Mach-O binary found to patch in $root\n", ConsoleChunkKind.SYSTEM))
+                _buildState.value = BuildState(status = RunStatus.Failed)
+                _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = 1) }
+                activeRunSession = null
+                return@launch
+            }
+
+            var anyPatched = false
+            withContext(ioDispatcher) {
+                for (artifact in artifacts) {
+                    val execPath = if (artifact.endsWith(".app")) {
+                        val meta = GuestAppContainer.inspectApp(artifact)
+                        meta?.executablePath ?: IosFiles.join(artifact, IosFiles.nameOf(artifact).removeSuffix(".app"))
+                    } else artifact
+
+                    if (IosFiles.exists(execPath) && !IosFiles.isDirectory(execPath)) {
+                        val outDylib = "$execPath.dylib"
+                        onChunk(ConsoleChunk("Patching: $execPath -> $outDylib\n", ConsoleChunkKind.SYSTEM))
+                        val res = MachoPatcher.patchExecutable(execPath, outDylib)
+                        onChunk(ConsoleChunk("${res.message}\n", ConsoleChunkKind.OUTPUT))
+                        if (res.success) anyPatched = true
+                    }
+                }
+            }
+
+            onChunk(ConsoleChunk("\n[Mach-O Patch: ${if (anyPatched) "SUCCESS" else "FAILED"}]\n", ConsoleChunkKind.SYSTEM))
+            _buildState.value = BuildState(status = if (anyPatched) RunStatus.Succeeded else RunStatus.Failed)
+            _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = if (anyPatched) 0 else 1) }
+            activeRunSession = null
+        }
+    }
+
+    private fun runExternalRuntimeTask(task: IosRuntimeRunner.DiscoveredTask, root: String) {
+        val currentRunning = activeRunSession
+        if (currentRunning != null) {
+            stopBuild()
+        }
+        val sessionId = (activeRunSession ?: 0) + 1
+        activeRunSession = sessionId
+
+        _buildState.value = BuildState(status = RunStatus.Running)
+        _runConsole.value = RunConsoleUi(
+            id = sessionId,
+            moduleName = active?.name ?: "app",
+            mainClass = task.option.label,
+            phase = RunPhase.Running,
+            transcript = emptyList(),
+            acceptsInput = true,
+        )
+
+        runJob = backendScope.launch {
+            val onChunk: (ConsoleChunk) -> Unit = { chunk ->
+                _runConsole.update { console ->
+                    console?.copy(transcript = console.transcript + chunk)
+                }
+            }
+
+            onChunk(ConsoleChunk("=== Launching ${task.option.label} ===\n", ConsoleChunkKind.SYSTEM))
+
+            val exitCode: Int
+            if (task.runtime == IosRuntimeRunner.RuntimeKind.NODE && task.targetFile != null && !hasNodeExecutable()) {
+                val script = IosFiles.readText(task.targetFile)
+                val success = IosRuntimeRunner.runJavaScriptInProcess(script, IosFiles.nameOf(task.targetFile), root, onChunk)
+                exitCode = if (success) 0 else 1
+            } else {
+                val cmd = task.command ?: task.targetFile ?: "echo 'No command specified'"
+                exitCode = withContext(ioDispatcher) {
+                    IosRuntimeRunner.runProcess(cmd, root, onChunk)
+                }
+            }
+
+            onChunk(ConsoleChunk("\n[Process finished with exit code $exitCode]\n", ConsoleChunkKind.SYSTEM))
+            _buildState.value = BuildState(
+                status = if (exitCode == 0) RunStatus.Succeeded else RunStatus.Failed,
+                log = listOf(
+                    BuildLogLine(
+                        "${task.option.label} finished with code $exitCode",
+                        if (exitCode == 0) UiLogLevel.Info else UiLogLevel.Error,
+                    ),
+                ),
+            )
+            _runConsole.update {
+                it?.copy(phase = RunPhase.Finished, exitCode = exitCode, acceptsInput = false)
+            }
+            activeRunSession = null
+        }
+    }
+
+    private fun hasNodeExecutable(): Boolean =
+        IosFiles.exists("/usr/local/bin/node") ||
+            IosFiles.exists("/opt/homebrew/bin/node") ||
+            IosFiles.exists("/usr/bin/node")
+
+    private fun runKotlinComposeBuild(root: String) {
         val currentRunning = activeRunSession
         if (currentRunning != null) {
             stopBuild()
@@ -752,6 +1123,27 @@ class IosBackend(
         }
         _runConsole.update { it?.copy(phase = RunPhase.Finished) }
         _buildState.value = BuildState(status = RunStatus.Idle)
+    }
+
+    override fun sendRunInput(text: String) {
+        val line = if (text.endsWith("\n")) text else "$text\n"
+        val chunk = ConsoleChunk(line, ConsoleChunkKind.INPUT)
+        if (_runConsole.value == null) {
+            _runConsole.value = RunConsoleUi(
+                id = 1,
+                moduleName = active?.name ?: "app",
+                mainClass = "Console",
+                phase = RunPhase.Running,
+                transcript = listOf(chunk),
+                acceptsInput = true,
+            )
+        } else {
+            _runConsole.update { console ->
+                console?.copy(
+                    transcript = console.transcript + chunk,
+                )
+            }
+        }
     }
 
     override fun sendRunPointer(action: Int, x: Float, y: Float) {
@@ -1119,6 +1511,71 @@ class IosBackend(
         UiActionEdits(focal = fix.edits.map { UiTextEdit(it.offset, it.offset + it.oldLength, it.newText.toString()) })
     }
 
+    override suspend fun prepareRename(path: String, text: String, offset: Int): UiRenameTarget? {
+        if (offset < 0 || offset >= text.length) return null
+        val (start, end) = identifierRangeAt(text, offset) ?: return null
+        val word = text.substring(start, end)
+        if (word.isBlank() || !isValidIdentifier(word)) return null
+        return UiRenameTarget(oldName = word, kind = "symbol")
+    }
+
+    override suspend fun rename(path: String, text: String, offset: Int, newName: String): UiRenameResult {
+        val trimmedNew = newName.trim()
+        if (!isValidIdentifier(trimmedNew)) {
+            return UiRenameResult(false, "'$trimmedNew' is not a valid identifier")
+        }
+        val target = prepareRename(path, text, offset)
+            ?: return UiRenameResult(false, "No symbol under caret to rename")
+        val oldName = target.oldName
+        if (oldName == trimmedNew) {
+            return UiRenameResult(true, "Name is unchanged", occurrences = 0, filesChanged = 0)
+        }
+
+        val root = active?.rootPath ?: return UiRenameResult(false, "No active project")
+        val files = findKotlinSourceFiles(root)
+        var totalOccurrences = 0
+        var totalFiles = 0
+        val wordRegex = Regex("\\b${Regex.escape(oldName)}\\b")
+
+        for (f in files) {
+            val content = buffers[f] ?: IosFiles.readText(f)
+            if (wordRegex.containsMatchIn(content)) {
+                val matches = wordRegex.findAll(content).count()
+                totalOccurrences += matches
+                totalFiles++
+                val updated = wordRegex.replace(content, trimmedNew)
+                IosFiles.writeText(f, updated)
+                if (buffers[f] != null) {
+                    buffers[f] = updated
+                }
+            }
+        }
+        fsEpoch.update { it + 1 }
+        resetAnalysis()
+        return UiRenameResult(
+            success = true,
+            message = "Renamed '$oldName' to '$trimmedNew'",
+            occurrences = totalOccurrences,
+            filesChanged = totalFiles,
+        )
+    }
+
+    private fun identifierRangeAt(text: String, offset: Int): Pair<Int, Int>? {
+        if (text.isEmpty()) return null
+        var o = offset.coerceIn(0, text.length - 1)
+        if (!isIdentifierPart(text[o])) {
+            if (o > 0 && isIdentifierPart(text[o - 1])) o-- else return null
+        }
+        var start = o
+        while (start > 0 && isIdentifierPart(text[start - 1])) start--
+        var end = o
+        while (end < text.length && isIdentifierPart(text[end])) end++
+        return if (start < end) start to end else null
+    }
+
+    private fun isIdentifierPart(c: Char): Boolean = c.isLetterOrDigit() || c == '_' || c == '$'
+    private fun isValidIdentifier(s: String): Boolean = s.isNotEmpty() && (s[0].isLetter() || s[0] == '_') && s.all { isIdentifierPart(it) }
+
     /**
      * The three text-driven editor commands, which share a shape: Kotlin only, degrade to no edits, and
      * return a `[start, end)` replacement the editor applies through its surgical edit path.
@@ -1241,8 +1698,8 @@ class IosBackend(
     override suspend fun openProject(rootPath: String): Boolean {
         if (!IosFiles.isDirectory(rootPath)) return false
         resetAnalysis()
-        active = projectInfo(rootPath)
         withContext(ioDispatcher) { projectModel.reopen(rootPath) }
+        active = projectInfo(rootPath)
         ensureClasspath(rootPath)
         bumpProjects()
         return true
@@ -1272,6 +1729,50 @@ class IosBackend(
         bumpProjects()
         return true
     }
+
+    override suspend fun inspectProjectFolder(path: String): UiProjectFolderKind {
+        val p = path.trimEnd('/', '\\')
+        return when {
+            IosFiles.exists("$p/.platform/workspace.json") || IosFiles.exists("$p/module.toml") -> UiProjectFolderKind.CODE_ASSIST
+            IosFiles.exists("$p/build.gradle") || IosFiles.exists("$p/build.gradle.kts") ||
+                IosFiles.exists("$p/settings.gradle") || IosFiles.exists("$p/settings.gradle.kts") -> UiProjectFolderKind.GRADLE
+            IosFiles.exists("$p/Package.swift") -> UiProjectFolderKind.SWIFT
+            IosFiles.exists("$p/package.json") -> UiProjectFolderKind.NODE
+            IosFiles.exists("$p/requirements.txt") || IosFiles.exists("$p/pyproject.toml") -> UiProjectFolderKind.PYTHON
+            else -> UiProjectFolderKind.CODE_ASSIST
+        }
+    }
+
+    override suspend fun importExternalProject(sourceRootPath: String): UiProjectResult {
+        if (!IosFiles.isDirectory(sourceRootPath)) {
+            return UiProjectResult(false, "Selected source is not a directory: $sourceRootPath")
+        }
+        val name = IosFiles.sanitize(sourceRootPath.substringAfterLast('/').substringAfterLast('\\').ifBlank { "ImportedProject" })
+        var dest = IosFiles.join(projectsRoot, name)
+        if (dest != sourceRootPath) {
+            var counter = 1
+            while (IosFiles.exists(dest)) {
+                dest = IosFiles.join(projectsRoot, "${name}_${counter++}")
+            }
+            val ok = IosFiles.copy(sourceRootPath, dest)
+            if (!ok && !IosFiles.exists(dest)) {
+                return UiProjectResult(false, "Could not copy project files into storage")
+            }
+        }
+        bumpProjects()
+        val opened = openProject(dest)
+        return if (opened) {
+            UiProjectResult(true, "Imported $name", dest)
+        } else {
+            UiProjectResult(false, "Could not open imported project")
+        }
+    }
+
+    override suspend fun openFolderInPlace(rootPath: String): UiProjectResult {
+        val opened = openProject(rootPath)
+        return if (opened) UiProjectResult(true, "Opened folder", rootPath) else UiProjectResult(false, "Could not open folder")
+    }
+
 
 
     // ---- ModuleService ------------------------------------------------------------------------------
@@ -1734,18 +2235,38 @@ class IosBackend(
     /** A project change moves files too, so the tree is re-read alongside the project switch. */
     private fun bumpProjects() { projEpoch.value += 1; bumpFs() }
 
-    /**
-     * A project as the picker shows it, with the module count read from the model.
-     *
-     * One place rather than three, because the count is the part that used to be a lie: it was hard-coded
-     * to 1, so a two-module project created on the desktop and opened here described itself as one.
-     */
-    private fun projectInfo(root: String) = ProjectInfo(
-        name = IosFiles.nameOf(root),
-        rootPath = root,
-        moduleCount = projectModel.moduleNames(root).size.coerceAtLeast(1),
-        lastOpened = IosFiles.modifiedMs(root),
+    override fun uiPlugins(): List<dev.ide.ui.ext.UiPlugin> = listOf(
+        IosWorkbenchUiPlugin,
+        dev.ide.vcs.ui.VcsUiPlugin,
+        dev.ide.agent.ui.AgentUiPlugin,
     )
+
+    /**
+     * A project as the picker shows it, with the module count and multi-runtime metadata read from the model.
+     */
+    private fun projectInfo(root: String): ProjectInfo {
+        val store = projectModel.storeFor(root)
+        val isNode = projectModel.isNode(root)
+        val isPython = projectModel.isPython(root)
+        val isSwift = projectModel.isSwift(root)
+        val isAndroid = store?.workspace?.projects?.any { p ->
+            p.modules.any { it.type.id in listOf("android-app", "android-lib") }
+        } ?: false
+        val unrecognized = !isNode && !isPython && !isSwift && !isAndroid &&
+            (store?.workspace?.projects?.isEmpty() == true ||
+                store?.workspace?.projects?.all { it.modules.isEmpty() } == true)
+        return ProjectInfo(
+            name = IosFiles.nameOf(root),
+            rootPath = root,
+            moduleCount = projectModel.moduleNames(root).size.coerceAtLeast(1),
+            lastOpened = IosFiles.modifiedMs(root),
+            isNode = isNode,
+            isPython = isPython,
+            isSwift = isSwift,
+            isAndroid = isAndroid,
+            unrecognized = unrecognized,
+        )
+    }
 
     private companion object {
         const val MAX_TREE_DEPTH = 12

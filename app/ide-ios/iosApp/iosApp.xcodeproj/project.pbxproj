@@ -7,12 +7,14 @@
 
 /* Begin PBXBuildFile section */
 		000000000000000000000009 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000008 /* App.swift */; };
+		000000000000000000000015 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000016 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		000000000000000000000003 /* CodeAssist.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodeAssist.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		000000000000000000000008 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		00000000000000000000000A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		000000000000000000000016 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -21,7 +23,7 @@
 
 /* Begin PBXGroup section */
 		000000000000000000000007 = {isa = PBXGroup; children = (000000000000000000000005 /* iosApp */, 000000000000000000000006 /* Products */, ); sourceTree = "<group>"; };
-		000000000000000000000005 /* iosApp */ = {isa = PBXGroup; children = (000000000000000000000008 /* App.swift */, 00000000000000000000000A /* Info.plist */, ); path = iosApp; sourceTree = "<group>"; };
+		000000000000000000000005 /* iosApp */ = {isa = PBXGroup; children = (000000000000000000000008 /* App.swift */, 00000000000000000000000A /* Info.plist */, 000000000000000000000016 /* Assets.xcassets */, ); path = iosApp; sourceTree = "<group>"; };
 		000000000000000000000006 /* Products */ = {isa = PBXGroup; children = (000000000000000000000003 /* CodeAssist.app */, ); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
@@ -56,7 +58,7 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		00000000000000000000000D /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		00000000000000000000000D /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (000000000000000000000015 /* Assets.xcassets in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
@@ -70,7 +72,7 @@
 			outputPaths = ();
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\ncd \"$SRCROOT/../../..\"\nexport JAVA_HOME=\"${JAVA_HOME:-/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home}\"\n# The Kotlin target follows what Xcode is building for: the device links iosArm64, the\n# simulator iosSimulatorArm64. Reading SDK_NAME rather than the destination keeps one phase\n# correct for both.\ncase \"$SDK_NAME\" in\n  iphoneos*) KOTLIN_TARGET=IosArm64 ;;\n  *) KOTLIN_TARGET=IosSimulatorArm64 ;;\nesac\n./gradlew --quiet \":ide-ios:link${CONFIGURATION}Framework${KOTLIN_TARGET}\" :ide-ios:syncComposeResourcesForIos :ide-ios:syncPreviewRuntimeForIos\n";
+			shellScript = "set -e\ncd \"$SRCROOT/../../..\"\nexport JAVA_HOME=\"${JAVA_HOME:-/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home}\"\n# The Kotlin target follows what Xcode is building for: the device links iosArm64, the\n# simulator iosSimulatorArm64. Reading SDK_NAME rather than the destination keeps one phase\n# correct for both.\ncase \"$SDK_NAME\" in\n  iphoneos*) KOTLIN_TARGET=IosArm64 ;;\n  *) KOTLIN_TARGET=IosSimulatorArm64; export ARCHS=\"arm64\" ;;\nesac\n./gradlew --quiet \":ide-ios:link${CONFIGURATION}Framework${KOTLIN_TARGET}\" :ide-ios:syncComposeResourcesForIos :ide-ios:syncPreviewRuntimeForIos\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -119,6 +121,7 @@
 		000000000000000000000012 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"ARCHS[sdk=iphonesimulator*]" = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
 				"CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]" = NO;
@@ -147,6 +150,7 @@
 		000000000000000000000013 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				"ARCHS[sdk=iphonesimulator*]" = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
 				"CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]" = NO;

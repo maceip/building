@@ -171,6 +171,9 @@ kotlin {
             // has (files, projects, saving) and inherits the empty/`Unsupported` answers for the rest.
             // `api`, not `implementation`: it is the supertype of a public class here.
             api(project(":ide-ui-testing"))
+            implementation(project(":kotlin-classfile"))
+            implementation(project(":vcs-ui"))
+            implementation(project(":agent-ui"))
 
             // The Projects Store. The transport (:store-impl) and its translation onto the UI contract
             // (:store-bridge) are the same code the Android and desktop hosts run; what this host supplies
@@ -179,6 +182,7 @@ kotlin {
             implementation(project(":store-api"))
             implementation(project(":store-impl"))
             implementation(project(":store-bridge"))
+            implementation(project(":platform-json"))
             // Kotlin syntax analysis that needs no JVM: the compiler's own parser, vendored and built for
             // this target. It backs the outline and code folding.
             implementation(project(":kotlin-syntax"))

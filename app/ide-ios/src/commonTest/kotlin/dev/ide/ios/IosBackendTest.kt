@@ -4,6 +4,7 @@ package dev.ide.ios
 
 import dev.ide.deps.impl.ArtifactFetcher
 import dev.ide.ios.store.IosPreferences
+import dev.ide.ios.guest.*
 import dev.ide.ui.backend.NodeKind
 import dev.ide.ui.backend.TreeViewMode
 import dev.ide.ui.backend.UiHighlightModifier
@@ -1603,6 +1604,169 @@ class IosBackendTest {
         backend.build.sendRunPointer(2, 100f, 100f)
         backend.build.stopBuild()
         assertEquals(dev.ide.ui.backend.RunStatus.Idle, backend.build.buildState.value.status)
+    }
+
+    @Test
+    fun nodeProjectIsAdoptedAndDiscoversTasks() = runTest {
+        val nodeDir = IosFiles.join(root, "my-node-app")
+        IosFiles.mkdirs(nodeDir)
+        IosFiles.writeText(
+            IosFiles.join(nodeDir, "package.json"),
+            """
+            {
+              "name": "my-node-app",
+              "version": "1.0.0",
+              "main": "index.js",
+              "scripts": {
+                "start": "node index.js",
+                "test": "node test.js"
+              }
+            }
+            """.trimIndent()
+        )
+        IosFiles.writeText(
+            IosFiles.join(nodeDir, "index.js"),
+            """console.log("Hello from Node!");"""
+        )
+
+        assertTrue(backend.openProject(nodeDir), "node project opens successfully")
+        val info = backend.project
+        assertTrue(info.isNode, "project is recognized as Node")
+        assertFalse(info.isPython, "project is not Python")
+        assertFalse(info.isSwift, "project is not Swift")
+
+        val tasks = backend.build.runTasks()
+        assertTrue(tasks.any { it.id == "node:script:start" }, "found npm start task")
+        assertTrue(tasks.any { it.id == "node:script:test" }, "found npm test task")
+        assertTrue(tasks.any { it.id == "node:main" || it.id == "node:file:index.js" }, "found node index.js task")
+
+        // Test in-process JS execution
+        val chunks = mutableListOf<dev.ide.ui.backend.ConsoleChunk>()
+        val success = IosRuntimeRunner.runJavaScriptInProcess(
+            script = "console.log('JS test line 1'); 40 + 2;",
+            scriptName = "index.js",
+            cwd = nodeDir,
+            onChunk = { chunks.add(it) },
+        )
+        assertTrue(success, "in-process JS execution succeeded")
+        assertTrue(chunks.any { "JS test line 1" in it.text }, "captured console output")
+        assertTrue(chunks.any { "42" in it.text }, "captured evaluated expression result")
+    }
+
+    @Test
+    fun pythonProjectIsAdoptedAndDiscoversTasks() = runTest {
+        val pyDir = IosFiles.join(root, "my-python-app")
+        IosFiles.mkdirs(pyDir)
+        IosFiles.writeText(
+            IosFiles.join(pyDir, "pyproject.toml"),
+            """
+            [project]
+            name = "my-python-app"
+            version = "0.1.0"
+            """.trimIndent()
+        )
+        IosFiles.writeText(
+            IosFiles.join(pyDir, "main.py"),
+            """print("Hello Python")"""
+        )
+
+        assertTrue(backend.openProject(pyDir), "python project opens successfully")
+        val info = backend.project
+        assertTrue(info.isPython, "project is recognized as Python")
+        assertFalse(info.isNode, "project is not Node")
+
+        val tasks = backend.build.runTasks()
+        assertTrue(tasks.any { it.id == "python:file:main.py" }, "found python main.py task")
+    }
+
+    @Test
+    fun swiftProjectIsAdoptedAndDiscoversTasks() = runTest {
+        val swiftDir = IosFiles.join(root, "my-swift-app")
+        IosFiles.mkdirs(swiftDir)
+        IosFiles.writeText(
+            IosFiles.join(swiftDir, "Package.swift"),
+            """
+            // swift-tools-version:5.5
+            import PackageDescription
+            let package = Package(name: "my-swift-app")
+            """.trimIndent()
+        )
+
+        assertTrue(backend.openProject(swiftDir), "swift project opens successfully")
+        val info = backend.project
+        assertTrue(info.isSwift, "project is recognized as Swift")
+
+        val tasks = backend.build.runTasks()
+        assertTrue(tasks.any { it.id == "swift:run" }, "found swift run task")
+        assertTrue(tasks.any { it.id == "swift:test" }, "found swift test task")
+    }
+
+    @Test
+    fun multiRuntimeProjectCreationAndFileActions() = runTest {
+        val nodeProjectDir = IosFiles.join(root, "created-node-app")
+        IosFiles.mkdirs(nodeProjectDir)
+        IosFiles.writeText(IosFiles.join(nodeProjectDir, "package.json"), "{}")
+        assertTrue(backend.openProject(nodeProjectDir), "opens node project")
+        assertTrue(backend.project.isNode, "isNode is true")
+
+        val pyProjectDir = IosFiles.join(root, "created-python-app")
+        IosFiles.mkdirs(pyProjectDir)
+        IosFiles.writeText(IosFiles.join(pyProjectDir, "main.py"), "print(1)")
+        assertTrue(backend.openProject(pyProjectDir), "opens python project")
+        assertTrue(backend.project.isPython, "isPython is true")
+
+        val host = IosHost()
+        assertTrue(host.fileActions.canShare, "host supports sharing files")
+    }
+
+    @Test
+    fun uiPluginsAndSendRunInputAreSupported() = runTest {
+        val plugins = backend.uiPlugins()
+        assertTrue(plugins.isNotEmpty(), "iOS host contributes UI plugins")
+        assertTrue(plugins.any { it.id == "developer-workbench" }, "has developer-workbench plugin")
+
+        backend.build.sendRunInput("echo test")
+        val console = backend.build.runConsole.value
+        assertNotNull(console, "console exists after sending input")
+        assertTrue(console.transcript.any { "echo test" in it.text }, "input echoed to transcript")
+    }
+
+    @Test
+    fun iosHttpClientAndDiscoveryVerification() = runTest {
+        val resp = dev.ide.ios.http.IosHttpClient.get("https://api.github.com/zen")
+        assertTrue(resp.statusCode == 200 || resp.error != null, "HttpClient executed: status=${resp.statusCode}")
+        assertTrue(backend.discovery.supported(), "discovery supported on iOS")
+        val feed = backend.discovery.getFeed("all", "kotlin", refresh = false)
+        assertNotNull(feed, "feed received")
+    }
+
+    @Test
+    fun guestAppTasksDiscoveredAndRun() = runTest {
+        val guestProject = IosFiles.join(root, "guest-test-project")
+        val buildDir = IosFiles.join(guestProject, "build")
+        val testApp = IosFiles.join(buildDir, "GuestDemo.app")
+        IosFiles.mkdirs(testApp)
+        IosFiles.writeText(
+            IosFiles.join(testApp, "Info.plist"),
+            """<plist><dict><key>CFBundleIdentifier</key><string>com.demo.guest</string></dict></plist>"""
+        )
+
+        assertTrue(backend.openProject(guestProject), "opens guest project")
+        val tasks = backend.build.runTasks()
+        assertTrue(tasks.any { it.id == "ios:guest:run" }, "found ios:guest:run task")
+        assertTrue(tasks.any { it.id == "ios:guest:patch" }, "found ios:guest:patch task")
+
+        backend.build.runTask("ios:guest:patch")
+        withContext(Dispatchers.Default) {
+            withTimeout(10_000) {
+                while (backend.build.runConsole.value?.transcript?.any { "Patching Mach-O" in it.text } != true) {
+                    delay(50)
+                }
+            }
+        }
+        val console = backend.build.runConsole.value
+        assertNotNull(console, "console created for guest patch")
+        assertTrue(console.transcript.any { "Patching Mach-O" in it.text }, "started Mach-O patch task")
     }
 
 }
