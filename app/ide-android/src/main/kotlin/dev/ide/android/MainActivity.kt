@@ -113,9 +113,10 @@ class MainActivity : ComponentActivity() {
         val runtimeReliability = dev.ide.android.reliability.AndroidRuntimeReliability(applicationContext)
         workbenchRuntime = RuntimeController(AndroidRuntimeHost(applicationContext), workbenchScope, observer = runtimeReliability.runtimeObserver)
         UiPluginHost.register(WorkbenchUiPlugin)
+        dev.ide.android.workbench.runtime.RuntimeBrowserBridge.get(applicationContext)
         // Before extractStream: a sign-in redirect is an ACTION_VIEW with a URI, which would otherwise be
         // taken for a file to import.
-        if (!takeAuthRedirect(intent) && !takeStoreLink(intent)) inbound.value = extractStream(intent)
+        if (!takeAuthRedirect(intent) && !takeStoreLink(intent) && !takeRuntimeCallback(intent)) inbound.value = extractStream(intent)
 
         setContent {
             var backend by remember { mutableStateOf<IdeBackend?>(null) }
@@ -378,7 +379,29 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         if (takeAuthRedirect(intent)) return
         if (takeStoreLink(intent)) return
+        if (takeRuntimeCallback(intent)) return
         extractStream(intent)?.let { inbound.value = it }
+    }
+
+    /**
+     * Claim [intent] if it is a developer runtime project OAuth or browser callback.
+     */
+    private fun takeRuntimeCallback(intent: Intent?): Boolean {
+        if (intent?.action != Intent.ACTION_VIEW) return false
+        val uri = intent.data ?: return false
+        if (uri.scheme?.lowercase(java.util.Locale.ROOT) != "codeassist") return false
+        val host = uri.host?.lowercase(java.util.Locale.ROOT)
+        if (host == "callback" || host == "runtime-callback") {
+            val url = uri.toString()
+            dev.ide.android.workbench.runtime.RuntimeBrowserBridge.recordCallback(url)
+            val previewUrl = workbenchRuntime?.state?.value?.previewUrl
+            if (previewUrl != null) {
+                dev.ide.android.workbench.runtime.RuntimeBrowserBridge.forwardCallbackToPreview(previewUrl, uri)
+            }
+            intent.data = null
+            return true
+        }
+        return false
     }
 
     /**

@@ -1,6 +1,8 @@
 package dev.ide.android.workbench.ui
 
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.net.http.SslError
 import android.os.Message
 import android.view.ViewGroup
@@ -35,7 +37,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.ide.android.workbench.runtime.RuntimeBrowserBridge
 import java.io.ByteArrayInputStream
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.delay
 
@@ -53,14 +57,14 @@ internal fun RuntimePreview(address: RuntimePreviewAddress, sessionId: String) {
         runCatching {
             WebView(context).apply {
                 settings.javaScriptEnabled = true
-                settings.javaScriptCanOpenWindowsAutomatically = false
-                settings.setSupportMultipleWindows(false)
+                settings.javaScriptCanOpenWindowsAutomatically = true
+                settings.setSupportMultipleWindows(true)
                 settings.allowFileAccess = false
                 settings.allowContentAccess = false
                 settings.allowFileAccessFromFileURLs = false
                 settings.allowUniversalAccessFromFileURLs = false
-                settings.domStorageEnabled = false
-                settings.databaseEnabled = false
+                settings.domStorageEnabled = true
+                settings.databaseEnabled = true
                 settings.cacheMode = WebSettings.LOAD_NO_CACHE
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 settings.mediaPlaybackRequiresUserGesture = true
@@ -71,12 +75,59 @@ internal fun RuntimePreview(address: RuntimePreviewAddress, sessionId: String) {
                 settings.loadWithOverviewMode = true
                 settings.useWideViewPort = true
                 isSaveEnabled = false
+                CookieManager.getInstance().setAcceptCookie(true)
                 CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
-                // No addJavascriptInterface, local file URLs, permission delegation, or automatic intents.
+                fun handleExternalOrCallback(view: WebView, url: String): Boolean {
+                    if (address.permits(url)) return false
+                    val uri = runCatching { Uri.parse(url) }.getOrNull()
+                    val scheme = uri?.scheme?.lowercase(Locale.ROOT)
+                    if (scheme in setOf("http", "https")) {
+                        runCatching {
+                            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            view.context.startActivity(intent)
+                        }
+                        return true
+                    }
+                    if (scheme == "codeassist") {
+                        RuntimeBrowserBridge.recordCallback(url)
+                        runCatching {
+                            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            view.context.startActivity(intent)
+                        }
+                        return true
+                    }
+                    if (!disposed.get()) view.post { if (!disposed.get()) blocked = true }
+                    return true
+                }
+                // Browser popups, external OAuth redirects, and HTTPS CDN assets are handled safely.
                 webChromeClient = object : WebChromeClient() {
                     override fun onPermissionRequest(request: PermissionRequest) = request.deny()
                     override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) = callback.invoke(origin, false, false)
-                    override fun onCreateWindow(view: WebView, dialog: Boolean, gesture: Boolean, message: Message): Boolean = false
+                    override fun onCreateWindow(view: WebView, dialog: Boolean, gesture: Boolean, message: Message): Boolean {
+                        val transport = message.obj as? WebView.WebViewTransport ?: return false
+                        val popup = WebView(view.context).apply {
+                            webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
+                                    val targetUrl = request.url.toString()
+                                    handleExternalOrCallback(view, targetUrl)
+                                    v.destroy()
+                                    return true
+                                }
+                                override fun shouldOverrideUrlLoading(v: WebView, url: String): Boolean {
+                                    handleExternalOrCallback(view, url)
+                                    v.destroy()
+                                    return true
+                                }
+                            }
+                        }
+                        transport.webView = popup
+                        message.sendToTarget()
+                        return true
+                    }
                     override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<android.net.Uri>>, params: FileChooserParams): Boolean {
                         callback.onReceiveValue(null)
                         if (!disposed.get()) blocked = true
@@ -84,22 +135,28 @@ internal fun RuntimePreview(address: RuntimePreviewAddress, sessionId: String) {
                     }
                 }
                 webViewClient = object : WebViewClient() {
-                    private fun deny(view: WebView, url: String): Boolean {
-                        if (address.permits(url)) return false
-                        if (!disposed.get()) view.post { if (!disposed.get()) blocked = true }
-                        return true
-                    }
+                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+                        handleExternalOrCallback(view, request.url.toString())
 
-                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = deny(view, request.url.toString())
-                    override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean = deny(view, url)
+                    override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
+                        handleExternalOrCallback(view, url)
+
                     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                        if (!deny(view, request.url.toString())) return null
-                        return WebResourceResponse("text/plain", "utf-8", 403, "Blocked", emptyMap(), ByteArrayInputStream("Only this session's loopback origin is allowed.".toByteArray()))
+                        val urlStr = request.url.toString()
+                        if (address.permits(urlStr)) return null
+                        val scheme = request.url.scheme?.lowercase(Locale.ROOT)
+                        // Permit external HTTPS assets (CDNs, fonts, stylesheets, images)
+                        if (scheme == "https") return null
+                        return WebResourceResponse("text/plain", "utf-8", 403, "Blocked", emptyMap(), ByteArrayInputStream("Only this session's loopback origin and HTTPS assets are allowed.".toByteArray()))
                     }
 
                     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
                         if (disposed.get()) return
-                        if (deny(view, url)) { view.stopLoading(); return }
+                        if (!address.permits(url)) {
+                            handleExternalOrCallback(view, url)
+                            view.stopLoading()
+                            return
+                        }
                         loading = true
                     }
 

@@ -78,8 +78,10 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 // Installer-owned nativeLibraryDir changes on APK updates; repair only our pack links.
                 parts.forEach { materializeLinks(it.manifest, prefix) }
             }
+            materializeBrowserShims(prefix)
             // Only manifest-verified signed native payloads may use the split linker entrypoint.
             verifiedNativePaths = nativePaths
+            val browserBridge = RuntimeBrowserBridge.get(app)
             val userHome = home.resolve("home")
             val temp = home.resolve("tmp")
             Files.createDirectories(userHome)
@@ -124,6 +126,8 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 "npm_config_audit" to "false",
                 "npm_config_fund" to "false",
                 "npm_config_update_notifier" to "false",
+                "BUILDING_BROWSER_BRIDGE_PORT" to browserBridge.port.toString(),
+                "BROWSER" to prefix.resolve("bin/xdg-open").toString(),
             )
             if (Files.isRegularFile(prefix.resolve("bin/xtool"))) {
                 env["LD_LIBRARY_PATH"] = "$prefix/lib:$native:$prefix/lib/swift-runtime:$prefix/lib/swift/host:$prefix/lib/swift/host/compiler:$prefix/lib/xtool"
@@ -245,6 +249,41 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
         for (i in 0 until links.length()) {
             val item = links.getJSONObject(i)
             link(confined(prefix, item.getString("path")), confined(prefix, item.getString("target")))
+        }
+    }
+
+    private fun materializeBrowserShims(prefix: Path) {
+        val binDir = prefix.resolve("bin")
+        Files.createDirectories(binDir)
+        val scriptContent = """
+            #!/bin/sh
+            URL="${'$'}1"
+            if [ -z "${'$'}URL" ]; then
+                exit 0
+            fi
+
+            # 1. Try local loopback browser bridge if port is set
+            if [ -n "${'$'}BUILDING_BROWSER_BRIDGE_PORT" ]; then
+                if [ -x "${'$'}PREFIX/bin/python3" ]; then
+                    "${'$'}PREFIX/bin/python3" -c "import urllib.request, urllib.parse, sys; urllib.request.urlopen('http://127.0.0.1:' + sys.argv[1] + '/open?url=' + urllib.parse.quote(sys.argv[2]), timeout=2)" "${'$'}BUILDING_BROWSER_BRIDGE_PORT" "${'$'}URL" 2>/dev/null && exit 0
+                elif [ -x "${'$'}PREFIX/bin/node" ]; then
+                    "${'$'}PREFIX/bin/node" -e "const http = require('http'); const u = encodeURIComponent(process.argv[2]); http.get('http://127.0.0.1:' + process.argv[1] + '/open?url=' + u, () => process.exit(0)).on('error', () => process.exit(0));" "${'$'}BUILDING_BROWSER_BRIDGE_PORT" "${'$'}URL" 2>/dev/null && exit 0
+                fi
+            fi
+
+            # 2. Try Android am start
+            /system/bin/am start -a android.intent.action.VIEW -d "${'$'}URL" 2>/dev/null && exit 0
+
+            exit 0
+        """.trimIndent() + "\n"
+
+        for (name in listOf("xdg-open", "open", "x-www-browser")) {
+            val file = binDir.resolve(name)
+            if (!Files.exists(file) || Files.isSymbolicLink(file)) {
+                Files.deleteIfExists(file)
+                Files.write(file, scriptContent.toByteArray(Charsets.UTF_8))
+                file.toFile().setExecutable(true, false)
+            }
         }
     }
 

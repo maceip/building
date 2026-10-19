@@ -365,7 +365,7 @@ class RuntimeController(
         mutableState.update { current ->
             val transcript = (current.transcript + text).takeLast(MAX_TRANSCRIPT)
             val url = if (current.phase == RuntimePhase.RUNNING && current.previewUrl == null) {
-                PREVIEW.findAll(transcript.takeLast(8192)).lastOrNull()?.value?.replace("localhost", "127.0.0.1")
+                PREVIEW.findAll(transcript.takeLast(8192)).lastOrNull()?.value?.replace("localhost", "127.0.0.1")?.replace("0.0.0.0", "127.0.0.1")
             } else current.previewUrl
             current.copy(transcript = transcript, previewUrl = url)
         }
@@ -411,6 +411,6 @@ class RuntimeController(
     companion object {
         const val MAX_TRANSCRIPT = 256 * 1024
         private val IDENTITY_TOKEN = Regex("[A-Za-z0-9._-]+")
-        private val PREVIEW = Regex("http://(?:127\\.0\\.0\\.1|localhost):[0-9]{2,5}(?:/[^\\s\\\"'<>]*)?")
+        private val PREVIEW = Regex("https?://(?:127\\.0\\.0\\.1|localhost|0\\.0\\.0\\.0):[0-9]{2,5}(?:/[^\\s\\\"'<>]*)?")
     }
 }

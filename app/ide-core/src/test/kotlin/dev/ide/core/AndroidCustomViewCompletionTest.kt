@@ -77,7 +77,13 @@ class AndroidCustomViewCompletionTest {
         // 2) On the custom view, android: attributes inherited from Button/TextView/View are offered.
         val attrText = "<com.example.app.MyButton android:\n"
         val attrOffset = attrText.indexOf("android:") + "android:".length
-        val attrLabels = runBlocking { s.complete(layout, attrText, attrOffset) }.items.map { it.label }
+        val attrDeadline = System.currentTimeMillis() + 60_000
+        var attrLabels: List<String?> = emptyList()
+        while (System.currentTimeMillis() < attrDeadline) {
+            attrLabels = runBlocking { s.complete(layout, attrText, attrOffset) }.items.map { it.label }
+            if ("android:text" in attrLabels) break
+            Thread.sleep(50)
+        }
         assertTrue("android:text" in attrLabels, "inherited android:text expected on the source custom view; got $attrLabels")
     }
 

@@ -126,6 +126,7 @@ object RuntimeSamples {
     fun list(): List<RuntimeSample> = listOf(
         RuntimeSample("node-http", "Node HTTP server", "Offline Node HTTP, npm start, file writes and a browser preview; no dependencies."),
         RuntimeSample("python", "Python console", "Offline input, JSON, sqlite3 and a persisted output file."),
+        RuntimeSample("python-web", "Python web server", "Offline Python HTTP server with interactive web UI and OAuth/callback support."),
         RuntimeSample("static-web", "Static web", "Offline HTML/CSS/JavaScript preview without a runtime download."),
         RuntimeSample("shell", "POSIX shell", "dash variables, a loop, pipes and an output file. Not Bash."),
     )
@@ -164,6 +165,64 @@ object RuntimeSamples {
                     json.dump({'greeting': 'Hello ' + name, 'rows': connection.execute('select count(*) from greetings').fetchone()[0]}, output)
                 print('Hello', name, '— result.json and sample.sqlite saved', flush=True)
                 connection.close()
+            """.trimIndent())
+            "python-web" -> mapOf("main.py" to """
+                import http.server, socketserver, os, sys, urllib.parse
+
+                PORT = int(os.environ.get('PORT', '8080'))
+
+                HTML = '''<!doctype html>
+                <html>
+                <head>
+                  <meta charset="utf-8">
+                  <meta name="viewport" content="width=device-width, initial-scale=1">
+                  <title>Python Web App</title>
+                  <style>
+                    body { font-family: system-ui, sans-serif; margin: 2rem; background: #0f172a; color: #f8fafc; }
+                    .card { background: #1e293b; padding: 1.5rem; border-radius: 12px; max-width: 480px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+                    button, a.btn { display: inline-block; background: #3b82f6; color: white; padding: 0.75rem 1.25rem; border-radius: 8px; text-decoration: none; border: none; font-size: 1rem; cursor: pointer; margin-top: 1rem; }
+                    button:hover, a.btn:hover { background: #2563eb; }
+                    pre { background: #020617; padding: 1rem; border-radius: 8px; overflow-x: auto; color: #38bdf8; font-size: 0.875rem; }
+                  </style>
+                </head>
+                <body>
+                  <div class="card">
+                    <h1>Python Web Server</h1>
+                    <p>Running on Python <b>''' + sys.version.split()[0] + '''</b> on Android.</p>
+                    <p id="status">Interactive loopback UI is active.</p>
+                    <a class="btn" href="https://example.com" target="_blank">Test External Link</a>
+                    <button id="authBtn" onclick="testOAuth()">Test OAuth Popup & Callback</button>
+                    <div id="result" style="margin-top:1rem;"></div>
+                  </div>
+                  <script>
+                    function testOAuth() {
+                      const popup = window.open('https://example.com/login?redirect=codeassist://callback?code=mock_oauth_success', '_blank');
+                      document.getElementById('status').innerText = 'Browser popup triggered...';
+                    }
+                  </script>
+                </body>
+                </html>'''
+
+                class Handler(http.server.SimpleHTTPRequestHandler):
+                    def do_GET(self):
+                        parsed = urllib.parse.urlparse(self.path)
+                        if parsed.path == '/callback':
+                            self.send_response(200)
+                            self.send_header('Content-Type', 'text/html; charset=utf-8')
+                            self.end_headers()
+                            self.wfile.write(b'<!doctype html><h1>OAuth Callback Received!</h1><p>Query: ' + parsed.query.encode() + b'</p>')
+                            return
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'text/html; charset=utf-8')
+                        self.end_headers()
+                        self.wfile.write(HTML.encode('utf-8'))
+
+                server = socketserver.TCPServer(('127.0.0.1', PORT), Handler)
+                print(f'Preview: http://127.0.0.1:{server.server_address[1]}/', flush=True)
+                try:
+                    server.serve_forever()
+                except KeyboardInterrupt:
+                    server.server_close()
             """.trimIndent())
             "static-web" -> mapOf(
                 "index.html" to """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Offline web preview</title><link rel="stylesheet" href="style.css"></head><body><h1>Offline web preview</h1><p>HTML, CSS and JavaScript served from your project.</p><button id="counter">Clicks: 0</button><script src="main.js"></script></body></html>""",

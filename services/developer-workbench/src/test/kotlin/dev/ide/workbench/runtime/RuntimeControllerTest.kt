@@ -712,6 +712,22 @@ class RuntimeControllerTest {
             assertNotEquals(first, second)
             assertTrue(controller.targets(first).any { it.id == "npm:start" })
             assertTrue(Files.exists(first.resolve("server.cjs")))
+            val pyWeb = controller.seedSample(temp, "python-web")
+            assertTrue(Files.exists(pyWeb.resolve("main.py")))
+            assertTrue(controller.targets(pyWeb).any { it.id == "python:main.py" })
+        } finally { controller.close() }
+    }
+
+    @Test fun previewRegexCapturesLoopbackAndZeroZeroZeroZero() = runBlocking<Unit> {
+        val controller = controller()
+        try {
+            val script = temp.resolve("server.sh")
+            RuntimeFiles.writeUtf8(script, "echo 'Server listening on http://0.0.0.0:9090/'\nsleep 1\n")
+            script.toFile().setExecutable(true)
+            controller.run(RuntimeRunRequest(temp, "shell:server.sh"))
+            val running = withTimeout(5000) { controller.state.first { it.previewUrl != null } }
+            assertEquals("http://127.0.0.1:9090/", running.previewUrl)
+            controller.stop()
         } finally { controller.close() }
     }
 

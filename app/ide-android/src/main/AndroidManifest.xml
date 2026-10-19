@@ -125,6 +125,19 @@
                         android:host="auth-callback"
                         android:scheme="codeassist" />
             </intent-filter>
+            <!-- Browser and OAuth callbacks for running Node.js / Python developer runtime projects. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                        android:host="callback"
+                        android:scheme="codeassist" />
+                <data
+                        android:host="runtime-callback"
+                        android:scheme="codeassist" />
+            </intent-filter>
             <!-- A link into the Projects Store: `codeassist://store` for the store itself, and
                  `codeassist://store/{item id}` for one item's page. The moderation page uses it to jump
                  from a submission into the app on the same phone. Same scheme as the sign-in redirect and
