@@ -1035,6 +1035,7 @@ class SwiftBuildSystem : BuildSystem {
 
     private fun buildSwiftEnv(installation: RuntimeInstallation, projectRoot: Path): Map<String, String> {
         prepareAndroidSwiftSdkIfNeeded(installation.prefix)
+        val baseLib = installation.prefix.resolve("lib").takeIf { Files.isDirectory(it) }?.toString()
         val xtoolLib = installation.prefix.resolve("lib/xtool").takeIf { Files.isDirectory(it) }?.toString()
         val swiftRuntime = installation.prefix.resolve("lib/swift-runtime").takeIf { Files.isDirectory(it) }?.toString()
         val swiftHost = installation.prefix.resolve("lib/swift/host").takeIf { Files.isDirectory(it) }?.toString()
@@ -1043,14 +1044,17 @@ class SwiftBuildSystem : BuildSystem {
         val baseLd = installation.environment["LD_LIBRARY_PATH"].orEmpty()
         val xtoolLd = listOfNotNull(
             baseLd.takeIf { it.isNotBlank() },
+            baseLib,
             archLib,
             swiftRuntime,
             swiftHost,
             swiftCompiler,
             xtoolLib,
         ).distinct().joinToString(":")
+        val tmpDir = (installation.prefix.parent?.resolve("tmp") ?: projectRoot.resolve(".platform/tmp")).toString()
         return LinkedHashMap(installation.environment).apply {
             if (xtoolLd.isNotBlank()) put("LD_LIBRARY_PATH", xtoolLd)
+            put("TMPDIR", tmpDir)
             put("SOURCEKIT_TOOLCHAIN_PATH", installation.prefix.toString())
             if (Files.isDirectory(installation.prefix.resolve("include/aarch64-linux-android"))) {
                 put("SDKROOT", installation.prefix.toString())
@@ -1131,6 +1135,20 @@ class SwiftBuildSystem : BuildSystem {
                 } else {
                     ",\n            path: \"$sourceDirRel\""
                 }
+                val targetDir = if (sourceDirRel == "." || sourceDirRel.isEmpty()) root else root.resolve(sourceDirRel)
+                val mixedFiles = if (Files.isDirectory(targetDir)) {
+                    Files.walk(targetDir, 5).use { stream ->
+                        stream.filter { f ->
+                            val n = f.fileName.toString()
+                            (n.endsWith(".m") || n.endsWith(".c") || n.endsWith(".cpp") || n.endsWith(".mm") || n.endsWith(".h")) &&
+                                Files.isRegularFile(f)
+                        }.map { targetDir.relativize(it).toString().replace('\\', '/') }.toList()
+                    }
+                } else emptyList()
+                val excludeClause = if (mixedFiles.isNotEmpty()) {
+                    val formatted = mixedFiles.take(50).joinToString(",\n                ") { "\"$it\"" }
+                    ",\n            exclude: [\n                $formatted\n            ]"
+                } else ""
                 val productDecl = if (isIosApp) {
                     ".library(name: \"$sanitizedName\", targets: [\"$sanitizedName\"])"
                 } else {
@@ -1148,7 +1166,7 @@ class SwiftBuildSystem : BuildSystem {
                         ],
                         targets: [
                             .$targetFunc(
-                                name: "$sanitizedName"$pathClause
+                                name: "$sanitizedName"$pathClause$excludeClause
                             ),
                         ]
                     )
@@ -1189,6 +1207,8 @@ class SwiftBuildSystem : BuildSystem {
                 root.relativize(file.parent).toString().replace('\\', '/').ifEmpty { "." }
             }.distinct()
             if (parents.size == 1) return parents.single()
+            if (parents.any { it.startsWith("iOS") } && Files.isDirectory(root.resolve("iOS"))) return "iOS"
+            if (parents.any { it.startsWith("Sources") } && Files.isDirectory(root.resolve("Sources"))) return "Sources"
             // Find common directory prefix
             val split = parents.map { it.split('/').filter { s -> s.isNotEmpty() && s != "." } }
             if (split.any { it.isEmpty() }) return "."

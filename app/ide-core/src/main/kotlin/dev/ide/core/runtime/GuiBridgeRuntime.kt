@@ -58,11 +58,19 @@ internal object GuiBridgeRuntime {
 
         val filesRoot = installation.prefix.parent?.parent?.parent
         val backupCandidates = listOfNotNull(
+            filesRoot?.resolve("developer-runtime/swiftui-sdk/android-aarch64"),
             filesRoot?.resolve("developer-runtime/swiftui-sdk"),
+            Path.of("/data/local/tmp/swiftui-sdk/android-aarch64"),
             Path.of("/data/local/tmp/swiftui-sdk"),
             Path.of(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk/android-aarch64"),
+            Path.of(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk"),
         )
-        for (backup in backupCandidates) {
+        for (candidate in backupCandidates) {
+            val backup = if (Files.isDirectory(candidate.resolve("android-aarch64"))) {
+                candidate.resolve("android-aarch64")
+            } else {
+                candidate
+            }
             val srcLib = backup.resolve("libSwiftUI.a")
             val srcMod = backup.resolve("SwiftUI.swiftmodule/aarch64-unknown-linux-android.swiftmodule")
                 .takeIf { Files.isRegularFile(it) }
@@ -88,7 +96,10 @@ internal object GuiBridgeRuntime {
                 }
                 for (extraMod in listOf("Combine", "CoreGraphics", "UIKit")) {
                     val extraSrc = backup.resolve("$extraMod.swiftmodule/aarch64-unknown-linux-android.swiftmodule")
-                    if (Files.isRegularFile(extraSrc)) {
+                        .takeIf { Files.isRegularFile(it) }
+                        ?: backup.resolve("$extraMod.swiftmodule")
+                            .takeIf { Files.isRegularFile(it) }
+                    if (extraSrc != null && Files.isRegularFile(extraSrc)) {
                         val extraTargetDir = swiftAndroidDir.resolve("$extraMod.swiftmodule")
                         val extraTarget = extraTargetDir.resolve("aarch64-unknown-linux-android.swiftmodule")
                         if (!Files.isRegularFile(extraTarget)) {
@@ -137,53 +148,87 @@ internal object GuiBridgeRuntime {
      * unresolvable external framework imports.
      */
     internal fun selectSwiftUiTargetFiles(projectRoot: Path, candidateFiles: List<Path>): List<Path> {
-        if (candidateFiles.size <= 1) return candidateFiles
-        val fileTexts = candidateFiles.associateWith { f ->
+        if (candidateFiles.isEmpty()) return candidateFiles
+        // 1. Filter out non-iOS directories (Mac, tests, watch, etc.)
+        val iosFiles = candidateFiles.filterNot { f ->
+            val s = f.toString().replace('\\', '/')
+            s.contains("/Mac/") || s.contains("/macOS/") ||
+                s.contains("/Tests/") || s.contains("/UnitTests/") || s.contains("/UITests/") ||
+                s.contains("/Watch/") || s.contains("/watchOS/")
+        }.ifEmpty { candidateFiles }
+
+        val fileTexts = iosFiles.associateWith { f ->
             runCatching { f.readText() }.getOrDefault("")
         }
-        val mainFiles = candidateFiles.filter { f ->
-            val text = fileTexts[f].orEmpty()
-            text.contains("@main") || Regex("""struct\s+\w+\s*:\s*App\b""").containsMatchIn(text)
-        }
-        if (mainFiles.size <= 1) return candidateFiles
 
-        data class TargetCandidate(
-            val mainFile: Path,
-            val targetDir: Path,
-            val files: List<Path>,
-            val unsupportedImports: Int,
-            val importsSwiftUi: Boolean,
-        )
-
-        val candidates = mainFiles.map { mainFile ->
-            val targetDir = mainFile.parent ?: projectRoot
-            val scopedFiles = candidateFiles.filter { it.startsWith(targetDir) }
-            var unsupported = 0
-            var hasSwiftUi = false
-            for (f in scopedFiles) {
-                val text = fileTexts[f].orEmpty()
-                for (line in text.lineSequence()) {
-                    val trimmed = line.trim()
-                    if (trimmed.startsWith("import ")) {
-                        val mod = trimmed.removePrefix("import ").trim().takeWhile { it.isLetterOrDigit() || it == '_' }
-                        if (mod == "SwiftUI") hasSwiftUi = true
-                        if (mod.isNotEmpty() && mod !in SUPPORTED_SWIFTUI_IMPORTS) {
-                            unsupported++
-                        }
+        fun countUnsupportedImports(text: String): Int {
+            var count = 0
+            for (line in text.lineSequence()) {
+                val trimmed = line.trim()
+                if (trimmed.startsWith("import ")) {
+                    val mod = trimmed.removePrefix("import ").trim().takeWhile { it.isLetterOrDigit() || it == '_' }
+                    if (mod.isNotEmpty() && mod !in SUPPORTED_SWIFTUI_IMPORTS) {
+                        count++
                     }
                 }
             }
-            TargetCandidate(mainFile, targetDir, scopedFiles, unsupported, hasSwiftUi)
+            return count
         }
 
-        val best = candidates.sortedWith(
-            compareBy<TargetCandidate> { !it.importsSwiftUi }
-                .thenBy { it.unsupportedImports }
-                .thenBy { it.mainFile.toString().contains("TCA", ignoreCase = true) }
-                .thenBy { it.targetDir.toString().length },
-        ).firstOrNull()
+        val pureSwiftUiFiles = iosFiles.filter { f ->
+            val text = fileTexts[f].orEmpty()
+            text.contains("import SwiftUI") && countUnsupportedImports(text) == 0
+        }
 
-        return best?.files?.ifEmpty { candidateFiles } ?: candidateFiles
+        val mainFiles = iosFiles.filter { f ->
+            val text = fileTexts[f].orEmpty()
+            text.contains("@main") || Regex("""struct\s+\w+\s*:\s*App\b""").containsMatchIn(text)
+        }
+
+        if (mainFiles.isNotEmpty()) {
+            data class TargetCandidate(
+                val mainFile: Path,
+                val targetDir: Path,
+                val files: List<Path>,
+                val unsupportedImports: Int,
+                val importsSwiftUi: Boolean,
+            )
+
+            val candidates = mainFiles.map { mainFile ->
+                val targetDir = mainFile.parent ?: projectRoot
+                val scopedFiles = iosFiles.filter { it.startsWith(targetDir) }
+                val unsupported = scopedFiles.sumOf { countUnsupportedImports(fileTexts[it].orEmpty()) }
+                val hasSwiftUi = scopedFiles.any { fileTexts[it].orEmpty().contains("import SwiftUI") }
+                TargetCandidate(mainFile, targetDir, scopedFiles, unsupported, hasSwiftUi)
+            }
+
+            val best = candidates.sortedWith(
+                compareBy<TargetCandidate> { !it.importsSwiftUi }
+                    .thenBy { it.unsupportedImports }
+                    .thenBy { it.mainFile.toString().contains("TCA", ignoreCase = true) }
+                    .thenBy { it.targetDir.toString().length },
+            ).firstOrNull()
+
+            if (best != null && (best.unsupportedImports == 0 || pureSwiftUiFiles.isEmpty())) {
+                val cleanFiles = best.files.filter { countUnsupportedImports(fileTexts[it].orEmpty()) == 0 }
+                return if (cleanFiles.isNotEmpty()) cleanFiles else best.files
+            }
+        }
+
+        // When no clean @main candidate exists (or in multi-target projects like NetNewsWire where @main is a Widget),
+        // pick the cluster of pure SwiftUI views
+        if (pureSwiftUiFiles.isNotEmpty()) {
+            val byDir = pureSwiftUiFiles.groupBy { it.parent }
+            val bestGroup = byDir.values.maxByOrNull { group ->
+                group.count { f ->
+                    val t = fileTexts[f].orEmpty()
+                    t.contains(": View") && (t.contains("About") || t.contains("Content") || t.contains("Main") || t.contains("App"))
+                } * 10 + group.size
+            }
+            return bestGroup ?: pureSwiftUiFiles
+        }
+
+        return iosFiles
     }
 
     /**
