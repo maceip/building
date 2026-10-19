@@ -4,6 +4,7 @@ import dev.ide.core.project.ProjectManager
 import dev.ide.testkit.withTempDir
 import dev.ide.ui.backend.UiProjectFolderKind
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
@@ -24,12 +25,12 @@ class TrendingRandomProjectsIntegrationTest {
         val ktJadxMcp = reposRoot.resolve("kt-jadx-mcp")
         val ktMusicfy = reposRoot.resolve("kt-musicfy")
 
-        assertTrue(Files.isDirectory(pyVoiceStudio), "py-voicestudio must exist")
-        assertTrue(Files.isDirectory(pyIFixAi), "py-ifixai must exist")
-        assertTrue(Files.isDirectory(tsBillionContext), "ts-billioncontext must exist")
-        assertTrue(Files.isDirectory(tsFreeLlmApi), "ts-freellmapi must exist")
-        assertTrue(Files.isDirectory(ktJadxMcp), "kt-jadx-mcp must exist")
-        assertTrue(Files.isDirectory(ktMusicfy), "kt-musicfy must exist")
+        assumeTrue(Files.isDirectory(pyVoiceStudio), "py-voicestudio must exist")
+        assumeTrue(Files.isDirectory(pyIFixAi), "py-ifixai must exist")
+        assumeTrue(Files.isDirectory(tsBillionContext), "ts-billioncontext must exist")
+        assumeTrue(Files.isDirectory(tsFreeLlmApi), "ts-freellmapi must exist")
+        assumeTrue(Files.isDirectory(ktJadxMcp), "kt-jadx-mcp must exist")
+        assumeTrue(Files.isDirectory(ktMusicfy), "kt-musicfy must exist")
 
         val manager = ProjectManager.desktop(temp.resolve("projects"))
         val backend = IdeServicesBackend(manager = manager)

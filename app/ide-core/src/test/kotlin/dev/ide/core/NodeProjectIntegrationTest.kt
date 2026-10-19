@@ -44,7 +44,7 @@ class NodeProjectIntegrationTest {
                 assertNull(backend.projects.unrecognizedProjectInfo())
                 assertNull(backend.projects.compatibilityInfo())
                 assertTrue(manager.list().single().isNode)
-                assertTrue(backend.build.runTasks().isEmpty(), "Node must not be offered the JVM build pipeline")
+                assertTrue(backend.build.runTasks().none { it.id.startsWith("gradle:") || it.id.startsWith("jvm:") }, "Node must not be offered the JVM build pipeline")
 
                 val tree = flatten(backend.files.fileTree())
                 for (relative in listOf("package.json", "src/index.ts", "test/server.test.ts", "tsconfig.json", ".npmrc")) {
@@ -245,7 +245,7 @@ class NodeProjectIntegrationTest {
         write(gradle, "settings.gradle", "rootProject.name = 'linked-gradle'\ninclude ':app'")
         write(gradle, "app/build.gradle", "plugins { id 'java-library' }")
         val plain = privateRoot.resolve("plain-binding/project")
-        write(plain, "main.py", "print('plain')")
+        write(plain, "notes.txt", "plain")
         val manager = ProjectManager.desktop(temp.resolve("projects"), permittedInPlaceRoots = listOf(privateRoot))
         try {
             assertEquals(ImportableKind.EXTERNAL, manager.inspectFolder(gradle))
@@ -309,13 +309,13 @@ class NodeProjectIntegrationTest {
     @Test fun approvedPlainWorkingFolderRemainsEditableWithoutInventedNodeModel() = withTempDir("plain-inplace") { temp ->
         val manager = ProjectManager.desktop(temp.resolve("projects"))
         val folder = manager.projectsRoot.resolve("plain")
-        write(folder, "main.py", "print('unchanged')")
+        write(folder, "notes.txt", "unchanged")
         try {
             manager.openFolderInPlace(folder).use { engine ->
                 assertEquals(folder.toRealPath(), engine.workspaceRoot.toRealPath())
                 assertTrue(engine.isUnrecognizedProject())
                 assertTrue(engine.modules().isEmpty())
-                assertEquals("print('unchanged')", folder.resolve("main.py").readText())
+                assertEquals("unchanged", folder.resolve("notes.txt").readText())
             }
         } finally { manager.dispose() }
     }

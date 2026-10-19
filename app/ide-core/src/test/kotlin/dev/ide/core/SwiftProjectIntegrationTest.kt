@@ -6,6 +6,7 @@ import dev.ide.testkit.withTempDir
 import dev.ide.ui.backend.TreeNode
 import dev.ide.ui.backend.UiProjectFolderKind
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
@@ -66,8 +67,8 @@ class SwiftProjectIntegrationTest {
         val reposRoot = Path.of("/Users/mac/.gemini/antigravity/worktrees/building/restructure_settings_and_menus/verification_repos")
         val alamofire = reposRoot.resolve("trending-alamofire")
         val pokeToken = reposRoot.resolve("trending-poketoken")
-        assertTrue(Files.isDirectory(alamofire), "trending-alamofire directory must exist")
-        assertTrue(Files.isDirectory(pokeToken), "trending-poketoken directory must exist")
+        assumeTrue(Files.isDirectory(alamofire), "trending-alamofire directory must exist")
+        assumeTrue(Files.isDirectory(pokeToken), "trending-poketoken directory must exist")
 
         val manager = ProjectManager.desktop(temp.resolve("projects"))
         val backend = IdeServicesBackend(manager = manager)

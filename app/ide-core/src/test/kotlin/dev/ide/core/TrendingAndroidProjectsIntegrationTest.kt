@@ -4,6 +4,7 @@ import dev.ide.core.project.ProjectManager
 import dev.ide.testkit.withTempDir
 import dev.ide.ui.backend.UiProjectFolderKind
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
@@ -20,8 +21,8 @@ class TrendingAndroidProjectsIntegrationTest {
         val clearPdf = reposRoot.resolve("trending-clearpdf")
         val bitChord = reposRoot.resolve("trending-bitchord")
 
-        assertTrue(Files.isDirectory(clearPdf), "trending-clearpdf must exist")
-        assertTrue(Files.isDirectory(bitChord), "trending-bitchord must exist")
+        assumeTrue(Files.isDirectory(clearPdf), "trending-clearpdf must exist")
+        assumeTrue(Files.isDirectory(bitChord), "trending-bitchord must exist")
 
         val manager = ProjectManager.desktop(temp.resolve("projects"))
         val backend = IdeServicesBackend(manager = manager)
