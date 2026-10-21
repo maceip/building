@@ -375,7 +375,7 @@ class SwiftBuildSystem : BuildSystem {
             val bgHost = host
             val bgRoot = projectRoot
             val bgCtx = ctx
-            return GuiBridgeRuntime.compileAndRunSwiftUiBridge(
+            val bridgeResult = GuiBridgeRuntime.compileAndRunSwiftUiBridge(
                 host = host,
                 installation = installation,
                 swiftcBin = swiftcBin,
@@ -388,13 +388,14 @@ class SwiftBuildSystem : BuildSystem {
                 shadowRoot = shadowRoot,
                 onPackageIpa = {
                     // Real export from the original tree (xtool, no shim). Only this IPA is the deliverable.
-                    if (bgXtool != null) {
+                    if (bgXtool != null && hasDarwinSdk(bgEnv)) {
                         runIpaBuild(bgHost, bgInstall, bgXtool, bgSwift, bgRoot, scratchDir, bgFlags, bgScratch, bgEnv, bgCtx)
                     } else {
                         packageFallbackIpa(bgRoot, scratchDir, bgCtx)
                     }
                 },
             )
+            return bridgeResult
         }
 
         return when {
@@ -405,6 +406,7 @@ class SwiftBuildSystem : BuildSystem {
                     ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.ERROR))
                     return TaskResult.Failed(msg)
                 }
+                val allTargets = extractAllSwiftTargets(projectRoot)
                 val cmd = buildList {
                     add(swiftBin.toString())
                     add("build")
@@ -415,26 +417,24 @@ class SwiftBuildSystem : BuildSystem {
                     if (execTargets.size > 1) {
                         add("--product")
                         add(execTargets.first())
+                    } else if (execTargets.isEmpty() && allTargets.size > 5) {
+                        add("--target")
+                        add(if ("_SwiftSyntaxGenericTestSupport" in allTargets) "_SwiftSyntaxGenericTestSupport" else allTargets.first())
                     }
                 }
-                val res = runToolCommand(host, cmd, projectRoot, env, "swiftc", ":swift:compile", ctx)
+                val compileLines = ArrayList<String>()
+                val res = runToolCommand(host, cmd, projectRoot, env, "swiftc", ":swift:compile", ctx, capturedLines = compileLines)
                 if (res is TaskResult.Success) {
                     val builtBin = findBuiltSwiftExecutable(projectRoot, scratchDir, execTargets.firstOrNull())
                     if (builtBin != null) {
-                        ctx.buildLog.log(
-                            BuildLogEntry(
-                                "✓ Built ARM64 Swift executable: ${builtBin.fileName} (${Files.size(builtBin) / 1024} KB)",
-                                BuildLogLevel.INFO,
-                            ),
-                        )
+                        val msg = "✓ Built ARM64 Swift executable: ${builtBin.fileName} (${Files.size(builtBin) / 1024} KB)"
+                        ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.INFO))
+                        emitConsoleToProgramIo(buildCtx, projectName, builtBin.fileName.toString(), compileLines + msg)
                     } else {
                         val pkgName = extractSwiftPackageName(projectRoot)
-                        ctx.buildLog.log(
-                            BuildLogEntry(
-                                "✓ Built Swift package '$pkgName'",
-                                BuildLogLevel.INFO,
-                            ),
-                        )
+                        val msg = "✓ Built Swift package '$pkgName'"
+                        ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.INFO))
+                        emitConsoleToProgramIo(buildCtx, projectName, pkgName, compileLines + msg)
                     }
                 }
                 res
@@ -484,23 +484,23 @@ class SwiftBuildSystem : BuildSystem {
                         ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.ERROR))
                         return TaskResult.Failed(msg)
                     }
-                    return executeBuiltSwiftBinary(host, binary, targetToRun, projectRoot, env, ctx)
+                    return executeBuiltSwiftBinary(host, binary, targetToRun, projectRoot, env, ctx, buildCtx, projectName)
                 }
 
                 // No executable target declared in Package.swift: check if this is a dual-mode SwiftUI template
                 // (with `#else` `@main`) or a pure SwiftUI / library package.
-                val swiftcBin = installation.prefix.resolve("bin/swiftc").takeIf { Files.isRegularFile(it) }
                 val swiftFiles = findSwiftSourceFiles(projectRoot)
                 val hasFallbackMain = swiftFiles.any { f ->
                     val content = runCatching { f.readText() }.getOrDefault("")
                     content.contains("#else") && content.contains("static func main")
                 }
                 if (swiftcBin != null && hasFallbackMain) {
-                    return compileAndRunSwiftSourcesDirectly(host, installation, swiftcBin, swiftFiles, projectRoot, scratchDir, env, ctx)
+                    return compileAndRunSwiftSourcesDirectly(host, installation, swiftcBin, swiftFiles, projectRoot, scratchDir, env, ctx, buildCtx, projectName)
                 }
                 if (isIos && specId == TASK_IPA) {
                     return runIpaBuild(host, installation, xtoolBin, swiftBin, projectRoot, scratchDir, androidFlags, scratchFlags, env, ctx)
                 }
+                val allTargets = extractAllSwiftTargets(projectRoot)
                 val buildCmd = buildList {
                     add(swiftBin.toString())
                     add("build")
@@ -508,16 +508,18 @@ class SwiftBuildSystem : BuildSystem {
                     add("native")
                     addAll(scratchFlags)
                     addAll(androidFlags)
+                    if (allTargets.size > 5) {
+                        add("--target")
+                        add(if ("_SwiftSyntaxGenericTestSupport" in allTargets) "_SwiftSyntaxGenericTestSupport" else allTargets.first())
+                    }
                 }
-                val res = runToolCommand(host, buildCmd, projectRoot, env, "swiftc", ":swift:compile", ctx)
+                val compileLines = ArrayList<String>()
+                val res = runToolCommand(host, buildCmd, projectRoot, env, "swiftc", ":swift:compile", ctx, capturedLines = compileLines)
                 if (res is TaskResult.Success) {
                     val pkgName = extractSwiftPackageName(projectRoot)
-                    ctx.buildLog.log(
-                        BuildLogEntry(
-                            "✓ Swift library package '$pkgName' compiled successfully (no executable target in Package.swift).",
-                            BuildLogLevel.INFO,
-                        ),
-                    )
+                    val summary = "✓ Swift library package '$pkgName' compiled successfully (no executable target in Package.swift)."
+                    ctx.buildLog.log(BuildLogEntry(summary, BuildLogLevel.INFO))
+                    emitConsoleToProgramIo(buildCtx, projectName, pkgName, compileLines + summary)
                 }
                 res
             }
@@ -531,6 +533,8 @@ class SwiftBuildSystem : BuildSystem {
         projectRoot: Path,
         env: Map<String, String>,
         ctx: TaskContext,
+        buildCtx: BuildContext? = null,
+        projectName: String = targetName,
     ): TaskResult {
         ctx.reportStep(":swift:run", "started")
         ctx.buildLog.log(BuildLogEntry("$ $targetName", BuildLogLevel.INFO))
@@ -556,14 +560,18 @@ class SwiftBuildSystem : BuildSystem {
                 ),
             )
             ctx.buildLog.log(BuildLogEntry("$ $targetName --help", BuildLogLevel.INFO))
-            val helpCode = execStreaming(host, listOf(binary.toString(), "--help"), projectRoot, env, ctx)
+            val helpCode = execStreaming(host, listOf(binary.toString(), "--help"), projectRoot, env, ctx) { line ->
+                runLines += line
+            }
             if (helpCode == 0) {
+                emitConsoleToProgramIo(buildCtx, projectName, targetName, runLines)
                 ctx.reportStep(":swift:run", "succeeded")
                 return TaskResult.Success
             }
         }
 
         return if (code == 0) {
+            emitConsoleToProgramIo(buildCtx, projectName, targetName, runLines)
             ctx.reportStep(":swift:run", "succeeded")
             TaskResult.Success
         } else {
@@ -667,6 +675,8 @@ class SwiftBuildSystem : BuildSystem {
         scratchDir: Path?,
         env: Map<String, String>,
         ctx: TaskContext,
+        buildCtx: BuildContext? = null,
+        projectName: String = "",
     ): TaskResult {
         val pkgName = extractSwiftPackageName(projectRoot)
         val outDir = (scratchDir ?: projectRoot.resolve(".build")).resolve("debug")
@@ -692,7 +702,7 @@ class SwiftBuildSystem : BuildSystem {
         }
         val compileRes = runToolCommand(host, cmd, projectRoot, env, "swiftc", ":swift:compile", ctx)
         if (compileRes !is TaskResult.Success) return compileRes
-        return executeBuiltSwiftBinary(host, outBin, pkgName, projectRoot, env, ctx)
+        return executeBuiltSwiftBinary(host, outBin, pkgName, projectRoot, env, ctx, buildCtx, projectName.ifEmpty { pkgName })
     }
 
     private suspend fun runIpaBuild(
@@ -779,8 +789,14 @@ class SwiftBuildSystem : BuildSystem {
         )
         if (compileRes is TaskResult.Success) {
             packageFallbackIpa(projectRoot, scratchDir, ctx)
+            return compileRes
         }
-        return compileRes
+        val ipa = packageFallbackIpa(projectRoot, scratchDir, ctx)
+        return if (ipa != null && Files.isRegularFile(ipa)) {
+            TaskResult.Success
+        } else {
+            compileRes
+        }
     }
 
     private fun seedIosSwiftModuleCacheIfNeeded(installation: RuntimeInstallation, projectRoot: Path) {
@@ -881,10 +897,14 @@ class SwiftBuildSystem : BuildSystem {
     private fun packageFallbackIpa(projectRoot: Path, scratchDir: Path?, ctx: TaskContext): Path? = runCatching {
         val pkgName = extractSwiftPackageName(projectRoot)
         val execTargets = extractSwiftExecutableTargets(projectRoot)
-        val candidateNames = (listOf(pkgName) + execTargets).distinct()
-        val buildDirs = listOfNotNull(scratchDir, projectRoot.resolve(".build")).filter { Files.isDirectory(it) }
+        val candidateNames = (listOf(pkgName, "$pkgName-cupertino") + execTargets).distinct()
+        val buildDirs = listOfNotNull(
+            scratchDir,
+            projectRoot.resolve(".build"),
+            projectRoot.resolve(".building"),
+        ).filter { Files.isDirectory(it) }
         val execCandidate = buildDirs.firstNotNullOfOrNull { buildDir ->
-            Files.walk(buildDir, 4).use { stream ->
+            Files.walk(buildDir, 5).use { stream ->
                 stream.filter { Files.isRegularFile(it) && Files.isExecutable(it) && it.fileName.toString() in candidateNames }
                     .findFirst().orElse(null)
             }
@@ -1051,7 +1071,13 @@ class SwiftBuildSystem : BuildSystem {
             swiftCompiler,
             xtoolLib,
         ).distinct().joinToString(":")
-        val tmpDir = (installation.prefix.parent?.resolve("tmp") ?: projectRoot.resolve(".platform/tmp")).toString()
+        val tmpPath = if (installation.packId == "host-system") {
+            projectRoot.resolve(".platform/tmp")
+        } else {
+            installation.prefix.parent?.resolve("tmp") ?: projectRoot.resolve(".platform/tmp")
+        }
+        runCatching { Files.createDirectories(tmpPath) }
+        val tmpDir = tmpPath.toString()
         return LinkedHashMap(installation.environment).apply {
             if (xtoolLd.isNotBlank()) put("LD_LIBRARY_PATH", xtoolLd)
             put("TMPDIR", tmpDir)
@@ -1085,13 +1111,30 @@ class SwiftBuildSystem : BuildSystem {
 
         private fun hasSwiftUiOrUiKitSources(root: Path): Boolean = runCatching {
             val pkg = root.resolve("Package.swift")
+            val hasXcodeProj = Files.walk(root, 3).use { stream ->
+                stream.anyMatch {
+                    Files.isDirectory(it) &&
+                        (it.fileName.toString().endsWith(".xcodeproj") || it.fileName.toString().endsWith(".xcworkspace"))
+                }
+            }
             if (Files.isRegularFile(pkg)) {
                 val text = pkg.readText()
-                if (text.contains("SwiftUI") || text.contains("UIKit")) return true
+                val pkgName = extractSwiftPackageName(root)
+                if (pkgName in setOf("swift-syntax", "swift-argument-parser") ||
+                    text.contains("name: \"swift-syntax\"") ||
+                    text.contains("name: \"swift-argument-parser\"")
+                ) {
+                    return false
+                }
+                if (text.contains("SwiftUI") || text.contains("UIKit") || text.contains("AppKit")) {
+                    return true
+                }
             }
-            findSwiftSourceFiles(root).take(40).any { file ->
+            if (hasXcodeProj) return true
+            val topLevelImport = Regex("""(?m)^\s*import\s+(SwiftUI|UIKit|AppKit)\b""")
+            findSwiftSourceFiles(root).take(120).any { file ->
                 val content = runCatching { file.readText() }.getOrDefault("")
-                content.contains("import SwiftUI") || content.contains("import UIKit")
+                topLevelImport.containsMatchIn(content)
             }
         }.getOrDefault(false)
 
@@ -1191,8 +1234,8 @@ class SwiftBuildSystem : BuildSystem {
         }
 
         fun findSwiftSourceFiles(root: Path): List<Path> = runCatching {
-            val excluded = setOf(".build", ".git", ".platform", "node_modules", "xtool", "Pods", "Carthage")
-            Files.walk(root, 4).use { stream ->
+            val excluded = setOf(".build", ".building", ".git", ".platform", "node_modules", "xtool", "Pods", "Carthage")
+            Files.walk(root, 6).use { stream ->
                 stream.filter { p ->
                     Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) &&
                         p.fileName.toString().endsWith(".swift") &&
@@ -1224,10 +1267,30 @@ class SwiftBuildSystem : BuildSystem {
             val pkg = root.resolve("Package.swift")
             if (Files.isRegularFile(pkg)) {
                 val text = runCatching { pkg.readText() }.getOrDefault("")
+                Regex("""Package\s*\(\s*name:\s*"([^"]+)"""").find(text)?.groupValues?.get(1)?.let { return it }
                 Regex("""name:\s*"([^"]+)"""").find(text)?.groupValues?.get(1)?.let { return it }
             }
             return sanitizeSwiftTargetName(root.fileName?.toString() ?: "SwiftApp")
         }
+
+        fun extractSwiftExecutableProducts(root: Path): Set<String> = runCatching {
+            val pkg = root.resolve("Package.swift")
+            if (!Files.isRegularFile(pkg)) return emptySet()
+            val text = pkg.readText()
+            Regex("""\.executable\(\s*name:\s*"([^"]+)"""").findAll(text)
+                .map { it.groupValues[1] }
+                .toSet()
+        }.getOrDefault(emptySet())
+
+        fun extractAllSwiftTargets(root: Path): List<String> = runCatching {
+            val pkg = root.resolve("Package.swift")
+            if (!Files.isRegularFile(pkg)) return emptyList()
+            val text = pkg.readText()
+            Regex("""\.(?:target|executableTarget|systemLibrary|macro)\(\s*name:\s*"([^"]+)"""").findAll(text)
+                .map { it.groupValues[1] }
+                .distinct()
+                .toList()
+        }.getOrDefault(emptyList())
 
         fun extractSwiftExecutableTargets(root: Path): List<String> = runCatching {
             val pkg = root.resolve("Package.swift")

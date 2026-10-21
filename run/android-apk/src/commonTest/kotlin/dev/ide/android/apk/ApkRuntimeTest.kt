@@ -45,6 +45,36 @@ class ApkRuntimeTest {
         assertTrue(DexFile.parse(notDex).isFailure)
     }
 
+    @Test
+    fun apkBuilderAndDexVmExecuteActivityOnCreate() {
+        val spec = ApkBuilder.parseProjectSpec(
+            fallbackName = "BitChord",
+            manifestXml = """
+                <manifest package="com.kushagra.bitchord">
+                  <application android:label="BitChord">
+                    <activity android:name=".MainActivity">
+                      <intent-filter>
+                        <action android:name="android.intent.action.MAIN" />
+                        <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                    </activity>
+                  </application>
+                </manifest>
+            """.trimIndent(),
+            gradleTexts = listOf("""namespace = "com.kushagra.bitchord""""),
+            kotlinFileNames = listOf("MainActivity.kt", "HomeScreen.kt"),
+        )
+        val apkBytes = ApkBuilder.buildApkBytes(spec)
+        val logs = mutableListOf<String>()
+        val result = ApkRuntime { logs += it }.launch(apkBytes)
+        assertTrue(result.ok, "Expected ApkRuntime.launch to succeed: ${result.message}")
+        assertEquals("com.kushagra.bitchord", result.packageName)
+        assertEquals("com.kushagra.bitchord.MainActivity", result.activity)
+        assertTrue(result.dexClasses >= 2, "Expected >= 2 DEX classes, got ${result.dexClasses}")
+        assertTrue(result.message.contains("onCreate returned"), "Expected onCreate to return: ${result.message}")
+        assertTrue(logs.any { it.contains("I/BitChord:") }, "Expected Log.i from DexVm execution, got $logs")
+    }
+
     private fun zipOf(vararg entries: Pair<String, ByteArray>): ByteArray {
         // Minimal stored-zip writer (local headers + central directory + EOCD) with real CRC-32s:
         // ZipArchive rejects an entry whose crc does not match, so a zero crc makes read() answer null.

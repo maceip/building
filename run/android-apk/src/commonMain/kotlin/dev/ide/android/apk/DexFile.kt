@@ -89,24 +89,60 @@ class DexFile private constructor(
             require(bytes[0].toInt().toChar() == 'd' && bytes[1].toInt().toChar() == 'e' &&
                 bytes[2].toInt().toChar() == 'x' && bytes[3].toInt().toChar() == '\n') { "not a dex" }
             val r = DexReader(bytes)
-            r.skip(36) // magic already checked; checksum + signature
-            val fileSize = r.u32()
-            require(fileSize <= bytes.size) { "dex header file_size $fileSize > ${bytes.size}" }
-            val headerSize = r.u32()
-            require(headerSize == HEADER_SIZE.toLong()) { "unexpected header size $headerSize" }
-            r.skip(4) // endian_tag
-            val stringIdsOff = r.u32().toInt()
-            val stringIdsSize = r.u32().toInt()
-            val typeIdsOff = r.u32().toInt()
-            val typeIdsSize = r.u32().toInt()
-            val protoIdsOff = r.u32().toInt()
-            val protoIdsSize = r.u32().toInt()
-            val fieldIdsOff = r.u32().toInt()
-            val fieldIdsSize = r.u32().toInt()
-            val methodIdsOff = r.u32().toInt()
-            val methodIdsSize = r.u32().toInt()
-            val classDefsOff = r.u32().toInt()
-            val classDefsSize = r.u32().toInt()
+            r.at(0x24)
+            val stdHeaderCandidate = r.u32()
+            val stringIdsOff: Int
+            val stringIdsSize: Int
+            val typeIdsOff: Int
+            val typeIdsSize: Int
+            val protoIdsOff: Int
+            val protoIdsSize: Int
+            val fieldIdsOff: Int
+            val fieldIdsSize: Int
+            val methodIdsOff: Int
+            val methodIdsSize: Int
+            val classDefsOff: Int
+            val classDefsSize: Int
+            if (stdHeaderCandidate == HEADER_SIZE.toLong()) {
+                // Standard Android DEX header layout (magic[8] + checksum[4] + sig[20] = 32)
+                r.at(0x20)
+                val fileSize = r.u32()
+                require(fileSize <= bytes.size) { "dex header file_size $fileSize > ${bytes.size}" }
+                val headerSize = r.u32()
+                require(headerSize == HEADER_SIZE.toLong()) { "unexpected header size $headerSize" }
+                r.skip(16) // endian_tag (4) + link_size (4) + link_off (4) + map_off (4)
+                stringIdsSize = r.u32().toInt()
+                stringIdsOff = r.u32().toInt()
+                typeIdsSize = r.u32().toInt()
+                typeIdsOff = r.u32().toInt()
+                protoIdsSize = r.u32().toInt()
+                protoIdsOff = r.u32().toInt()
+                fieldIdsSize = r.u32().toInt()
+                fieldIdsOff = r.u32().toInt()
+                methodIdsSize = r.u32().toInt()
+                methodIdsOff = r.u32().toInt()
+                classDefsSize = r.u32().toInt()
+                classDefsOff = r.u32().toInt()
+            } else {
+                r.at(36) // legacy synthetic layout
+                val fileSize = r.u32()
+                require(fileSize <= bytes.size) { "dex header file_size $fileSize > ${bytes.size}" }
+                val headerSize = r.u32()
+                require(headerSize == HEADER_SIZE.toLong()) { "unexpected header size $headerSize" }
+                r.skip(4) // endian_tag
+                stringIdsOff = r.u32().toInt()
+                stringIdsSize = r.u32().toInt()
+                typeIdsOff = r.u32().toInt()
+                typeIdsSize = r.u32().toInt()
+                protoIdsOff = r.u32().toInt()
+                protoIdsSize = r.u32().toInt()
+                fieldIdsOff = r.u32().toInt()
+                fieldIdsSize = r.u32().toInt()
+                methodIdsOff = r.u32().toInt()
+                methodIdsSize = r.u32().toInt()
+                classDefsOff = r.u32().toInt()
+                classDefsSize = r.u32().toInt()
+            }
 
             val strings = ArrayList<String>(stringIdsSize)
             for (i in 0 until stringIdsSize) {

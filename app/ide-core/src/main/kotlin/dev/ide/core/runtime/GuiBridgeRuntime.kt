@@ -35,7 +35,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * user interaction callbacks (`{"id":"...","kind":"void|bool|string|double|int","value":...}`)
  * over stdin, rendering live interactive native Compose windows inside `RunScreen`.
  */
-internal object GuiBridgeRuntime {
+object GuiBridgeRuntime {
 
     fun isBridgeJsonLine(line: String): Boolean {
         val trimmed = line.trim()
@@ -60,6 +60,8 @@ internal object GuiBridgeRuntime {
         val backupCandidates = listOfNotNull(
             filesRoot?.resolve("developer-runtime/swiftui-sdk/android-aarch64"),
             filesRoot?.resolve("developer-runtime/swiftui-sdk"),
+            Path.of("/sdcard/Android/data/dev.ide.android.dev/files/codeassist/swiftui-sdk/android-aarch64"),
+            Path.of("/sdcard/Android/data/dev.ide.android.dev/files/codeassist/swiftui-sdk"),
             Path.of("/data/local/tmp/swiftui-sdk/android-aarch64"),
             Path.of("/data/local/tmp/swiftui-sdk"),
             Path.of(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk/android-aarch64"),
@@ -134,12 +136,377 @@ internal object GuiBridgeRuntime {
         "Combine",
         "CoreGraphics",
         "UIKit",
+        "AppKit",
+        "QuartzCore",
         "Observation",
         "Swift",
         "Darwin",
         "Glibc",
         "Android",
     )
+
+    internal val CUPERTINO_BRIDGE_PRELUDE = """
+        import SwiftUI
+        import struct Foundation.UUID
+        import struct Foundation.Date
+        import struct Foundation.URL
+        import struct Foundation.Data
+
+        public typealias LocalizedStringKey = String
+        public protocol ShapeStyle {}
+        extension Color: ShapeStyle {}
+        extension LinearGradient: ShapeStyle {}
+
+        public struct Locale: Sendable {
+            public static let current = Locale()
+            public init() {}
+            public func localizedString(forIdentifier id: String) -> String? { id }
+        }
+
+        public enum RoundedCornerStyle: Sendable { case circular, continuous }
+        public extension RoundedRectangle {
+            init(cornerRadius: Double, style: RoundedCornerStyle) {
+                self.init(cornerRadius: cornerRadius)
+            }
+            func stroke(_ content: Color, lineWidth: Double = 1) -> Self { self }
+        }
+        public extension Circle {
+            func stroke(_ content: Color, lineWidth: Double = 1) -> Self { self }
+        }
+        public struct Material: ShapeStyle, Sendable {
+            public static let regularMaterial = Material()
+            public static let thinMaterial = Material()
+            public static let ultraThinMaterial = Material()
+            public static let thickMaterial = Material()
+        }
+        public extension ShapeStyle where Self == Material {
+            static var regularMaterial: Material { .regularMaterial }
+            static var thinMaterial: Material { .thinMaterial }
+            static var ultraThinMaterial: Material { .ultraThinMaterial }
+            static var thickMaterial: Material { .thickMaterial }
+        }
+        public enum ControlSize: Sendable { case mini, small, regular, large, extraLarge }
+        public extension _ControlStyle {
+            static let glassProminent = _ControlStyle.borderedProminent
+            static let glass = _ControlStyle.bordered
+        }
+        public struct RoundedBorderTextFieldStyle: Sendable {
+            public init() {}
+        }
+        public enum NavigationBarTitleDisplayMode: Sendable { case automatic, inline, large }
+        public enum TextInputAutocapitalization: Sendable { case never, words, sentences, characters }
+        public extension View {
+            func background<S: ShapeStyle, Sh>(_ style: S, in shape: Sh) -> Self { self }
+            func controlSize(_ size: ControlSize) -> Self { self }
+            func accessibilityHint(_ hint: String) -> Self { self }
+            func accessibilityValue(_ value: String) -> Self { self }
+            func layoutPriority(_ value: Double) -> Self { self }
+            func fixedSize(horizontal: Bool = true, vertical: Bool = true) -> Self { self }
+            func textFieldStyle<S>(_ style: S) -> Self { self }
+            func navigationBarTitleDisplayMode(_ mode: NavigationBarTitleDisplayMode) -> Self { self }
+            func autocorrectionDisabled(_ disabled: Bool = true) -> Self { self }
+            func textInputAutocapitalization(_ autocapitalization: TextInputAutocapitalization?) -> Self { self }
+            func onChange<V: Equatable>(of value: V, initial: Bool = false, _ action: @escaping (V, V) -> Void) -> Self { self }
+            func focused(_ condition: Binding<Bool>) -> Self { self }
+        }
+
+        public struct NSColor: Sendable {
+            public let r: Double, g: Double, b: Double, a: Double
+            public init(srgbRed: Double, green: Double, blue: Double, alpha: Double) {
+                self.r = srgbRed; self.g = green; self.b = blue; self.a = alpha
+            }
+            public static let clear = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0)
+        }
+        public extension Color {
+            init(nsColor: NSColor) {
+                self.init(red: nsColor.r, green: nsColor.g, blue: nsColor.b, opacity: nsColor.a)
+            }
+            static let cyan = Color(red: 0.0, green: 0.8, blue: 1.0)
+            static let indigo = Color(red: 0.35, green: 0.34, blue: 0.84)
+        }
+        public extension ShapeStyle where Self == Color {
+            static var indigo: Color { .indigo }
+            static var secondary: Color { .secondary }
+        }
+        public func dynamicNSColor(light: NSColor, dark: NSColor) -> NSColor { light }
+        public func dynamicColor(light: NSColor, dark: NSColor) -> Color { Color(nsColor: light) }
+
+        public struct StrokeStyle: Sendable {
+            public enum LineCap: Sendable { case round, butt, square }
+            public enum LineJoin: Sendable { case round, miter, bevel }
+            public init(lineWidth: Double = 1, lineCap: LineCap = .butt, lineJoin: LineJoin = .miter, miterLimit: Double = 10, dash: [Double] = [], dashPhase: Double = 0) {}
+        }
+        public extension Circle {
+            func trim(from: Double, to: Double) -> Self { self }
+            func stroke<S>(_ content: S, style: StrokeStyle) -> Self { self }
+        }
+        public extension VerticalAlignment {
+            static let firstTextBaseline = VerticalAlignment.center
+            static let lastTextBaseline = VerticalAlignment.center
+        }
+        public extension Font.Design {
+            static let rounded = Font.Design.default
+        }
+        public enum DynamicTypeSize: Int, Comparable, Sendable {
+            case xSmall = 0, small, medium, large, xLarge, xxLarge, xxxLarge
+            case accessibility1, accessibility2, accessibility3, accessibility4, accessibility5
+            public static func < (lhs: DynamicTypeSize, rhs: DynamicTypeSize) -> Bool { lhs.rawValue < rhs.rawValue }
+            public var isAccessibilitySize: Bool { rawValue >= DynamicTypeSize.accessibility1.rawValue }
+        }
+        public extension EnvironmentValues {
+            var dynamicTypeSize: DynamicTypeSize {
+                get { .large }
+                set {}
+            }
+        }
+        public extension Comparable {
+            func clamped(to limits: ClosedRange<Self>) -> Self {
+                min(max(self, limits.lowerBound), limits.upperBound)
+            }
+        }
+        public enum ModuleTheme: Sendable {
+            case smartScan
+            public var gradient: LinearGradient {
+                LinearGradient(colors: [.blue, .cyan], startPoint: .leading, endPoint: .trailing)
+            }
+        }
+        public enum L10n {
+            public static func tr(_ zh: String, _ en: String, _ ru: String) -> String { en }
+        }
+        public enum FileSizeFormatter {
+            public static func shortFormat(_ size: UInt64) -> (value: String, unit: String) { ("1.2", "GB") }
+        }
+        public struct SpeechLanguageSuggestion: Equatable, Sendable {
+            public let localeIdentifier: String
+            public let languageName: String
+            public var localeName: String { languageName }
+            public init(localeIdentifier: String = "en-US", languageName: String = "English") {
+                self.localeIdentifier = localeIdentifier
+                self.languageName = languageName
+            }
+        }
+    """.trimIndent()
+
+    internal fun stripPreviewMacros(text: String): String {
+        if (!text.contains("#Preview")) return text
+        val out = StringBuilder(text.length)
+        var i = 0
+        val n = text.length
+        while (i < n) {
+            val idx = text.indexOf("#Preview", i)
+            if (idx == -1) {
+                out.append(text, i, n)
+                break
+            }
+            out.append(text, i, idx)
+            var j = idx + "#Preview".length
+            while (j < n && text[j].isWhitespace()) j++
+            if (j < n && text[j] == '(') {
+                var depth = 1
+                j++
+                while (j < n && depth > 0) {
+                    when (text[j]) {
+                        '(' -> depth++
+                        ')' -> depth--
+                    }
+                    j++
+                }
+            }
+            while (j < n && text[j].isWhitespace()) j++
+            if (j < n && text[j] == '{') {
+                var depth = 1
+                j++
+                while (j < n && depth > 0) {
+                    when (text[j]) {
+                        '{' -> depth++
+                        '}' -> depth--
+                    }
+                    j++
+                }
+            }
+            out.append("// [sanitized #Preview]")
+            i = j
+        }
+        return out.toString()
+    }
+
+    private val BANNED_BRIDGE_DECL_TOKENS = listOf(
+        "NSViewRepresentable",
+        "UIViewRepresentable",
+        ": NSView",
+        ": UIView",
+        "CVDisplayLink",
+        "Canvas {",
+        "SynthesizedCursorGlyphRepresentable",
+        "CursorLabCanvas",
+        ": ToggleStyle",
+        "CursorToggleStyle",
+        "NSApplication",
+        "NSWindow",
+        "UIApplication",
+        "UIScreen",
+    )
+
+    internal fun dropUnsupportedDeclarations(text: String): String {
+        if (BANNED_BRIDGE_DECL_TOKENS.none { text.contains(it) }) return text
+        val header = ArrayList<String>()
+        val blocks = ArrayList<String>()
+        val cur = StringBuilder()
+        var depth = 0
+        var inBlock = false
+        for (line in text.lineSequence()) {
+            val trimmed = line.trim()
+            if (!inBlock && depth == 0 && trimmed.startsWith("import ")) {
+                header.add(line)
+                continue
+            }
+            cur.append(line).append('\n')
+            for (ch in line) {
+                if (ch == '{') {
+                    depth++
+                    inBlock = true
+                } else if (ch == '}') {
+                    depth--
+                }
+            }
+            if (inBlock && depth <= 0) {
+                val blockStr = cur.toString()
+                if (BANNED_BRIDGE_DECL_TOKENS.none { blockStr.contains(it) }) {
+                    blocks.add(blockStr)
+                }
+                cur.setLength(0)
+                depth = 0
+                inBlock = false
+            }
+        }
+        return (header.joinToString("\n") + "\n" + blocks.joinToString("\n")).trim() + "\n"
+    }
+
+    internal fun discoverInternalSwiftModules(projectRoot: Path): Set<String> {
+        val mods = LinkedHashSet<String>()
+        runCatching {
+            Files.walk(projectRoot, 4).use { stream ->
+                stream.filter { it.fileName?.toString() == "Package.swift" && Files.isRegularFile(it) }
+                    .forEach { pkg ->
+                        val text = runCatching { pkg.readText() }.getOrDefault("")
+                        Regex("""name:\s*"([A-Za-z0-9_]+)"""").findAll(text).forEach { m ->
+                            mods.add(m.groupValues[1])
+                        }
+                    }
+            }
+        }
+        return mods
+    }
+
+    internal fun sanitizeSwiftUiSource(text: String, internalModules: Set<String> = emptySet()): String {
+        var t = stripPreviewMacros(text)
+        t = dropUnsupportedDeclarations(t)
+        t = t.replace(Regex("""#if\s+os\(macOS\)"""), "#if false")
+        for (mod in internalModules + listOf("AppKit", "UIKit", "QuartzCore")) {
+            t = t.replace(
+                Regex("""(?m)^\s*import\s+${Regex.escape(mod)}\b.*$"""),
+                "// [sanitized import $mod]",
+            )
+        }
+        t = t.replace("private struct ", "struct ")
+        t = t.replace("private enum ", "enum ")
+        t = t.replace(
+            Regex("""@FocusState\s+(private\s+)?var\s+(\w+)\s*:\s*Bool(?!\s*=)"""),
+            "@State $1var $2: Bool = false",
+        )
+        return t
+    }
+
+    internal fun inferPreviewExpression(text: String): String {
+        val prevMatch = Regex("""struct\s+(\w+)\s*:\s*PreviewProvider\b""").find(text)
+        if (prevMatch != null) {
+            return "${prevMatch.groupValues[1]}.previews"
+        }
+        val views = Regex("""struct\s+(\w+)\s*:\s*View\b""").findAll(text).map { it.groupValues[1] }.toList()
+        if (views.isEmpty()) return "EmptyView()"
+        val orderedViews = views.sortedByDescending {
+            it.contains("Content") || it.contains("Main") || it.contains("App") || it.contains("View")
+        }
+        for (v in orderedViews) {
+            val idx = text.indexOf("struct $v")
+            val bodyIdx = if (idx >= 0) text.indexOf("var body", idx) else -1
+            val headerSlice = if (idx >= 0 && bodyIdx > idx) text.substring(idx, bodyIdx) else ""
+            if (headerSlice.contains("init()")) return "$v()"
+            val uninitProps = headerSlice.lineSequence().drop(1).map { it.trim() }.filter { s ->
+                (s.startsWith("let ") || s.startsWith("var ") || s.startsWith("public let ") || s.startsWith("public var ")) &&
+                    !s.contains("=") && !s.contains("{")
+            }.toList()
+            if (uninitProps.isEmpty()) return "$v()"
+        }
+        val v = orderedViews.first()
+        val idx = text.indexOf("struct $v")
+        val bodyIdx = if (idx >= 0) text.indexOf("var body", idx) else -1
+        val headerSlice = if (idx >= 0 && bodyIdx > idx) text.substring(idx, bodyIdx) else ""
+        val args = ArrayList<Pair<String, String>>()
+        val initMatch = Regex("""init\s*\(([^\)]*)\)""").find(headerSlice)
+        if (initMatch != null) {
+            for (rawParam in initMatch.groupValues[1].split(',')) {
+                val p = rawParam.trim()
+                if (p.isEmpty() || p.contains("=")) continue
+                val pm = Regex("""(\w+)(?:\s+\w+)?\s*:\s*(.+)""").find(p)
+                if (pm != null) {
+                    args.add(pm.groupValues[1] to pm.groupValues[2].trim())
+                }
+            }
+        } else {
+            for (line in headerSlice.lineSequence().drop(1)) {
+                val s = line.trim()
+                if ((s.startsWith("let ") || s.startsWith("var ") || s.startsWith("public let ") || s.startsWith("public var ")) &&
+                    !s.contains("=") && !s.contains("{")
+                ) {
+                    val pm = Regex("""(?:public\s+)?(?:let|var)\s+(\w+)\s*:\s*(.+)""").find(s)
+                    if (pm != null) {
+                        args.add(pm.groupValues[1] to pm.groupValues[2].trim())
+                    }
+                }
+            }
+        }
+        val renderedArgs = args.map { (pname, ptype) ->
+            val argVal = when {
+                "->" in ptype -> "{}"
+                ptype.endsWith("?") -> "nil"
+                ptype == "String" -> "\"${pname.replaceFirstChar { it.uppercaseChar() }}\""
+                ptype in setOf("Double", "CGFloat", "Float") -> "0.72"
+                ptype in setOf("Int", "UInt64", "Int64") -> "42"
+                ptype == "Bool" -> "true"
+                ptype == "SpeechLanguageSuggestion" -> "SpeechLanguageSuggestion()"
+                else -> ".init()"
+            }
+            "$pname: $argVal"
+        }
+        return "$v(${renderedArgs.joinToString(", ")})"
+    }
+
+    internal fun countUnsupportedSwiftImports(text: String, internalModules: Set<String> = emptySet()): Int {
+        val sanitized = text.replace(Regex("""#if\s+os\(macOS\)"""), "#if false")
+        var inFalse = 0
+        var count = 0
+        for (line in sanitized.lineSequence()) {
+            val t = line.trim()
+            if (t.startsWith("#if false")) {
+                inFalse++
+            } else if (t.startsWith("#if ") && inFalse > 0) {
+                inFalse++
+            } else if (t.startsWith("#else") && inFalse == 1) {
+                inFalse = 0
+            } else if (t.startsWith("#endif") && inFalse > 0) {
+                inFalse--
+            } else if (inFalse == 0 && t.startsWith("import ")) {
+                val rest = t.removePrefix("import ").trim()
+                val parts = rest.split(Regex("""\s+"""))
+                val mod = parts.lastOrNull()?.substringBefore('.')?.takeWhile { it.isLetterOrDigit() || it == '_' }.orEmpty()
+                if (mod.isNotEmpty() && mod !in SUPPORTED_SWIFTUI_IMPORTS && mod !in internalModules) {
+                    count++
+                }
+            }
+        }
+        return count
+    }
 
     /**
      * When a repository contains multiple app targets or subprojects (for example,
@@ -149,35 +516,22 @@ internal object GuiBridgeRuntime {
      */
     internal fun selectSwiftUiTargetFiles(projectRoot: Path, candidateFiles: List<Path>): List<Path> {
         if (candidateFiles.isEmpty()) return candidateFiles
+        val internalModules = discoverInternalSwiftModules(projectRoot)
         // 1. Filter out non-iOS directories (Mac, tests, watch, etc.)
         val iosFiles = candidateFiles.filterNot { f ->
             val s = f.toString().replace('\\', '/')
             s.contains("/Mac/") || s.contains("/macOS/") ||
                 s.contains("/Tests/") || s.contains("/UnitTests/") || s.contains("/UITests/") ||
-                s.contains("/Watch/") || s.contains("/watchOS/")
+                s.contains("/Watch/") || s.contains("/watchOS/") || s.contains("/Pods/")
         }.ifEmpty { candidateFiles }
 
         val fileTexts = iosFiles.associateWith { f ->
             runCatching { f.readText() }.getOrDefault("")
         }
 
-        fun countUnsupportedImports(text: String): Int {
-            var count = 0
-            for (line in text.lineSequence()) {
-                val trimmed = line.trim()
-                if (trimmed.startsWith("import ")) {
-                    val mod = trimmed.removePrefix("import ").trim().takeWhile { it.isLetterOrDigit() || it == '_' }
-                    if (mod.isNotEmpty() && mod !in SUPPORTED_SWIFTUI_IMPORTS) {
-                        count++
-                    }
-                }
-            }
-            return count
-        }
-
         val pureSwiftUiFiles = iosFiles.filter { f ->
             val text = fileTexts[f].orEmpty()
-            text.contains("import SwiftUI") && countUnsupportedImports(text) == 0
+            text.contains("import SwiftUI") && countUnsupportedSwiftImports(text, internalModules) == 0
         }
 
         val mainFiles = iosFiles.filter { f ->
@@ -197,7 +551,7 @@ internal object GuiBridgeRuntime {
             val candidates = mainFiles.map { mainFile ->
                 val targetDir = mainFile.parent ?: projectRoot
                 val scopedFiles = iosFiles.filter { it.startsWith(targetDir) }
-                val unsupported = scopedFiles.sumOf { countUnsupportedImports(fileTexts[it].orEmpty()) }
+                val unsupported = scopedFiles.sumOf { countUnsupportedSwiftImports(fileTexts[it].orEmpty(), internalModules) }
                 val hasSwiftUi = scopedFiles.any { fileTexts[it].orEmpty().contains("import SwiftUI") }
                 TargetCandidate(mainFile, targetDir, scopedFiles, unsupported, hasSwiftUi)
             }
@@ -210,7 +564,7 @@ internal object GuiBridgeRuntime {
             ).firstOrNull()
 
             if (best != null && (best.unsupportedImports == 0 || pureSwiftUiFiles.isEmpty())) {
-                val cleanFiles = best.files.filter { countUnsupportedImports(fileTexts[it].orEmpty()) == 0 }
+                val cleanFiles = best.files.filter { countUnsupportedSwiftImports(fileTexts[it].orEmpty(), internalModules) == 0 }
                 return if (cleanFiles.isNotEmpty()) cleanFiles else best.files
             }
         }
@@ -248,6 +602,7 @@ internal object GuiBridgeRuntime {
             }
         }
         Files.createDirectories(shadow)
+        val internalModules = discoverInternalSwiftModules(projectRoot)
         val allSwiftFiles = SwiftBuildSystem.findSwiftSourceFiles(projectRoot)
         val filteredFiles = allSwiftFiles.filter { f ->
             val name = f.fileName.toString()
@@ -260,10 +615,8 @@ internal object GuiBridgeRuntime {
         val copied = ArrayList<Path>()
         fun copyAndSanitize(src: Path, dst: Path) {
             Files.createDirectories(dst.parent)
-            var content = runCatching { src.readText() }.getOrDefault("")
-            if (content.contains("#Preview")) {
-                content = content.replace(Regex("""#Preview\s*(\([^\)]*\))?\s*\{[^\}]*\}"""), "// [sanitized #Preview]")
-            }
+            val raw = runCatching { src.readText() }.getOrDefault("")
+            val content = sanitizeSwiftUiSource(raw, internalModules)
             dst.writeText(content)
             copied.add(dst)
         }
@@ -283,7 +636,7 @@ internal object GuiBridgeRuntime {
                         f.fileName.toString().endsWith(".swift") && f !in swiftUiFiles
                     }.forEach { sibling ->
                         val text = runCatching { sibling.readText() }.getOrDefault("")
-                        if (!text.contains("import AppKit") && !text.contains("import WebKit") && !text.contains("import XCTest")) {
+                        if (!text.contains("import WebKit") && !text.contains("import XCTest")) {
                             val rel = runCatching { projectRoot.relativize(sibling) }.getOrDefault(sibling.fileName)
                             val dst = shadow.resolve(rel.toString())
                             copyAndSanitize(sibling, dst)
@@ -297,24 +650,16 @@ internal object GuiBridgeRuntime {
             text.contains("runPreview") || text.contains("ViewHost(")
         }
         if (!hasBridgeEntry) {
-            val rootName = copied.firstOrNull()?.fileName?.toString()?.removeSuffix(".swift")
-                ?.let { name -> name.replaceFirstChar { it.uppercaseChar() } }
-                ?: "ContentView"
-            // Prefer an existing View type named like ContentView / App root if present.
             val text = copied.joinToString("\n") { runCatching { it.readText() }.getOrDefault("") }
-            val viewType = Regex("""struct\s+(\w+)\s*:\s*View\b""").findAll(text)
-                .map { it.groupValues[1] }
-                .firstOrNull { it.contains("Content") || it.contains("App") || it.contains("View") }
-                ?: Regex("""struct\s+(\w+)\s*:\s*View\b""").findAll(text).firstOrNull()?.groupValues?.get(1)
-                ?: rootName
+            val expr = inferPreviewExpression(text)
             shadow.resolve("CupertinoShadowMain.swift").writeText(
                 """
-                import SwiftUI
+                $CUPERTINO_BRIDGE_PRELUDE
 
                 @main
                 struct CupertinoShadowMain {
                     static func main() throws {
-                        try runPreview { $viewType() }
+                        try runPreview { $expr }
                     }
                 }
                 """.trimIndent() + "\n",
@@ -377,10 +722,10 @@ internal object GuiBridgeRuntime {
             val archInclude = installation.prefix.resolve("include/aarch64-linux-android")
             val archLib = installation.prefix.resolve("lib/aarch64-linux-android")
             val hostBridgeSdk = Path.of(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk")
-            val compileCmd = buildList {
+            fun buildSwiftcCommand(sources: List<Path>): List<String> = buildList {
                 add(swiftcBin.toString())
                 add("-parse-as-library")
-                for (f in swiftUiFiles) add(f.toString())
+                for (f in sources) add(f.toString())
                 if (Files.isDirectory(swiftAndroidLib)) {
                     add("-sdk")
                     add(sdkRoot.toString())
@@ -409,7 +754,83 @@ internal object GuiBridgeRuntime {
             }
             ctx.buildLog.log(BuildLogEntry("$ swiftc -parse-as-library $relNames -lSwiftUI -o ${outBin.fileName}", BuildLogLevel.INFO))
             val compileLines = ArrayList<String>()
-            val code = execSimple(host, compileCmd, compileRoot, env, ctx, compileLines)
+            var code = execSimple(host, buildSwiftcCommand(swiftUiFiles), compileRoot, env, ctx, compileLines)
+
+            if (code != 0) {
+                // Multi-file target had cross-module/platform symbols; try focused candidate SwiftUI view files in projectRoot
+                val internalModules = discoverInternalSwiftModules(projectRoot)
+                val repoSwiftFiles = SwiftBuildSystem.findSwiftSourceFiles(projectRoot).filterNot { f ->
+                    val s = f.toString().replace('\\', '/')
+                    s.contains("/.build/") || s.contains("/Pods/") ||
+                        s.contains("/Tests/") || s.contains("/UITests/") || s.contains("/UnitTests/")
+                }
+                val themeHelpers = repoSwiftFiles.filter { it.fileName.toString() == "Color+Theme.swift" }
+                data class FocusedCandidate(val score: Int, val file: Path, val sanitized: String)
+                val focusedCandidates = repoSwiftFiles.mapNotNull { p ->
+                    val raw = runCatching { p.readText() }.getOrDefault("")
+                    if (!raw.contains("import SwiftUI")) return@mapNotNull null
+                    if (countUnsupportedSwiftImports(raw, internalModules) > 0) return@mapNotNull null
+                    val san = sanitizeSwiftUiSource(raw, internalModules)
+                    val hasView = Regex("""struct\s+\w+\s*:\s*View\b""").containsMatchIn(san)
+                    val hasPreview = Regex("""struct\s+\w+\s*:\s*PreviewProvider\b""").containsMatchIn(san)
+                    if (!hasView && !hasPreview) return@mapNotNull null
+                    val fname = p.fileName.toString()
+                    val pathStr = p.toString().replace('\\', '/')
+                    var score = 0
+                    if (hasPreview) score += 50
+                    if (listOf("ContentView", "BrandFooter", "ProgressGauge", "TextInputView", "LanguageSuggestionBanner", "MenuLabel", "UnreadDividerView").any { fname.contains(it) }) {
+                        score += 100
+                    }
+                    if (listOf("/Shared/", "/DesignSystem/", "/Views/", "Previews").any { pathStr.contains(it) }) {
+                        score += 30
+                    }
+                    score -= san.length / 500
+                    FocusedCandidate(score, p, san)
+                }.sortedByDescending { it.score }
+
+                val focusedDir = outDir.parent?.resolve("focused") ?: compileRoot.resolve("focused")
+                for (cand in focusedCandidates.take(8)) {
+                    if (Files.isDirectory(focusedDir)) {
+                        Files.walk(focusedDir).use { stream ->
+                            stream.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+                        }
+                    }
+                    Files.createDirectories(focusedDir)
+                    val srcs = ArrayList<Path>()
+                    val targetFile = focusedDir.resolve(cand.file.fileName.toString())
+                    targetFile.writeText(cand.sanitized)
+                    srcs.add(targetFile)
+                    for (th in themeHelpers) {
+                        if (th.parent == cand.file.parent) {
+                            val tp = focusedDir.resolve(th.fileName.toString())
+                            tp.writeText(sanitizeSwiftUiSource(runCatching { th.readText() }.getOrDefault(""), internalModules))
+                            srcs.add(tp)
+                        }
+                    }
+                    val expr = inferPreviewExpression(cand.sanitized)
+                    val mainFile = focusedDir.resolve("CupertinoShadowMain.swift")
+                    mainFile.writeText(
+                        """
+                        $CUPERTINO_BRIDGE_PRELUDE
+
+                        @main
+                        struct CupertinoShadowMain {
+                            static func main() throws {
+                                try runPreview { $expr }
+                            }
+                        }
+                        """.trimIndent() + "\n",
+                    )
+                    srcs.add(mainFile)
+                    compileLines.clear()
+                    val attemptCode = execSimple(host, buildSwiftcCommand(srcs), focusedDir, env, ctx, compileLines)
+                    if (attemptCode == 0) {
+                        code = 0
+                        break
+                    }
+                }
+            }
+
             ctx.reportToolDiagnostics("swiftc", compileLines)
             if (code != 0) {
                 ctx.reportStep(":swift:compileCupertinoBridge", "failed")
@@ -429,7 +850,7 @@ internal object GuiBridgeRuntime {
         // Dual pipeline: the shim app is ready to spawn now. Kick the real iPhone/macOS
         // rebuild (xtool, no shim) in the background so the interactive Run is not blocked.
         val exportJob = kotlinx.coroutines.CoroutineScope(
-            Dispatchers.IO + NonCancellable + kotlinx.coroutines.SupervisorJob(),
+            Dispatchers.IO + kotlinx.coroutines.SupervisorJob(),
         ).launch {
             try {
                 ctx.buildLog.log(
@@ -485,8 +906,7 @@ internal object GuiBridgeRuntime {
                 buildCtx = buildCtx,
             )
         } finally {
-            // Leave the export running only if the interactive session ended; cancel on user stop.
-            // The export scope is independent so a still-running IPA build can finish after Stop.
+            exportJob.cancel()
         }
     }
 

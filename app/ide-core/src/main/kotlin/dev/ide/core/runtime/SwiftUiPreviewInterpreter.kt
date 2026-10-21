@@ -35,6 +35,9 @@ object SwiftUiPreviewInterpreter {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    private val viewDeclRegex = Regex(""":\s*View\b""")
+    private val appDeclRegex = Regex(""":\s*App\b""")
+
     /**
      * When a repo holds several targets (e.g. SimpleCounterSwiftUI + SimpleCounterTCA),
      * keep only the files of one interpretible SwiftUI app target.
@@ -47,32 +50,47 @@ object SwiftUiPreviewInterpreter {
             "UIViewRepresentable", "UIViewControllerRepresentable",
             "import ComposableArchitecture", "import TCA",
         )
-        data class Candidate(val index: Int, val text: String, val bad: Int, val hasSwiftUi: Boolean, val hasMain: Boolean)
+        data class Candidate(
+            val index: Int,
+            val text: String,
+            val bad: Int,
+            val hasSwiftUi: Boolean,
+            val hasView: Boolean,
+            val hasMain: Boolean,
+        )
         val scored = sources.mapIndexed { i, text ->
             val bad = blocked.count { text.contains(it) }
-            val hasSwiftUi = text.contains("import SwiftUI") || text.contains(": View") || text.contains(": App")
-            val hasMain = text.contains("@main") || Regex("""struct\s+\w+\s*:\s*App\b""").containsMatchIn(text)
-            Candidate(i, text, bad, hasSwiftUi, hasMain)
+            val hasView = viewDeclRegex.containsMatchIn(text)
+            val hasApp = appDeclRegex.containsMatchIn(text)
+            val hasSwiftUi = text.contains("import SwiftUI") || hasView || hasApp
+            val hasMain = text.contains("@main") || hasApp
+            Candidate(i, text, bad, hasSwiftUi, hasView, hasMain)
         }
-        val best = scored
-            .filter { it.hasSwiftUi }
-            .sortedWith(
-                compareBy<Candidate> { it.bad }
-                    .thenByDescending { it.hasMain }
-                    .thenBy { it.text.length },
-            )
-            .firstOrNull { it.bad == 0 } ?: return sources
-        // Keep all clean files that share the chosen file's directory-ish prefix (heuristic: no blocked imports).
-        return sources.filter { s ->
+        val clean = sources.filter { s ->
             val bad = blocked.count { s.contains(it) }
             bad == 0 && (
                 s.contains("import SwiftUI") ||
-                    s.contains(": View") ||
-                    s.contains(": App") ||
+                    viewDeclRegex.containsMatchIn(s) ||
+                    appDeclRegex.containsMatchIn(s) ||
                     s.contains("@State") ||
                     s.contains("struct ")
                 )
-        }.ifEmpty { listOf(best.text) }
+        }
+        if (clean.any { viewDeclRegex.containsMatchIn(it) || appDeclRegex.containsMatchIn(it) } && parse(clean) != null) {
+            return clean
+        }
+        // If all SwiftUI View files in a multi-file repository use e.g. @StateObject/@ObservedObject
+        // (which skipAttributesAndModifiers ignores), select the View/App files with the lowest bad count.
+        val fallbackViews = scored
+            .filter { it.hasSwiftUi && (it.hasView || it.hasMain) }
+            .sortedWith(
+                compareBy<Candidate> { it.bad }
+                    .thenByDescending { it.hasView }
+                    .thenByDescending { it.hasMain }
+                    .thenBy { it.text.length },
+            )
+            .map { it.text }
+        return fallbackViews.ifEmpty { sources }
     }
 
     /** True when [sources] look like a SwiftUI app we can interpret without a toolchain. */
@@ -82,13 +100,15 @@ object SwiftUiPreviewInterpreter {
         if (!joined.contains("import SwiftUI") && !joined.contains(": View") && !joined.contains(": App")) {
             return false
         }
-        // Reject early on constructs we deliberately do not model.
-        val blocked = listOf(
-            "SwiftData", "CoreData", "Map(", "WKWebView", "AVFoundation",
-            "@FetchRequest", "@EnvironmentObject", "@StateObject", "@ObservedObject",
-            "UIViewRepresentable", "UIViewControllerRepresentable",
-        )
-        if (blocked.any { joined.contains(it) }) return false
+        if (sources.size <= 1) {
+            // Reject early on constructs we deliberately do not model for single-file checks.
+            val blocked = listOf(
+                "SwiftData", "CoreData", "Map(", "WKWebView", "AVFoundation",
+                "@FetchRequest", "@EnvironmentObject", "@StateObject", "@ObservedObject",
+                "UIViewRepresentable", "UIViewControllerRepresentable",
+            )
+            if (blocked.any { joined.contains(it) }) return false
+        }
         return parse(chosen) != null
     }
 
@@ -388,7 +408,12 @@ object SwiftUiPreviewInterpreter {
             while (pos < toks.size && peek() != Tok.Eof) {
                 skipAttributesAndModifiers()
                 if (atIdent("struct") || atIdent("class") || atIdent("enum")) {
-                    structs += parseStruct()
+                    val savedPos = pos
+                    runCatching {
+                        structs += parseStruct()
+                    }.onFailure {
+                        pos = (savedPos + 1).coerceAtMost(toks.size)
+                    }
                 } else {
                     // Skip top-level noise (imports already ignored by caller)
                     next()
@@ -400,6 +425,20 @@ object SwiftUiPreviewInterpreter {
         private fun parseStruct(): Ast.Struct {
             val kind = expectIdent() // struct/class/enum
             val name = expectIdent()
+            if (at("<")) {
+                var angle = 0
+                while (pos < toks.size) {
+                    if (at("<")) angle++
+                    else if (at(">")) {
+                        angle--
+                        if (angle <= 0) {
+                            pos++
+                            break
+                        }
+                    }
+                    pos++
+                }
+            }
             val superTypes = ArrayList<String>()
             if (at(":")) {
                 pos++
@@ -676,7 +715,8 @@ object SwiftUiPreviewInterpreter {
             var e = parsePrimary()
             while (true) {
                 when {
-                    at(".") -> {
+                    at(".") || (at("?") && pos + 1 < toks.size && toks[pos + 1] == Tok.Sym(".")) -> {
+                        if (at("?")) pos++
                         pos++
                         val name = expectIdent()
                         if (at("(")) {
@@ -697,6 +737,15 @@ object SwiftUiPreviewInterpreter {
                             is Ast.Call -> e.copy(trailing = e.trailing + cl)
                             else -> Ast.Call(e, emptyList(), listOf(cl))
                         }
+                    }
+                    e is Ast.Call && e.trailing.isNotEmpty() &&
+                        peek() is Tok.Ident &&
+                        pos + 2 < toks.size &&
+                        toks[pos + 1] == Tok.Sym(":") &&
+                        toks[pos + 2] == Tok.Sym("{") -> {
+                        pos += 2
+                        val cl = parseClosure()
+                        e = e.copy(trailing = e.trailing + cl)
                     }
                     else -> return e
                 }
@@ -745,10 +794,15 @@ object SwiftUiPreviewInterpreter {
                 if (atIdent("in")) pos++
             } else if (peek() is Tok.Ident) {
                 val save = pos
-                val p1 = expectIdent()
+                val tempParams = ArrayList<String>()
+                tempParams += expectIdent()
+                while (at(",") && pos + 1 < toks.size && toks[pos + 1] is Tok.Ident) {
+                    pos++
+                    tempParams += expectIdent()
+                }
                 if (atIdent("in")) {
                     pos++
-                    params += p1
+                    params += tempParams
                 } else {
                     pos = save
                 }
@@ -898,22 +952,32 @@ object SwiftUiPreviewInterpreter {
                 .joinToString("\n")
             runCatching {
                 structs += Parser(lex(cleaned) + Tok.Eof).parseFile()
-            }.onFailure { return null }
+            }.onFailure {
+                if (sources.size <= 1) return null
+            }
         }
         if (structs.isEmpty()) return null
 
         // Prefer @main App's WindowGroup content's root view type; else a View with body.
+        val viewCandidates = ArrayList<Ast.Struct>()
         val app = structs.firstOrNull { it.superTypes.any { s -> s == "App" } }
         if (app?.body != null) {
             val rootExpr = extractWindowContent(app.body)
             val rootStruct = resolveRootStruct(rootExpr, structs)
-            if (rootStruct != null) return rootStruct
-            // WindowGroup { InlineView }
-            if (rootExpr != null) {
-                return Ast.Struct("Root", listOf("View"), emptyList(), rootExpr)
+            if (rootStruct != null && rootStruct.body != null) viewCandidates += rootStruct
+            if (rootExpr != null && rootStruct == null) {
+                viewCandidates += Ast.Struct("Root", listOf("View"), emptyList(), rootExpr)
             }
         }
-        return structs.firstOrNull { it.superTypes.any { s -> s == "View" } && it.body != null }
+        structs.filter { it.superTypes.any { s -> s == "View" } && it.body != null }
+            .forEach { if (it !in viewCandidates) viewCandidates += it }
+        if (viewCandidates.size <= 1) return viewCandidates.firstOrNull()
+        return viewCandidates.firstOrNull { candidate ->
+            val previewJson = runCatching {
+                ViewNodeBuilder(PreviewSession()).buildRoot(candidate, PreviewSession()).toString()
+            }.getOrDefault("")
+            previewJson.length > 80
+        } ?: viewCandidates.firstOrNull()
     }
 
     private fun extractWindowContent(body: Ast.Expr): Ast.Expr? {
@@ -1090,6 +1154,11 @@ object SwiftUiPreviewInterpreter {
                 when {
                     cur is Ast.Call && cur.callee is Ast.Member && (cur.callee as Ast.Member).name in MODIFIER_NAMES -> {
                         mods += cur
+                        cur = (cur.callee as Ast.Member).target ?: break
+                    }
+                    cur is Ast.Call && cur.callee is Ast.Member &&
+                        (cur.callee as Ast.Member).target != null &&
+                        (cur.callee as Ast.Member).name.firstOrNull()?.isLowerCase() == true -> {
                         cur = (cur.callee as Ast.Member).target ?: break
                     }
                     cur is Ast.Call && cur.callee is Ast.Ident && (cur.callee as Ast.Ident).name in MODIFIER_NAMES -> {
@@ -1510,6 +1579,7 @@ object SwiftUiPreviewInterpreter {
 
     private val KNOWN_VIEWS = setOf(
         "VStack", "HStack", "ZStack", "Group", "List", "Section", "Form",
+        "ScrollView", "TabView", "NavigationSplitView", "LazyVStack", "LazyHStack",
         "Text", "Button", "Toggle", "TextField", "SecureField", "Image", "Label",
         "Spacer", "Divider", "Color", "Circle", "Rectangle", "Capsule", "RoundedRectangle",
         "NavigationView", "NavigationStack", "NavigationView", "ForEach", "Slider",

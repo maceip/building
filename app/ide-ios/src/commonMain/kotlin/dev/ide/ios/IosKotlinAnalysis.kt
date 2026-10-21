@@ -27,13 +27,22 @@ import dev.ide.lang.kotlin.KotlinSignatureHelpService
 import dev.ide.lang.kotlin.NavKind
 import dev.ide.lang.kotlin.NavTarget
 import dev.ide.lang.kotlin.completion.KotlinCompletion
+import dev.ide.kotlin.syntax.psi.KtNamedFunction
 import dev.ide.lang.kotlin.index.KotlinBuiltinCallableIndex
 import dev.ide.lang.kotlin.index.KotlinBuiltinsIndex
 import dev.ide.lang.kotlin.index.KotlinCallableIndex
 import dev.ide.lang.kotlin.index.KotlinTypeShapeIndex
+import dev.ide.lang.kotlin.interp.Binding
 import dev.ide.lang.kotlin.interp.KotlinPreviewLowering
 import dev.ide.lang.kotlin.interp.PreviewInfo
+import dev.ide.lang.kotlin.interp.PreviewModel
 import dev.ide.lang.kotlin.interp.PreviewWire
+import dev.ide.lang.kotlin.interp.RNode
+import dev.ide.lang.kotlin.interp.RParam
+import dev.ide.lang.kotlin.interp.SourceSpan
+import dev.ide.lang.kotlin.interp.missingSourceCallees
+import dev.ide.lang.kotlin.interp.reachableSourceFunctions
+import dev.ide.lang.kotlin.interp.walk
 import dev.ide.lang.kotlin.parse.KotlinParsedFile
 import dev.ide.lang.kotlin.parse.KotlinParserHost
 import dev.ide.lang.kotlin.resolve.KotlinResolver
@@ -67,7 +76,7 @@ import dev.ide.vfs.VirtualFile
  */
 internal class IosKotlinAnalysis(
     private val projectRoot: String,
-    classpathJars: List<String> = emptyList(),
+    private val classpathJars: List<String> = emptyList(),
     /**
      * The live editor buffers, OWNED BY THE HOST and shared with it.
      *
@@ -295,15 +304,146 @@ internal class IosKotlinAnalysis(
     }
 
     /**
-     * The `@Preview` [functionName] in [path], lowered with everything it reaches across the project's files
-     * and encoded as a [PreviewWire] blob: what [IosPreviewRenderer] renders. Null when the function is not
-     * in the file or did not lower.
+     * The `@Preview` or `@Composable` [functionName] in [path], lowered with everything it reaches across the
+     * project's files and encoded as a [PreviewWire] blob: what [IosPreviewRenderer] renders. Null when the
+     * function is not in the file or did not lower.
      */
-    fun lowerPreview(path: String, text: String, functionName: String): ByteArray? {
-        val file = parsed(path, text)
-        val model = previewLowering.crossFileModel(file)
-        val entry = model.program["$functionName/0"] ?: return null
+    private val modelCache = HashMap<String, Pair<Int, PreviewModel>>()
+
+    fun lowerPreview(
+        path: String,
+        text: String,
+        functionName: String,
+        requireComplete: Boolean = false,
+    ): ByteArray? {
+        val textHash = text.hashCode()
+        val cached = modelCache[path]
+        val model = if (cached != null && cached.first == textHash) {
+            cached.second
+        } else {
+            val file = parsed(path, text)
+            val scopedRoots = scopedSourceRootsFor(projectRoot, path)
+            val activeLowering = if (scopedRoots != null) {
+                val scopedService = KotlinSymbolService(
+                    sourceRoots = scopedRoots,
+                    classpathJars = classpathJars,
+                    index = index,
+                    cacheDir = IosFiles.join(projectRoot, ".platform/caches/kotlin-ext"),
+                )
+                KotlinPreviewLowering(scopedService)
+            } else {
+                previewLowering
+            }
+            val computed = activeLowering.crossFileModel(file)
+            if (modelCache.size > 32) modelCache.clear()
+            modelCache[path] = textHash to computed
+            computed
+        }
+        val rawEntry = model.program["$functionName/0"]
+            ?: model.program.entries.firstOrNull { it.key.substringBeforeLast('/') == functionName }?.value
+            ?: return null
+        val entry = if (rawEntry.params.all { it.default != null }) {
+            rawEntry
+        } else {
+            rawEntry.copy(
+                params = rawEntry.params.map { p ->
+                    if (p.default != null) p else p.copy(default = defaultNodeForParam(p, functionName))
+                },
+            )
+        }
+        if (requireComplete) {
+            val reachable = reachableSourceFunctions(entry, model.program, model.classes)
+            val missing = missingSourceCallees(entry, model.program, model.classes)
+            if (missing.isNotEmpty() || reachable.any { !it.isComplete }) {
+                return null
+            }
+            var hasCall = false
+            entry.body.walk { if (it is RNode.Call) hasCall = true }
+            if (!hasCall) return null
+        }
         return PreviewWire.encode(entry, model.program, model.classes)
+    }
+
+    private fun defaultNodeForParam(p: RParam, functionName: String): RNode {
+        val span = SourceSpan(0, 0)
+        val typeStr = p.type?.toString().orEmpty()
+        return when {
+            "Modifier" in typeStr -> RNode.Name(Binding.ObjectRef("androidx.compose.ui.Modifier", "Modifier"), span)
+            "->" in typeStr || "Function" in typeStr -> RNode.Lambda(
+                params = emptyList(),
+                body = RNode.Block(emptyList(), false, span),
+                captures = emptyList(),
+                source = span,
+            )
+            p.type?.nullable == true -> RNode.Const(null, p.type, span)
+            "String" in typeStr || "CharSequence" in typeStr -> RNode.Const("${p.name} ($functionName)", p.type, span)
+            "Boolean" in typeStr -> RNode.Const(true, p.type, span)
+            "Int" in typeStr -> RNode.Const(42, p.type, span)
+            "Long" in typeStr -> RNode.Const(0L, p.type, span)
+            "Float" in typeStr -> RNode.Const(0.5f, p.type, span)
+            "Double" in typeStr -> RNode.Const(0.5, p.type, span)
+            else -> RNode.Const(null, p.type, span)
+        }
+    }
+
+    /**
+     * For large multi-module repositories (> 80 `.kt` files), returns a scoped list of source roots centered on
+     * [targetFilePath]'s directory plus sibling UI/theme/design/component directories so `crossFileModel` does not
+     * parse thousands of unrelated module files. Returns `null` for normal projects so the shared [service] is used.
+     */
+    private fun scopedSourceRootsFor(root: String, targetFilePath: String): List<VirtualFile>? {
+        var totalKt = 0
+        fun countUpTo(dir: String, limit: Int) {
+            if (totalKt > limit) return
+            for (entry in IosFiles.list(dir)) {
+                if (entry.startsWith(".") || entry == "build" || entry == "node_modules") continue
+                val full = IosFiles.join(dir, entry)
+                if (IosFiles.isDirectory(full)) {
+                    countUpTo(full, limit)
+                    if (totalKt > limit) return
+                } else if (entry.endsWith(".kt")) {
+                    totalKt++
+                }
+            }
+        }
+        countUpTo(root, 80)
+        if (totalKt <= 80) return null
+
+        val targetDir = IosFiles.parentOf(targetFilePath) ?: return null
+        val selectedRoots = LinkedHashSet<String>()
+
+        val targetDirKtFiles = IosFiles.list(targetDir)
+            .filter { it.endsWith(".kt") }
+            .map { IosFiles.join(targetDir, it) }
+        if (targetDirKtFiles.size <= 12) {
+            selectedRoots.add(targetDir)
+        } else {
+            selectedRoots.add(targetFilePath)
+            targetDirKtFiles
+                .filter { it != targetFilePath }
+                .sortedBy { IosFiles.size(it) }
+                .take(8)
+                .forEach { selectedRoots.add(it) }
+        }
+
+        val parent1 = IosFiles.parentOf(targetDir)
+        val parent2 = parent1?.let { IosFiles.parentOf(it) }
+        val searchBases = listOfNotNull(parent1, parent2)
+        val uiDirNames = setOf("theme", "design", "components", "component", "common", "preview", "icons", "shimmer")
+        for (base in searchBases) {
+            if (!IosFiles.isDirectory(base)) continue
+            for (entry in IosFiles.list(base)) {
+                val full = IosFiles.join(base, entry)
+                val lower = entry.lowercase()
+                if (IosFiles.isDirectory(full) && lower in uiDirNames) {
+                    val siblingKtFiles = IosFiles.list(full).count { it.endsWith(".kt") }
+                    if (lower == "theme" || siblingKtFiles <= 15) {
+                        selectedRoots.add(full)
+                    }
+                }
+            }
+        }
+        return selectedRoots.map { IosVirtualFile(it) }
     }
 
     /** The `@Preview` variants [path] declares. */
@@ -311,6 +451,55 @@ internal class IosKotlinAnalysis(
 
     /** The `@Preview` functions [path] declares, by name. */
     fun previewNames(path: String, text: String): List<String> = previews(path, text).map { it.functionName }.distinct()
+
+    /**
+     * Top-level `@Composable` functions declared in [path] that can be invoked as a preview entrypoint
+     * (either 0 required parameters or parameters with default/primitive/String/Modifier/lambda types),
+     * ordered by suitability for standalone rendering.
+     */
+    fun composableNames(path: String, text: String): List<String> {
+        val file = parsed(path, text)
+        val fns = file.ktFile.declarations.filterIsInstance<KtNamedFunction>()
+        val candidates = mutableListOf<Pair<String, Int>>()
+        for (fn in fns) {
+            val name = fn.name ?: continue
+            val isComposable = fn.annotationEntries.any {
+                val short = it.shortName?.asString().orEmpty()
+                short == "Composable" || short.endsWith("Preview") || short.endsWith("Previews")
+            }
+            if (!isComposable) continue
+            if (name.endsWith("Theme") && fn.valueParameters.any { it.name == "content" }) continue
+            val params = fn.valueParameters
+            val allSupported = params.all { p ->
+                p.hasDefaultValue() || isSupportedEntryParamType(p.typeReference?.text.orEmpty())
+            }
+            if (!allSupported) continue
+            val bodyText = fn.bodyExpression?.text.orEmpty()
+            var score = 0
+            if (fn.annotationEntries.any { it.shortName?.asString()?.contains("Preview") == true } || "Preview" in name) {
+                score += 100
+            }
+            if (params.all { it.hasDefaultValue() }) score += 40
+            if (params.isEmpty()) score += 20
+            val uiPrimitives = listOf("Text(", "Column(", "Row(", "Box(", "Spacer(", "Surface(", "Card(", "Icon(", "Button(", "Switch(", "OutlinedTextField(")
+            score += uiPrimitives.count { it in bodyText } * 10
+            if ("LocalContext" in bodyText || "HazeState" in bodyText || "hiltViewModel" in bodyText || "collectAsState" in bodyText) {
+                score -= 80
+            }
+            candidates.add(name to score)
+        }
+        return candidates.sortedByDescending { it.second }.map { it.first }.distinct()
+    }
+
+    private fun isSupportedEntryParamType(typeText: String): Boolean {
+        val t = typeText.trim().removeSuffix("?")
+        if (t.isEmpty()) return false
+        if ("->" in t) return true
+        return t in setOf(
+            "String", "CharSequence", "Boolean", "Int", "Long", "Float", "Double", "Modifier",
+            "androidx.compose.ui.Modifier",
+        )
+    }
 
     /**
      * Go-to targets of [kind] at [offset], for Go to Declaration / Implementation(s) / Type / Super.
@@ -531,7 +720,9 @@ internal class IosVirtualFile(override val path: String) : VirtualFile {
     override fun parent(): VirtualFile? = IosFiles.parentOf(path)?.let { IosVirtualFile(it) }
 
     override fun children(): List<VirtualFile> =
-        if (!isDirectory) emptyList() else IosFiles.list(path).map { IosVirtualFile(IosFiles.join(path, it)) }
+        if (!isDirectory) emptyList() else IosFiles.list(path)
+            .filter { it != ".git" && it != "build" && it != ".gradle" && it != ".platform" && it != "node_modules" }
+            .map { IosVirtualFile(IosFiles.join(path, it)) }
 
     override fun contentHash(): ContentHash = ContentHash.of(readBytes())
     override fun readBytes(): ByteArray = IosFiles.readBytes(path) ?: ByteArray(0)

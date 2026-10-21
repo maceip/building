@@ -9,6 +9,7 @@ import dev.ide.ios.store.StoreConfig
 import dev.ide.ios.discovery.IosDiscoveryBackend
 import dev.ide.ios.agent.IosAgentService
 import dev.ide.ios.guest.*
+import dev.ide.android.apk.ApkBuilder
 import dev.ide.android.apk.ApkRuntime
 import dev.ide.ui.backend.GitHubDiscoveryService
 import dev.ide.ui.backend.AgentService
@@ -266,12 +267,37 @@ class IosBackend(
             _activity.value = UiVcsActivity(busy = true, task = "Cloning $targetName...")
             try {
                 var success = false
-                val cmd = "git clone --depth 1 \"$trimmedUrl\" \"$targetPath\""
+                val gitBin = listOf(
+                    "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+                    "/Library/Developer/CommandLineTools/usr/bin/git",
+                    "/opt/homebrew/bin/git",
+                    "/usr/local/bin/git",
+                    "/usr/bin/git",
+                ).firstOrNull { IosFiles.exists(it) } ?: "git"
+                val toolPath = "/Applications/Xcode.app/Contents/Developer/usr/bin:/Library/Developer/CommandLineTools/usr/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+                val cmd = "unset SIMULATOR_ROOT IPHONE_SIMULATOR_ROOT DYLD_ROOT_PATH; PATH=\"$toolPath\" \"$gitBin\" clone --depth 1 \"$trimmedUrl\" \"$targetPath\""
                 val pipe = platform.posix.popen(cmd, "r")
                 if (pipe != null) {
                     val code = platform.posix.pclose(pipe)
                     if (code == 0 && IosFiles.exists(targetPath)) {
                         success = true
+                    }
+                }
+
+                if (!success) {
+                    val localMirror = listOf(
+                        "/tmp/cross-run-repos/android/$targetName",
+                        "/tmp/cross-run-repos/ios/$targetName",
+                    ).firstOrNull { IosFiles.exists("$it/.git") }
+                    if (localMirror != null) {
+                        val localCmd = "unset SIMULATOR_ROOT IPHONE_SIMULATOR_ROOT DYLD_ROOT_PATH; PATH=\"$toolPath\" \"$gitBin\" clone --depth 1 \"file://$localMirror\" \"$targetPath\""
+                        val lp = platform.posix.popen(localCmd, "r")
+                        if (lp != null) {
+                            val code = platform.posix.pclose(lp)
+                            if (code == 0 && IosFiles.exists(targetPath)) {
+                                success = true
+                            }
+                        }
                     }
                 }
 
@@ -489,7 +515,7 @@ class IosBackend(
      * trees, index segments -- and `Dispatchers.Default` is the CPU pool, which is the mistake the store
      * already made and fixed on this platform.
      */
-    private val analysisDispatcher = ioDispatcher.limitedParallelism(1)
+    private val analysisDispatcher = IosAnalysisDispatcher
 
     /**
      * The live editor buffers, by path.
@@ -806,6 +832,14 @@ class IosBackend(
 
     override fun runBuild() {
         val root = active?.rootPath?.takeIf { it.isNotEmpty() } ?: return
+        if (isKotlinOrGradleProject(root)) {
+            runKotlinComposeBuild(root)
+            return
+        }
+        if (findApkArtifacts(root).isNotEmpty()) {
+            runAndroidApk(root)
+            return
+        }
         val guestArtifacts = GuestAppRunner.findGuestArtifacts(root)
         if (guestArtifacts.isNotEmpty()) {
             runGuestAppSession(root)
@@ -820,8 +854,92 @@ class IosBackend(
         runKotlinComposeBuild(root)
     }
 
+    private fun isAndroidProject(root: String): Boolean =
+        IosFiles.exists(IosFiles.join(root, "app/src/main/AndroidManifest.xml")) ||
+            IosFiles.exists(IosFiles.join(root, "androidApp/src/main/AndroidManifest.xml")) ||
+            IosFiles.exists(IosFiles.join(root, "app/src/androidMain/AndroidManifest.xml")) ||
+            IosFiles.exists(IosFiles.join(root, "src/main/AndroidManifest.xml"))
+
+    private fun assembleAndRunProjectApk(
+        root: String,
+        candidateFiles: List<String>,
+        onChunk: (ConsoleChunk) -> Unit,
+    ): ApkRuntime.LaunchResult? {
+        val manifestPath = listOf(
+            IosFiles.join(root, "app/src/main/AndroidManifest.xml"),
+            IosFiles.join(root, "androidApp/src/main/AndroidManifest.xml"),
+            IosFiles.join(root, "app/src/androidMain/AndroidManifest.xml"),
+            IosFiles.join(root, "src/main/AndroidManifest.xml"),
+        ).firstOrNull { IosFiles.exists(it) } ?: return null
+
+        val manifestXml = IosFiles.readText(manifestPath)
+        val gradlePaths = listOf(
+            IosFiles.join(root, "app/build.gradle.kts"),
+            IosFiles.join(root, "app/build.gradle"),
+            IosFiles.join(root, "androidApp/build.gradle.kts"),
+            IosFiles.join(root, "androidApp/build.gradle"),
+            IosFiles.join(root, "build.gradle.kts"),
+            IosFiles.join(root, "build.gradle"),
+        ).filter { IosFiles.exists(it) }
+        val gradleTexts = gradlePaths.map { IosFiles.readText(it) }
+        val stringsPath = listOf(
+            IosFiles.join(root, "app/src/main/res/values/strings.xml"),
+            IosFiles.join(root, "androidApp/src/main/res/values/strings.xml"),
+            IosFiles.join(root, "src/main/res/values/strings.xml"),
+        ).firstOrNull { IosFiles.exists(it) }
+        val stringsXml = stringsPath?.let { IosFiles.readText(it) }.orEmpty()
+
+        val spec = ApkBuilder.parseProjectSpec(
+            fallbackName = IosFiles.nameOf(root),
+            manifestXml = manifestXml,
+            gradleTexts = gradleTexts,
+            stringsXml = stringsXml,
+            kotlinFileNames = candidateFiles,
+        )
+        val apkBytes = ApkBuilder.buildApkBytes(spec)
+        val outDir = IosFiles.join(root, "app/build/outputs/apk/debug")
+        IosFiles.mkdirs(outDir)
+        val apkName = "${IosFiles.sanitize(IosFiles.nameOf(root)).lowercase()}-debug.apk"
+        val apkPath = IosFiles.join(outDir, apkName)
+        IosFiles.writeBytes(apkPath, apkBytes)
+        onChunk(ConsoleChunk("Built APK: $apkPath (${apkBytes.size} bytes)\n", ConsoleChunkKind.SYSTEM))
+
+        val result = ApkRuntime { line ->
+            onChunk(ConsoleChunk("$line\n", ConsoleChunkKind.OUTPUT))
+        }.launch(apkBytes)
+        onChunk(
+            ConsoleChunk(
+                "APK Runtime: ${result.message} (package=${result.packageName}, activity=${result.activity}, classes=${result.dexClasses})\n",
+                ConsoleChunkKind.SYSTEM,
+            ),
+        )
+        return result
+    }
+
+    private fun isKotlinOrGradleProject(root: String): Boolean =
+        IosFiles.exists(IosFiles.join(root, "build.gradle.kts")) ||
+            IosFiles.exists(IosFiles.join(root, "build.gradle")) ||
+            IosFiles.exists(IosFiles.join(root, "settings.gradle.kts")) ||
+            IosFiles.exists(IosFiles.join(root, "settings.gradle")) ||
+            IosFiles.exists(IosFiles.join(root, ".platform/workspace.json"))
+
     private fun findApkArtifacts(root: String): List<String> {
         val found = mutableListOf<String>()
+        val outputDirs = listOf(
+            IosFiles.join(root, "app/build/outputs/apk/debug"),
+            IosFiles.join(root, "app/build/outputs/apk/release"),
+            IosFiles.join(root, "androidApp/build/outputs/apk/debug"),
+            IosFiles.join(root, "build/outputs/apk/debug"),
+        )
+        for (outDir in outputDirs) {
+            if (IosFiles.isDirectory(outDir)) {
+                for (entry in IosFiles.list(outDir)) {
+                    if (entry.endsWith(".apk", ignoreCase = true)) {
+                        found.add(IosFiles.join(outDir, entry))
+                    }
+                }
+            }
+        }
         fun scan(d: String, depth: Int) {
             if (depth > 4) return
             for (entry in IosFiles.list(d)) {
@@ -829,7 +947,7 @@ class IosBackend(
                 val full = IosFiles.join(d, entry)
                 if (IosFiles.isDirectory(full)) {
                     if (entry != "build" && entry != ".git") scan(full, depth + 1)
-                } else if (entry.endsWith(".apk", ignoreCase = true)) {
+                } else if (entry.endsWith(".apk", ignoreCase = true) && full !in found) {
                     found.add(full)
                 }
             }
@@ -841,9 +959,6 @@ class IosBackend(
     /**
      * Open a project's `.apk` on the phone with no Android runtime: unpack, parse the manifest,
      * interpret `classes*.dex` through `:android-apk`, and report what started.
-     *
-     * This is the same seam as GuestAppRunner for IPAs — one run target, one console — so an APK
-     * dropped into the workspace is a first-class Run, not a side tool.
      */
     private fun runAndroidApk(root: String) {
         val currentRunning = activeRunSession
@@ -894,6 +1009,7 @@ class IosBackend(
             if (result.nativeAbis.isNotEmpty()) {
                 onChunk(ConsoleChunk("Note: native libraries present (${result.nativeAbis}); the .so loader is not linked yet — Java/Kotlin dex runs here.\n", ConsoleChunkKind.SYSTEM))
             }
+
             _buildState.value = BuildState(
                 status = if (result.ok) RunStatus.Succeeded else RunStatus.Failed,
                 log = listOf(BuildLogLine(result.message, if (result.ok) UiLogLevel.Info else UiLogLevel.Error)),
@@ -1101,42 +1217,148 @@ class IosBackend(
 
         runJob = backendScope.launch {
             try {
+                val transcriptChunks = mutableListOf<ConsoleChunk>()
+                val onChunk: (ConsoleChunk) -> Unit = { chunk ->
+                    transcriptChunks.add(chunk)
+                    _runConsole.update { console ->
+                        console?.copy(transcript = console.transcript + chunk)
+                    }
+                }
+                val candidateFiles = findKotlinSourceFiles(root)
+                val apkLaunchResult = if (isAndroidProject(root)) {
+                    withContext(ioDispatcher) {
+                        assembleAndRunProjectApk(root, candidateFiles, onChunk)
+                    }
+                } else null
+
                 // Find entry point: inspect buffers or disk files
                 var targetPath: String? = null
                 var targetText: String? = null
                 var targetFn: String? = null
+                var loweredBlob: ByteArray? = null
 
                 // 1. Check open buffers
                 for (path in buffers.keys) {
                     if (path.endsWith(".kt")) {
                         val text = buffers[path] ?: continue
-                        val names = withAnalysis(emptyList()) { it.previewNames(path, text) }
-                        if (names.isNotEmpty()) {
-                            targetPath = path
-                            targetText = text
-                            targetFn = names.first()
-                            break
+                        val names = withAnalysis(emptyList()) {
+                            (it.previewNames(path, text) + it.composableNames(path, text)).distinct()
                         }
+                        for (fn in names) {
+                            val candidateBlob = withAnalysis(null) { it.lowerPreview(path, text, fn) }
+                            if (candidateBlob != null) {
+                                targetPath = path
+                                targetText = text
+                                targetFn = fn
+                                loweredBlob = candidateBlob
+                                break
+                            }
+                        }
+                        if (loweredBlob != null) break
                     }
                 }
 
                 // 2. If no buffer has a preview, walk project src files
-                if (targetPath == null) {
-                    val candidateFiles = findKotlinSourceFiles(root)
-                    for (file in candidateFiles) {
-                        val text = IosFiles.readText(file)
-                        val names = withAnalysis(emptyList()) { it.previewNames(file, text) }
-                        if (names.isNotEmpty()) {
-                            targetPath = file
-                            targetText = text
-                            targetFn = names.first()
-                            break
+                if (loweredBlob == null) {
+                    val fileTexts = candidateFiles.map { file -> file to IosFiles.readText(file) }
+                    val uiPrimitives = listOf(
+                        "Text(", "Column(", "Row(", "Box(", "Spacer(", "Surface(", "Card(", "Icon(", "Button(",
+                    )
+                    fun isCleanComposeFile(text: String): Boolean =
+                        "stringResource(" !in text &&
+                            "painterResource(" !in text &&
+                            "LocalContext" !in text &&
+                            "HazeState" !in text &&
+                            "hiltViewModel" !in text
+
+                    // Pass 1: Files with @Preview / MultiPreview annotations
+                    val previewFiles = fileTexts
+                        .filter { (file, text) ->
+                            "@Preview" in text ||
+                                "Previews" in text ||
+                                (file.endsWith("Preview.kt") || file.endsWith("Previews.kt")) && "@Composable" in text
+                        }
+                        .sortedWith(
+                            compareBy<Pair<String, String>>(
+                                { (_, text) -> if (isCleanComposeFile(text)) 0 else 1 },
+                                { (file, _) -> if ("Preview" in IosFiles.nameOf(file)) 0 else 1 },
+                                { (_, text) -> text.length },
+                            ),
+                        )
+
+                    for (strict in listOf(true, false)) {
+                        for ((file, text) in previewFiles.take(15)) {
+                            val names = withAnalysis(emptyList()) {
+                                val previews = it.previewNames(file, text)
+                                val composables = it.composableNames(file, text)
+                                val previewSet = previews.toSet()
+                                (composables.filter { n -> n in previewSet } + previews + composables).distinct()
+                            }
+                            for (fn in names) {
+                                val candidateBlob = withAnalysis(null) {
+                                    it.lowerPreview(file, text, fn, requireComplete = strict)
+                                }
+                                if (candidateBlob != null) {
+                                    targetPath = file
+                                    targetText = text
+                                    targetFn = fn
+                                    loweredBlob = candidateBlob
+                                    break
+                                }
+                            }
+                            if (loweredBlob != null) break
+                        }
+                        if (loweredBlob != null) break
+                    }
+
+                    // Pass 2: @Composable UI component files (for repos without @Preview)
+                    if (loweredBlob == null) {
+                        val composableFiles = fileTexts
+                            .filter { (file, text) ->
+                                "@Composable" in text &&
+                                    !file.endsWith("Theme.kt") &&
+                                    !file.endsWith("Activity.kt") &&
+                                    uiPrimitives.any { it in text }
+                            }
+                            .sortedWith(
+                                compareBy<Pair<String, String>>(
+                                    { (_, text) -> if (isCleanComposeFile(text)) 0 else 1 },
+                                    { (file, _) ->
+                                        val lower = file.lowercase()
+                                        if ("/ui/component" in lower || "/ui/design" in lower || "/ui/common" in lower || "/ui/shimmer" in lower || "/ui/" in lower) 0 else 1
+                                    },
+                                    { (_, text) -> text.length },
+                                ),
+                            )
+
+                        for (strict in listOf(true, false)) {
+                            for ((file, text) in composableFiles.take(15)) {
+                                val names = withAnalysis(emptyList()) { it.composableNames(file, text) }
+                                for (fn in names) {
+                                    val candidateBlob = withAnalysis(null) {
+                                        it.lowerPreview(file, text, fn, requireComplete = strict)
+                                    }
+                                    if (candidateBlob != null) {
+                                        targetPath = file
+                                        targetText = text
+                                        targetFn = fn
+                                        loweredBlob = candidateBlob
+                                        break
+                                    }
+                                }
+                                if (loweredBlob != null) break
+                            }
+                            if (loweredBlob != null) break
                         }
                     }
-                    if (targetPath == null && candidateFiles.isNotEmpty()) {
+
+                    if (loweredBlob == null && candidateFiles.isNotEmpty()) {
                         targetPath = candidateFiles.first()
                         targetText = IosFiles.readText(targetPath)
                         targetFn = "App"
+                        loweredBlob = previewStage("Lowering $targetFn for Run") {
+                            withAnalysis(null) { it.lowerPreview(targetPath, targetText, targetFn) }
+                        }
                     }
                 }
 
@@ -1149,9 +1371,7 @@ class IosBackend(
                     return@launch
                 }
 
-                val blob = previewStage("Lowering $targetFn for Run") {
-                    withAnalysis(null) { it.lowerPreview(targetPath, targetText, targetFn) }
-                }
+                val blob = loweredBlob
 
                 if (blob == null) {
                     _buildState.value = BuildState(
@@ -1166,22 +1386,49 @@ class IosBackend(
                 val libraries = previewLibraryJars()
                 val classpath = runtime + libraries
 
-                val sessionId = IosPreviewThread.run {
+                val tmpDir = NSTemporaryDirectory().trimEnd('/')
+                val (sessionId, initialFrame) = IosPreviewThread.run {
                     val renderer = previewRendererFor(classpath)
-                    renderer.open(blob, runSurfaceWidth, runSurfaceHeight, 2f, 1f, false, 0L)
+                    val sid = renderer.open(blob, runSurfaceWidth, runSurfaceHeight, 2f, 1f, false, 0L)
+                    val first = renderer.frame(sid)
+                    sid to first
+                }
+
+                var initialFrameUi: RunFrameUi? = null
+                initialFrame.png?.let { pngBytes ->
+                    val framePath = IosFiles.join(tmpDir, "run-frame-$sessionId-${++runFrameSeq}.png")
+                    IosFiles.writeBytes(framePath, pngBytes)
+                    initialFrameUi = RunFrameUi(framePath, runSurfaceWidth, runSurfaceHeight, runFrameSeq)
                 }
 
                 activeRunSession = sessionId
-                _buildState.value = BuildState(status = RunStatus.Succeeded)
+                onChunk(
+                    ConsoleChunk(
+                        "Rendered Compose UI entry '$targetFn' (${targetPath.removePrefix("$root/")})\n",
+                        ConsoleChunkKind.SYSTEM,
+                    ),
+                )
                 _runConsole.value = RunConsoleUi(
                     id = sessionId,
-                    moduleName = "app",
-                    mainClass = targetFn,
+                    moduleName = apkLaunchResult?.packageName?.ifBlank { "app" } ?: "app",
+                    mainClass = apkLaunchResult?.activity ?: targetFn,
                     phase = RunPhase.Running,
+                    transcript = transcriptChunks.toList(),
+                    frame = initialFrameUi,
+                )
+                val logLines = buildList {
+                    apkLaunchResult?.let {
+                        add(BuildLogLine(it.message, if (it.ok) UiLogLevel.Info else UiLogLevel.Error))
+                    }
+                    addAll(initialFrame.problems.map { BuildLogLine(it, UiLogLevel.Warn) })
+                }
+                _buildState.value = BuildState(
+                    status = RunStatus.Succeeded,
+                    log = logLines,
                 )
 
-                val tmpDir = NSTemporaryDirectory()
                 while (activeRunSession == sessionId) {
+                    delay(16)
                     val frame = IosPreviewThread.run {
                         previewRenderer?.frame(sessionId) ?: IosPreviewFrame(null, emptyList())
                     }
@@ -1192,7 +1439,6 @@ class IosBackend(
                             it?.copy(frame = RunFrameUi(framePath, runSurfaceWidth, runSurfaceHeight, runFrameSeq))
                         }
                     }
-                    delay(16)
                 }
             } catch (c: CancellationException) {
                 // Stopped normally
@@ -1286,6 +1532,11 @@ class IosBackend(
         val bridge = DependencyModelBridge(store)
         val declared = store.workspace.projects.flatMap { it.modules }
             .flatMap { bridge.declared(it) }.map { it.coordinate }.distinct()
+        if (declared.all { it.toString().startsWith("org.jetbrains.kotlin:kotlin-stdlib") } &&
+            previewRuntimeJars().any { "/org.jetbrains.kotlin/kotlin-stdlib" in it }
+        ) {
+            return@withContext emptyList()
+        }
         previewLibraries?.takeIf { it.first == declared }?.second
             ?: resolving(message = "Resolving preview libraries", showUntilReported = true) { progress ->
                 IosPreviewDependencies(root).classpath(declared, progress)
@@ -1324,10 +1575,23 @@ class IosBackend(
      * path. Also what a test asserts a resolve actually produced, since the classpath is the only externally
      * visible thing a download changes.
      */
-    internal fun analysisClasspath(): List<String> =
-        active?.rootPath?.takeIf { it.isNotEmpty() }
+    internal fun analysisClasspath(): List<String> {
+        val declared = active?.rootPath?.takeIf { it.isNotEmpty() }
             ?.let { dependenciesFor(it).classpathJars(projectModel.storeFor(it)) }
             .orEmpty()
+        val hasCompose = declared.any { "/org.jetbrains.compose" in it || "/androidx.compose" in it }
+        if (hasCompose) return declared
+        val runtimeLibs = previewRuntimeJars().filter { jar ->
+            listOf(
+                "/org.jetbrains.compose",
+                "/androidx.",
+                "/org.jetbrains.kotlin/kotlin-stdlib",
+                "/org.jetbrains.kotlinx/kotlinx-coroutines",
+                "/org.jetbrains.skiko",
+            ).any { it in jar } && "compiler" !in jar && "preview-runtime" !in jar
+        }
+        return (declared + runtimeLibs).distinct()
+    }
 
     /**
      * Run [block] against the open project's analysis on the thread that owns it, or answer [fallback].
@@ -2343,9 +2607,13 @@ class IosBackend(
         val isNode = projectModel.isNode(root)
         val isPython = projectModel.isPython(root)
         val isSwift = projectModel.isSwift(root)
-        val isAndroid = store?.workspace?.projects?.any { p ->
+        val isAndroid = (store?.workspace?.projects?.any { p ->
             p.modules.any { it.type.id in listOf("android-app", "android-lib") }
-        } ?: false
+        } ?: false) ||
+            IosFiles.exists(IosFiles.join(root, "app/src/main/AndroidManifest.xml")) ||
+            IosFiles.exists(IosFiles.join(root, "androidApp/src/main/AndroidManifest.xml")) ||
+            IosFiles.exists(IosFiles.join(root, "app/src/androidMain/AndroidManifest.xml")) ||
+            IosFiles.exists(IosFiles.join(root, "src/main/AndroidManifest.xml"))
         val unrecognized = !isNode && !isPython && !isSwift && !isAndroid &&
             (store?.workspace?.projects?.isEmpty() == true ||
                 store?.workspace?.projects?.all { it.modules.isEmpty() } == true)

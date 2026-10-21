@@ -73,7 +73,7 @@ class DexVm(private val dex: DexFile) {
     }
 
     private fun isStatic(method: DexFile.EncodedMethod): Boolean =
-        (method.accessFlags and 0x8) != 0 || (method.accessFlags and 0x100) != 0 /* constructor is direct */
+        (method.accessFlags and 0x8) != 0
 
     private fun interpret(frame: Frame): DvmValue {
         val insns = frame.code.insns
@@ -101,18 +101,18 @@ class DexVm(private val dex: DexFile) {
                 }
                 0x08 -> { frame.registers[insns[p] ushr 8] = frame.registers[insns[p + 1]]; frame.pc += 2 }
                 0x09 -> { frame.registers[insns[p + 1]] = frame.registers[insns[p + 2]]; frame.pc += 3 }
-                0x0a -> { frame.registers[insns[p] ushr 8] = frame.registers[insns[p] ushr 12]; frame.pc++ } // move-result
-                0x0b -> { frame.registers[insns[p] ushr 8] = frame.registers[insns[p] ushr 12]; frame.pc++ } // move-result-wide
-                0x0c -> { frame.registers[insns[p] ushr 8] = frame.registers[insns[p] ushr 12]; frame.pc++ } // move-result-object
-                0x0e -> frame.pc++ // return-void
+                0x0a -> { frame.registers[insns[p] ushr 8] = lastResult; frame.pc++ } // move-result
+                0x0b -> { frame.registers[insns[p] ushr 8] = lastResult; frame.pc++ } // move-result-wide
+                0x0c -> { frame.registers[insns[p] ushr 8] = lastResult; frame.pc++ } // move-result-object
+                0x0e -> return DvmValue.Null // return-void
                 0x0f -> return frame.registers[insns[p] ushr 8] // return vAA
                 0x10 -> return frame.registers[insns[p] ushr 8] // return-wide
                 0x11 -> return frame.registers[insns[p] ushr 8] // return-object
-                0x12 -> { // const/4 vA, #+B
+                0x12 -> { // const/4 vA, #+B (11n: B|A|op)
                     val i = insns[p]
-                    val lit = (i shr 8) and 0xF
-                    val signed = if (lit and 0x8 != 0) lit or -0x10 else lit
-                    frame.registers[(i ushr 12) and 0xF] = DvmValue.IntV(signed)
+                    val reg = (i ushr 8) and 0xF
+                    val signed = i.toShort().toInt() shr 12
+                    frame.registers[reg] = DvmValue.IntV(signed)
                     frame.pc++
                 }
                 0x13 -> { frame.registers[insns[p] ushr 8] = DvmValue.IntV(insns[p + 1].toShort().toInt()); frame.pc += 2 }
@@ -123,7 +123,10 @@ class DexVm(private val dex: DexFile) {
                     frame.registers[insns[p] ushr 8] = DvmValue.IntV(v)
                     frame.pc += 3
                 }
-                0x15 -> { frame.registers[insns[p] ushr 8] = DvmValue.FloatV(Float.fromBits(insns[p + 1] or (insns[p + 2] shl 16))); frame.pc += 3 }
+                0x15 -> { // const/high16 vAA, #+BBBB0000
+                    frame.registers[insns[p] ushr 8] = DvmValue.IntV(insns[p + 1] shl 16)
+                    frame.pc += 2
+                }
                 0x16 -> { frame.registers[insns[p] ushr 8] = DvmValue.LongV(insns[p + 1].toShort().toLong()); frame.pc += 2 }
                 0x17 -> {
                     val lo = insns[p + 1].toLong() and 0xFFFF
@@ -196,8 +199,8 @@ class DexVm(private val dex: DexFile) {
                     frame.pc += 2
                 }
                 0x27 -> throw DexException("UnsatisfiedLinkError", "fill-array-data at $p not supported")
-                0x28 -> { // goto
-                    val off = insns[p].toByte().toInt()
+                0x28 -> { // goto (10t: AA|op)
+                    val off = (insns[p] shr 8).toByte().toInt()
                     frame.pc += off
                 }
                 0x29 -> { frame.pc += insns[p + 1].toShort().toInt() } // goto/16
@@ -264,10 +267,18 @@ class DexVm(private val dex: DexFile) {
                     val name = dex.fieldName(fieldIdx)
                     if (op in 0x52..0x58) {
                         val owner = (obj as? DvmValue.ObjV)?.o
-                        frame.registers[vd] = if (owner != null) host.getField(this, owner, name) ?: DvmValue.Null else DvmValue.Null
+                        frame.registers[vd] = when (owner) {
+                            is GuestObject -> owner.fields[name] ?: host.getField(this, owner, name) ?: DvmValue.Null
+                            null -> DvmValue.Null
+                            else -> host.getField(this, owner, name) ?: DvmValue.Null
+                        }
                     } else {
                         val owner = (obj as? DvmValue.ObjV)?.o
-                        if (owner != null) host.setField(this, owner, name, frame.registers[vd])
+                        when (owner) {
+                            is GuestObject -> owner.fields[name] = frame.registers[vd]
+                            null -> {}
+                            else -> host.setField(this, owner, name, frame.registers[vd])
+                        }
                     }
                     frame.pc += 2
                 }
@@ -284,7 +295,6 @@ class DexVm(private val dex: DexFile) {
                 }
                 0x6e, 0x6f, 0x70, 0x71, 0x72 -> { // invoke-kind
                     val result = doInvoke(frame, insns, p, op)
-                    frame.registers[0] = result // move-result reads regs[0] after; caller uses 0x0a immediately
                     lastResult = result
                     frame.pc += 3
                 }
@@ -380,7 +390,7 @@ class DexVm(private val dex: DexFile) {
             (regNibbles shr 12) and 0xF,
             (argWord shr 8) and 0xF,
         )
-        val isStatic = op == 0x71 || op == 0x72
+        val isStatic = op == 0x71
         val recv: Any? = if (isStatic) null else {
             when (val v = frame.registers[regList[0]]) {
                 is DvmValue.ObjV -> v.o
@@ -402,12 +412,12 @@ class DexVm(private val dex: DexFile) {
         val desc = dex.protoDescriptor(dex.methodIds[methodIdx].protoIdx)
         val count = (argWord shr 8) and 0xFF
         val start = insns[p + 2]
-        val isStatic = (argWord and 0xFF) == 0x74 || (argWord and 0xFF) == 0x74
+        val isStatic = (argWord and 0xFF) == 0x77
         val args = ArrayList<DvmValue>()
         var recv: Any? = null
         for (i in 0 until count) {
             val v = frame.registers[start + i]
-            if (i == 0 && (insns[p] and 0xFF) !in intArrayOf(0x74)) {
+            if (i == 0 && !isStatic) {
                 recv = (v as? DvmValue.ObjV)?.o
             } else {
                 args.add(v)
@@ -417,6 +427,13 @@ class DexVm(private val dex: DexFile) {
     }
 
     private fun dispatch(owner: String, name: String, desc: String, recv: Any?, args: List<DvmValue>): DvmValue {
+        if (recv != null) {
+            val guestMethod = dex.findMethod(owner, name, desc)
+                ?: (recv as? GuestObject)?.let { dex.findMethod(it.type, name, desc) }
+            if (guestMethod != null && guestMethod.code != null) {
+                return invoke(guestMethod, recv, args)
+            }
+        }
         host.invoke(this, owner, name, desc, args)?.let { return it }
         if (recv == null) {
             // static or host class with no body: try the guest's own class
