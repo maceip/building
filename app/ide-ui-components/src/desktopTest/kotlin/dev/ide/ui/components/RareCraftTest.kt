@@ -60,9 +60,9 @@ class RareCraftTest {
         }
 
         assertEquals(0.dp, interactiveFloor)
-        assertEquals(Color(0xFF09090B), darkBackground)
-        assertEquals(Color(0xFF23252C), darkOutlineVariant)
-        assertEquals(Color(0xFF6E8EF7), darkPrimary)
+        assertEquals(Color(0xFF191A17), darkBackground)
+        assertEquals(Color(0xFF2C2D27), darkOutlineVariant)
+        assertEquals(Color(0xFFC8F169), darkPrimary)
     }
 
     @Test

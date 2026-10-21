@@ -68,7 +68,7 @@ import org.jetbrains.compose.resources.pluralStringResource
 /** The fixed editor palette the code motifs are drawn in. Independent of the app theme, by design. */
 object CodeMotifColors {
     val Chrome = Color(0xFF0C0C0F)
-    val ChromeBar = Color(0xFF09090B)
+    val ChromeBar = Color(0xFF191A17)
     val Gutter = Color(0xFF111114)
     val TreeBar = Color(0xFF232329)
     val Keyword = Color(0xFFCD7EE0)
@@ -76,7 +76,7 @@ object CodeMotifColors {
     val StringLit = Color(0xFF98C97A)
     val Plain = Color(0xFFA1A1AA)
     val Comment = Color(0xFF52525B)
-    val FileName = Color(0xFF71717A)
+    val FileName = Color(0xFF8C8D84)
     val Dot = Color(0xFF2E2E36)
 }
 

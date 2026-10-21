@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -57,8 +58,9 @@ import dev.ide.agent.ui.generated.resources.chat_providers_subtitle
 import dev.ide.agent.ui.generated.resources.chat_providers_title
 import dev.ide.agent.ui.generated.resources.chat_show
 import dev.ide.ui.icons.CaIcons
-import dev.ide.ui.theme.Ca
-import dev.ide.ui.theme.Ide
+import dev.ide.ui.screens.AgentChip
+import dev.ide.ui.screens.AgentPrimaryButton
+import dev.ide.ui.theme.AgentUi
 import org.jetbrains.compose.resources.stringResource
 
 /**
@@ -70,29 +72,30 @@ import org.jetbrains.compose.resources.stringResource
 @Composable
 internal fun AgentProvidersSheet(backend: IdeBackend, onClose: () -> Unit) {
     var cfg by remember { mutableStateOf(backend.agent.config()) }
+    val chrome = AgentUi.chrome
     CenteredDialog(visible = true, onDismiss = onClose) {
         Column(
             Modifier.widthIn(max = 460.dp)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                .clip(RoundedCornerShape(Ca.radius.xl))
+                .clip(RoundedCornerShape(AgentUi.radius.sheet))
                 // Opaque: a key field is the last thing that should be legible-depending-on-what-is-behind-it.
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.xl))
+                .background(chrome.surface)
+                .border(1.dp, chrome.hairlineStrong, RoundedCornerShape(AgentUi.radius.sheet))
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(CaIcons.key, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                Icon(CaIcons.key, null, Modifier.size(18.dp), tint = chrome.accent)
                 Spacer(Modifier.width(8.dp))
                 Text(
                     stringResource(Res.string.chat_providers_title),
-                    color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                    color = chrome.text, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
                 )
                 IconButtonCa(CaIcons.close, stringResource(Res.string.chat_close), onClose, iconSize = 16, boxSize = 36)
             }
-            Text(stringResource(Res.string.chat_providers_subtitle), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(Res.string.chat_providers_subtitle), color = chrome.textFaint, style = MaterialTheme.typography.bodySmall)
             Column(
                 Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -113,7 +116,7 @@ internal fun AgentProvidersSheet(backend: IdeBackend, onClose: () -> Unit) {
                     )
                 }
             }
-            PrimaryButton(stringResource(Res.string.chat_done), onClose, Modifier.fillMaxWidth())
+            AgentPrimaryButton(stringResource(Res.string.chat_done), onClose, Modifier.fillMaxWidth())
         }
     }
 }
@@ -163,6 +166,7 @@ private fun ProviderCard(
     onPickModel: (String) -> Unit,
     onSetGateway: (String, String, String) -> Unit,
 ) {
+    val chrome = AgentUi.chrome
     val isGateway = provider.id == "gateway"
     var key by remember(provider.id) { mutableStateOf(provider.apiKey) }
     var customBaseUrl by remember(provider.id) { mutableStateOf(oneLine(provider.baseUrl)) }
@@ -171,24 +175,23 @@ private fun ProviderCard(
     var caCert by remember(provider.id) { mutableStateOf(gatewayCaCert) }
     // A gateway is often a local server that takes no key, so its URL alone makes it usable.
     val hasKey = if (isGateway) baseUrl.isNotBlank() else key.isNotBlank()
-    val shape = RoundedCornerShape(Ca.radius.md)
-    val scheme = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(AgentUi.radius.card)
     // A selected card is a tonal container, so its text and its radio dot take the container's own content
     // colour. Leaving them on onSurface is the classic pairing slip: legible in one theme, muddy in the other.
-    val container = if (selected) scheme.secondaryContainer else scheme.surfaceContainerHigh
-    val onContainer = if (selected) scheme.onSecondaryContainer else scheme.onSurface
+    val container = if (selected) chrome.surfaceAlt else chrome.bg
+    val onContainer = if (selected) chrome.text else chrome.text
     val subtitle = providerSubtitle(provider.id)
     Column(
         Modifier.fillMaxWidth()
             .clip(shape)
             .background(container, shape)
-            .border(1.dp, if (selected) scheme.primary else scheme.outlineVariant, shape)
+            .border(1.dp, if (selected) chrome.accent else chrome.hairline, shape)
             .clickable(onClick = onSelect)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            RadioDot(selected, onContainer)
+            RadioDot(selected, if (selected) chrome.accent else chrome.textFaint)
             Column(Modifier.weight(1f)) {
                 Text(
                     provider.displayName,
@@ -198,7 +201,7 @@ private fun ProviderCard(
                 if (subtitle.isNotEmpty()) {
                     Text(
                         subtitle,
-                        color = if (selected) onContainer.copy(alpha = 0.8f) else scheme.onSurfaceVariant,
+                        color = if (selected) chrome.textMuted else chrome.textFaint,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -206,10 +209,9 @@ private fun ProviderCard(
                 }
             }
             if (hasKey) {
-                Chip(
-                    stringResource(Res.string.chat_connected),
-                    fill = scheme.tertiaryContainer,
-                    textColor = scheme.onTertiaryContainer,
+                AgentChip(
+                    label = stringResource(Res.string.chat_connected),
+                    selected = true,
                 )
             }
         }
@@ -224,11 +226,10 @@ private fun ProviderCard(
                 ) {
                     provider.models.take(4).forEach { m ->
                         val isChosen = m.id == activeModel
-                        Chip(
-                            text = m.displayName,
-                            modifier = Modifier.clip(RoundedCornerShape(Ca.radius.pill)).clickable { onPickModel(m.id) },
-                            fill = if (isChosen) scheme.primary else scheme.surfaceContainerHighest,
-                            textColor = if (isChosen) scheme.onPrimary else scheme.onSurfaceVariant,
+                        AgentChip(
+                            label = m.displayName,
+                            selected = isChosen,
+                            onClick = { onPickModel(m.id) },
                         )
                     }
                 }
@@ -243,8 +244,8 @@ private fun ProviderCard(
                 PlainField(baseUrl, stringResource(Res.string.chat_base_url)) { baseUrl = oneLine(it); onSetGateway(baseUrl, model, caCert) }
                 PlainField(model, stringResource(Res.string.chat_model)) { model = it; onSetGateway(baseUrl, it, caCert) }
                 PlainField(caCert, stringResource(Res.string.chat_ca_cert)) { caCert = it; onSetGateway(baseUrl, model, it) }
-                Text(stringResource(Res.string.chat_ca_cert_hint), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
-                Text(stringResource(Res.string.chat_gateway_hint), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                Text(stringResource(Res.string.chat_ca_cert_hint), color = chrome.textFaint, style = MaterialTheme.typography.labelSmall)
+                Text(stringResource(Res.string.chat_gateway_hint), color = chrome.textFaint, style = MaterialTheme.typography.labelSmall)
             }
         }
     }
@@ -255,10 +256,11 @@ private val LINE_BREAKS = Regex("\\s*[\\r\\n]+\\s*")
 private fun oneLine(text: String): String = text.replace(LINE_BREAKS, " ")
 
 @Composable
-private fun RadioDot(selected: Boolean, selectedTint: Color = MaterialTheme.colorScheme.primary) {
+private fun RadioDot(selected: Boolean, selectedTint: Color = AgentUi.chrome.accent) {
+    val chrome = AgentUi.chrome
     Box(
         Modifier.size(18.dp).clip(CircleShape)
-            .border(2.dp, if (selected) selectedTint else MaterialTheme.colorScheme.outlineVariant, CircleShape),
+            .border(2.dp, if (selected) selectedTint else chrome.hairlineStrong, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         if (selected) Box(Modifier.size(9.dp).clip(CircleShape).background(selectedTint))
@@ -268,30 +270,31 @@ private fun RadioDot(selected: Boolean, selectedTint: Color = MaterialTheme.colo
 @Composable
 private fun SecretField(value: String, placeholder: String, onValueChange: (String) -> Unit) {
     var visible by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(Ca.radius.control)
+    val chrome = AgentUi.chrome
+    val shape = RoundedCornerShape(AgentUi.radius.control)
     Row(
-        Modifier.fillMaxWidth().clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHighest)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+        Modifier.fillMaxWidth().clip(shape).background(chrome.bg)
+            .border(1.dp, chrome.hairlineStrong, shape)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Box(Modifier.weight(1f)) {
-            if (value.isEmpty()) Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            if (value.isEmpty()) Text(placeholder, color = chrome.textFaint, style = MaterialTheme.typography.bodyMedium)
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = chrome.text),
+                cursorBrush = SolidColor(chrome.accent),
                 visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
         Text(
             stringResource(if (visible) Res.string.chat_hide else Res.string.chat_show),
-            color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.clip(RoundedCornerShape(Ca.radius.pill))
+            color = chrome.accent, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.clip(RoundedCornerShape(AgentUi.radius.chip))
                 .clickable { visible = !visible }
                 .padding(horizontal = 6.dp, vertical = 2.dp),
         )
@@ -300,19 +303,20 @@ private fun SecretField(value: String, placeholder: String, onValueChange: (Stri
 
 @Composable
 private fun PlainField(value: String, placeholder: String, onValueChange: (String) -> Unit) {
-    val shape = RoundedCornerShape(Ca.radius.control)
+    val chrome = AgentUi.chrome
+    val shape = RoundedCornerShape(AgentUi.radius.control)
     Box(
-        Modifier.fillMaxWidth().clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHighest)
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+        Modifier.fillMaxWidth().clip(shape).background(chrome.bg)
+            .border(1.dp, chrome.hairlineStrong, shape)
             .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
-        if (value.isEmpty()) Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+        if (value.isEmpty()) Text(placeholder, color = chrome.textFaint, style = MaterialTheme.typography.bodyMedium)
         BasicTextField(
             value = value,
             onValueChange = onValueChange,
             singleLine = true,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = chrome.text),
+            cursorBrush = SolidColor(chrome.accent),
             modifier = Modifier.fillMaxWidth(),
         )
     }

@@ -460,6 +460,10 @@ class IdeUiState(
      *  or the header split toggle). */
     var rightPanelHalfScreen by mutableStateOf(false)
 
+    /** When the Agent is in half-screen split, true docks it to the **top** pane (agent-first default from
+     *  the redesign); false keeps the classic bottom dock with code live above. */
+    var rightPanelAgentOnTop by mutableStateOf(true)
+
     /** Continuous predictive-back progress (`0f..1f`) on the Editor screen; shrinks the code canvas first. */
     var editorBackProgress by mutableStateOf(0f)
 
@@ -489,6 +493,7 @@ class IdeUiState(
         if (selectedRightPanel == id) {
             selectedRightPanel = null
             rightPanelHalfScreen = false
+            rightPanelAgentOnTop = true
         } else {
             selectedRightPanel = id
         }

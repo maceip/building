@@ -2,6 +2,7 @@ package dev.ide.agent.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -53,6 +55,8 @@ import dev.ide.ui.components.IconButtonCa
 import dev.ide.ui.editor.preview.decodeImageBytes
 import dev.ide.ui.editor.preview.encodeImageJpeg
 import dev.ide.ui.icons.CaIcons
+import dev.ide.ui.screens.AgentStatusDot
+import dev.ide.ui.theme.AgentUi
 import dev.ide.ui.theme.Ca
 import dev.ide.ui.theme.Ide
 import kotlinx.coroutines.delay
@@ -82,19 +86,51 @@ internal fun FileChangesList(
     changes: List<UiAgentFileChange>,
     expandedByDefault: Boolean = false,
     maxDiffHeight: Int = 320,
+    onUndo: (() -> Unit)? = null,
 ) {
+    var reviewAll by rememberSaveable { mutableStateOf(false) }
+    val chrome = AgentUi.chrome
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        changes.forEach { change -> FileChangeRow(change, expandedByDefault, maxDiffHeight) }
+        changes.forEach { change -> FileChangeRow(change, expandedByDefault, maxDiffHeight, forceExpand = reviewAll) }
+        if (onUndo != null) {
+            // Diff summary footer row: Review opens every hunk; Undo reverts the turn.
+            Row(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(AgentUi.radius.tile))
+                    .background(chrome.surface)
+                    .border(1.dp, chrome.hairlineStrong, RoundedCornerShape(AgentUi.radius.tile))
+                    .height(42.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.weight(1f).fillMaxWidth().clickable { reviewAll = true }.padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Text("Review", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium, color = chrome.text)
+                }
+                Box(Modifier.width(1.dp).height(42.dp).background(chrome.hairlineStrong))
+                Box(
+                    Modifier.weight(1f).fillMaxWidth().clickable(onClick = onUndo),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("Undo", style = MaterialTheme.typography.labelLarge, color = chrome.danger)
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun FileChangeRow(change: UiAgentFileChange, expandedByDefault: Boolean, maxDiffHeight: Int) {
+private fun FileChangeRow(change: UiAgentFileChange, expandedByDefault: Boolean, maxDiffHeight: Int, forceExpand: Boolean = false) {
     val result = remember(change) { LineDiff.diff(change.before, change.after) }
     var expanded by rememberSaveable(change.path) { mutableStateOf(expandedByDefault) }
-    val scheme = MaterialTheme.colorScheme
+    val open = forceExpand || expanded
+    val chrome = AgentUi.chrome
+    // Diff summary card: surface fill, hairline, +lime / -coral counts.
     Column(
-        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).background(scheme.surfaceContainer),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(AgentUi.radius.tile))
+            .background(chrome.surface)
+            .border(1.dp, chrome.hairline, RoundedCornerShape(AgentUi.radius.tile)),
     ) {
         Row(
             Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(horizontal = 10.dp, vertical = 7.dp),
@@ -103,13 +139,13 @@ private fun FileChangeRow(change: UiAgentFileChange, expandedByDefault: Boolean,
         ) {
             Icon(
                 CaIcons.chevronDown, null,
-                Modifier.size(12.dp).rotate(if (expanded) 0f else -90f),
-                tint = scheme.onSurfaceVariant,
+                Modifier.size(12.dp).rotate(if (open) 0f else -90f),
+                tint = chrome.textFaint,
             )
             Text(
                 change.path.substringAfterLast('/'),
                 style = MaterialTheme.typography.labelMedium,
-                color = scheme.onSurface,
+                color = chrome.text,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -120,40 +156,40 @@ private fun FileChangeRow(change: UiAgentFileChange, expandedByDefault: Boolean,
                 change.after == null -> stringResource(Res.string.chat_file_deleted)
                 else -> null
             }
-            if (note != null) Text(note, style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
-            if (result.added > 0) Text("+${result.added}", style = MaterialTheme.typography.labelSmall, color = Ide.colors.gitAdded)
-            if (result.removed > 0) Text("-${result.removed}", style = MaterialTheme.typography.labelSmall, color = Ide.colors.gitDeleted)
+            if (note != null) Text(note, style = MaterialTheme.typography.labelSmall, color = chrome.textFaint)
+            if (result.added > 0) Text("+${result.added}", style = MaterialTheme.typography.labelSmall, color = chrome.accent)
+            if (result.removed > 0) Text("-${result.removed}", style = MaterialTheme.typography.labelSmall, color = chrome.danger)
         }
-        if (expanded) DiffView(result, maxDiffHeight)
+        if (open) DiffView(result, maxDiffHeight)
     }
 }
 
 /** The hunks of a [LineDiff.Result] in a monospace block, scrollable both ways inside a bounded height. */
 @Composable
 internal fun DiffView(result: LineDiff.Result, maxHeight: Int = 320) {
-    val scheme = MaterialTheme.colorScheme
+    val chrome = AgentUi.chrome
     // Opaque tints, blended against the panel's own surface, so the added/removed rows hold their contrast in
     // both themes (the panel never composites with alpha).
-    val addedBg = lerp(scheme.surfaceContainerLowest, Ide.colors.gitAdded, 0.16f)
-    val removedBg = lerp(scheme.surfaceContainerLowest, Ide.colors.gitDeleted, 0.16f)
+    val addedBg = lerp(chrome.bg, chrome.accent, 0.16f)
+    val removedBg = lerp(chrome.bg, chrome.danger, 0.16f)
     val horizontal = rememberScrollState()
     Column(
-        Modifier.fillMaxWidth().heightIn(max = maxHeight.dp).background(scheme.surfaceContainerLowest)
+        Modifier.fillMaxWidth().heightIn(max = maxHeight.dp).background(chrome.bg)
             .verticalScroll(rememberScrollState()).horizontalScroll(horizontal)
             .padding(vertical = 4.dp),
     ) {
         if (result.hunks.isEmpty()) {
-            Text(stringResource(Res.string.chat_no_changes), style = Ca.type.codeSmall, color = scheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 10.dp))
+            Text(stringResource(Res.string.chat_no_changes), style = Ca.type.codeSmall, color = chrome.textFaint, modifier = Modifier.padding(horizontal = 10.dp))
         }
         result.hunks.forEachIndexed { index, hunk ->
             if (index > 0) {
-                Text("⋯", style = Ca.type.codeSmall, color = scheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 10.dp))
+                Text("⋯", style = Ca.type.codeSmall, color = chrome.textFaint, modifier = Modifier.padding(horizontal = 10.dp))
             }
             hunk.lines.forEach { line ->
                 val (marker, bg, fg) = when (line.kind) {
-                    LineDiff.Kind.ADDED -> Triple("+", addedBg, scheme.onSurface)
-                    LineDiff.Kind.REMOVED -> Triple("-", removedBg, scheme.onSurface)
-                    LineDiff.Kind.CONTEXT -> Triple(" ", Color.Unspecified, scheme.onSurfaceVariant)
+                    LineDiff.Kind.ADDED -> Triple("+", addedBg, chrome.text)
+                    LineDiff.Kind.REMOVED -> Triple("-", removedBg, chrome.text)
+                    LineDiff.Kind.CONTEXT -> Triple(" ", Color.Unspecified, chrome.textMuted)
                 }
                 val number = (line.newLine ?: line.oldLine)?.toString().orEmpty().padStart(4)
                 Text(
@@ -193,9 +229,9 @@ internal fun AttachmentChips(
 
 @Composable
 private fun AttachmentChip(attachment: UiAgentAttachment, onRemove: (() -> Unit)?) {
-    val scheme = MaterialTheme.colorScheme
+    val chrome = AgentUi.chrome
     Row(
-        Modifier.clip(RoundedCornerShape(Ca.radius.md)).background(scheme.surfaceContainerHighest)
+        Modifier.clip(RoundedCornerShape(AgentUi.radius.tile)).background(chrome.surfaceAlt)
             .padding(start = 6.dp, end = if (onRemove != null) 0.dp else 8.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -213,12 +249,12 @@ private fun AttachmentChip(attachment: UiAgentAttachment, onRemove: (() -> Unit)
                 UiAgentAttachmentKind.FILE -> CaIcons.file
                 UiAgentAttachmentKind.SELECTION -> CaIcons.code
             }
-            Icon(icon, null, Modifier.size(14.dp), tint = scheme.onSurfaceVariant)
+            Icon(icon, null, Modifier.size(14.dp), tint = chrome.textFaint)
         }
         Text(
             attachment.name,
             style = MaterialTheme.typography.labelMedium,
-            color = scheme.onSurface,
+            color = chrome.text,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.widthIn(max = 180.dp),
@@ -287,21 +323,23 @@ internal fun prepareImageAttachment(name: String, bytes: ByteArray): UiAgentAtta
 @Composable
 internal fun TodoCard(todos: List<UiAgentTodo>) {
     if (todos.isEmpty()) return
-    val scheme = MaterialTheme.colorScheme
+    val chrome = AgentUi.chrome
     var expanded by rememberSaveable { mutableStateOf(true) }
     val done = todos.count { it.status == UiAgentTodoStatus.DONE }
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 8.dp)
-            .clip(MaterialTheme.shapes.medium).background(scheme.surfaceContainerHigh),
+            .clip(RoundedCornerShape(AgentUi.radius.card))
+            .background(chrome.surface)
+            .border(1.dp, chrome.hairline, RoundedCornerShape(AgentUi.radius.card)),
     ) {
         Row(
             Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(CaIcons.chevronDown, null, Modifier.size(12.dp).rotate(if (expanded) 0f else -90f), tint = scheme.onSurfaceVariant)
-            Text(stringResource(Res.string.chat_plan), style = MaterialTheme.typography.labelLarge, color = scheme.onSurface, modifier = Modifier.weight(1f))
-            Text("$done/${todos.size}", style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
+            Icon(CaIcons.chevronDown, null, Modifier.size(12.dp).rotate(if (expanded) 0f else -90f), tint = chrome.textFaint)
+            Text(stringResource(Res.string.chat_plan), style = MaterialTheme.typography.labelLarge, color = chrome.text, modifier = Modifier.weight(1f))
+            Text("$done/${todos.size}", style = MaterialTheme.typography.labelMedium, color = chrome.textFaint)
         }
         if (expanded) {
             Column(
@@ -311,16 +349,21 @@ internal fun TodoCard(todos: List<UiAgentTodo>) {
             ) {
                 todos.forEach { todo ->
                     Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val (icon, tint) = when (todo.status) {
-                            UiAgentTodoStatus.DONE -> CaIcons.check to Ide.colors.success
-                            UiAgentTodoStatus.IN_PROGRESS -> CaIcons.caretRight to scheme.primary
-                            UiAgentTodoStatus.PENDING -> CaIcons.dot to scheme.onSurfaceVariant
+                        val (dotActive, dotColor) = when (todo.status) {
+                            UiAgentTodoStatus.DONE -> true to chrome.accent
+                            UiAgentTodoStatus.IN_PROGRESS -> true to chrome.warn
+                            UiAgentTodoStatus.PENDING -> false to chrome.textFaint
                         }
-                        Icon(icon, null, Modifier.padding(top = 2.dp).size(14.dp), tint = tint)
+                        AgentStatusDot(
+                            active = dotActive,
+                            size = 7.dp,
+                            color = dotColor,
+                            modifier = Modifier.padding(top = 5.dp),
+                        )
                         Text(
                             todo.content,
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (todo.status == UiAgentTodoStatus.DONE) scheme.onSurfaceVariant else scheme.onSurface,
+                            color = if (todo.status == UiAgentTodoStatus.DONE) chrome.textFaint else chrome.text,
                             fontWeight = if (todo.status == UiAgentTodoStatus.IN_PROGRESS) FontWeight.SemiBold else null,
                         )
                     }
@@ -341,22 +384,24 @@ internal fun WaitRow(untilMs: Long, reason: String) {
         }
     }
     val seconds = ((untilMs - now + 999) / 1000).coerceAtLeast(0)
-    val scheme = MaterialTheme.colorScheme
+    val chrome = AgentUi.chrome
     Row(
-        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).background(scheme.secondaryContainer)
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(AgentUi.radius.card))
+            .background(chrome.surfaceAlt)
+            .border(1.dp, chrome.hairline, RoundedCornerShape(AgentUi.radius.card))
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Icon(CaIcons.clock, null, Modifier.size(16.dp), tint = scheme.onSecondaryContainer)
+        Icon(CaIcons.clock, null, Modifier.size(16.dp), tint = chrome.warn)
         Column(Modifier.weight(1f)) {
-            Text(reason, style = MaterialTheme.typography.bodySmall, color = scheme.onSecondaryContainer)
+            Text(reason, style = MaterialTheme.typography.bodySmall, color = chrome.text)
         }
         Box(Modifier.width(44.dp), contentAlignment = Alignment.CenterEnd) {
             Text(
                 if (seconds >= 60) "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}" else "${seconds}s",
                 style = MaterialTheme.typography.labelLarge,
-                color = scheme.onSecondaryContainer,
+                color = chrome.warn,
                 fontWeight = FontWeight.SemiBold,
             )
         }

@@ -777,6 +777,10 @@ private fun ProjectPickerRoute(
             dev.ide.ui.ext.ScreenArgumentHandoff.pending = url
             app.openPluginScreen(VcsService.SCREEN_CLONE)
         },
+        // Agent-first Home: the agent icon opens the redesigned Agent settings (also in the Settings hub).
+        onOpenAgentSettings = { app.openPluginScreen(dev.ide.ui.screens.SCREEN_AGENT_SETTINGS) },
+        onCloneGit = { app.openPluginScreen(VcsService.SCREEN_CLONE) },
+        onImportPackage = if (fileActions.canPickFile) app::requestProjectImport else null,
     )
     if (notificationsVisible) {
         NotificationsSheet(

@@ -96,6 +96,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -165,6 +166,11 @@ import dev.ide.ui.components.CodeSample
 import dev.ide.ui.icons.CaIcons
 import dev.ide.ui.markdown.Markdown
 import dev.ide.ui.markdown.defaultHeadingStyle
+import dev.ide.ui.screens.AgentStatusDot
+import dev.ide.ui.screens.AgentChip
+import dev.ide.ui.screens.AgentIconCircle
+import dev.ide.ui.screens.AgentPrimaryButton
+import dev.ide.ui.theme.AgentUi
 import dev.ide.ui.theme.Ca
 import dev.ide.ui.theme.CaMotion
 import dev.ide.ui.theme.Ide
@@ -239,7 +245,7 @@ fun ChatDrawer(
         hasClipboardImage = fileActions::hasClipboardImage,
     )
 
-    Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+    Box(modifier.fillMaxSize().background(AgentUi.chrome.bg)) {
         Column(Modifier.fillMaxSize()) {
             val headerModels = models.ifEmpty { cfg.providers.firstOrNull { it.id == cfg.selectedProvider }?.models ?: emptyList() }
             val onPickModel: (String, String) -> Unit = { providerId, modelId ->
@@ -314,7 +320,7 @@ fun ChatDrawer(
                         LaunchedEffect(message) { delay(3000); notice = null }
                         Text(
                             message,
-                            color = MaterialTheme.colorScheme.error,
+                            color = AgentUi.chrome.danger,
                             style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
                         )
@@ -397,10 +403,12 @@ private fun Suggestions(backend: IdeBackend, input: TextFieldValue, onPick: (Tex
     }
     if (commands.isEmpty() && (mentionQuery == null || mentions.isEmpty())) return
 
-    val scheme = MaterialTheme.colorScheme
+    val chrome = AgentUi.chrome
     Column(
         Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 10.dp)
-            .clip(MaterialTheme.shapes.medium).background(scheme.surfaceContainerHigh)
+            .clip(RoundedCornerShape(AgentUi.radius.card))
+            .background(chrome.surface)
+            .border(1.dp, chrome.hairlineStrong, RoundedCornerShape(AgentUi.radius.card))
             .heightIn(max = 220.dp).verticalScroll(rememberScrollState())
             .padding(vertical = 4.dp),
     ) {
@@ -445,14 +453,14 @@ private fun SuggestionRow(title: String, detail: String, onClick: () -> Unit) {
         Text(
             title,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = AgentUi.chrome.text,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
         )
         Text(
             detail,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = AgentUi.chrome.textFaint,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
@@ -483,7 +491,7 @@ private fun ChatHeader(
         Column(Modifier.weight(1f)) {
             Text(
                 stringResource(Res.string.chat_title),
-                color = MaterialTheme.colorScheme.onSurface,
+                color = AgentUi.chrome.text,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
@@ -519,16 +527,15 @@ private val EFFORT_OPTIONS = listOf(
 @Composable
 private fun EffortChip(effort: String, onPick: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
-    val scheme = MaterialTheme.colorScheme
+    val chrome = AgentUi.chrome
     val normalized = effort.ifBlank { "default" }
     val shortLabel = EFFORT_OPTIONS.firstOrNull { it.first == normalized }?.second ?: normalized
     val active = normalized != "default" && normalized != "none"
     Box {
-        Chip(
-            text = "Think: $shortLabel",
-            modifier = Modifier.clip(RoundedCornerShape(Ca.radius.pill)).clickable { open = true },
-            fill = if (active) scheme.secondaryContainer else scheme.surfaceContainerHighest,
-            textColor = if (active) scheme.onSecondaryContainer else scheme.onSurfaceVariant,
+        AgentChip(
+            label = "Think: $shortLabel",
+            selected = active,
+            onClick = { open = true },
         )
         CaDropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             EFFORT_OPTIONS.forEach { (id, label) ->
@@ -538,7 +545,7 @@ private fun EffortChip(effort: String, onPick: (String) -> Unit) {
                             text = if (id == "default") "Default (Auto)" else label,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = if (id == normalized) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (id == normalized) scheme.primary else scheme.onSurface,
+                            color = if (id == normalized) chrome.accent else chrome.text,
                         )
                     },
                     onClick = { onPick(id); open = false },
@@ -556,23 +563,34 @@ private fun EffortChip(effort: String, onPick: (String) -> Unit) {
  */
 @Composable
 private fun ModeChip(mode: UiAgentPermissionMode, onCycleMode: () -> Unit) {
-    val scheme = MaterialTheme.colorScheme
+    val chrome = AgentUi.chrome
+    // Tinted by how much the mode lets the agent do: auto-accept is the loudest (lime wash), plan-only is
+    // calm violet, ask-each is a quiet ghost pill.
     val modeFill = when (mode) {
-        UiAgentPermissionMode.AUTO_ACCEPT -> scheme.tertiaryContainer
-        UiAgentPermissionMode.PLAN_ONLY -> scheme.secondaryContainer
-        UiAgentPermissionMode.ASK_EACH -> scheme.surfaceContainerHighest
+        UiAgentPermissionMode.AUTO_ACCEPT -> chrome.accentSoft
+        UiAgentPermissionMode.PLAN_ONLY -> chrome.surfaceAlt
+        UiAgentPermissionMode.ASK_EACH -> Color.Transparent
     }
     val modeText = when (mode) {
-        UiAgentPermissionMode.AUTO_ACCEPT -> scheme.onTertiaryContainer
-        UiAgentPermissionMode.PLAN_ONLY -> scheme.onSecondaryContainer
-        UiAgentPermissionMode.ASK_EACH -> scheme.onSurfaceVariant
+        UiAgentPermissionMode.AUTO_ACCEPT -> chrome.accent
+        UiAgentPermissionMode.PLAN_ONLY -> chrome.violet
+        UiAgentPermissionMode.ASK_EACH -> chrome.textMuted
     }
-    Chip(
-        text = modeLabel(mode),
-        modifier = Modifier.clip(RoundedCornerShape(Ca.radius.pill)).clickable(onClick = onCycleMode),
-        fill = modeFill,
-        textColor = modeText,
-    )
+    val shape = RoundedCornerShape(AgentUi.radius.chip)
+    Box(
+        Modifier.height(36.dp)
+            .clip(shape)
+            .background(modeFill)
+            .then(
+                if (mode == UiAgentPermissionMode.ASK_EACH) Modifier.border(1.dp, chrome.hairline, shape)
+                else Modifier
+            )
+            .clickable(onClick = onCycleMode)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(modeLabel(mode), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = modeText, maxLines = 1)
+    }
 }
 
 /** The header's occasional actions, in one menu so the title and the model name keep room to read. */
@@ -592,8 +610,8 @@ private fun ChatMenu(onNew: () -> Unit, onHistory: () -> Unit, onManage: () -> U
 @Composable
 private fun HeaderMenuItem(icon: ImageVector, label: String, onClick: () -> Unit) {
     DropdownMenuItem(
-        text = { Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface) },
-        leadingIcon = { Icon(icon, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+        text = { Text(label, style = MaterialTheme.typography.bodyMedium, color = AgentUi.chrome.text) },
+        leadingIcon = { Icon(icon, null, Modifier.size(16.dp), tint = AgentUi.chrome.textFaint) },
         onClick = onClick,
     )
 }
@@ -630,9 +648,9 @@ private fun ModelPicker(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(label, color = AgentUi.chrome.textMuted, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             val chevron by animateFloatAsState(if (open) 180f else 0f, label = "chevron")
-            Icon(CaIcons.chevronDown, null, Modifier.size(12.dp).rotate(chevron), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(CaIcons.chevronDown, null, Modifier.size(12.dp).rotate(chevron), tint = AgentUi.chrome.textFaint)
         }
         CaDropdownMenu(expanded = open, onDismissRequest = { onOpen(false) }) {
             configured.forEachIndexed { idx, p ->
@@ -640,7 +658,7 @@ private fun ModelPicker(
                 val providerModels = if (isCurrentProvider && models.isNotEmpty()) models else p.models
                 if (configured.size > 1) {
                     if (idx > 0) {
-                        Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)))
+                        Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp).background(AgentUi.chrome.hairlineStrong))
                     }
                     DropdownMenuItem(
                         text = {
@@ -648,7 +666,7 @@ private fun ModelPicker(
                                 p.displayName.uppercase(),
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = AgentUi.chrome.accent,
                             )
                         },
                         enabled = false,
@@ -665,11 +683,11 @@ private fun ModelPicker(
                                 fallbackName,
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                color = if (isSelected) AgentUi.chrome.accent else AgentUi.chrome.text,
                             )
                         },
                         trailingIcon = if (isSelected) {
-                            { Icon(CaIcons.check, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) }
+                            { Icon(CaIcons.check, null, Modifier.size(14.dp), tint = AgentUi.chrome.accent) }
                         } else null,
                         onClick = { onPickModel(p.id, fallbackId); onOpen(false) },
                     )
@@ -682,11 +700,11 @@ private fun ModelPicker(
                                     model.displayName,
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    color = if (isSelected) AgentUi.chrome.accent else AgentUi.chrome.text,
                                 )
                             },
                             trailingIcon = if (isSelected) {
-                                { Icon(CaIcons.check, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) }
+                                { Icon(CaIcons.check, null, Modifier.size(14.dp), tint = AgentUi.chrome.accent) }
                             } else null,
                             onClick = { onPickModel(p.id, model.id); onOpen(false) },
                         )
@@ -694,10 +712,10 @@ private fun ModelPicker(
                 }
             }
             if (onManageProviders != null) {
-                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp).background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)))
+                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(1.dp).background(AgentUi.chrome.hairlineStrong))
                 DropdownMenuItem(
-                    text = { Text(stringResource(Res.string.chat_manage_keys), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) },
-                    leadingIcon = { Icon(CaIcons.key, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) },
+                    text = { Text(stringResource(Res.string.chat_manage_keys), style = MaterialTheme.typography.labelMedium, color = AgentUi.chrome.accent) },
+                    leadingIcon = { Icon(CaIcons.key, null, Modifier.size(14.dp), tint = AgentUi.chrome.accent) },
                     onClick = { onOpen(false); onManageProviders() },
                 )
             }
@@ -811,8 +829,8 @@ internal fun Transcript(
                     scope.launch { runCatching { listState.animateScrollToItem(end) } }
                 },
                 shape = CircleShape,
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                containerColor = AgentUi.chrome.accent,
+                contentColor = AgentUi.chrome.accentInk,
             ) {
                 Icon(CaIcons.chevronDown, stringResource(Res.string.chat_jump_latest), Modifier.size(18.dp))
             }
@@ -855,31 +873,32 @@ private fun MessageContent(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Box(
-                    Modifier.widthIn(max = 320.dp)
-                        // Chat-bubble rounding: a small corner on the tail side (bottom-end for the user).
-                        .background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    // Agent-first user bubble: surfaceAlt, 18/18/6/18 rounding, ~82% width capped for wide panels.
+                    Modifier.fillMaxWidth(0.82f).widthIn(max = 320.dp)
+                        .background(AgentUi.chrome.surfaceAlt, RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 6.dp, bottomEnd = 18.dp))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
                 ) {
-                    // onSecondaryContainer, not onSurface: a tonal container carries its own content colour,
-                    // and borrowing the surface's is exactly how a bubble ends up unreadable in one theme.
                     Text(
                         msg.text,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        color = AgentUi.chrome.text,
                         style = chatBodyStyle(),
                     )
                 }
-                AttachmentChips(msg.attachments, modifier = Modifier.widthIn(max = 320.dp))
+                AttachmentChips(msg.attachments, modifier = Modifier.fillMaxWidth(0.82f).widthIn(max = 320.dp))
                 DisableSelection {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (msg.undone) {
                             Text(
                                 stringResource(Res.string.chat_undone),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = AgentUi.chrome.textFaint,
                             )
                         }
                         if (onUndo != null) {
-                            TextButton(onClick = onUndo) {
+                            TextButton(
+                                onClick = onUndo,
+                                colors = ButtonDefaults.textButtonColors(contentColor = AgentUi.chrome.danger),
+                            ) {
                                 Icon(CaIcons.undo, null, Modifier.size(14.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text(stringResource(Res.string.chat_undo), style = MaterialTheme.typography.labelMedium)
@@ -889,7 +908,7 @@ private fun MessageContent(
                     }
                 }
             }
-            else -> AssistantMessage(msg)
+            else -> AssistantMessage(msg, onUndo)
         }
     }
 }
@@ -901,28 +920,28 @@ private fun ErrorMessage(
     suggestedModel: String? = null,
     onUseModel: (String) -> Unit = {},
 ) {
-    // The errorContainer pair rather than a translucent error tint: it stays legible in both themes and
-    // against any Material You palette, which an alpha-over-surface fill does not.
-    val scheme = MaterialTheme.colorScheme
+    // An opaque surfaceAlt card with danger ink: stays legible in every Agent skin without compositing alpha.
+    val chrome = AgentUi.chrome
     Column(
         Modifier.fillMaxWidth()
-            .background(scheme.errorContainer, MaterialTheme.shapes.medium)
+            .background(chrome.surfaceAlt, RoundedCornerShape(AgentUi.radius.card))
+            .border(1.dp, chrome.danger.copy(alpha = 0.35f), RoundedCornerShape(AgentUi.radius.card))
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-            Icon(CaIcons.warning, null, Modifier.size(16.dp), tint = scheme.onErrorContainer)
-            Text(text, color = scheme.onErrorContainer, style = chatBodyStyle())
+            Icon(CaIcons.warning, null, Modifier.size(16.dp), tint = chrome.danger)
+            Text(text, color = chrome.text, style = chatBodyStyle())
         }
         DisableSelection {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                CopyButton(text, tint = scheme.onErrorContainer)
+                CopyButton(text, tint = chrome.textFaint)
                 // The one-tap fix for a model the account cannot use: switch and re-run, rather than leaving the user
                 // to find the model picker and guess which model would work.
                 if (suggestedModel != null) {
                     TextButton(
                         onClick = { onUseModel(suggestedModel) },
-                        colors = ButtonDefaults.textButtonColors(contentColor = scheme.onErrorContainer),
+                        colors = ButtonDefaults.textButtonColors(contentColor = chrome.accent),
                     ) {
                         Icon(CaIcons.sparkle, null, Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
@@ -931,7 +950,7 @@ private fun ErrorMessage(
                 } else if (onRetry != null) {
                     TextButton(
                         onClick = onRetry,
-                        colors = ButtonDefaults.textButtonColors(contentColor = scheme.onErrorContainer),
+                        colors = ButtonDefaults.textButtonColors(contentColor = chrome.accent),
                     ) {
                         Icon(CaIcons.refresh, null, Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
@@ -973,7 +992,7 @@ private fun stepsOf(msg: UiAgentMessage): List<Step> {
 }
 
 @Composable
-private fun AssistantMessage(msg: UiAgentMessage) {
+private fun AssistantMessage(msg: UiAgentMessage, onUndo: (() -> Unit)? = null) {
     val steps = remember(msg.segments, msg.toolCalls, msg.text, msg.thinking) { stepsOf(msg) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         steps.forEachIndexed { i, step ->
@@ -983,7 +1002,7 @@ private fun AssistantMessage(msg: UiAgentMessage) {
             key(i) {
                 when (step) {
                     is Step.Thinking -> if (step.text.isNotBlank()) ThinkingStep(step.text, live)
-                    is Step.Tools -> if (step.calls.isNotEmpty()) DisableSelection { ToolRun(step.calls, live) }
+                    is Step.Tools -> if (step.calls.isNotEmpty()) DisableSelection { ToolRun(step.calls, live, onUndo) }
                     is Step.Text -> if (step.text.isNotBlank()) AssistantMarkdown(step.text)
                 }
             }
@@ -1029,7 +1048,7 @@ private fun UsageFooter(usage: UiAgentUsage) {
     if (parts.isEmpty()) return
     Text(
         parts.joinToString(" · "),
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = AgentUi.chrome.textFaint,
         style = MaterialTheme.typography.labelSmall,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -1049,14 +1068,14 @@ private fun compactTokens(count: Int): String = when {
  * turn reads as its prose with a line per batch of work. A tap on the header overrides the automatic choice.
  */
 @Composable
-private fun ToolRun(calls: List<UiAgentToolCall>, live: Boolean) {
+private fun ToolRun(calls: List<UiAgentToolCall>, live: Boolean, onUndo: (() -> Unit)? = null) {
     if (calls.size == 1) {
-        ToolCallRow(calls[0])
+        ToolCallRow(calls[0], onUndo)
         return
     }
     var choice by rememberSaveable { mutableStateOf<Boolean?>(null) }
     val expanded = choice ?: (live || calls.any { it.status == UiAgentToolStatus.RUNNING })
-    val rail = MaterialTheme.colorScheme.outlineVariant
+    val rail = AgentUi.chrome.hairlineStrong
     Column(Modifier.fillMaxWidth().entranceSlideUp()) {
         ToolRunHeader(calls, expanded) { choice = !expanded }
         if (expanded) {
@@ -1066,7 +1085,7 @@ private fun ToolRun(calls: List<UiAgentToolCall>, live: Boolean) {
                     .drawBehind { drawRect(rail, size = Size(1.dp.toPx(), size.height)) }
                     .padding(start = 10.dp),
             ) {
-                calls.forEach { call -> key(call.id) { ToolCallRow(call) } }
+                calls.forEach { call -> key(call.id) { ToolCallRow(call, onUndo) } }
             }
         }
     }
@@ -1074,7 +1093,7 @@ private fun ToolRun(calls: List<UiAgentToolCall>, live: Boolean) {
 
 @Composable
 private fun ToolRunHeader(calls: List<UiAgentToolCall>, expanded: Boolean, onToggle: () -> Unit) {
-    val scheme = MaterialTheme.colorScheme
+    val chrome = AgentUi.chrome
     val files = remember(calls) { calls.flatMap { it.changes }.map { it.path }.distinct().size }
     val summary = buildString {
         append(pluralStringResource(Res.plurals.chat_tool_count, calls.size, calls.size))
@@ -1087,16 +1106,16 @@ private fun ToolRunHeader(calls: List<UiAgentToolCall>, expanded: Boolean, onTog
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         ToolStatusIcon(aggregateStatus(calls))
-        Text(summary, style = MaterialTheme.typography.bodySmall, color = scheme.onSurface, fontWeight = FontWeight.Medium, maxLines = 1)
+        Text(summary, style = MaterialTheme.typography.bodySmall, color = chrome.text, fontWeight = FontWeight.Medium, maxLines = 1)
         // Folded, the header still says what the run did last.
         Text(
             if (expanded) "" else calls.last().title,
             Modifier.weight(1f),
-            style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall, color = chrome.textMuted,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
         val rotation by animateFloatAsState(if (expanded) 0f else -90f, label = "toolChevron")
-        Icon(CaIcons.chevronDown, null, Modifier.size(14.dp).rotate(rotation), tint = scheme.onSurfaceVariant)
+        Icon(CaIcons.chevronDown, null, Modifier.size(14.dp).rotate(rotation), tint = chrome.textFaint)
     }
 }
 
@@ -1110,7 +1129,7 @@ private fun aggregateStatus(calls: List<UiAgentToolCall>): UiAgentToolStatus = w
 
 /** One-tap copy of a message's text, flipping to a check for ~1.5s as confirmation. */
 @Composable
-private fun CopyButton(text: String, tint: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+private fun CopyButton(text: String, tint: androidx.compose.ui.graphics.Color = AgentUi.chrome.textFaint) {
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) { if (copied) { delay(1500); copied = false } }
@@ -1143,28 +1162,29 @@ private fun TypingCaret() {
 private fun ThinkingStep(thinking: String, live: Boolean) {
     var open by rememberSaveable { mutableStateOf(false) }
     val expanded = live || open
-    val scheme = MaterialTheme.colorScheme
+    val chrome = AgentUi.chrome
     val canToggle = !live && thinking.isNotBlank()
     Column(
-        Modifier.fillMaxWidth().entranceSlideUp().clip(MaterialTheme.shapes.medium)
-            .background(if (expanded) scheme.surfaceContainerHigh else Color.Transparent)
+        Modifier.fillMaxWidth().entranceSlideUp().clip(RoundedCornerShape(14.dp))
+            .background(if (expanded) chrome.surface else Color.Transparent)
+            .then(if (expanded) Modifier.border(1.dp, chrome.hairline, RoundedCornerShape(14.dp)) else Modifier)
             .then(if (canToggle) Modifier.clickable { open = !open } else Modifier)
             .padding(horizontal = if (expanded) 12.dp else 2.dp, vertical = if (expanded) 10.dp else 4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Icon(CaIcons.sparkle, null, Modifier.size(12.dp), tint = pulseColor(live))
+            AgentStatusDot(active = true, size = 7.dp, color = pulseColor(live))
             Text(
                 stringResource(if (live) Res.string.chat_thinking else Res.string.chat_thought),
-                style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall, color = chrome.textMuted,
             )
             if (canToggle) {
                 val rotation by animateFloatAsState(if (open) 0f else -90f, label = "thoughtChevron")
-                Icon(CaIcons.chevronDown, null, Modifier.size(12.dp).rotate(rotation), tint = scheme.onSurfaceVariant)
+                Icon(CaIcons.chevronDown, null, Modifier.size(12.dp).rotate(rotation), tint = chrome.textFaint)
             }
         }
         if (expanded && thinking.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
-            Text(thinking, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+            Text(thinking, style = MaterialTheme.typography.bodySmall, color = chrome.textFaint)
         }
     }
 }
@@ -1174,9 +1194,9 @@ private fun ThinkingStep(thinking: String, live: Boolean) {
  * result is cut to the line; a tap shows it whole. Files the call changed list under it, each expanding to its diff.
  */
 @Composable
-private fun ToolCallRow(call: UiAgentToolCall) {
+private fun ToolCallRow(call: UiAgentToolCall, onUndo: (() -> Unit)? = null) {
     var open by rememberSaveable(call.id) { mutableStateOf(false) }
-    val scheme = MaterialTheme.colorScheme
+    val chrome = AgentUi.chrome
     val canOpen = call.detail.isNotBlank()
     Column(Modifier.fillMaxWidth()) {
         Row(
@@ -1188,16 +1208,16 @@ private fun ToolCallRow(call: UiAgentToolCall) {
         ) {
             ToolStatusIcon(call.status)
             Text(
-                toolTitle(call.title, scheme.onSurfaceVariant),
+                toolTitle(call.title, chrome.textFaint),
                 Modifier.weight(1f, fill = false),
-                style = MaterialTheme.typography.bodySmall, color = scheme.onSurface,
+                style = MaterialTheme.typography.bodySmall, color = chrome.text,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             if (canOpen && !open) {
                 Text(
                     call.detail,
                     Modifier.widthIn(max = 160.dp),
-                    style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall, color = chrome.textFaint,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -1206,10 +1226,10 @@ private fun ToolCallRow(call: UiAgentToolCall) {
             Text(
                 call.detail,
                 Modifier.padding(start = 24.dp, bottom = 4.dp),
-                style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall, color = chrome.textFaint,
             )
         }
-        if (call.changes.isNotEmpty()) Box(Modifier.padding(start = 22.dp, top = 2.dp)) { FileChangesList(call.changes) }
+        if (call.changes.isNotEmpty()) Box(Modifier.padding(start = 22.dp, top = 2.dp)) { FileChangesList(call.changes, onUndo = onUndo) }
     }
 }
 
@@ -1226,15 +1246,14 @@ private fun toolTitle(title: String, verbColor: Color): AnnotatedString = buildA
 
 @Composable
 private fun ToolStatusIcon(status: UiAgentToolStatus) {
-    // Cross-fade so the spinner dissolves into the check/error glyph when the call resolves.
+    // Rounded-square status dots (6-8px): lime for running/ok, coral for error, amber for denied.
+    val chrome = AgentUi.chrome
     Crossfade(targetState = status, label = "toolStatus") { s ->
         when (s) {
-            UiAgentToolStatus.RUNNING -> CircularProgressIndicator(
-                Modifier.size(14.dp), color = MaterialTheme.colorScheme.primary, strokeWidth = 1.5.dp,
-            )
-            UiAgentToolStatus.OK -> Icon(CaIcons.check, null, Modifier.size(14.dp), tint = Ide.colors.success)
-            UiAgentToolStatus.ERROR -> Icon(CaIcons.error, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.error)
-            UiAgentToolStatus.DENIED -> Icon(CaIcons.close, null, Modifier.size(14.dp), tint = Ide.colors.warning)
+            UiAgentToolStatus.RUNNING -> AgentStatusDot(active = true, size = 8.dp, color = pulseColor(true))
+            UiAgentToolStatus.OK -> AgentStatusDot(active = true, size = 7.dp, color = chrome.accent)
+            UiAgentToolStatus.ERROR -> AgentStatusDot(active = true, size = 7.dp, color = chrome.danger)
+            UiAgentToolStatus.DENIED -> AgentStatusDot(active = true, size = 7.dp, color = chrome.warn)
         }
     }
 }
@@ -1246,7 +1265,11 @@ private fun ToolStatusIcon(status: UiAgentToolStatus) {
  * English sentence's final period on the far left under the Arabic UI.
  */
 @Composable
-private fun chatBodyStyle(): TextStyle = MaterialTheme.typography.bodyMedium.copy(textDirection = TextDirection.Content)
+private fun chatBodyStyle(): TextStyle = MaterialTheme.typography.bodyMedium.copy(
+    fontSize = 15.sp,
+    lineHeight = 22.sp,
+    textDirection = TextDirection.Content,
+)
 
 @Composable
 private fun AssistantMarkdown(text: String) {
@@ -1256,7 +1279,7 @@ private fun AssistantMarkdown(text: String) {
         text,
         paragraphStyle = chatBodyStyle(),
         headingStyle = { defaultHeadingStyle(it).copy(textDirection = TextDirection.Content) },
-        color = MaterialTheme.colorScheme.onSurface,
+        color = AgentUi.chrome.text,
         spacing = 8.dp,
         codeBlock = { code, lang -> CodeSample(code, lang) },
     )
@@ -1274,22 +1297,27 @@ private fun EmptyState(configured: Boolean, onManage: () -> Unit) {
         Text(
             stringResource(Res.string.chat_empty_title),
             modifier = Modifier.entranceSlideUp(90),
-            color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
+            color = AgentUi.chrome.text, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
         )
         Spacer(Modifier.height(8.dp))
         Text(
             if (configured) stringResource(Res.string.chat_empty_body) else stringResource(Res.string.chat_need_key),
             modifier = Modifier.entranceSlideUp(150),
-            color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium,
+            color = AgentUi.chrome.textMuted, style = MaterialTheme.typography.bodyMedium,
         )
         if (!configured) {
             Spacer(Modifier.height(16.dp))
-            PrimaryButton(
-                stringResource(Res.string.chat_add_key),
-                onManage,
-                Modifier.entranceSlideUp(210),
-                icon = CaIcons.key,
-            )
+            // Lime CTA with dark ink (AgentPrimaryButton); leading key icon kept for parity with the old button.
+            Row(
+                modifier = Modifier.entranceSlideUp(210),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                AgentPrimaryButton(
+                    stringResource(Res.string.chat_add_key),
+                    onManage,
+                )
+            }
         }
     }
 }
@@ -1306,116 +1334,124 @@ private fun Composer(
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
+    val chrome = AgentUi.chrome
+    // Agent-first pill composer: one 22px-radius rail holding attach, free text and a 40px lime send.
     Row(
         Modifier.fillMaxWidth().padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (images.any || activeFilePath != null) {
-            var attachOpen by remember { mutableStateOf(false) }
-            Box {
-                IconButtonCa(
-                    CaIcons.plus, stringResource(Res.string.chat_attach), { attachOpen = true },
-                    iconSize = 18, boxSize = 36, tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                CaDropdownMenu(expanded = attachOpen, onDismissRequest = { attachOpen = false }) {
-                    images.pick?.let { pick ->
-                        DropdownMenuItem(
-                            text = { Text(stringResource(Res.string.chat_attach_image), style = MaterialTheme.typography.bodyMedium) },
-                            leadingIcon = { Icon(CaIcons.image, null, Modifier.size(16.dp)) },
-                            onClick = { attachOpen = false; pick() },
-                        )
-                    }
-                    images.camera?.let { camera ->
-                        DropdownMenuItem(
-                            text = { Text(stringResource(Res.string.chat_attach_photo), style = MaterialTheme.typography.bodyMedium) },
-                            leadingIcon = { Icon(CaIcons.eye, null, Modifier.size(16.dp)) },
-                            onClick = { attachOpen = false; camera() },
-                        )
-                    }
-                    // Offered only while there is an image to paste, checked as the menu opens.
-                    val paste = images.paste
-                    if (paste != null && remember(attachOpen) { images.hasClipboardImage() }) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(Res.string.chat_paste_image), style = MaterialTheme.typography.bodyMedium) },
-                            leadingIcon = { Icon(CaIcons.copy, null, Modifier.size(16.dp)) },
-                            onClick = { attachOpen = false; paste() },
-                        )
-                    }
-                    if (activeFilePath != null) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(Res.string.chat_attach_file), style = MaterialTheme.typography.bodyMedium) },
-                            leadingIcon = { Icon(CaIcons.file, null, Modifier.size(16.dp)) },
-                            onClick = { attachOpen = false; onAttachFile(activeFilePath) },
-                        )
+        Row(
+            Modifier.weight(1f)
+                .clip(RoundedCornerShape(22.dp))
+                .background(chrome.surface)
+                .border(1.dp, chrome.hairlineStrong, RoundedCornerShape(22.dp))
+                .drawBehind {
+                    drawLine(
+                        color = chrome.sheen,
+                        start = Offset(12f, 1f),
+                        end = Offset(size.width - 12f, 1f),
+                        strokeWidth = 1f,
+                    )
+                }
+                .padding(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (images.any || activeFilePath != null) {
+                var attachOpen by remember { mutableStateOf(false) }
+                Box {
+                    AgentIconCircle(
+                        CaIcons.plus, stringResource(Res.string.chat_attach), { attachOpen = true },
+                        size = 40.dp,
+                    )
+                    CaDropdownMenu(expanded = attachOpen, onDismissRequest = { attachOpen = false }) {
+                        images.pick?.let { pick ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(Res.string.chat_attach_image), style = MaterialTheme.typography.bodyMedium) },
+                                leadingIcon = { Icon(CaIcons.image, null, Modifier.size(16.dp)) },
+                                onClick = { attachOpen = false; pick() },
+                            )
+                        }
+                        images.camera?.let { camera ->
+                            DropdownMenuItem(
+                                text = { Text(stringResource(Res.string.chat_attach_photo), style = MaterialTheme.typography.bodyMedium) },
+                                leadingIcon = { Icon(CaIcons.eye, null, Modifier.size(16.dp)) },
+                                onClick = { attachOpen = false; camera() },
+                            )
+                        }
+                        // Offered only while there is an image to paste, checked as the menu opens.
+                        val paste = images.paste
+                        if (paste != null && remember(attachOpen) { images.hasClipboardImage() }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(Res.string.chat_paste_image), style = MaterialTheme.typography.bodyMedium) },
+                                leadingIcon = { Icon(CaIcons.copy, null, Modifier.size(16.dp)) },
+                                onClick = { attachOpen = false; paste() },
+                            )
+                        }
+                        if (activeFilePath != null) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(Res.string.chat_attach_file), style = MaterialTheme.typography.bodyMedium) },
+                                leadingIcon = { Icon(CaIcons.file, null, Modifier.size(16.dp)) },
+                                onClick = { attachOpen = false; onAttachFile(activeFilePath) },
+                            )
+                        }
                     }
                 }
             }
-        }
-        // The focus outline follows M3's own treatment: the field sits on a container fill and gains a primary
-        // outline while focused. Motion uses the app's expressive springs rather than a linear tween.
-        val scheme = MaterialTheme.colorScheme
-        val fieldInteraction = remember { MutableInteractionSource() }
-        val focused by fieldInteraction.collectIsFocusedAsState()
-        val borderColor by animateColorAsState(
-            if (focused) scheme.primary else scheme.outlineVariant,
-            animationSpec = CaMotion.defaultEffects(),
-            label = "composerBorder",
-        )
-        val borderWidth by animateDpAsState(
-            if (focused) 2.dp else 1.dp,
-            animationSpec = CaMotion.defaultEffects(),
-            label = "composerBorderWidth",
-        )
-        val fieldShape = RoundedCornerShape(Ca.radius.xl)
-        Box(
-            Modifier.weight(1f)
-                .background(scheme.surfaceContainerHighest, fieldShape)
-                .border(borderWidth, borderColor, fieldShape)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-        ) {
-            if (value.text.isEmpty()) {
-                Text(
-                    stringResource(if (configured) Res.string.chat_placeholder else Res.string.chat_need_key),
-                    color = scheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-            BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
-                enabled = configured && !busy,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = scheme.onSurface),
-                cursorBrush = SolidColor(scheme.primary),
-                maxLines = 5,
-                interactionSource = fieldInteraction,
-                modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
-                    when {
-                        event.type != KeyEventType.KeyDown -> false
-                        event.key == Key.Enter && !event.isShiftPressed -> { onSend(); true }
-                        // Paste claims Ctrl/Cmd+V only when the clipboard holds an image; text paste is untouched.
-                        event.key == Key.V && (event.isCtrlPressed || event.isMetaPressed) &&
-                            images.paste != null && images.hasClipboardImage() -> { images.paste.invoke(); true }
-                        else -> false
-                    }
-                },
+            // Focus lights the lime cursor and a stronger hairline; the pill itself never reflows.
+            val fieldInteraction = remember { MutableInteractionSource() }
+            val focused by fieldInteraction.collectIsFocusedAsState()
+            val borderColor by animateColorAsState(
+                if (focused) chrome.accentSoftLine else chrome.hairlineStrong,
+                animationSpec = CaMotion.defaultEffects(),
+                label = "composerBorder",
             )
-        }
-        // A native filled icon button, so the disabled state, ripple and tonal roles all come from the theme.
-        // While a turn is running it becomes the stop control rather than a second button appearing beside it.
-        val canSend = configured && value.text.isNotBlank() && !busy
-        FilledIconButton(
-            onClick = { if (busy) onStop() else onSend() },
-            enabled = busy || canSend,
-            modifier = Modifier.size(48.dp),
-            shape = CircleShape,
-        ) {
-            Crossfade(targetState = busy, label = "sendIcon") { b ->
-                Icon(
-                    if (b) CaIcons.stop else CaIcons.arrowRight,
-                    stringResource(if (b) Res.string.chat_stop else Res.string.chat_send),
-                    Modifier.size(20.dp),
+            Box(
+                Modifier.weight(1f).padding(horizontal = 4.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (value.text.isEmpty()) {
+                    Text(
+                        stringResource(if (configured) Res.string.chat_placeholder else Res.string.chat_need_key),
+                        color = chrome.textMuted, fontSize = 15.sp,
+                    )
+                }
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    enabled = configured && !busy,
+                    textStyle = TextStyle(color = chrome.text, fontSize = 15.sp),
+                    cursorBrush = SolidColor(chrome.accent),
+                    maxLines = 5,
+                    interactionSource = fieldInteraction,
+                    modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
+                        when {
+                            event.type != KeyEventType.KeyDown -> false
+                            event.key == Key.Enter && !event.isShiftPressed -> { onSend(); true }
+                            // Paste claims Ctrl/Cmd+V only when the clipboard holds an image; text paste is untouched.
+                            event.key == Key.V && (event.isCtrlPressed || event.isMetaPressed) &&
+                                images.paste != null && images.hasClipboardImage() -> { images.paste.invoke(); true }
+                            else -> false
+                        }
+                    },
                 )
+                // Focus ring drawn over the pill's inner edge.
+                if (focused) {
+                    Box(
+                        Modifier.matchParentSize()
+                            .border(1.dp, borderColor, RoundedCornerShape(22.dp)),
+                    )
+                }
             }
+            // 40px lime send. While a turn is running it becomes the stop control.
+            val canSend = configured && value.text.isNotBlank() && !busy
+            AgentIconCircle(
+                icon = if (busy) CaIcons.stop else CaIcons.arrowRight,
+                contentDescription = stringResource(if (busy) Res.string.chat_stop else Res.string.chat_send),
+                onClick = { if (busy) onStop() else onSend() },
+                size = 40.dp,
+                accent = busy || canSend,
+            )
         }
     }
 }
@@ -1435,14 +1471,15 @@ private fun SparkleBadge(size: Int, animated: Boolean = false) {
         label = "sparkleScale",
     )
     val scale = if (animated) pulse else 1f
+    val chrome = AgentUi.chrome
     Box(
         Modifier.size(size.dp)
-            .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape((size / 2.6f).dp)),
+            .background(chrome.accent, RoundedCornerShape((size / 2.6f).dp)),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
             CaIcons.sparkle, null, Modifier.size((size * 0.58f).dp).scale(scale),
-            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            tint = chrome.accentInk,
         )
     }
 }
@@ -1454,7 +1491,7 @@ private fun SparkleBadge(size: Int, animated: Boolean = false) {
  */
 @Composable
 private fun ChatChrome(content: @Composable () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer) { content() }
+    Surface(color = AgentUi.chrome.surface) { content() }
 }
 
 /**
@@ -1464,8 +1501,8 @@ private fun ChatChrome(content: @Composable () -> Unit) {
  */
 @Composable
 private fun pulseColor(active: Boolean): Color {
-    val scheme = MaterialTheme.colorScheme
-    if (!active) return scheme.primary
+    val chrome = AgentUi.chrome
+    if (!active) return chrome.accent
     val transition = rememberInfiniteTransition(label = "pulse")
     val progress by transition.animateFloat(
         initialValue = 0f,
@@ -1473,7 +1510,7 @@ private fun pulseColor(active: Boolean): Color {
         animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
         label = "pulse",
     )
-    return lerp(scheme.onSurfaceVariant, scheme.primary, progress)
+    return lerp(chrome.textFaint, chrome.accent, progress)
 }
 
 @Composable

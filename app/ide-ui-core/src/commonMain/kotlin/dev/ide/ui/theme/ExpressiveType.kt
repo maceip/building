@@ -26,20 +26,20 @@ import androidx.compose.ui.unit.sp
  * container's height, so a 2.0 scale wraps rather than clips.
  */
 fun expressiveTypography(ui: FontFamily): Typography = Typography(
-    displayLarge = TextStyle(fontFamily = ui, fontWeight = FontWeight.Light, fontSize = 57.sp, lineHeight = 64.sp, letterSpacing = (-1.5).sp),
-    displayMedium = TextStyle(fontFamily = ui, fontWeight = FontWeight.Light, fontSize = 45.sp, lineHeight = 52.sp, letterSpacing = (-1.2).sp),
-    displaySmall = TextStyle(fontFamily = ui, fontWeight = FontWeight.Light, fontSize = 34.sp, lineHeight = 40.sp, letterSpacing = (-1).sp),
-    headlineLarge = TextStyle(fontFamily = ui, fontWeight = FontWeight.Normal, fontSize = 30.sp, lineHeight = 36.sp, letterSpacing = (-0.7).sp),
-    headlineMedium = TextStyle(fontFamily = ui, fontWeight = FontWeight.Normal, fontSize = 26.sp, lineHeight = 32.sp, letterSpacing = (-0.6).sp),
-    headlineSmall = TextStyle(fontFamily = ui, fontWeight = FontWeight.Normal, fontSize = 22.sp, lineHeight = 28.sp, letterSpacing = (-0.4).sp),
-    titleLarge = TextStyle(fontFamily = ui, fontWeight = FontWeight.Medium, fontSize = 24.sp, lineHeight = 29.sp, letterSpacing = (-0.6).sp),
-    titleMedium = TextStyle(fontFamily = ui, fontWeight = FontWeight.Medium, fontSize = 17.sp, lineHeight = 22.sp, letterSpacing = (-0.2).sp),
-    titleSmall = TextStyle(fontFamily = ui, fontWeight = FontWeight.Medium, fontSize = 16.sp, lineHeight = 21.sp, letterSpacing = (-0.2).sp),
-    bodyLarge = TextStyle(fontFamily = ui, fontWeight = FontWeight.Normal, fontSize = 14.5.sp, lineHeight = 23.sp),
-    bodyMedium = TextStyle(fontFamily = ui, fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 22.sp),
-    bodySmall = TextStyle(fontFamily = ui, fontWeight = FontWeight.Normal, fontSize = 12.5.sp, lineHeight = 18.sp),
+    displayLarge = TextStyle(fontFamily = ui, fontWeight = FontWeight.SemiBold, fontSize = 40.sp, lineHeight = 44.sp, letterSpacing = (-1).sp),
+    displayMedium = TextStyle(fontFamily = ui, fontWeight = FontWeight.SemiBold, fontSize = 34.sp, lineHeight = 38.sp, letterSpacing = (-0.8).sp),
+    displaySmall = TextStyle(fontFamily = ui, fontWeight = FontWeight.SemiBold, fontSize = 32.sp, lineHeight = 35.sp, letterSpacing = (-0.6).sp),
+    headlineLarge = TextStyle(fontFamily = ui, fontWeight = FontWeight.SemiBold, fontSize = 30.sp, lineHeight = 36.sp, letterSpacing = (-0.5).sp),
+    headlineMedium = TextStyle(fontFamily = ui, fontWeight = FontWeight.SemiBold, fontSize = 24.sp, lineHeight = 30.sp, letterSpacing = (-0.4).sp),
+    headlineSmall = TextStyle(fontFamily = ui, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, lineHeight = 26.sp, letterSpacing = (-0.2).sp),
+    titleLarge = TextStyle(fontFamily = ui, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 22.sp, letterSpacing = (-0.1).sp),
+    titleMedium = TextStyle(fontFamily = ui, fontWeight = FontWeight.Medium, fontSize = 16.sp, lineHeight = 21.sp, letterSpacing = 0.sp),
+    titleSmall = TextStyle(fontFamily = ui, fontWeight = FontWeight.Medium, fontSize = 15.sp, lineHeight = 20.sp, letterSpacing = 0.sp),
+    bodyLarge = TextStyle(fontFamily = ui, fontWeight = FontWeight.Normal, fontSize = 17.sp, lineHeight = 25.sp),
+    bodyMedium = TextStyle(fontFamily = ui, fontWeight = FontWeight.Normal, fontSize = 15.sp, lineHeight = 22.sp),
+    bodySmall = TextStyle(fontFamily = ui, fontWeight = FontWeight.Normal, fontSize = 13.sp, lineHeight = 18.sp),
     labelLarge = TextStyle(fontFamily = ui, fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp, letterSpacing = 0.1.sp),
-    labelMedium = TextStyle(fontFamily = ui, fontWeight = FontWeight.Medium, fontSize = 13.sp, lineHeight = 18.sp, letterSpacing = 0.1.sp),
-    // The all-caps eyebrow. Bold + wide tracking, because caps at 12 sp need the separation.
-    labelSmall = TextStyle(fontFamily = ui, fontWeight = FontWeight.Bold, fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 0.7.sp),
+    labelMedium = TextStyle(fontFamily = ui, fontWeight = FontWeight.Medium, fontSize = 13.sp, lineHeight = 18.sp, letterSpacing = 0.04.sp),
+    // The all-caps eyebrow. Medium + tracking, because caps at 12 sp need the separation.
+    labelSmall = TextStyle(fontFamily = ui, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = 0.06.sp),
 )

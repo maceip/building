@@ -257,26 +257,40 @@ fun RightToolOverlay(state: IdeUiState) {
 
             val selectedId = state.selectedRightPanel
             val effectiveId = selectedId ?: primaryId
-            val topCorner = lerp(0.dp, Ca.radius.sheet, splitMorphProgress)
-            val panelShape = RoundedCornerShape(topStart = topCorner, topEnd = topCorner)
+            val corner = lerp(0.dp, Ca.radius.sheet, splitMorphProgress)
+            // Agent-on-top docks the panel flush at the top and rounds the bottom edge; classic
+            // bottom-dock rounds the top edge so the code canvas peeks above it.
+            val panelShape = if (state.rightPanelAgentOnTop && state.rightPanelHalfScreen) {
+                RoundedCornerShape(bottomStart = corner, bottomEnd = corner)
+            } else {
+                RoundedCornerShape(topStart = corner, topEnd = corner)
+            }
             val closeSlideOffset = if (state.rightPanelHalfScreen) (backGestureProgress * openPx * 0.45f).roundToInt() else 0
 
-            // Vertical drag on the top handle lets the user manually pull the Agent down to Half-Screen or up to Full
+            // Vertical drag on the handle lets the user pull the Agent into half-screen or expand to full.
             val verticalDragState = rememberDraggableState { dy ->
-                if (dy > 18f && !state.rightPanelHalfScreen) {
+                val towardSplit = if (state.rightPanelAgentOnTop) dy > 18f else dy < -18f
+                val towardFull = if (state.rightPanelAgentOnTop) dy < -18f else dy > 18f
+                if (towardSplit && !state.rightPanelHalfScreen) {
                     haptics.predictiveBackThreshold()
                     state.rightPanelHalfScreen = true
-                } else if (dy < -18f && state.rightPanelHalfScreen) {
+                } else if (towardFull && state.rightPanelHalfScreen) {
                     haptics.tap()
                     state.rightPanelHalfScreen = false
                 }
             }
 
+            val dockTop = state.rightPanelAgentOnTop && state.rightPanelHalfScreen
             Box(
-                Modifier.align(Alignment.BottomEnd)
+                Modifier.align(if (dockTop) Alignment.TopEnd else Alignment.BottomEnd)
                     .width(panelWidth)
                     .height(with(density) { (fullHeightPx * effectiveHeightFraction).toDp() })
-                    .offset { IntOffset((openPx - shown.value).roundToInt() + closeSlideOffset, 0) }
+                    .offset {
+                        IntOffset(
+                            (openPx - shown.value).roundToInt() + closeSlideOffset,
+                            if (dockTop) (-backGestureProgress * 24).roundToInt() else 0,
+                        )
+                    }
                     .shadow(if (splitMorphProgress > 0.05f) 20.dp else 0.dp, panelShape, clip = false)
                     .clip(panelShape)
                     .then(
@@ -299,14 +313,25 @@ fun RightToolOverlay(state: IdeUiState) {
                                     indication = null,
                                 ) {
                                     haptics.predictiveBackThreshold()
-                                    state.rightPanelHalfScreen = !state.rightPanelHalfScreen
+                                    if (state.rightPanelHalfScreen) {
+                                        // While split, tap cycles agent dock: top ↔ bottom.
+                                        state.rightPanelAgentOnTop = !state.rightPanelAgentOnTop
+                                    } else {
+                                        state.rightPanelHalfScreen = true
+                                    }
                                 }
                                 .padding(horizontal = 12.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
                         ) {
                             Text(
-                                if (state.rightPanelHalfScreen) "Agent Peek · Code Live Above" else "Swipe Back for ½ Split",
+                                when {
+                                    state.rightPanelHalfScreen && state.rightPanelAgentOnTop ->
+                                        "Agent on top · code below"
+                                    state.rightPanelHalfScreen ->
+                                        "Agent Peek · Code Live Above"
+                                    else -> "Swipe Back for ½ Split"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -320,7 +345,11 @@ fun RightToolOverlay(state: IdeUiState) {
                                     )
                             )
                             Text(
-                                if (state.rightPanelHalfScreen) "Expand ⤢" else "½ Split ⤡",
+                                if (state.rightPanelHalfScreen) {
+                                    if (state.rightPanelAgentOnTop) "Bottom ↕" else "Top ↕"
+                                } else {
+                                    "½ Split ⤡"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.primary,

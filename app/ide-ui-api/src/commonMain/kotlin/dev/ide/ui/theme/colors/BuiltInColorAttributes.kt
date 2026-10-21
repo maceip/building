@@ -156,42 +156,42 @@ object BuiltInColorAttributes {
         add(
             ColorAttribute(
                 ColorKeys.TEXT, "Default text", ColorGroups.CODE, parent = null,
-                defaultDark = AttributeStyle.fg(Color(0xFFC7C8CF)),
-                defaultLight = AttributeStyle.fg(Color(0xFF34363D)),
+                defaultDark = AttributeStyle.fg(Color(0xFFEDEDE6)),
+                defaultLight = AttributeStyle.fg(Color(0xFF15171A)),
                 order = 0,
             )
         )
-        add(code(ColorKeys.KEYWORD, "Keyword", 1, dark = AttributeStyle.fg(Color(0xFFCD7EE0)), light = AttributeStyle.fg(Color(0xFFA32FB0))))
+        add(code(ColorKeys.KEYWORD, "Keyword", 1, dark = AttributeStyle.fg(Color(0xFFD6B4FF)), light = AttributeStyle.fg(Color(0xFF5B2A86))))
         add(code(ColorKeys.KEYWORD_MODIFIER, "Modifier keyword", 2, parent = ColorKeys.KEYWORD))
-        add(code(ColorKeys.STRING, "String", 3, dark = AttributeStyle.fg(Color(0xFF98C97A)), light = AttributeStyle.fg(Color(0xFF3F9C45))))
-        add(code(ColorKeys.STRING_ESCAPE, "Escape sequence", 4, parent = ColorKeys.STRING, dark = AttributeStyle.fg(Color(0xFFD9A066)), light = AttributeStyle.fg(Color(0xFFB9690B))))
-        add(code(ColorKeys.STRING_TEMPLATE, "Template delimiter", 5, parent = ColorKeys.STRING, dark = AttributeStyle.fg(Color(0xFFCD7EE0)), light = AttributeStyle.fg(Color(0xFFA32FB0))))
-        add(code(ColorKeys.NUMBER, "Number", 6, dark = AttributeStyle.fg(Color(0xFFD9A066)), light = AttributeStyle.fg(Color(0xFFB9690B))))
+        add(code(ColorKeys.STRING, "String", 3, dark = AttributeStyle.fg(Color(0xFFF2C98A)), light = AttributeStyle.fg(Color(0xFF8A4B00))))
+        add(code(ColorKeys.STRING_ESCAPE, "Escape sequence", 4, parent = ColorKeys.STRING, dark = AttributeStyle.fg(Color(0xFFFFB86B)), light = AttributeStyle.fg(Color(0xFF8A4B00))))
+        add(code(ColorKeys.STRING_TEMPLATE, "Template delimiter", 5, parent = ColorKeys.STRING, dark = AttributeStyle.fg(Color(0xFFD6B4FF)), light = AttributeStyle.fg(Color(0xFF5B2A86))))
+        add(code(ColorKeys.NUMBER, "Number", 6, dark = AttributeStyle.fg(Color(0xFFFFB86B)), light = AttributeStyle.fg(Color(0xFF8A4B00))))
         add(
             code(
                 ColorKeys.COMMENT, "Comment", 7,
-                dark = AttributeStyle(foreground = Color(0xFF6C7078), italic = true),
-                light = AttributeStyle(foreground = Color(0xFFA3A4AA), italic = true),
+                dark = AttributeStyle(foreground = Color(0xFFA3A49B), italic = true),
+                light = AttributeStyle(foreground = Color(0xFF6A6F72), italic = true),
             )
         )
-        add(code(ColorKeys.ANNOTATION, "Annotation", 8, dark = AttributeStyle.fg(Color(0xFFE6C178)), light = AttributeStyle.fg(Color(0xFF9A6700))))
-        add(code(ColorKeys.FUNCTION, "Function call", 9, dark = AttributeStyle.fg(Color(0xFF61AFEF)), light = AttributeStyle.fg(Color(0xFF3A6FE0))))
+        add(code(ColorKeys.ANNOTATION, "Annotation", 8, dark = AttributeStyle.fg(Color(0xFFF2B661)), light = AttributeStyle.fg(Color(0xFF8A4B00))))
+        add(code(ColorKeys.FUNCTION, "Function call", 9, dark = AttributeStyle.fg(Color(0xFF7FD4FF)), light = AttributeStyle.fg(Color(0xFF2A44D6))))
         add(code(ColorKeys.FUNCTION_DECLARATION, "Function declaration", 10, parent = ColorKeys.FUNCTION, dark = AttributeStyle(bold = true), light = AttributeStyle(bold = true)))
-        add(code(ColorKeys.TYPE, "Type", 11, dark = AttributeStyle.fg(Color(0xFFE6C178)), light = AttributeStyle.fg(Color(0xFF9A6700))))
+        add(code(ColorKeys.TYPE, "Type", 11, dark = AttributeStyle.fg(Color(0xFFE8F5C8)), light = AttributeStyle.fg(Color(0xFF3D4246))))
         add(code(ColorKeys.TYPE_PARAMETER, "Type parameter", 12, parent = ColorKeys.TYPE))
-        add(code(ColorKeys.PROPERTY, "Property", 13, dark = AttributeStyle.fg(Color(0xFF57B6C2)), light = AttributeStyle.fg(Color(0xFF0A86A8))))
-        add(code(ColorKeys.VARIABLE, "Local variable", 14, dark = AttributeStyle.fg(Color(0xFFE08C84)), light = AttributeStyle.fg(Color(0xFFC0473F))))
+        add(code(ColorKeys.PROPERTY, "Property", 13, dark = AttributeStyle.fg(Color(0xFF7FD4FF)), light = AttributeStyle.fg(Color(0xFF2A44D6))))
+        add(code(ColorKeys.VARIABLE, "Local variable", 14, dark = AttributeStyle.fg(Color(0xFFEDEDE6)), light = AttributeStyle.fg(Color(0xFF15171A))))
         add(code(ColorKeys.VARIABLE_PARAMETER, "Parameter", 15, parent = ColorKeys.VARIABLE))
-        add(code(ColorKeys.CONSTANT, "Constant", 16, dark = AttributeStyle.fg(Color(0xFFD9A066)), light = AttributeStyle.fg(Color(0xFFB9690B))))
+        add(code(ColorKeys.CONSTANT, "Constant", 16, dark = AttributeStyle.fg(Color(0xFFFFB86B)), light = AttributeStyle.fg(Color(0xFF8A4B00))))
         add(
             code(
                 ColorKeys.LABEL, "Label", 17,
-                dark = AttributeStyle(foreground = Color(0xFFB5895B), italic = true),
-                light = AttributeStyle(foreground = Color(0xFF8A5A2B), italic = true),
+                dark = AttributeStyle(foreground = Color(0xFFC8F169), italic = true),
+                light = AttributeStyle(foreground = Color(0xFF5E8F00), italic = true),
             )
         )
         add(code(ColorKeys.NAMESPACE, "Package / namespace", 18))
-        add(code(ColorKeys.PUNCTUATION, "Punctuation", 19, dark = AttributeStyle.fg(Color(0xFF8B8D96)), light = AttributeStyle.fg(Color(0xFF6B6C73))))
+        add(code(ColorKeys.PUNCTUATION, "Punctuation", 19, dark = AttributeStyle.fg(Color(0xFF8C8D84)), light = AttributeStyle.fg(Color(0xFF5A5F63))))
 
         // The finer classes below ship with NO color of their own, on purpose: each renders exactly as its
         // parent until a scheme separates them, so adding them changes nothing about how anyone's editor

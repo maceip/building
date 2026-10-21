@@ -221,11 +221,25 @@ fun ProjectsHomeScreen(
     onAccountRequestHandled: () -> Unit = {},
     backend: dev.ide.ui.backend.IdeBackend? = null,
     onCloneAndOpen: ((htmlUrl: String, repoName: String) -> Unit)? = null,
+    /**
+     * Opens the redesigned Agent settings destination. Null hides the agent icon on the phone home.
+     * The host routes this to `openPluginScreen("agent.settings")`.
+     */
+    onOpenAgentSettings: (() -> Unit)? = null,
+    /** Clone a Git repo from the New-project sheet (host opens the VCS clone screen). */
+    onCloneGit: (() -> Unit)? = null,
+    /** Import a `.caproj` package from the New-project sheet. */
+    onImportPackage: (() -> Unit)? = null,
 ) {
     var segment by remember { mutableStateOf(HomeSegment.Projects) }
     // Deleting wipes the project from disk and nothing else in this flow asks first.
     var pendingDelete by remember { mutableStateOf<ProjectInfo?>(null) }
     var sheet by remember { mutableStateOf<HomeSheet?>(null) }
+    // Phone agent-first Home: the prompt hero is primary; "All projects" reveals the existing list.
+    var showAllProjects by remember { mutableStateOf(false) }
+    var agentPrompt by remember { mutableStateOf("") }
+    var newProjectPrompt by remember { mutableStateOf("") }
+    var selectedStack by remember { mutableIntStateOf(0) }
     val now = remember(projects) { nowMillis() }
     val ordered = remember(projects) { projects.sortedByDescending { it.lastOpened } }
     // Rendered icons by project root. Held for the screen rather than per card: a card is recomposed every
@@ -248,6 +262,8 @@ fun ProjectsHomeScreen(
 
     PlatformBackHandler(enabled = sheet != null) { sheet = null }
     PlatformBackHandler(enabled = pendingDelete != null) { pendingDelete = null }
+    // Back from the classic list returns to the agent-first Home rather than leaving the tab.
+    PlatformBackHandler(enabled = showAllProjects) { showAllProjects = false }
 
     BoxWithConstraints(modifier.fillMaxSize()) {
     if (maxWidth >= ProjectsWideBreakpoint) {
@@ -258,7 +274,7 @@ fun ProjectsHomeScreen(
             loadIcon = loadIcon,
             loadIconImage = loadIconImage,
             onOpen = onOpen,
-            onNewProject = onNewProject,
+            onNewProject = { sheet = HomeSheet.NewProject },
             onImportProject = onImportProject,
             onCloneRepository = onCloneRepository,
             onExportProject = onExportProject,
@@ -271,6 +287,60 @@ fun ProjectsHomeScreen(
             onJoinDiscord = onJoinDiscord,
             backend = backend,
             onCloneAndOpen = onCloneAndOpen,
+        )
+    } else if (!showAllProjects) {
+        // Agent-first Home (phone width): prompt hero + Continue, with the classic project list one tap
+        // away via "All projects". New / Start opens the redesigned bottom sheet, which hands off to the
+        // existing create-project gallery.
+        val continueItems = remember(ordered, now) {
+            ordered.take(5).map { p ->
+                AgentContinueItem(
+                    id = p.rootPath,
+                    title = p.name,
+                    meta = listOfNotNull(
+                        when {
+                            p.isSwift -> "Swift & iOS"
+                            p.isPython -> "Python"
+                            p.isNode -> "Node.js"
+                            p.isAndroid -> "Android"
+                            p.compatibility -> "Gradle"
+                            p.unrecognized -> "Files"
+                            else -> "building"
+                        },
+                        if (p.moduleCount == 1) "1 module" else "${p.moduleCount} modules",
+                    ).joinToString(" · "),
+                    time = "",
+                    letter = p.name.firstOrNull()?.uppercase() ?: "?",
+                    needsAttention = false,
+                )
+            }
+        }
+        AgentHomeContent(
+            appName = "building",
+            prompt = agentPrompt,
+            onPromptChange = { agentPrompt = it },
+            onStart = {
+                if (agentPrompt.isNotBlank()) {
+                    // Carry the description into the New-project sheet so Start building keeps it.
+                    newProjectPrompt = agentPrompt
+                }
+                sheet = HomeSheet.NewProject
+            },
+            onOpenAgentSettings = onOpenAgentSettings ?: {},
+            onOpenAccount = { sheet = HomeSheet.Account },
+            onNewProject = { sheet = HomeSheet.NewProject },
+            onImportOrClone = {
+                when {
+                    onCloneGit != null -> onCloneGit()
+                    onImportProject != null -> onImportProject()
+                }
+            },
+            onDeviceLabel = "On-device",
+            continueItems = continueItems,
+            allProjectsLabel = "All projects",
+            onOpenItem = { item -> ordered.firstOrNull { it.rootPath == item.id }?.let(onOpen) },
+            onSeeAllProjects = { showAllProjects = true },
+            modifier = Modifier.fillMaxSize(),
         )
     } else
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.TopCenter) {
@@ -359,6 +429,23 @@ fun ProjectsHomeScreen(
     }
 
     when (sheet) {
+        HomeSheet.NewProject -> NewProjectSheet(
+            prompt = newProjectPrompt,
+            onPromptChange = { newProjectPrompt = it },
+            onStartBuilding = {
+                sheet = null
+                // Existing create-project gallery owns the template picker; the prompt rides along in the
+                // sheet state so the user can copy it into the agent once a project is open.
+                onNewProject()
+            },
+            onDismiss = { sheet = null },
+            selectedStack = selectedStack,
+            onSelectStack = { selectedStack = it },
+            onCloneGit = onCloneGit?.let { { sheet = null; it() } },
+            onOpenFolder = onImportProject?.let { { sheet = null; it() } },
+            onImportPackage = onImportPackage?.let { { sheet = null; it() } }
+                ?: onImportProject?.let { { sheet = null; it() } },
+        )
         HomeSheet.Account -> AccountSheet(
             onDismiss = { sheet = null },
             storagePath = storagePath,
@@ -401,7 +488,7 @@ fun ProjectsHomeScreen(
     }
 }
 
-private enum class HomeSheet { Account }
+private enum class HomeSheet { Account, NewProject }
 
 @Composable
 private fun HomeHeader(
@@ -830,6 +917,46 @@ private fun ResumeCard(project: ProjectInfo, now: Long, onOpen: () -> Unit) {
 }
 
 // ---- sheets ----
+
+/**
+ * The redesigned "Start something new" bottom sheet. Hosts [NewProjectSheetContent] inside a modal sheet so
+ * both iOS and Android pick up the same New / Start flow; Start building hands off to the existing
+ * create-project gallery via [onStartBuilding].
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun NewProjectSheet(
+    prompt: String,
+    onPromptChange: (String) -> Unit,
+    onStartBuilding: () -> Unit,
+    onDismiss: () -> Unit,
+    selectedStack: Int = 0,
+    onSelectStack: (Int) -> Unit = {},
+    onCloneGit: (() -> Unit)? = null,
+    onOpenFolder: (() -> Unit)? = null,
+    onImportPackage: (() -> Unit)? = null,
+) {
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = state,
+        shape = CaShapes.Sheet,
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+    ) {
+        NewProjectSheetContent(
+            prompt = prompt,
+            onPromptChange = onPromptChange,
+            onStartBuilding = onStartBuilding,
+            onClose = onDismiss,
+            selectedStack = selectedStack,
+            onSelectStack = onSelectStack,
+            onCloneGit = onCloneGit ?: {},
+            onOpenFolder = onOpenFolder ?: {},
+            onImportPackage = onImportPackage ?: {},
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
 
 @Composable
 private fun AccountSheet(

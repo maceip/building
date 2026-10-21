@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -40,7 +41,8 @@ import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.components.CenteredDialog
 import dev.ide.ui.components.IconButtonCa
 import dev.ide.ui.icons.CaIcons
-import dev.ide.ui.theme.Ca
+import dev.ide.ui.screens.AgentStatusDot
+import dev.ide.ui.theme.AgentUi
 import org.jetbrains.compose.resources.stringResource
 
 /** The saved conversations for this project, newest first: tap one to resume it, or delete it. */
@@ -48,23 +50,24 @@ import org.jetbrains.compose.resources.stringResource
 internal fun AgentHistorySheet(backend: IdeBackend, onClose: () -> Unit) {
     var sessions by remember { mutableStateOf(backend.agent.sessions()) }
     val current = backend.agent.chatState.value.sessionId
+    val chrome = AgentUi.chrome
     CenteredDialog(visible = true, onDismiss = onClose) {
         Column(
             Modifier.widthIn(max = 460.dp)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                .clip(RoundedCornerShape(Ca.radius.xl))
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.xl))
+                .clip(RoundedCornerShape(AgentUi.radius.sheet))
+                .background(chrome.surface)
+                .border(1.dp, chrome.hairlineStrong, RoundedCornerShape(AgentUi.radius.sheet))
                 .padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(CaIcons.clock, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                Icon(CaIcons.clock, null, Modifier.size(18.dp), tint = chrome.accent)
                 Spacer(Modifier.width(8.dp))
                 Text(
                     stringResource(Res.string.chat_history),
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = chrome.text,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
@@ -74,7 +77,7 @@ internal fun AgentHistorySheet(backend: IdeBackend, onClose: () -> Unit) {
             if (sessions.isEmpty()) {
                 Text(
                     stringResource(Res.string.chat_history_empty),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = chrome.textMuted,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -84,11 +87,14 @@ internal fun AgentHistorySheet(backend: IdeBackend, onClose: () -> Unit) {
             ) {
                 sessions.forEach { session ->
                     val selected = session.id == current
-                    val scheme = MaterialTheme.colorScheme
-                    val container = if (selected) scheme.secondaryContainer else scheme.surfaceContainerHighest
-                    val onContainer = if (selected) scheme.onSecondaryContainer else scheme.onSurface
+                    val container = if (selected) chrome.surfaceAlt else chrome.bg
+                    val onContainer = if (selected) chrome.text else chrome.textMuted
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.md)).background(container)
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(AgentUi.radius.card)).background(container)
+                            .then(
+                                if (selected) Modifier.border(1.dp, chrome.accentSoftLine, RoundedCornerShape(AgentUi.radius.card))
+                                else Modifier.border(1.dp, chrome.hairline, RoundedCornerShape(AgentUi.radius.card))
+                            )
                             .clickable {
                                 backend.agent.resumeSession(session.id)
                                 onClose()
@@ -96,6 +102,13 @@ internal fun AgentHistorySheet(backend: IdeBackend, onClose: () -> Unit) {
                             .padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        AgentStatusDot(
+                            active = selected,
+                            size = 7.dp,
+                            color = if (selected) chrome.accent else chrome.textFaint,
+                            modifier = Modifier.padding(end = 0.dp),
+                        )
+                        Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(
                                 session.title,
@@ -106,7 +119,7 @@ internal fun AgentHistorySheet(backend: IdeBackend, onClose: () -> Unit) {
                             )
                             Text(
                                 stringResource(Res.string.chat_history_messages, session.messageCount),
-                                color = if (selected) onContainer else scheme.onSurfaceVariant,
+                                color = if (selected) chrome.textMuted else chrome.textFaint,
                                 style = MaterialTheme.typography.labelSmall,
                             )
                         }
