@@ -52,6 +52,7 @@ object ManifestParser {
                     strings = readStringPool(bytes, r.pos - 8)
                 }
                 0x0102 -> { // START_ELEMENT
+                    val chunkStart = r.pos - 8
                     r.u16() // line
                     r.u16() // comment
                     val ns = r.u32().toInt()
@@ -64,7 +65,7 @@ object ManifestParser {
                     r.u16() // styleIndex
                     val elName = str(strings, name)
                     val attrs = LinkedHashMap<String, String>()
-                    val attrBase = r.pos - 8 + headerSize + (if (attrStart > 0) attrStart else 20)
+                    val attrBase = chunkStart + headerSize + (if (attrStart > 0) attrStart else 20)
                     var at = attrBase
                     repeat(attrCount) {
                         if (at + 20 > bytes.size) return@repeat
@@ -90,25 +91,37 @@ object ManifestParser {
                     when (elName) {
                         "manifest" -> packageName = attrs["package"] ?: packageName
                         "application" -> applicationLabel = attrs["label"] ?: applicationLabel
-                        "activity" -> {
+                        "activity", "activity-alias" -> {
                             inActivity = true
-                            currentActivity = attrs["name"]
+                            currentActivity = attrs["targetActivity"] ?: attrs["name"]
                             sawLauncher = false
                         }
                         "action" -> {
-                            if (inActivity && attrs["name"] == "android.intent.action.MAIN") sawLauncher = true
+                            if (inActivity && attrs["name"] == "android.intent.action.MAIN") {
+                                sawLauncher = true
+                                if (launchActivity == null) launchActivity = currentActivity
+                            }
                         }
                         "category" -> {
-                            if (inActivity && sawLauncher && attrs["name"] == "android.intent.category.LAUNCHER") {
+                            if (inActivity && sawLauncher &&
+                                (attrs["name"] == "android.intent.category.LAUNCHER" ||
+                                    attrs["name"] == "android.intent.category.LEANBACK_LAUNCHER" ||
+                                    attrs["name"] == "android.intent.category.APP_MUSIC")
+                            ) {
                                 launchActivity = currentActivity
                             }
                         }
                     }
                 }
                 0x0103 -> { // END_ELEMENT
-                    r.u16(); r.u16(); r.u32(); r.u32()
-                    // activity ends when its end tag arrives; keep last launcher match
-                    inActivity = false
+                    r.u16() // line
+                    r.u16() // comment
+                    r.u32() // ns
+                    val name = r.u32().toInt()
+                    val elName = str(strings, name)
+                    if (elName == "activity" || elName == "activity-alias") {
+                        inActivity = false
+                    }
                 }
             }
             r.pos = chunkEnd
@@ -209,20 +222,19 @@ object ManifestParser {
 
     private fun readStringPool(bytes: ByteArray, chunkAt: Int): List<String> {
         val r = LE(bytes)
-        r.pos = chunkAt + 8
+        r.pos = chunkAt + 2
+        val headerSize = r.u16()
+        r.u32() // chunkSize
         val stringCount = r.u32().toInt()
         val styleCount = r.u32().toInt()
-        r.u32() // flags (UTF8 flag 1<<8)
+        val flagsVal = r.u32() // flags (UTF8 flag 1<<8)
         val stringsStart = r.u32().toInt()
         r.u32() // stylesStart
-        // flags is the 4th u32 after the chunk header.
-        val flags = LE(bytes)
-        flags.pos = chunkAt + 8 + 12
-        val utf8 = (flags.u32() and 0x100) != 0L
+        val utf8 = (flagsVal and 0x100) != 0L
 
         val offsets = IntArray(stringCount)
         val or = LE(bytes)
-        or.pos = chunkAt + 8 + 28
+        or.pos = chunkAt + (if (headerSize >= 28) headerSize else 28)
         for (i in 0 until stringCount) offsets[i] = or.u32().toInt()
 
         val out = ArrayList<String>(stringCount)
@@ -246,11 +258,16 @@ object ManifestParser {
                 out.add(bytes.decodeToString(p, p + byteLen))
             } else {
                 var p = at
-                var utf16Len = bytes[p].toInt() and 0xFF
-                p++
-                if (utf16Len and 0x80 != 0) {
-                    utf16Len = ((utf16Len and 0x7F) shl 8) or (bytes[p].toInt() and 0xFF)
-                    p++
+                if (p + 1 >= bytes.size) {
+                    out.add("")
+                    continue
+                }
+                var utf16Len = (bytes[p].toInt() and 0xFF) or ((bytes[p + 1].toInt() and 0xFF) shl 8)
+                p += 2
+                if (utf16Len and 0x8000 != 0) {
+                    val lo = (bytes[p].toInt() and 0xFF) or ((bytes[p + 1].toInt() and 0xFF) shl 8)
+                    utf16Len = ((utf16Len and 0x7FFF) shl 16) or lo
+                    p += 2
                 }
                 val sb = StringBuilder(utf16Len)
                 repeat(utf16Len) {
@@ -262,7 +279,6 @@ object ManifestParser {
                 out.add(sb.toString())
             }
         }
-        // `isUtf8` is unused: the same flag is re-read into `utf8` below (the first read was at the wrong offset).
         return out
     }
 

@@ -58,11 +58,21 @@ class AndroidStubs(
                 DexVm.DvmValue.Null
             }
 
+            cleanOwner == "androidx/activity/compose/ComponentActivityKt" && name == "setContent" -> {
+                log("androidx/activity/compose/ComponentActivityKt.setContent")
+                DexVm.DvmValue.Null
+            }
+
+            cleanOwner == "androidx/activity/EdgeToEdge" && name.startsWith("enable") -> {
+                log("androidx/activity/EdgeToEdge.$name")
+                DexVm.DvmValue.Null
+            }
+
             cleanOwner == "android/app/Activity" ||
                 cleanOwner == "androidx/activity/ComponentActivity" ||
                 cleanOwner == "androidx/appcompat/app/AppCompatActivity" ||
                 cleanOwner == "androidx/fragment/app/FragmentActivity" ||
-                cleanOwner.endsWith("/Activity") -> when (name) {
+                cleanOwner.endsWith("Activity") -> when (name) {
                 "<init>" -> DexVm.DvmValue.Null
                 "onCreate", "onStart", "onResume", "onPause", "onStop", "onDestroy" -> {
                     log("$cleanOwner.$name")

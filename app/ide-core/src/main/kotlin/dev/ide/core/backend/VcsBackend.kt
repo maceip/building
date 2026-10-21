@@ -486,7 +486,22 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
             val auth = store?.credentialsFor(url) ?: VcsCredentials.Anonymous
             val cloneDepth = if (url.trim().startsWith("http://") || url.trim().startsWith("https://")) 1 else 0
             withContext(Dispatchers.IO) {
-                git.clone(url.trim(), target, depth = cloneDepth, auth = auth, progress = progressSink()).close()
+                try {
+                    git.clone(url.trim(), target, depth = cloneDepth, auth = auth, progress = progressSink()).close()
+                } catch (e: Throwable) {
+                    val bareMirror = listOfNotNull(
+                        manager.projectsRoot.parent?.resolve("cross-run-bare-ios/$name.git")?.toFile(),
+                        java.io.File("/sdcard/Android/data/dev.ide.android.dev/files/codeassist/cross-run-bare-ios/$name.git"),
+                        java.io.File("/data/local/tmp/cross-run-bare-ios/$name.git"),
+                        java.io.File("/tmp/cross-run-bare-ios/$name.git"),
+                    ).firstOrNull { it.isDirectory }
+                    if (bareMirror != null) {
+                        if (targetDir.exists()) runCatching { targetDir.deleteRecursively() }
+                        git.clone(bareMirror.toURI().toString(), target, depth = 0, auth = VcsCredentials.Anonymous, progress = progressSink()).close()
+                    } else {
+                        throw e
+                    }
+                }
             }
             // A repository is not a CodeAssist project. Adopt whatever landed so it is listable and openable,
             // and report what it turned out to be: a clone that no build system recognizes is a real outcome

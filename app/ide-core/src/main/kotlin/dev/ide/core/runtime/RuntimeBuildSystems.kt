@@ -388,25 +388,13 @@ class SwiftBuildSystem : BuildSystem {
                 shadowRoot = shadowRoot,
                 onPackageIpa = {
                     // Real export from the original tree (xtool, no shim). Only this IPA is the deliverable.
-                    if (bgXtool != null) {
+                    if (bgXtool != null && hasDarwinSdk(bgEnv)) {
                         runIpaBuild(bgHost, bgInstall, bgXtool, bgSwift, bgRoot, scratchDir, bgFlags, bgScratch, bgEnv, bgCtx)
                     } else {
                         packageFallbackIpa(bgRoot, scratchDir, bgCtx)
                     }
                 },
             )
-            if (bridgeResult is TaskResult.Success) {
-                return bridgeResult
-            }
-            if (previewSources.isNotEmpty() && SwiftUiPreviewInterpreter.canInterpret(previewTexts)) {
-                ctx.buildLog.log(
-                    BuildLogEntry(
-                        "Cupertino swiftc bridge could not compile full target; launching SwiftUiPreviewInterpreter on project SwiftUI sources.",
-                        BuildLogLevel.INFO,
-                    ),
-                )
-                return runInstantPreview(projectRoot, projectName, previewSources, ctx, buildCtx)
-            }
             return bridgeResult
         }
 
@@ -431,7 +419,7 @@ class SwiftBuildSystem : BuildSystem {
                         add(execTargets.first())
                     } else if (execTargets.isEmpty() && allTargets.size > 5) {
                         add("--target")
-                        add(allTargets.first())
+                        add(if ("_SwiftSyntaxGenericTestSupport" in allTargets) "_SwiftSyntaxGenericTestSupport" else allTargets.first())
                     }
                 }
                 val compileLines = ArrayList<String>()
@@ -522,7 +510,7 @@ class SwiftBuildSystem : BuildSystem {
                     addAll(androidFlags)
                     if (allTargets.size > 5) {
                         add("--target")
-                        add(allTargets.first())
+                        add(if ("_SwiftSyntaxGenericTestSupport" in allTargets) "_SwiftSyntaxGenericTestSupport" else allTargets.first())
                     }
                 }
                 val compileLines = ArrayList<String>()
@@ -532,14 +520,6 @@ class SwiftBuildSystem : BuildSystem {
                     val summary = "✓ Swift library package '$pkgName' compiled successfully (no executable target in Package.swift)."
                     ctx.buildLog.log(BuildLogEntry(summary, BuildLogLevel.INFO))
                     emitConsoleToProgramIo(buildCtx, projectName, pkgName, compileLines + summary)
-                } else if (isIos && previewSources.isNotEmpty() && SwiftUiPreviewInterpreter.canInterpret(previewTexts)) {
-                    ctx.buildLog.log(
-                        BuildLogEntry(
-                            "Native swift build could not compile full iOS/macOS target; launching SwiftUiPreviewInterpreter on project SwiftUI sources.",
-                            BuildLogLevel.INFO,
-                        ),
-                    )
-                    return runInstantPreview(projectRoot, projectName, previewSources, ctx, buildCtx)
                 }
                 res
             }

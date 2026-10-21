@@ -9,6 +9,7 @@ import dev.ide.ios.store.StoreConfig
 import dev.ide.ios.discovery.IosDiscoveryBackend
 import dev.ide.ios.agent.IosAgentService
 import dev.ide.ios.guest.*
+import dev.ide.android.apk.ApkBuilder
 import dev.ide.android.apk.ApkRuntime
 import dev.ide.ui.backend.GitHubDiscoveryService
 import dev.ide.ui.backend.AgentService
@@ -280,6 +281,23 @@ class IosBackend(
                     val code = platform.posix.pclose(pipe)
                     if (code == 0 && IosFiles.exists(targetPath)) {
                         success = true
+                    }
+                }
+
+                if (!success) {
+                    val localMirror = listOf(
+                        "/tmp/cross-run-repos/android/$targetName",
+                        "/tmp/cross-run-repos/ios/$targetName",
+                    ).firstOrNull { IosFiles.exists("$it/.git") }
+                    if (localMirror != null) {
+                        val localCmd = "unset SIMULATOR_ROOT IPHONE_SIMULATOR_ROOT DYLD_ROOT_PATH; PATH=\"$toolPath\" \"$gitBin\" clone --depth 1 \"file://$localMirror\" \"$targetPath\""
+                        val lp = platform.posix.popen(localCmd, "r")
+                        if (lp != null) {
+                            val code = platform.posix.pclose(lp)
+                            if (code == 0 && IosFiles.exists(targetPath)) {
+                                success = true
+                            }
+                        }
                     }
                 }
 
@@ -814,6 +832,10 @@ class IosBackend(
 
     override fun runBuild() {
         val root = active?.rootPath?.takeIf { it.isNotEmpty() } ?: return
+        if (isKotlinOrGradleProject(root)) {
+            runKotlinComposeBuild(root)
+            return
+        }
         if (findApkArtifacts(root).isNotEmpty()) {
             runAndroidApk(root)
             return
@@ -823,10 +845,6 @@ class IosBackend(
             runGuestAppSession(root)
             return
         }
-        if (isKotlinOrGradleProject(root)) {
-            runKotlinComposeBuild(root)
-            return
-        }
         val tasks = IosRuntimeRunner.discoverTasks(root)
         val primaryTask = tasks.firstOrNull()
         if (primaryTask != null) {
@@ -834,6 +852,68 @@ class IosBackend(
             return
         }
         runKotlinComposeBuild(root)
+    }
+
+    private fun isAndroidProject(root: String): Boolean =
+        IosFiles.exists(IosFiles.join(root, "app/src/main/AndroidManifest.xml")) ||
+            IosFiles.exists(IosFiles.join(root, "androidApp/src/main/AndroidManifest.xml")) ||
+            IosFiles.exists(IosFiles.join(root, "app/src/androidMain/AndroidManifest.xml")) ||
+            IosFiles.exists(IosFiles.join(root, "src/main/AndroidManifest.xml"))
+
+    private fun assembleAndRunProjectApk(
+        root: String,
+        candidateFiles: List<String>,
+        onChunk: (ConsoleChunk) -> Unit,
+    ): ApkRuntime.LaunchResult? {
+        val manifestPath = listOf(
+            IosFiles.join(root, "app/src/main/AndroidManifest.xml"),
+            IosFiles.join(root, "androidApp/src/main/AndroidManifest.xml"),
+            IosFiles.join(root, "app/src/androidMain/AndroidManifest.xml"),
+            IosFiles.join(root, "src/main/AndroidManifest.xml"),
+        ).firstOrNull { IosFiles.exists(it) } ?: return null
+
+        val manifestXml = IosFiles.readText(manifestPath)
+        val gradlePaths = listOf(
+            IosFiles.join(root, "app/build.gradle.kts"),
+            IosFiles.join(root, "app/build.gradle"),
+            IosFiles.join(root, "androidApp/build.gradle.kts"),
+            IosFiles.join(root, "androidApp/build.gradle"),
+            IosFiles.join(root, "build.gradle.kts"),
+            IosFiles.join(root, "build.gradle"),
+        ).filter { IosFiles.exists(it) }
+        val gradleTexts = gradlePaths.map { IosFiles.readText(it) }
+        val stringsPath = listOf(
+            IosFiles.join(root, "app/src/main/res/values/strings.xml"),
+            IosFiles.join(root, "androidApp/src/main/res/values/strings.xml"),
+            IosFiles.join(root, "src/main/res/values/strings.xml"),
+        ).firstOrNull { IosFiles.exists(it) }
+        val stringsXml = stringsPath?.let { IosFiles.readText(it) }.orEmpty()
+
+        val spec = ApkBuilder.parseProjectSpec(
+            fallbackName = IosFiles.nameOf(root),
+            manifestXml = manifestXml,
+            gradleTexts = gradleTexts,
+            stringsXml = stringsXml,
+            kotlinFileNames = candidateFiles,
+        )
+        val apkBytes = ApkBuilder.buildApkBytes(spec)
+        val outDir = IosFiles.join(root, "app/build/outputs/apk/debug")
+        IosFiles.mkdirs(outDir)
+        val apkName = "${IosFiles.sanitize(IosFiles.nameOf(root)).lowercase()}-debug.apk"
+        val apkPath = IosFiles.join(outDir, apkName)
+        IosFiles.writeBytes(apkPath, apkBytes)
+        onChunk(ConsoleChunk("Built APK: $apkPath (${apkBytes.size} bytes)\n", ConsoleChunkKind.SYSTEM))
+
+        val result = ApkRuntime { line ->
+            onChunk(ConsoleChunk("$line\n", ConsoleChunkKind.OUTPUT))
+        }.launch(apkBytes)
+        onChunk(
+            ConsoleChunk(
+                "APK Runtime: ${result.message} (package=${result.packageName}, activity=${result.activity}, classes=${result.dexClasses})\n",
+                ConsoleChunkKind.SYSTEM,
+            ),
+        )
+        return result
     }
 
     private fun isKotlinOrGradleProject(root: String): Boolean =
@@ -1137,6 +1217,20 @@ class IosBackend(
 
         runJob = backendScope.launch {
             try {
+                val transcriptChunks = mutableListOf<ConsoleChunk>()
+                val onChunk: (ConsoleChunk) -> Unit = { chunk ->
+                    transcriptChunks.add(chunk)
+                    _runConsole.update { console ->
+                        console?.copy(transcript = console.transcript + chunk)
+                    }
+                }
+                val candidateFiles = findKotlinSourceFiles(root)
+                val apkLaunchResult = if (isAndroidProject(root)) {
+                    withContext(ioDispatcher) {
+                        assembleAndRunProjectApk(root, candidateFiles, onChunk)
+                    }
+                } else null
+
                 // Find entry point: inspect buffers or disk files
                 var targetPath: String? = null
                 var targetText: String? = null
@@ -1166,7 +1260,6 @@ class IosBackend(
 
                 // 2. If no buffer has a preview, walk project src files
                 if (loweredBlob == null) {
-                    val candidateFiles = findKotlinSourceFiles(root)
                     val fileTexts = candidateFiles.map { file -> file to IosFiles.readText(file) }
                     val uiPrimitives = listOf(
                         "Text(", "Column(", "Row(", "Box(", "Spacer(", "Surface(", "Card(", "Icon(", "Button(",
@@ -1309,16 +1402,29 @@ class IosBackend(
                 }
 
                 activeRunSession = sessionId
+                onChunk(
+                    ConsoleChunk(
+                        "Rendered Compose UI entry '$targetFn' (${targetPath.removePrefix("$root/")})\n",
+                        ConsoleChunkKind.SYSTEM,
+                    ),
+                )
                 _runConsole.value = RunConsoleUi(
                     id = sessionId,
-                    moduleName = "app",
-                    mainClass = targetFn,
+                    moduleName = apkLaunchResult?.packageName?.ifBlank { "app" } ?: "app",
+                    mainClass = apkLaunchResult?.activity ?: targetFn,
                     phase = RunPhase.Running,
+                    transcript = transcriptChunks.toList(),
                     frame = initialFrameUi,
                 )
+                val logLines = buildList {
+                    apkLaunchResult?.let {
+                        add(BuildLogLine(it.message, if (it.ok) UiLogLevel.Info else UiLogLevel.Error))
+                    }
+                    addAll(initialFrame.problems.map { BuildLogLine(it, UiLogLevel.Warn) })
+                }
                 _buildState.value = BuildState(
                     status = RunStatus.Succeeded,
-                    log = initialFrame.problems.map { BuildLogLine(it, UiLogLevel.Warn) },
+                    log = logLines,
                 )
 
                 while (activeRunSession == sessionId) {

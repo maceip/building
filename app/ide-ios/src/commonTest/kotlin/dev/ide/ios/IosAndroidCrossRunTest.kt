@@ -101,9 +101,21 @@ class IosAndroidCrossRunTest {
                 assertEquals(0x89.toByte(), frameBytes[0], "Expected valid PNG magic byte 0")
                 assertEquals(0x50.toByte(), frameBytes[1], "Expected valid PNG magic byte 1 ('P')")
 
+                val transcriptText = console.transcript.joinToString("") { it.text }
+                assertTrue(
+                    transcriptText.contains("onCreate returned"),
+                    "Expected :android-apk DexVm onCreate execution in transcript for ${repo.dirName}, got:\n$transcriptText",
+                )
+                val apkDir = IosFiles.join(expectedPath, "app/build/outputs/apk/debug")
+                assertTrue(
+                    IosFiles.isDirectory(apkDir) && IosFiles.list(apkDir).any { it.endsWith(".apk") },
+                    "Expected built .apk artifact in $apkDir for ${repo.dirName}",
+                )
+
                 println(
-                    "PASS [iOS App Tooling -> Android Compose]: ${repo.dirName} | " +
-                        "entry=${console.mainClass} | frame=${frame.width}x${frame.height} (${frameBytes.size} bytes)",
+                    "PASS [iOS App Tooling -> Android APK + Compose]: ${repo.dirName} | " +
+                        "pkg=${console.moduleName} | activity=${console.mainClass} | " +
+                        "frame=${frame.width}x${frame.height} (${frameBytes.size} bytes)",
                 )
 
                 backend.build.stopBuild()
