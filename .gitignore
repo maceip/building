@@ -112,3 +112,9 @@ use.zip
 
 # Unpacked Agent-first redesign HTML bundle (design reference scratch; source HTML stays in Downloads)
 .tmp-redesign/
+
+# Unpacked archive research scratch (Archive 3 / Liquid Glass / Keyboard mockup extracts)
+.tmp-archive3/
+.tmp-archives/
+.tmp-keyboard/
+.tmp-liquid-glass/
