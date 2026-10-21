@@ -1,0 +1,17 @@
+diff --git a/src/execve/elf.h b/src/execve/elf.h
+--- a/src/execve/elf.h
++++ b/src/execve/elf.h
+@@ -26,6 +26,13 @@
+ #include <stdint.h>
+ #include <stdbool.h>
+ 
++/* Android NDK Bionic headers already define Elf32_Nhdr / Elf64_Nhdr in <linux/elf.h>.
++ * Guard local definitions to prevent duplicate struct declaration errors on NDK r26+. */
++#if defined(__ANDROID__)
++#include <elf.h>
++#define HAVE_ELF_NHDR 1
++#endif
++
+ #ifndef HAVE_ELF_NHDR
+ typedef struct {
+ 	uint32_t n_namesz;

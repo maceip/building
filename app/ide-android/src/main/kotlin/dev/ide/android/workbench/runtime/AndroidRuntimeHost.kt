@@ -30,11 +30,33 @@ import java.util.zip.ZipInputStream
 class AndroidRuntimeHost(context: Context) : RuntimeHost {
     private val app = context.applicationContext
     private val home = app.filesDir.toPath().resolve("developer-runtime")
+    private val extensionsRoot = home.resolve("extensions")
     private val native get() = java.nio.file.Paths.get(app.packageManager.getApplicationInfo(app.packageName, 0).nativeLibraryDir)
     override val workspaceCache: Path = home.resolve("workspaces")
+    val processSupervisor: dev.ide.workbench.runtime.ShellProcessSupervisor =
+        dev.ide.workbench.runtime.ShellProcessSupervisor(home.resolve("processes"))
     @Volatile private var installation: RuntimeInstallation? = null
     private var installationLocation: String? = null // Guarded by installLock.
     @Volatile private var verifiedNativePaths: Set<Path> = emptySet()
+
+    fun extensionManager(prefix: Path? = installation?.prefix): dev.ide.workbench.runtime.TermuxExtensionManager {
+        val resolvedPrefix = prefix ?: home.resolve("usr")
+        return dev.ide.workbench.runtime.TermuxExtensionManager(
+            extensionsRoot = extensionsRoot,
+            runtimePrefix = resolvedPrefix,
+        )
+    }
+
+    fun diagnoseAndRepair(repair: Boolean = true): dev.ide.workbench.runtime.EnvironmentDoctor.DiagnosisReport {
+        val currentPrefix = installation?.prefix ?: home.resolve("usr")
+        return dev.ide.workbench.runtime.EnvironmentDoctor.diagnoseAndRepair(
+            prefix = currentPrefix,
+            home = home,
+            nativeDir = native,
+            extensionsRoot = extensionsRoot,
+            repair = repair,
+        )
+    }
 
     override fun disabledReason(kind: RuntimeKind): String? {
         AndroidRuntimeSettings.read(app).disabledReason(kind)?.let { return it }
@@ -79,6 +101,18 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 parts.forEach { materializeLinks(it.manifest, prefix) }
             }
             materializeBrowserShims(prefix)
+            dev.ide.workbench.runtime.MuslAndBionicRuntimeLinker.ensureLinks(prefix, native)
+            dev.ide.workbench.runtime.EnvironmentDoctor.diagnoseAndRepair(
+                prefix = prefix,
+                home = home,
+                nativeDir = native,
+                extensionsRoot = extensionsRoot,
+                repair = true,
+            )
+            processSupervisor.reapStalePidFiles()
+            val (extBinDirs, extLibDirs) = extensionManager(prefix).activeEnvironmentPaths()
+            val extPathPrefix = if (extBinDirs.isNotEmpty()) extBinDirs.joinToString(":") + ":" else ""
+            val extLibSuffix = if (extLibDirs.isNotEmpty()) ":" + extLibDirs.joinToString(":") else ""
             // Only manifest-verified signed native payloads may use the split linker entrypoint.
             verifiedNativePaths = nativePaths
             val browserBridge = RuntimeBrowserBridge.get(app)
@@ -92,14 +126,14 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
             val nodeLauncher = native.resolve("libdevruntime-node.so")
             val useNodeLauncher = nodeBinary != null && !nodeBinary.startsWith(native.toRealPath())
             val env = linkedMapOf(
-                "PATH" to "${home.resolve("npm-global/bin")}:$prefix/bin:/system/bin:/system/xbin",
+                "PATH" to "$extPathPrefix${home.resolve("npm-global/bin")}:$prefix/bin:/system/bin:/system/xbin",
                 "HOME" to userHome.toString(),
                 "PREFIX" to prefix.toString(),
                 "TMPDIR" to temp.toString(),
                 "LANG" to "C.UTF-8",
                 "TERM" to "dumb",
                 "NO_COLOR" to "1",
-                "LD_LIBRARY_PATH" to "$prefix/lib:$native",
+                "LD_LIBRARY_PATH" to "$prefix/lib:$native$extLibSuffix",
                 "LD_PRELOAD" to "$relocator:$prefix/lib/libtermux-exec.so",
                 "TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE" to "force",
                 "TERMUX__PREFIX" to prefix.toString(),
@@ -169,12 +203,17 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
         if (!Files.isExecutable(executable) && !deliveredSplit) throw java.nio.file.AccessDeniedException(executable.toString())
         val launcher = native.resolve("libdevruntime-launcher.so")
         require(Files.isRegularFile(launcher)) { "Runtime launcher is not bundled for this ABI" }
-        val pidDirectory = home.resolve("processes")
-        Files.createDirectories(pidDirectory)
-        val pidFile = pidDirectory.resolve(UUID.randomUUID().toString() + ".pid")
+        val token = processSupervisor.allocateToken(UUID.randomUUID().toString())
+        val pidFile = token.pidFile
         // SplitCompat native files are read-only. Android's linker maps the verified ELF;
         // retain the prefix path as argv[0] because swift/swiftc select different drivers.
-        val entrypoint = if (deliveredSplit) listOf("/system/bin/linker64") + command else command
+        val currentPrefix = installation?.prefix ?: home.resolve("usr")
+        val wrappedCommand = dev.ide.workbench.runtime.MuslAndBionicRuntimeLinker.wrapCommandIfNeeded(
+            command = command,
+            prefix = currentPrefix,
+            nativeDir = native,
+        )
+        val entrypoint = if (deliveredSplit) listOf("/system/bin/linker64") + wrappedCommand else wrappedCommand
         val process = ProcessBuilder(listOf(launcher.toString(), pidFile.toString()) + entrypoint)
             .directory(workingDirectory.toFile())
             .apply {
@@ -183,7 +222,8 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 listOf("ANDROID_ROOT", "ANDROID_DATA", "ANDROID_ART_ROOT", "ANDROID_I18N_ROOT", "ANDROID_TZDATA_ROOT").forEach { key -> System.getenv(key)?.let { environment()[key] = it } }
                 environment().putAll(environment)
             }.start()
-        return AndroidRuntimeChild(process, pidFile)
+        val supervisedHandle = processSupervisor.register(token, process)
+        return AndroidRuntimeChild(process, pidFile, supervisedHandle)
     }
 
     private fun extractAssets(context: Context, part: RuntimePacks.Part, prefix: Path) {
@@ -405,13 +445,18 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
     private companion object { val installLock = Mutex() }
 }
 
-private class AndroidRuntimeChild(private val process: Process, private val pidFile: Path) : RuntimeChild {
+private class AndroidRuntimeChild(
+    private val process: Process,
+    private val pidFile: Path,
+    private val supervisedHandle: dev.ide.workbench.runtime.ShellProcessSupervisor.SupervisedProcessHandle? = null,
+) : RuntimeChild {
     override val stdin: OutputStream get() = process.outputStream
     override val stdout: InputStream get() = process.inputStream
     override val stderr: InputStream get() = process.errorStream
     private val terminated = AtomicBoolean(false)
     override suspend fun awaitExit(): Int = withContext(Dispatchers.IO) {
         while (!process.waitFor(100, TimeUnit.MILLISECONDS)) kotlinx.coroutines.currentCoroutineContext().ensureActive()
+        supervisedHandle?.markExited()
         process.exitValue()
     }
 
@@ -431,6 +476,7 @@ private class AndroidRuntimeChild(private val process: Process, private val pidF
         // Kill the whole group even if its leader already exited and descendants retained a socket.
         if (group != null) runCatching { android.system.Os.kill(-group, android.system.OsConstants.SIGKILL) }
         if (process.isAlive) process.destroyForcibly()
+        supervisedHandle?.terminate(100L)
         runCatching { stdin.close() }
         // Output readers drain to EOF; the controller closes these streams after the bounded drain.
         Files.deleteIfExists(pidFile)

@@ -1,0 +1,19 @@
+diff --git a/ashmem-dev.c b/ashmem-dev.c
+--- a/ashmem-dev.c
++++ b/ashmem-dev.c
+@@ -42,7 +42,14 @@ static int ashmem_open_fallback(const char *name, size_t size)
+ {
+-    const char *tmpdir = "/data/data/com.termux/files/usr/tmp";
++    const char *tmpdir = getenv("PROOT_TMP_DIR");
++    if (tmpdir == NULL || tmpdir[0] == '\0') {
++        tmpdir = getenv("TMPDIR");
++    }
++    if (tmpdir == NULL || tmpdir[0] == '\0') {
++        tmpdir = "/data/local/tmp";
++    }
+     char path[512];
+     snprintf(path, sizeof(path), "%s/ashmem-%d-%lu", tmpdir, getpid(), (unsigned long)size);
+     int fd = open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+     if (fd >= 0) unlink(path);
+     return fd;
+ }
