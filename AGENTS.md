@@ -11,3 +11,8 @@ The owner gives standing authorization for ordinary commits and task-branch push
 5. **Report to the owner.** Include the branch, commit ID, push result/remote, relevant checks, and merge-conflict count/paths. If any step is blocked, state exactly what succeeded, what did not, and why. Never present a failed push or incomplete verification as delivered work.
 
 Do not automatically merge into `main`. Do not bypass denied actions, push protection, credentials requirements or branch rules. Preserve the working tree on failure. A broader request to finish a task does not authorize including unrelated edits.
+
+## On-device runtime architecture rules (No external Termux app, No PRoot)
+
+1. **Never require the user to have Termux installed.** Our app is 100% self-contained. Never depend on the external `com.termux` app, Termux `RUN_COMMAND` intents, or `/data/data/com.termux` existing on the user's device. Any prebuilt packages/libraries we use must be bundled or provisioned directly inside our own app's private storage and `nativeLibraryDir` with our own prefix relocation (`libsdk-exec-prefix.so`).
+2. **Never use PRoot (`proot`).** Do not use, bundle, or wire `proot`, `libproot_exec.so`, `libproot_loader.so`, or `ProotCommandBuilder`. All on-device toolchains and binaries (`swift`, `swiftc`, `xtool`, `node`, `python3`, `git`, `clang`, etc.) must execute directly on the kernel via Android `nativeLibraryDir` / `/system/bin/linker64` / `libsdk-exec-prefix.so` / direct dynamic linking, never under `proot` `ptrace` translation.

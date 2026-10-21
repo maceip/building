@@ -8,29 +8,6 @@
       "termuxArch": "aarch64",
       "packages": [
         {
-          "name": "proot",
-          "version": "5.1.107-65",
-          "filename": "pool/main/p/proot/proot_5.1.107-65_aarch64.deb",
-          "sha256": "83f7932a99923d42dc21552e59f282221fb779ff3df52ce4675021cc75fb58d7",
-          "extractedMappings": [
-            {
-              "source": "data/data/com.termux/files/usr/bin/proot",
-              "target": "bin/proot",
-              "executable": true
-            },
-            {
-              "source": "data/data/com.termux/files/usr/libexec/proot/loader",
-              "target": "libexec/proot/loader",
-              "executable": true
-            },
-            {
-              "source": "data/data/com.termux/files/usr/libexec/proot/loader32",
-              "target": "libexec/proot/loader32",
-              "executable": true
-            }
-          ]
-        },
-        {
           "name": "libtalloc",
           "version": "2.4.2-0",
           "filename": "pool/main/libt/libtalloc/libtalloc_2.4.2_aarch64.deb",
@@ -61,24 +38,6 @@
     "x86_64": {
       "termuxArch": "x86_64",
       "packages": [
-        {
-          "name": "proot",
-          "version": "5.1.107-65",
-          "filename": "pool/main/p/proot/proot_5.1.107-65_x86_64.deb",
-          "sha256": "a54a6dc8c59429bd8738282041bc5a6eb402ef9c568ec6484008b8a4bf8d5d33",
-          "extractedMappings": [
-            {
-              "source": "data/data/com.termux/files/usr/bin/proot",
-              "target": "bin/proot",
-              "executable": true
-            },
-            {
-              "source": "data/data/com.termux/files/usr/libexec/proot/loader",
-              "target": "libexec/proot/loader",
-              "executable": true
-            }
-          ]
-        },
         {
           "name": "libtalloc",
           "version": "2.4.2-0",

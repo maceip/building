@@ -76,7 +76,6 @@ object EnvironmentDoctor {
             add(home.resolve("tmp"))
             add(home.resolve("npm-global/bin"))
             add(home.resolve("py-shims"))
-            add(prefix.resolve(".l2s"))
         }
         for (dir in requiredDirs) {
             if (!Files.isDirectory(dir)) {

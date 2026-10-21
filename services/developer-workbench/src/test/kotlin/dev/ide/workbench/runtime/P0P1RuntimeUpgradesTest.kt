@@ -165,39 +165,15 @@ class P0P1RuntimeUpgradesTest {
     }
 
     @Test
-    fun prootCommandBuilderAndEnvironmentDoctorRepairIssues() {
+    fun environmentDoctorRepairsIssues() {
         val prefix = temp.resolve("usr")
         val home = temp.resolve("home-root")
         val nativeDir = temp.resolve("native")
         Files.createDirectories(prefix.resolve("bin"))
         Files.createDirectories(nativeDir)
 
-        // Create 16 KiB-aligned proot + loader + musl in nativeDir
-        val prootBin = nativeDir.resolve("libproot_exec.so")
-        val prootLoader = nativeDir.resolve("libproot_loader.so")
         val muslSo = nativeDir.resolve("libldmusl.so")
-        Files.write(prootBin, byteArrayOf(1))
-        Files.write(prootLoader, byteArrayOf(2))
         Files.write(muslSo, byteArrayOf(3))
-
-        val foundProot = ProotCommandBuilder.findProotBinary(prefix, nativeDir)
-        assertEquals(prootBin, foundProot)
-
-        val plan = ProotCommandBuilder.build(
-            config = ProotCommandBuilder.ProotMountConfig(
-                prootBinary = prootBin,
-                rootfsDir = prefix,
-                workDir = temp.resolve("workspace"),
-                homeDir = home.resolve("home"),
-                tmpDir = home.resolve("tmp"),
-                nativeLibraryDir = nativeDir,
-            ),
-            innerCommand = listOf("/bin/sh", "-c", "echo inside-proot"),
-        )
-        assertTrue(plan.command.contains("--kill-on-exit"))
-        assertTrue(plan.command.contains("--link2symlink"))
-        assertEquals(prootLoader.toString(), plan.environment["PROOT_LOADER"])
-        assertEquals(prefix.resolve(".l2s").toString(), plan.environment["PROOT_L2S_DIR"])
 
         // Create deliberate runtime issues for EnvironmentDoctor:
         // 1. Non-executable script with unrewritten Termux shebang
