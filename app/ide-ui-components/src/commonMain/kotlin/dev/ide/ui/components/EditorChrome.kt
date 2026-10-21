@@ -1303,11 +1303,12 @@ private fun EditorTab(
             Modifier
                 .fillMaxHeight()
                 .background(
-                    color = if (active) Color.White.copy(alpha = 0.08f) else Color.Transparent,
+                    // Subtle accent wash only — never a bright lime fill (locked decision).
+                    color = if (active) accent.copy(alpha = 0.10f) else Color.Transparent,
                     shape = RoundedCornerShape(Ca.radius.control)
                 )
                 .then(
-                    if (active) Modifier.border(1.dp, Ide.colors.glassEdgeTop, RoundedCornerShape(Ca.radius.control))
+                    if (active) Modifier.border(1.dp, accent.copy(alpha = 0.28f), RoundedCornerShape(Ca.radius.control))
                     else Modifier
                 )
                 .combinedClickable(onClick = onSelect, onLongClick = { menuOpen = true })
@@ -1336,6 +1337,17 @@ private fun EditorTab(
                     tint = MaterialTheme.colorScheme.outline
                 )
             }
+        }
+        if (active) {
+            // Small lime cue along the tab foot (not a full fill).
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 3.dp)
+                    .width(28.dp)
+                    .height(2.dp)
+                    .background(accent, RoundedCornerShape(1.dp)),
+            )
         }
         CaDropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
             OverflowItem(CaIcons.close, stringResource(Res.string.close), shortcutFor = AppCommands.CLOSE_TAB) {

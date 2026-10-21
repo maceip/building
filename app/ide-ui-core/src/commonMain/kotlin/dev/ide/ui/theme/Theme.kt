@@ -520,8 +520,11 @@ fun CodeAssistTheme(
     val typography = remember(uiFont) { expressiveTypography(uiFont) }
 
     MaterialTheme(colorScheme = scheme, typography = typography, shapes = ExpressiveShapes) {
-        val chrome = remember(dark, accent, seedColor) {
-            agentChrome(AgentSkin.Olive, dark)
+        // Agent chrome follows light/dark + the live accent (preset / seed / Material You).
+        // Olive + lime remain the default identity (CaAccent.Lime); user accent/dynamic still applies
+        // so the whole app is one theme. Anodized/Ceramic/glass stay optional skins only.
+        val chrome = remember(dark, accent, seedColor, scheme.primary) {
+            agentChromeForTheme(dark, scheme.primary)
         }
         CompositionLocalProvider(
             LocalMinimumInteractiveComponentSize provides 0.dp,

@@ -610,10 +610,10 @@ private fun TreeRowContent(
                 .clip(RoundedCornerShape(Ca.radius.sm))
                 .background(
                     when {
-                        // The selected file: the muted M3 "selected list item" tone (secondaryContainer),
-                        // consistent with the nav bar + editor tabs — not a loud full-primary fill.
-                        isActive -> MaterialTheme.colorScheme.secondaryContainer
-                        hovered -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
+                        // Selected file: restrained accent wash (not a loud primary fill).
+                        isActive -> MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                        // Desktop hover only — no phone hover chrome.
+                        hovered -> MaterialTheme.colorScheme.surfaceContainerHigh
                         else -> Color.Transparent
                     }
                 )

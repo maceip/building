@@ -162,6 +162,32 @@ val AgentChromeCeramicLight = AgentChrome(
 /** Named skins offered in appearance settings. */
 enum class AgentSkin { Olive, Machined, Anodized, Ceramic, GlassFlood }
 
+/**
+ * Derive agent chrome from the live theme: olive/machined neutrals for default identity, but
+ * **accent follows the user** (preset, custom seed, or Material You). Olive/lime is the default,
+ * not a hard lock — one theme across Home, agent, and IDE.
+ */
+fun AgentChrome.withAccent(accent: Color, accentInk: Color = bestInkOn(accent)): AgentChrome = copy(
+    accent = accent,
+    accentInk = accentInk,
+    accentSoft = accent.copy(alpha = if (isDark) 0.14f else 0.18f),
+    accentSoftLine = accent.copy(alpha = if (isDark) 0.22f else 0.32f),
+)
+
+/** Dark ink on bright accents (lime), white ink on deep accents (blue/violet). */
+fun bestInkOn(accent: Color): Color {
+    // Rec. 709 relative luminance approximation.
+    val lum = 0.2126f * accent.red + 0.7152f * accent.green + 0.0722f * accent.blue
+    return if (lum > 0.55f) Color(0xFF141510) else Color(0xFFFFFFFF)
+}
+
+/**
+ * Default agent chrome for the active appearance: olive dark / Machined light neutrals,
+ * accent retinted from the live theme (preset, seed, or dynamic).
+ */
+fun agentChromeForTheme(dark: Boolean, accent: Color): AgentChrome =
+    agentChrome(AgentSkin.Olive, dark).withAccent(accent)
+
 fun agentChrome(skin: AgentSkin, dark: Boolean): AgentChrome = when (skin) {
     AgentSkin.Olive -> if (dark) AgentChromeOliveDark else AgentChromeMachinedLight
     AgentSkin.Machined -> if (dark) AgentChromeOliveDark.copy(

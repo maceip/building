@@ -450,6 +450,7 @@ private fun PaletteRow(entry: PaletteEntry, query: String, selected: Boolean, on
             .padding(horizontal = 6.dp)
             .heightIn(min = 38.dp)
             .clip(RoundedCornerShape(Ca.radius.sm))
+            // Soft selection only; bright lime is reserved for match highlight + the left cue.
             .background(if (selected) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f) else Color.Transparent)
             .hoverable(interaction)
             .clickable(interaction, indication = null) { entry.run(); onClose() }
@@ -457,6 +458,14 @@ private fun PaletteRow(entry: PaletteEntry, query: String, selected: Boolean, on
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        if (selected) {
+            Box(
+                Modifier
+                    .width(2.dp)
+                    .height(18.dp)
+                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(1.dp)),
+            )
+        }
         EntryIcon(entry)
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
