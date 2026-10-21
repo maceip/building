@@ -213,6 +213,7 @@ kotlin {
             // Compose preview: the closed-world VM the desktop preview pipeline runs inside, with the project's
             // libraries, since nothing here can load them as code (see IosPreviewRenderer).
             implementation(project(":jvm-vm"))
+            implementation(project(":android-apk"))
         }
         commonTest { kotlin.srcDir(generatePreviewTestClasspath) }
     }

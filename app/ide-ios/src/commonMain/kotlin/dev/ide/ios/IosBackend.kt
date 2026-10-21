@@ -9,6 +9,7 @@ import dev.ide.ios.store.StoreConfig
 import dev.ide.ios.discovery.IosDiscoveryBackend
 import dev.ide.ios.agent.IosAgentService
 import dev.ide.ios.guest.*
+import dev.ide.android.apk.ApkRuntime
 import dev.ide.ui.backend.GitHubDiscoveryService
 import dev.ide.ui.backend.AgentService
 import dev.ide.ui.backend.UiRenameTarget
@@ -752,6 +753,10 @@ class IosBackend(
         val root = active?.rootPath?.takeIf { it.isNotEmpty() }
         val options = mutableListOf<RunTaskOption>()
         if (root != null) {
+            val apks = findApkArtifacts(root)
+            if (apks.isNotEmpty()) {
+                options.add(RunTaskOption("android:apk:run", "Run Android APK", "Application"))
+            }
             val guestArtifacts = GuestAppRunner.findGuestArtifacts(root)
             if (guestArtifacts.isNotEmpty()) {
                 options.add(RunTaskOption("ios:guest:run", "Run in LiveContainer (Live Session)", "Application"))
@@ -774,6 +779,10 @@ class IosBackend(
     override fun runTask(id: String) {
         val root = active?.rootPath?.takeIf { it.isNotEmpty() } ?: return
         when (id) {
+            "android:apk:run" -> {
+                runAndroidApk(root)
+                return
+            }
             "ios:guest:run" -> {
                 runGuestAppSession(root)
                 return
@@ -809,6 +818,91 @@ class IosBackend(
             return
         }
         runKotlinComposeBuild(root)
+    }
+
+    private fun findApkArtifacts(root: String): List<String> {
+        val found = mutableListOf<String>()
+        fun scan(d: String, depth: Int) {
+            if (depth > 4) return
+            for (entry in IosFiles.list(d)) {
+                if (entry.startsWith(".")) continue
+                val full = IosFiles.join(d, entry)
+                if (IosFiles.isDirectory(full)) {
+                    if (entry != "build" && entry != ".git") scan(full, depth + 1)
+                } else if (entry.endsWith(".apk", ignoreCase = true)) {
+                    found.add(full)
+                }
+            }
+        }
+        scan(root, 0)
+        return found
+    }
+
+    /**
+     * Open a project's `.apk` on the phone with no Android runtime: unpack, parse the manifest,
+     * interpret `classes*.dex` through `:android-apk`, and report what started.
+     *
+     * This is the same seam as GuestAppRunner for IPAs — one run target, one console — so an APK
+     * dropped into the workspace is a first-class Run, not a side tool.
+     */
+    private fun runAndroidApk(root: String) {
+        val currentRunning = activeRunSession
+        if (currentRunning != null) stopBuild()
+        val sessionId = (activeRunSession ?: 0) + 1
+        activeRunSession = sessionId
+
+        _buildState.value = BuildState(status = RunStatus.Running)
+        _runConsole.value = RunConsoleUi(
+            id = sessionId,
+            moduleName = active?.name ?: "app",
+            mainClass = "Android APK Runtime",
+            phase = RunPhase.Running,
+            transcript = emptyList(),
+            acceptsInput = true,
+        )
+
+        runJob = backendScope.launch {
+            val onChunk: (ConsoleChunk) -> Unit = { chunk ->
+                _runConsole.update { console ->
+                    console?.copy(transcript = console.transcript + chunk)
+                }
+            }
+            onChunk(ConsoleChunk("=== Launching Android APK ===\n", ConsoleChunkKind.SYSTEM))
+            val apks = findApkArtifacts(root)
+            if (apks.isEmpty()) {
+                onChunk(ConsoleChunk("No .apk found in $root\n", ConsoleChunkKind.SYSTEM))
+                _buildState.value = BuildState(status = RunStatus.Failed)
+                _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = 1) }
+                activeRunSession = null
+                return@launch
+            }
+            val apkPath = apks.first()
+            onChunk(ConsoleChunk("Selected: $apkPath\n", ConsoleChunkKind.SYSTEM))
+            val bytes = withContext(ioDispatcher) { IosFiles.readBytes(apkPath) }
+            if (bytes == null) {
+                onChunk(ConsoleChunk("Could not read $apkPath\n", ConsoleChunkKind.SYSTEM))
+                _buildState.value = BuildState(status = RunStatus.Failed)
+                _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = 1) }
+                activeRunSession = null
+                return@launch
+            }
+            val result = withContext(ioDispatcher) {
+                ApkRuntime { line -> onChunk(ConsoleChunk("$line\n", ConsoleChunkKind.OUTPUT)) }.launch(bytes)
+            }
+            onChunk(ConsoleChunk("\n${result.message}\n", ConsoleChunkKind.SYSTEM))
+            onChunk(ConsoleChunk("package=${result.packageName} activity=${result.activity} classes=${result.dexClasses} abis=${result.nativeAbis}\n", ConsoleChunkKind.SYSTEM))
+            if (result.nativeAbis.isNotEmpty()) {
+                onChunk(ConsoleChunk("Note: native libraries present (${result.nativeAbis}); the .so loader is not linked yet — Java/Kotlin dex runs here.\n", ConsoleChunkKind.SYSTEM))
+            }
+            _buildState.value = BuildState(
+                status = if (result.ok) RunStatus.Succeeded else RunStatus.Failed,
+                log = listOf(BuildLogLine(result.message, if (result.ok) UiLogLevel.Info else UiLogLevel.Error)),
+            )
+            _runConsole.update {
+                it?.copy(phase = RunPhase.Finished, exitCode = if (result.ok) 0 else 1)
+            }
+            activeRunSession = null
+        }
     }
 
     private fun runGuestAppSession(root: String) {
