@@ -1,10 +1,58 @@
 package dev.ide.ios
 
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.suspendCancellableCoroutine
 import platform.Foundation.NSCondition
 import platform.Foundation.NSThread
+import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+/**
+ * Single-threaded [CoroutineDispatcher] backed by a dedicated [NSThread] with a 64 MB stack for
+ * [IosKotlinAnalysis], [KotlinParserHost], [KotlinResolver], and [KotlinPreviewLowering].
+ *
+ * iOS GCD worker threads (`ioDispatcher`) have a 544 KB stack, which recursive AST parsing,
+ * type resolution, and preview tree lowering on large real-world repositories can overrun.
+ */
+internal object IosAnalysisDispatcher : CoroutineDispatcher() {
+    private const val STACK_BYTES: ULong = 67_108_864u // 64 MB
+
+    private val lock = NSCondition()
+    private val jobs = ArrayDeque<Runnable>()
+    private var thread: NSThread? = null
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        lock.lock()
+        try {
+            jobs.addLast(block)
+            if (thread == null) {
+                thread = NSThread { loop() }.also {
+                    it.stackSize = STACK_BYTES
+                    it.name = "kotlin-analysis"
+                    it.start()
+                }
+            }
+            lock.signal()
+        } finally {
+            lock.unlock()
+        }
+    }
+
+    private fun loop() {
+        while (true) {
+            lock.lock()
+            val job = try {
+                while (jobs.isEmpty()) lock.wait()
+                jobs.removeFirst()
+            } finally {
+                lock.unlock()
+            }
+            job.run()
+        }
+    }
+}
 
 /**
  * The one thread preview renders run on, with a stack big enough for them.

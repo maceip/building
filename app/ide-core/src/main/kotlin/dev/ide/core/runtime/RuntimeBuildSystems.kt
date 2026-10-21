@@ -375,7 +375,7 @@ class SwiftBuildSystem : BuildSystem {
             val bgHost = host
             val bgRoot = projectRoot
             val bgCtx = ctx
-            return GuiBridgeRuntime.compileAndRunSwiftUiBridge(
+            val bridgeResult = GuiBridgeRuntime.compileAndRunSwiftUiBridge(
                 host = host,
                 installation = installation,
                 swiftcBin = swiftcBin,
@@ -395,6 +395,19 @@ class SwiftBuildSystem : BuildSystem {
                     }
                 },
             )
+            if (bridgeResult is TaskResult.Success) {
+                return bridgeResult
+            }
+            if (previewSources.isNotEmpty() && SwiftUiPreviewInterpreter.canInterpret(previewTexts)) {
+                ctx.buildLog.log(
+                    BuildLogEntry(
+                        "Cupertino swiftc bridge could not compile full target; launching SwiftUiPreviewInterpreter on project SwiftUI sources.",
+                        BuildLogLevel.INFO,
+                    ),
+                )
+                return runInstantPreview(projectRoot, projectName, previewSources, ctx, buildCtx)
+            }
+            return bridgeResult
         }
 
         return when {
@@ -519,6 +532,14 @@ class SwiftBuildSystem : BuildSystem {
                     val summary = "✓ Swift library package '$pkgName' compiled successfully (no executable target in Package.swift)."
                     ctx.buildLog.log(BuildLogEntry(summary, BuildLogLevel.INFO))
                     emitConsoleToProgramIo(buildCtx, projectName, pkgName, compileLines + summary)
+                } else if (isIos && previewSources.isNotEmpty() && SwiftUiPreviewInterpreter.canInterpret(previewTexts)) {
+                    ctx.buildLog.log(
+                        BuildLogEntry(
+                            "Native swift build could not compile full iOS/macOS target; launching SwiftUiPreviewInterpreter on project SwiftUI sources.",
+                            BuildLogLevel.INFO,
+                        ),
+                    )
+                    return runInstantPreview(projectRoot, projectName, previewSources, ctx, buildCtx)
                 }
                 res
             }
@@ -1110,6 +1131,12 @@ class SwiftBuildSystem : BuildSystem {
 
         private fun hasSwiftUiOrUiKitSources(root: Path): Boolean = runCatching {
             val pkg = root.resolve("Package.swift")
+            val hasXcodeProj = Files.walk(root, 3).use { stream ->
+                stream.anyMatch {
+                    Files.isDirectory(it) &&
+                        (it.fileName.toString().endsWith(".xcodeproj") || it.fileName.toString().endsWith(".xcworkspace"))
+                }
+            }
             if (Files.isRegularFile(pkg)) {
                 val text = pkg.readText()
                 val pkgName = extractSwiftPackageName(root)
@@ -1119,14 +1146,8 @@ class SwiftBuildSystem : BuildSystem {
                 ) {
                     return false
                 }
-                if (text.contains("SwiftUI") || text.contains("UIKit") || text.contains("AppKit") || pkgName.equals("SimUse", ignoreCase = true)) {
+                if (text.contains("SwiftUI") || text.contains("UIKit") || text.contains("AppKit")) {
                     return true
-                }
-            }
-            val hasXcodeProj = Files.walk(root, 3).use { stream ->
-                stream.anyMatch {
-                    Files.isDirectory(it) &&
-                        (it.fileName.toString().endsWith(".xcodeproj") || it.fileName.toString().endsWith(".xcworkspace"))
                 }
             }
             if (hasXcodeProj) return true

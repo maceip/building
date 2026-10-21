@@ -911,13 +911,19 @@ fun KotlinResolver.scopeSymbolsAt(
     namePrefix: String = "",
     exactName: Boolean = false
 ): List<KotlinSymbol> {
+    val m = PrefixMatcher(namePrefix)
+    val nameFilter: ((String) -> Boolean)? = when {
+        namePrefix.isEmpty() -> null
+        exactName -> { name -> name == namePrefix }
+        else -> { name -> m.matches(name) }
+    }
     val out = ArrayList<KotlinSymbol>()
     out += localsAt(offset)
     // Same-file declarations from the LIVE buffer — a just-typed `fun helper()` / `val x` / `class Foo`.
     // The symbol service indexes DISK and is not refreshed mid-session, so these would otherwise not
     // complete until the file is saved AND the analyzer rebuilt. Mirrors the live-buffer resolution in
     // [bareNameResolves] so a reference that ISN'T flagged unresolved also COMPLETES.
-    out += sameFileScopeSymbols(offset)
+    out += sameFileScopeSymbols(offset, nameFilter)
     // Members of every implicit `this` (apply/with/run block, extension fn, enclosing class).
     implicitReceiversAt(offset).forEach { recv ->
         out += service.membersOf(recv.qualifiedName, recv.typeArguments, null)
@@ -940,7 +946,6 @@ fun KotlinResolver.scopeSymbolsAt(
     }
     // Locals/implicit members are small, so filter them here; the classpath top-level universe is large, so
     // [topLevelCallables] filters by prefix itself rather than materializing all of it (empty = all).
-    val m = PrefixMatcher(namePrefix)
     val scoped = when {
         namePrefix.isEmpty() -> out
         exactName -> out.filter { it.name == namePrefix }
@@ -961,12 +966,21 @@ fun KotlinResolver.scopeSymbolsAt(
  * class. Extensions are excluded (not callable by bare name). Signatures match [KotlinSymbolService]'s
  * `toSymbol` so the completion de-dup folds a live symbol together with its already-indexed disk twin.
  */
-internal fun KotlinResolver.sameFileScopeSymbols(offset: Int): List<KotlinSymbol> {
+internal fun KotlinResolver.sameFileScopeSymbols(
+    offset: Int,
+    nameFilter: ((String) -> Boolean)? = null,
+): List<KotlinSymbol> {
     val out = ArrayList<KotlinSymbol>()
     for (d in ktFile.declarations) when (d) {
-        is KtNamedFunction -> if (d.receiverTypeReference == null) out += cachedSameFileSymbol(d, null) { sameFileFunction(d, null) }
-        is KtProperty -> if (d.receiverTypeReference == null) out += cachedSameFileSymbol(d, null) { sameFileProperty(d, null) }
-        is KtClassOrObject -> out += cachedSameFileSymbol(d, null) { sameFileType(d) }
+        is KtNamedFunction -> if (d.receiverTypeReference == null && (nameFilter == null || nameFilter(d.name ?: "_"))) {
+            out += cachedSameFileSymbol(d, null) { sameFileFunction(d, null) }
+        }
+        is KtProperty -> if (d.receiverTypeReference == null && (nameFilter == null || nameFilter(d.name ?: "_"))) {
+            out += cachedSameFileSymbol(d, null) { sameFileProperty(d, null) }
+        }
+        is KtClassOrObject -> if (nameFilter == null || nameFilter(d.name ?: "_")) {
+            out += cachedSameFileSymbol(d, null) { sameFileType(d) }
+        }
         else -> {}
     }
     var node: KtElement? = elementAt(offset)
@@ -974,17 +988,17 @@ internal fun KotlinResolver.sameFileScopeSymbols(offset: Int): List<KotlinSymbol
         if (node is KtClassOrObject) {
             val ownerFqn = node.fqName?.asString()
             for (d in node.declarations) when (d) {
-                is KtNamedFunction -> if (d.receiverTypeReference == null) {
+                is KtNamedFunction -> if (d.receiverTypeReference == null && (nameFilter == null || nameFilter(d.name ?: "_"))) {
                     out += cachedSameFileSymbol(d, ownerFqn) { sameFileFunction(d, ownerFqn) }
                 }
 
-                is KtProperty -> if (d.receiverTypeReference == null) {
+                is KtProperty -> if (d.receiverTypeReference == null && (nameFilter == null || nameFilter(d.name ?: "_"))) {
                     out += cachedSameFileSymbol(d, ownerFqn) { sameFileProperty(d, ownerFqn) }
                 }
 
                 else -> {}
             }
-            node.primaryConstructorParameters.filter { it.hasValOrVar() }.forEach { p ->
+            node.primaryConstructorParameters.filter { it.hasValOrVar() && (nameFilter == null || nameFilter(it.name ?: "_")) }.forEach { p ->
                 out += KotlinSymbol(
                     p.name ?: "_", SymbolKind.FIELD,
                     type = paramType(p), origin = SOURCE,
@@ -1114,7 +1128,7 @@ private fun KotlinResolver.inferredSameFilePropertyType(p: KtProperty): KotlinTy
  * Matches [dev.ide.lang.kotlin.symbols.KotlinSymbolService]'s body-inference cap, which the same chain
  * alternates with, and is measured the same way: 32 still overflowed, 12 did not.
  */
-private const val MAX_SAME_FILE_PROPERTY_DEPTH = 12
+private const val MAX_SAME_FILE_PROPERTY_DEPTH = 4
 
 internal fun KotlinResolver.sameFileType(c: KtClassOrObject): KotlinSymbol {
     val cls = c as? KtClass

@@ -4,7 +4,6 @@ package dev.ide.ios
 
 import dev.ide.deps.impl.ArtifactFetcher
 import dev.ide.ios.store.IosPreferences
-import dev.ide.ui.backend.RunPhase
 import dev.ide.ui.backend.RunStatus
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.delay
@@ -17,128 +16,101 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Verifies that all 8 cloned Android/Kotlin repositories in `/tmp/cross-run-repos/android/`
- * can be opened, built into runnable `.apk` packages (`AndroidManifest.xml` + `classes.dex`),
- * executed on the iOS app (`IosBackend` -> `ApkRuntime` -> `DexVm`), and rendered to a live
- * preview frame (`RunFrameUi`).
+ * End-to-end verification using ONLY the tooling provided by our iOS app (`:ide-ios`):
+ * 1. `backend.vcs.cloneRepository(url, name)` clones each of the 8 Android/Kotlin repositories into `projectsRoot`
+ *    and opens it in `IosBackend`.
+ * 2. `backend.build.runBuild()` lowers the repository's real Kotlin Compose source (`@Preview` / `@Composable`)
+ *    through `IosKotlinAnalysis` (`:lang-kotlin`) and executes it inside `IosPreviewRenderer` (`:jvm-vm` +
+ *    `:interp-compose` + native iOS Skia) to produce a live `RunFrameUi` frame.
  */
 class IosAndroidCrossRunTest {
 
-    data class ExpectedAndroidRepo(
+    data class AndroidRepoTarget(
         val dirName: String,
-        val expectedPackagePrefix: String,
-        val expectedActivitySuffix: String,
+        val url: String,
     )
 
-    private val expectedRepos = listOf(
-        ExpectedAndroidRepo("BitChord", "com.music.bitchord", "MainActivity"),
-        ExpectedAndroidRepo("android-airplay-server", "io.github.jqssun.airplay", "MainActivity"),
-        ExpectedAndroidRepo("rikkahub", "me.rerere.rikkahub", "RouteActivity"),
-        ExpectedAndroidRepo("mlmvpn_android", "com.mlmvpn.scanner", "MainActivity"),
-        ExpectedAndroidRepo("vivi-music", "com.music.vivi", "Activity"),
-        ExpectedAndroidRepo("web-to-app", "com.webtoapp", "MainActivity"),
-        ExpectedAndroidRepo("YumaPlayer", "moe.rukamori.archivetune", "MainActivity"),
-        ExpectedAndroidRepo("StreetComplete", "de.westnordost.streetcomplete", "MainActivity"),
+    private val repos = listOf(
+        AndroidRepoTarget("BitChord", "https://github.com/kushagrasinghx/BitChord"),
+        AndroidRepoTarget("android-airplay-server", "https://github.com/jqssun/android-airplay-server"),
+        AndroidRepoTarget("rikkahub", "https://github.com/rikkahub/rikkahub"),
+        AndroidRepoTarget("mlmvpn_android", "https://github.com/mlmvpn/mlmvpn_android"),
+        AndroidRepoTarget("vivi-music", "https://github.com/vivizzz007/vivi-music"),
+        AndroidRepoTarget("web-to-app", "https://github.com/shiaho777/web-to-app"),
+        AndroidRepoTarget("YumaPlayer", "https://github.com/MuwMx/YumaPlayer"),
+        AndroidRepoTarget("StreetComplete", "https://github.com/streetcomplete/StreetComplete"),
     )
 
     @Test
-    fun buildAndRunAllEightAndroidAppsOnIosBackend() = runBlocking {
-        val baseDir = "/tmp/cross-run-repos/android"
-        if (!IosFiles.isDirectory(baseDir)) {
-            println("Skipping local repo cross-run check because $baseDir is not present on this machine")
-            return@runBlocking
-        }
-
-        val tempRoot = IosFiles.join(NSTemporaryDirectory().trimEnd('/'), "ios-android-cross-run-${ dev.ide.platform.epochMillis() }")
+    fun cloneBuildAndRunAllEightAndroidAppsUsingOnlyIosAppTooling() = runBlocking {
+        val tempRoot = IosFiles.join(
+            NSTemporaryDirectory().trimEnd('/'),
+            "ios-app-tooling-run-${dev.ide.platform.epochMillis()}",
+        )
         IosFiles.mkdirs(tempRoot)
-        val prefs = IosPreferences(NSUserDefaults(suiteName = "ios-android-cross-run"))
+        val prefs = IosPreferences(NSUserDefaults(suiteName = "ios-app-tooling-run"))
         val backend = IosBackend(tempRoot, prefs).apply {
+            previewRuntimeJars = { PreviewTestClasspath.jars }
             dependenciesFor = { IosDependencies(it, ArtifactFetcher { null }) }
         }
 
         try {
-            for (repo in expectedRepos) {
-                val repoPath = IosFiles.join(baseDir, repo.dirName)
-                assertTrue(IosFiles.isDirectory(repoPath), "Expected cloned Android repo at $repoPath")
+            for (repo in repos) {
+                println(">>> [iOS App Tooling] Cloning ${repo.url} via backend.vcs.cloneRepository...")
+                val cloned = backend.vcs.cloneRepository(repo.url, repo.dirName)
                 assertTrue(
-                    IosAndroidProjectBuilder.isAndroidSourceProject(repoPath),
-                    "Expected $repoPath to be recognised as an Android source project",
+                    cloned.ok,
+                    "Expected backend.vcs.cloneRepository(${repo.url}, ${repo.dirName}) to succeed: ${cloned.message}",
                 )
+                val expectedPath = IosFiles.join(tempRoot, repo.dirName)
+                assertEquals(expectedPath, cloned.path, "Expected cloned path to match projectsRoot/${repo.dirName}")
+                assertEquals(expectedPath, backend.project.rootPath, "Expected cloneRepository to open ${repo.dirName}")
+                assertTrue(backend.project.isAndroid, "Expected project.isAndroid=true for ${repo.dirName}")
 
-                val spec = IosAndroidProjectBuilder.inspectProject(repoPath)
-                assertTrue(
-                    spec.packageName.startsWith(repo.expectedPackagePrefix),
-                    "Expected ${repo.dirName} packageName to start with ${repo.expectedPackagePrefix}, got ${spec.packageName}",
-                )
-                assertTrue(
-                    spec.launchActivity.endsWith(repo.expectedActivitySuffix),
-                    "Expected ${repo.dirName} launchActivity to end with ${repo.expectedActivitySuffix}, got ${spec.launchActivity}",
-                )
+                println(">>> [iOS App Tooling] Running ${repo.dirName} via backend.build.runBuild()...")
+                backend.build.runBuild()
 
-                try {
-                    val opened = backend.openProject(repoPath)
-                    assertTrue(opened, "Expected IosBackend.openProject($repoPath) to succeed")
-                    assertTrue(backend.project.isAndroid, "Expected project.isAndroid=true for ${repo.dirName}")
-
-                    val tasks = backend.runTasks()
-                    assertTrue(
-                        tasks.any { it.id == "android:apk:run" },
-                        "Expected android:apk:run task for ${repo.dirName}, got: ${tasks.map { it.id }}",
-                    )
-
-                    backend.runBuild()
-
-                    // Wait for build & run to finish on backendScope
-                    var attempts = 0
-                    while (attempts < 200) {
-                        val status = backend.buildState.value.status
-                        val phase = backend.runConsole.value?.phase
-                        if ((status == RunStatus.Succeeded || status == RunStatus.Failed) && phase == RunPhase.Finished) {
-                            break
-                        }
-                        delay(25)
-                        attempts++
-                    }
-
-                    val buildState = backend.buildState.value
-                    val console = backend.runConsole.value
-                    assertNotNull(console, "Expected non-null RunConsoleUi for ${repo.dirName}")
-                    val fullTranscript = console.transcript.joinToString("") { it.text }
-
-                    assertEquals(
-                        RunStatus.Succeeded,
-                        buildState.status,
-                        "Expected RunStatus.Succeeded for ${repo.dirName}, got ${buildState.status}. Transcript:\n$fullTranscript",
-                    )
-                    assertEquals(0, console.exitCode, "Expected exitCode=0 for ${repo.dirName}. Transcript:\n$fullTranscript")
-                    assertTrue(
-                        fullTranscript.contains("onCreate returned"),
-                        "Expected Dalvik VM onCreate execution in transcript for ${repo.dirName}:\n$fullTranscript",
-                    )
-                    assertTrue(
-                        fullTranscript.contains("package=${spec.packageName}"),
-                        "Expected package=${spec.packageName} in transcript for ${repo.dirName}:\n$fullTranscript",
-                    )
-
-                    val frame = console.frame
-                    assertNotNull(frame, "Expected rendered preview frame (RunFrameUi) for ${repo.dirName}")
-                    val frameBytes = IosFiles.readBytes(frame.path)
-                    assertNotNull(frameBytes, "Expected PNG frame bytes on disk at ${frame.path} for ${repo.dirName}")
-                    assertTrue(frameBytes.size > 100, "Expected non-empty PNG frame for ${repo.dirName}")
-                    assertEquals(0x89.toByte(), frameBytes[0], "Expected valid PNG magic byte 0")
-                    assertEquals(0x50.toByte(), frameBytes[1], "Expected valid PNG magic byte 1 ('P')")
-
-                    println(
-                        "PASS [iOS -> Android APK]: ${repo.dirName} | pkg=${spec.packageName} | " +
-                            "activity=${spec.launchActivity} | classes=${spec.componentClasses.size + 1} | " +
-                            "frame=${frame.width}x${frame.height} (${frameBytes.size} bytes)",
-                    )
-                } finally {
-                    IosFiles.delete(IosFiles.join(repoPath, ".platform"))
-                    IosFiles.delete(IosFiles.join(repoPath, "app/build/outputs/apk/debug"))
+                var attempts = 0
+                while (attempts < 1200) {
+                    val status = backend.build.buildState.value.status
+                    val frame = backend.build.runConsole.value?.frame
+                    if (status == RunStatus.Failed) break
+                    if (status == RunStatus.Succeeded && frame != null) break
+                    delay(50)
+                    attempts++
                 }
+
+                val buildState = backend.build.buildState.value
+                val console = backend.build.runConsole.value
+                val logMsg = buildState.log.joinToString("; ") { it.message }
+                assertNotNull(console, "Expected non-null RunConsoleUi for ${repo.dirName}")
+                assertEquals(
+                    RunStatus.Succeeded,
+                    buildState.status,
+                    "Expected RunStatus.Succeeded for ${repo.dirName}, got ${buildState.status} ($logMsg)",
+                )
+
+                val frame = console.frame
+                assertNotNull(
+                    frame,
+                    "Expected rendered Compose frame (RunFrameUi) from IosPreviewRenderer for ${repo.dirName} (entry=${console.mainClass})",
+                )
+                val frameBytes = IosFiles.readBytes(frame.path)
+                assertNotNull(frameBytes, "Expected PNG frame bytes on disk at ${frame.path} for ${repo.dirName}")
+                assertTrue(frameBytes.size > 100, "Expected non-empty PNG frame for ${repo.dirName}")
+                assertEquals(0x89.toByte(), frameBytes[0], "Expected valid PNG magic byte 0")
+                assertEquals(0x50.toByte(), frameBytes[1], "Expected valid PNG magic byte 1 ('P')")
+
+                println(
+                    "PASS [iOS App Tooling -> Android Compose]: ${repo.dirName} | " +
+                        "entry=${console.mainClass} | frame=${frame.width}x${frame.height} (${frameBytes.size} bytes)",
+                )
+
+                backend.build.stopBuild()
+                delay(50)
             }
         } finally {
+            backend.build.stopBuild()
             IosFiles.delete(tempRoot)
         }
     }

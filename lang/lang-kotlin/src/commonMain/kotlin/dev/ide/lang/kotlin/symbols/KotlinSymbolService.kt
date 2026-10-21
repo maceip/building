@@ -196,7 +196,7 @@ class KotlinSymbolService(
      * declarations is not a thing real code does; a file with a hundred INDEPENDENT ones is, and that case
      * never nests at all.
      */
-    private val MAX_BODY_INFERENCE_DEPTH = 12
+    private val MAX_BODY_INFERENCE_DEPTH = 4
 
     // FQNs of source classes with a member whose type is currently being inferred ([inferReturnFromBody]), as a
     // per-thread reference count (a member inference nests into its class's other members). While a class is in
