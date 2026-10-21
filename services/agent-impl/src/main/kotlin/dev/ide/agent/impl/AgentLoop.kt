@@ -55,6 +55,14 @@ class AgentLoop(
     /** Records what each mutating call changed, for diffs and undo; null records nothing. */
     private val checkpoints: CheckpointWorkspace? = null,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** 32 KB head+tail tool output truncator and spill store. */
+    val spillStore: ToolResultSpillStore = ToolResultSpillStore(checkpoints),
+    /** Self-improving error hook that logs recurring tool failures to ERRORS.md. */
+    val errorHook: SelfImprovingErrorHook = SelfImprovingErrorHook(checkpoints),
+    /** Per-purpose token usage ledger and orchestration ceiling. */
+    val usageLedger: UsageLedger = UsageLedger(),
+    /** Post-run trajectory analyzer for skill evolution. */
+    val skillAdvisor: SkillEvolutionAdvisor = SkillEvolutionAdvisor(checkpoints),
 ) {
     private companion object {
         /** How many rate-limit waits one turn may sit through before it gives up and reports the error. */
@@ -142,7 +150,13 @@ class AgentLoop(
         var creditRetries = 0
         // A user-visible "turn" is the whole loop, which is several requests; report what all of them cost.
         var total = TokenUsage()
+        val usedToolsInTurn = mutableListOf<String>()
+        var toolErrorsInTurn = 0
         while (iteration++ < maxIterations) {
+            if (usageLedger.isBudgetExceeded()) {
+                wrapUp(sink, total)
+                return
+            }
             val request = LlmRequest(
                 model = model,
                 system = systemPrompt(),
@@ -184,17 +198,31 @@ class AgentLoop(
                 return
             }
             rateLimitWaits = 0
-            turn.usage?.let { total += it }
+            turn.usage?.let {
+                total += it
+                usageLedger.record(
+                    purpose = if (iteration == 1) UsagePurpose.MAIN else UsagePurpose.TOOL_LOOP,
+                    model = model,
+                    usage = it,
+                )
+            }
 
             history += LlmMessage.assistant(turn.assistantParts())
             val calls = turn.toolCalls()
             if (calls.isEmpty()) {
+                skillAdvisor.analyzeCompletedTurn(usedToolsInTurn, toolErrorsInTurn)
                 sink.emit(AgentEvent.TurnCompleted(turn.stopReason, total))
                 return
             }
 
-            history += executeCalls(calls, sink)
+            usedToolsInTurn += calls.map { it.name }
+            val toolMessages = executeCalls(calls, sink)
+            toolErrorsInTurn += toolMessages.count { msg ->
+                msg.content.any { part -> part is ContentPart.ToolResultPart && part.isError }
+            }
+            history += toolMessages
         }
+        skillAdvisor.analyzeCompletedTurn(usedToolsInTurn, toolErrorsInTurn)
         wrapUp(sink, total)
     }
 
@@ -255,6 +283,7 @@ class AgentLoop(
         compactor.reset()
         history += LlmMessage.user("Continue the earlier conversation. Here is where it got to.")
         history += LlmMessage.assistant(listOf(ContentPart.Text(turn.text.toString())))
+        turn.usage?.let { usageLedger.record(UsagePurpose.COMPACTION, model, it) }
         sink.emit(AgentEvent.TurnCompleted(turn.stopReason, turn.usage))
         return true
     }
@@ -370,11 +399,13 @@ class AgentLoop(
 
         // Mutating calls run one at a time, so the checkpoint workspace can attribute every write to this call.
         if (tool.mutating) checkpoints?.beginCall(call.id)
-        val result = runCatching { tool.execute(args) }
+        val rawResult = runCatching { tool.execute(args) }
             .getOrElse { ToolExecutionResult.error(it.message ?: "tool failed") }
         if (tool.mutating) {
             checkpoints?.endCall()?.takeIf { it.isNotEmpty() }?.let { sink.emit(AgentEvent.FilesChanged(call.id, it)) }
         }
+        errorHook.onToolResult(call.name, summary, rawResult)
+        val result = spillStore.processResult(call.id, call.name, rawResult)
         result.event?.let { sink.emit(it) }
         sink.emit(AgentEvent.ToolCallFinished(call.id, ok = !result.isError, resultSummary = brief(result.content)))
         return LlmMessage.toolResult(call.id, result.content, result.isError, result.images)

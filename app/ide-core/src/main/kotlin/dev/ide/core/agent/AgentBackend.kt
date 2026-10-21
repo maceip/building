@@ -126,11 +126,24 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         }
     }
 
-    private val tools = SimpleToolRegistry(builtinTools(checkpoints) + ftpControlTool)
+    private val spillStore = dev.ide.agent.impl.ToolResultSpillStore(checkpoints)
+    private val usageLedger = dev.ide.agent.impl.UsageLedger()
+
+    private val tools = dev.ide.agent.impl.createSelfExtendingToolRegistry(
+        workspace = checkpoints,
+        extraTools = listOf(ftpControlTool),
+        gateProvider = { gate },
+        spillStore = spillStore,
+        usageLedger = usageLedger,
+    )
 
     /** The MCP server's tools write straight to the workspace: an external client's edits are not a chat turn,
      *  and recording them into one would let that turn's Undo revert someone else's work. */
-    private val mcpTools = SimpleToolRegistry(builtinTools(workspace) + ftpControlTool)
+    private val mcpTools = dev.ide.agent.impl.createSelfExtendingToolRegistry(
+        workspace = workspace,
+        extraTools = listOf(ftpControlTool),
+        gateProvider = { AllowAllGate },
+    )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val log = Log.logger("ide.agent")
 
@@ -573,6 +586,8 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
             compactor = if (provider.managesContext) HistoryCompactor.serverManaged() else HistoryCompactor(),
             pacer = pacer,
             checkpoints = checkpoints,
+            spillStore = spillStore,
+            usageLedger = usageLedger,
         )
         if (!carried.isNullOrEmpty()) built.restore(carried, dropThinking = modelChanged)
         pendingHistory = null

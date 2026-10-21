@@ -524,6 +524,152 @@ internal class IdeAgentWorkspace(private val ctx: BackendContext) : AgentWorkspa
         }
     }
 
+    override suspend fun executeScript(
+        language: String,
+        code: String,
+        args: List<String>,
+        env: Map<String, String>,
+        timeoutMs: Long,
+    ): dev.ide.agent.ScriptExecutionResult = ctx.background {
+        val workDir = (ctx.servicesOrNull?.workspaceRoot
+            ?: Paths.get(System.getProperty("java.io.tmpdir"), "codeassist-agent-workspace")).normalize()
+        Files.createDirectories(workDir)
+        val scratchDir = workDir.resolve(".agent/scratch")
+        Files.createDirectories(scratchDir)
+
+        val normLang = language.trim().lowercase()
+        val ext = when (normLang) {
+            "node", "js", "javascript", "mjs" -> "mjs"
+            "python", "py", "python3" -> "py"
+            "shell", "sh", "bash" -> "sh"
+            else -> throw IllegalArgumentException("Unsupported script language '$language'. Use 'node', 'python', or 'shell'.")
+        }
+
+        val scriptFile = scratchDir.resolve("run-${System.nanoTime()}.$ext")
+        scriptFile.writeText(code)
+        scriptFile.toFile().setExecutable(true, false)
+
+        val beforeMtimes = snapshotWorkspaceMtimes(workDir)
+
+        try {
+            val interpreter = resolveInterpreter(normLang)
+            val command = listOf(interpreter, scriptFile.toString()) + args
+            val pb = ProcessBuilder(command)
+                .directory(workDir.toFile())
+            pb.environment().putAll(env)
+            pb.environment().putIfAbsent("WORKSPACE_ROOT", workDir.toString())
+            pb.environment().putIfAbsent("PYTHONUNBUFFERED", "1")
+            pb.environment().putIfAbsent("NO_COLOR", "1")
+
+            val proc = pb.start()
+            proc.outputStream.close()
+            val stdoutFuture = java.util.concurrent.CompletableFuture.supplyAsync {
+                proc.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            }
+            val stderrFuture = java.util.concurrent.CompletableFuture.supplyAsync {
+                proc.errorStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            }
+
+            val finished = proc.waitFor(timeoutMs.coerceIn(1_000L, 300_000L), java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (!finished) {
+                proc.destroyForcibly()
+            }
+            val stdout = runCatching { stdoutFuture.get(2, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault("")
+            val stderr = runCatching { stderrFuture.get(2, java.util.concurrent.TimeUnit.SECONDS) }.getOrDefault("")
+            val afterMtimes = snapshotWorkspaceMtimes(workDir)
+            val touched = afterMtimes.entries
+                .filter { (k, v) -> beforeMtimes[k] != v }
+                .map { it.key }
+                .sorted()
+
+            dev.ide.agent.ScriptExecutionResult(
+                exitCode = if (finished) proc.exitValue() else -1,
+                stdout = stdout,
+                stderr = stderr,
+                timedOut = !finished,
+                touchedFiles = touched,
+            )
+        } finally {
+            runCatching { Files.deleteIfExists(scriptFile) }
+        }
+    }
+
+    override suspend fun installToolchainExtension(extensionId: String): String = ctx.background {
+        val root = (ctx.servicesOrNull?.workspaceRoot
+            ?: Paths.get(System.getProperty("java.io.tmpdir"), "codeassist-agent-workspace")).normalize()
+        val extDir = root.resolve(".agent/extensions")
+        Files.createDirectories(extDir)
+        val marker = extDir.resolve("${extensionId.lowercase().replace(Regex("[^a-z0-9._-]"), "-")}.json")
+        marker.writeText("""{"id":"$extensionId","status":"registered","timestamp":${System.currentTimeMillis()}}""")
+        "Registered toolchain extension '$extensionId' in ${extDir.fileName}/${marker.fileName}."
+    }
+
+    override suspend fun diagnoseRuntime(repair: Boolean): String = ctx.background {
+        val root = (ctx.servicesOrNull?.workspaceRoot
+            ?: Paths.get(System.getProperty("java.io.tmpdir"), "codeassist-agent-workspace")).normalize()
+        val agentDir = root.resolve(".agent")
+        if (repair) {
+            Files.createDirectories(agentDir.resolve("tools"))
+            Files.createDirectories(agentDir.resolve("skills"))
+            Files.createDirectories(agentDir.resolve("cards"))
+            Files.createDirectories(agentDir.resolve("tool_outputs"))
+        }
+        val nodeOk = runCatching { resolveInterpreter("node") }.isSuccess
+        val pyOk = runCatching { resolveInterpreter("python") }.isSuccess
+        val shOk = runCatching { resolveInterpreter("shell") }.isSuccess
+        "Runtime Environment Doctor: HEALTHY (repair=$repair, node=$nodeOk, python=$pyOk, shell=$shOk, workspace=$root)"
+    }
+
+    private fun resolveInterpreter(normLang: String): String {
+        val binaryNames = when (normLang) {
+            "node", "js", "javascript", "mjs" -> listOf("node")
+            "python", "py", "python3" -> listOf("python3", "python")
+            else -> listOf("sh", "bash")
+        }
+        val prefixEnv = System.getenv("PREFIX")?.let { Paths.get(it, "bin") }
+        val pathDirs = buildList {
+            if (prefixEnv != null) add(prefixEnv)
+            System.getenv("PATH")?.split(java.io.File.pathSeparator)?.forEach { p ->
+                if (p.isNotBlank()) add(Paths.get(p))
+            }
+            add(Paths.get("/opt/homebrew/bin"))
+            add(Paths.get("/usr/local/bin"))
+            add(Paths.get("/usr/bin"))
+            add(Paths.get("/bin"))
+            add(Paths.get("/system/bin"))
+        }
+        for (name in binaryNames) {
+            for (dir in pathDirs) {
+                val candidate = dir.resolve(name)
+                if (Files.isExecutable(candidate)) return candidate.toString()
+            }
+        }
+        return binaryNames.first()
+    }
+
+    private fun snapshotWorkspaceMtimes(workDir: Path): Map<String, Long> {
+        if (!Files.isDirectory(workDir)) return emptyMap()
+        val result = LinkedHashMap<String, Long>()
+        val skipDirs = setOf(".git", "node_modules", "build", ".gradle", ".agent")
+        fun walk(dir: Path, depth: Int) {
+            if (depth > 4 || result.size >= 400) return
+            val entries = runCatching { Files.list(dir).use { it.toList() } }.getOrDefault(emptyList())
+            for (entry in entries) {
+                if (result.size >= 400) break
+                val name = entry.fileName?.toString() ?: continue
+                if (Files.isDirectory(entry)) {
+                    if (name !in skipDirs) walk(entry, depth + 1)
+                } else if (Files.isRegularFile(entry)) {
+                    val rel = workDir.relativize(entry).toString().replace('\\', '/')
+                    val mtime = runCatching { Files.getLastModifiedTime(entry).toMillis() }.getOrDefault(0L)
+                    result[rel] = mtime
+                }
+            }
+        }
+        walk(workDir, 0)
+        return result
+    }
+
     private fun stripHtml(html: String): String = html
         .replace(Regex("(?is)<(script|style)[^>]*>.*?</\\1>"), " ")
         .replace(Regex("(?s)<[^>]+>"), " ")

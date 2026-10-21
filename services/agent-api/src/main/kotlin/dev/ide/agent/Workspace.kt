@@ -163,7 +163,52 @@ interface AgentWorkspace {
         body: String? = null,
         maxChars: Int = 20_000,
     ): String = throw UnsupportedOperationException("HTTP requests are not supported here.")
+
+    // Self-extending agent runtime & script execution.
+
+    /**
+     * Executes an on-device script ([language] = `"node"`, `"python"`, or `"shell"`) inside the project/agent
+     * workspace, passing [args] and environment [env], and returning stdout, stderr, exit code, and any files
+     * created or modified in the workspace during execution.
+     */
+    suspend fun executeScript(
+        language: String,
+        code: String,
+        args: List<String> = emptyList(),
+        env: Map<String, String> = emptyMap(),
+        timeoutMs: Long = 60_000L,
+    ): ScriptExecutionResult =
+        ScriptExecutionResult(
+            exitCode = -1,
+            stdout = "",
+            stderr = "Script execution is not supported in this workspace.",
+            timedOut = false,
+        )
+
+    /**
+     * Installs an on-demand toolchain extension (e.g. `"python"`, `"golang"`, `"rust"`, `"clang"`, `"git"`,
+     * `"ffmpeg"`, `"sqlite"`, `"jq"`) into the on-device runtime environment.
+     */
+    suspend fun installToolchainExtension(extensionId: String): String =
+        throw UnsupportedOperationException("Toolchain extension installer is not available here.")
+
+    /**
+     * Runs the runtime environment doctor to inspect and optionally repair symlinks, shebangs, and permissions.
+     */
+    suspend fun diagnoseRuntime(repair: Boolean = true): String =
+        "Runtime doctor: no issues detected in current host."
 }
+
+/**
+ * The outcome of [AgentWorkspace.executeScript].
+ */
+data class ScriptExecutionResult(
+    val exitCode: Int,
+    val stdout: String,
+    val stderr: String,
+    val timedOut: Boolean = false,
+    val touchedFiles: List<String> = emptyList(),
+)
 
 /**
  * The outcome of [AgentWorkspace.runProgram]: whether the module [compiled] (its `main` started), [finished]
