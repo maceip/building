@@ -28,6 +28,46 @@ data class NodePackageJson(
             }?.toMap(LinkedHashMap()).orEmpty()
             NodePackageJson(text("name"), scripts, text("main"), text("packageManager"))
         }.getOrNull()
+
+        /**
+         * Recognizes a TypeScript/JavaScript repository that has no root `package.json` (for example,
+         * `anthropics/claude-code` which has `mods/tsconfig.json` and `scripts/` `.ts` files without a root `package.json`).
+         * Never called when a root `package.json` file or symlink is present.
+         */
+        fun detectTypeScriptWorkspace(root: Path): Pair<NodePackageJson, Path>? = runCatching {
+            if (!Files.isDirectory(root)) return null
+            if (Files.exists(root.resolve("package.json"), java.nio.file.LinkOption.NOFOLLOW_LINKS)) return null
+            val excluded = setOf(".git", ".platform", "node_modules", "build", "dist", ".venv", "venv")
+            var tsconfigMarker: Path? = null
+            var firstTs: Path? = null
+            var tsCount = 0
+            var pyCount = 0
+            Files.walk(root, 5).use { stream ->
+                stream.filter { p ->
+                    Files.isRegularFile(p, java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                        root.relativize(p).none { seg -> seg.toString() in excluded }
+                }.sorted().forEach { p ->
+                    val name = p.fileName.toString()
+                    when {
+                        name == "tsconfig.json" && tsconfigMarker == null -> tsconfigMarker = p
+                        (name.endsWith(".ts") || name.endsWith(".tsx")) && !name.endsWith(".d.ts") -> {
+                            tsCount++
+                            if (firstTs == null) firstTs = p
+                        }
+                        name.endsWith(".py") -> pyCount++
+                    }
+                }
+            }
+            if (tsCount == 0 || tsCount <= pyCount) return null
+            val marker = tsconfigMarker ?: firstTs ?: return null
+            val mainRel = firstTs?.let { root.relativize(it).toString().replace('\\', '/') }
+            NodePackageJson(
+                name = root.fileName?.toString() ?: "node-project",
+                scripts = emptyMap(),
+                main = mainRel,
+                packageManager = null,
+            ) to marker
+        }.getOrNull()
     }
 }
 
@@ -44,7 +84,11 @@ data class NodeProjectRunInfo(
 
 object NodeProjectBridge {
     fun inspect(root: Path): NodeProjectRunInfo? {
-        val manifest = NodePackageJson.read(root) ?: return null
+        val manifest = if (Files.exists(root.resolve("package.json"), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            NodePackageJson.read(root) ?: return null
+        } else {
+            NodePackageJson.detectTypeScriptWorkspace(root)?.first ?: return null
+        }
         val canonical = root.toRealPath()
         val targets = RuntimeProjects.targets(canonical).filter {
             it.kind == RuntimeKind.NODE || it.kind == RuntimeKind.NPM && it.script in manifest.scripts

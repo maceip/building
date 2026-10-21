@@ -18,6 +18,8 @@ import dev.ide.model.sync.SyncOutcome
 import dev.ide.model.sync.SyncRequest
 import dev.ide.model.sync.SyncSeverity
 import dev.ide.workbench.runtime.NodePackageJson
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 
 /** A package.json project, not a synthetic Java module or an Android build. */
@@ -47,22 +49,35 @@ class NodeProjectImporter : ProjectImporter {
             val formerlyUnknown = dev.ide.core.sync.UnrecognizedProjectMarker.exists(root) && projects.all { it.modules.isEmpty() }
             if (projects.isNotEmpty() && projects.none { it.buildSystemId == id.value } && !formerlyUnknown) return null
         }
-        val manifest = NodePackageJson.read(root) ?: return null
+        if (Files.exists(root.resolve("package.json"), LinkOption.NOFOLLOW_LINKS)) {
+            val manifest = NodePackageJson.read(root) ?: return null
+            return Detection(
+                name = manifest.name ?: root.fileName?.toString() ?: "node-project",
+                markers = listOf(root.toAbsolutePath().resolve("package.json")),
+                // A Gradle/native project with a tooling package.json stays with its existing importer.
+                confidence = 5,
+            )
+        }
+        val (tsManifest, marker) = NodePackageJson.detectTypeScriptWorkspace(root) ?: return null
         Detection(
-            name = manifest.name ?: root.fileName?.toString() ?: "node-project",
-            markers = listOf(root.toAbsolutePath().resolve("package.json")),
-            // A Gradle/native project with a tooling package.json stays with its existing importer.
+            name = tsManifest.name ?: root.fileName?.toString() ?: "node-project",
+            markers = listOf(marker.toAbsolutePath()),
             confidence = 5,
         )
     }.getOrNull()
 
-    override fun syncFiles(): List<String> = listOf("package.json")
+    override fun syncFiles(): List<String> = listOf("package.json", "tsconfig.json")
 
     override suspend fun resolve(request: SyncRequest): SyncOutcome {
         request.progress.checkCanceled()
         request.progress.report(-1.0, "Reading package.json (no scripts are executed)")
-        val manifest = NodePackageJson.read(request.root)
-            ?: return SyncOutcome.failed("Cannot read a valid package.json object inside the project (maximum 1 MiB).")
+        val manifest = if (Files.exists(request.root.resolve("package.json"), LinkOption.NOFOLLOW_LINKS)) {
+            NodePackageJson.read(request.root)
+                ?: return SyncOutcome.failed("Cannot read a valid package.json object inside the project (maximum 1 MiB).")
+        } else {
+            NodePackageJson.detectTypeScriptWorkspace(request.root)?.first
+                ?: return SyncOutcome.failed("Cannot find package.json or TypeScript sources inside the project.")
+        }
         val name = manifest.name ?: request.root.fileName?.toString() ?: "node-project"
         return SyncOutcome(
             ExternalProjectModel(

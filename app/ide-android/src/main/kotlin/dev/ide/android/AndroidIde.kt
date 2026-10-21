@@ -813,7 +813,13 @@ object AndroidIde {
             (external.isDirectory || external.mkdirs()) &&
             external.canWrite()
         ) {
-            return external
+            val codeassist = File(external, "codeassist")
+            val probe = File(codeassist, ".write-probe")
+            val writable = runCatching {
+                (codeassist.isDirectory || codeassist.mkdirs()) &&
+                    probe.apply { writeText("ok"); delete() }.let { true }
+            }.getOrDefault(false)
+            if (writable) return external
         }
         return context.filesDir
     }
@@ -876,6 +882,9 @@ object AndroidIde {
             val parent = dest.parentFile
             if (parent != null && !parent.isDirectory && !parent.mkdirs()) {
                 throw IOException("Cannot create app storage directory ${parent.absolutePath} (storage unavailable?)")
+            }
+            if (dest.exists()) {
+                runCatching { dest.delete() }
             }
             context.assets.open(name).use { input ->
                 dest.outputStream().use { output -> input.copyTo(output) }

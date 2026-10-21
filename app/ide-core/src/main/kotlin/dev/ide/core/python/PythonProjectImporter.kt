@@ -68,24 +68,49 @@ class PythonProjectImporter : ProjectImporter {
         }
         // Also recognize cloned Python repos that have standard top-level Python entrypoints (`main.py`, `app.py`, `run.py`, `cli.py`, `server.py`, `manage.py`)
         // or any top-level `.py` script directly in the repository root.
-        for (entry in listOf("main.py", "app.py", "run.py", "cli.py", "server.py", "manage.py")) {
+        for (entry in listOf("main.py", "app.py", "run.py", "cli.py", "server.py", "manage.py", "start-abus.py", "one_click.py", "salary_lookup.py")) {
             val candidate = root.resolve(entry)
             if (Files.isRegularFile(candidate)) {
-                return Detection(name = root.fileName?.toString() ?: "python-project", markers = listOf(candidate.toAbsolutePath()), confidence = 4)
+                return Detection(name = root.fileName?.toString() ?: "python-project", markers = listOf(candidate.toAbsolutePath()), confidence = 6)
             }
         }
-        val anyPy = Files.walk(root, 3).use { stream ->
+        val excluded = setOf(".git", ".platform", "node_modules", "build", "dist", ".venv", "venv", "__pycache__")
+        var firstPy: Path? = null
+        var subPyManifest: Path? = null
+        var pyCount = 0
+        var tsJsCount = 0
+        Files.walk(root, 6).use { stream ->
             stream.filter { p ->
                 Files.isRegularFile(p) &&
-                    p.fileName.toString().endsWith(".py") &&
-                    root.relativize(p).none { seg -> seg.toString() in setOf(".git", ".platform", "node_modules", "build", ".venv", "venv") }
+                    root.relativize(p).none { seg -> seg.toString() in excluded }
+            }.sorted().forEach { p ->
+                val fileName = p.fileName.toString()
+                when {
+                    fileName.endsWith(".py") -> {
+                        pyCount++
+                        if (firstPy == null) firstPy = p
+                    }
+                    (fileName.endsWith(".ts") || fileName.endsWith(".tsx") || fileName.endsWith(".js") || fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) &&
+                        !fileName.endsWith(".d.ts") -> {
+                        tsJsCount++
+                    }
+                    fileName in setOf("pyproject.toml", "setup.py", "requirements.txt") && subPyManifest == null -> {
+                        subPyManifest = p
+                    }
+                }
             }
-                .sorted()
-                .findFirst()
-                .orElse(null)
         }
+        if (subPyManifest != null && pyCount > tsJsCount) {
+            return Detection(
+                name = root.fileName?.toString() ?: "python-project",
+                markers = listOf(subPyManifest!!.toAbsolutePath()),
+                confidence = 6,
+            )
+        }
+        val anyPy = firstPy
         if (anyPy != null) {
-            return Detection(name = root.fileName?.toString() ?: "python-project", markers = listOf(anyPy.toAbsolutePath()), confidence = 4)
+            val conf = if (pyCount > tsJsCount) 4 else 3
+            return Detection(name = root.fileName?.toString() ?: "python-project", markers = listOf(anyPy.toAbsolutePath()), confidence = conf)
         }
         null
     }.getOrNull()

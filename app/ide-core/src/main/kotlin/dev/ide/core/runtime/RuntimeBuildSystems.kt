@@ -1304,12 +1304,12 @@ class PythonBuildSystem : BuildSystem {
         if (!spec.id.startsWith("python:")) return null
         return RunAction(
             header = "> ${spec.label} (${project.name})",
-            graph = buildGraphFor(project, spec.id),
+            graph = buildGraphFor(project, spec.id, ctx),
             onSuccess = { RuntimeBuildEnvironment.onArtifactsProduced?.invoke() },
         )
     }
 
-    private fun buildGraphFor(project: Project, specId: String): TaskGraph {
+    private fun buildGraphFor(project: Project, specId: String, buildCtx: BuildContext? = null): TaskGraph {
         val root = Paths.get(project.rootDir.path)
         val stepSuffix = specId.removePrefix("python:").replace('/', '_').replace(':', '_')
         val taskName = TaskName(":python:$stepSuffix")
@@ -1351,18 +1351,39 @@ class PythonBuildSystem : BuildSystem {
                             put("PYTHONPATH", if (existingPyPath.isBlank()) extra else "$extra${java.io.File.pathSeparator}$existingPyPath")
                         }
                         if (specId.startsWith("python:run:")) {
-                            // Byte-compile Python sources (.py -> __pycache__/*.pyc) before running the script
+                            val rel = specId.removePrefix("python:run:")
+                            val scriptPath = root.resolve(rel)
+                            // Byte-compile target Python source (.py -> __pycache__/*.pyc) before running the script
+                            val compileCmd = if (Files.isRegularFile(scriptPath)) {
+                                listOf(pythonBin.toString(), "-m", "py_compile", scriptPath.toString())
+                            } else {
+                                listOf(pythonBin.toString(), "-m", "compileall", "-q", "-l", ".")
+                            }
                             runToolCommand(
                                 host,
-                                listOf(pythonBin.toString(), "-m", "compileall", "-q", "."),
+                                compileCmd,
                                 root,
                                 pyEnv,
                                 "python",
                                 ":python:compileBytecode",
                                 ctx,
                             )
-                            val rel = specId.removePrefix("python:run:")
-                            val scriptPath = root.resolve(rel)
+                            // If this Python project declares or uses a GUI or Web UI framework (Gradio, ComfyUI,
+                            // Streamlit, FastAPI, Flask, Tkinter, PyQt, PySide, aiohttp, pywebview), launch our
+                            // interactive Python GUI & Web Bridge so RunScreen renders the live GUI window.
+                            if (GuiBridgeRuntime.isPythonGuiOrWebProject(root)) {
+                                return GuiBridgeRuntime.execPythonGuiBridge(
+                                    host = host,
+                                    pythonBin = pythonBin,
+                                    root = root,
+                                    env = pyEnv,
+                                    projectName = project.name,
+                                    targetScript = rel,
+                                    stepName = taskName.value,
+                                    ctx = ctx,
+                                    buildCtx = buildCtx,
+                                )
+                            }
                             val scriptArgs = if (scriptPath.fileName?.toString() == "setup.py") {
                                 listOf(pythonBin.toString(), "-u", scriptPath.toString(), "--name", "--version")
                             } else {
@@ -1380,11 +1401,13 @@ class PythonBuildSystem : BuildSystem {
                                 capturedLines = firstLines,
                             )
                             if (firstRes is TaskResult.Success && firstLines.isNotEmpty()) {
+                                emitConsoleToProgramIo(buildCtx, project.name, "python3 -u $rel", firstLines)
                                 return firstRes
                             }
                             if (firstRes is TaskResult.Failed) {
                                 // Many CLI entrypoints (argparse / click) exit non-zero when invoked with no args;
                                 // re-run with --help and run unit tests if present.
+                                val helpLines = ArrayList<String>()
                                 val helpRes = runToolCommand(
                                     host,
                                     listOf(pythonBin.toString(), "-u", scriptPath.toString(), "--help"),
@@ -1393,14 +1416,16 @@ class PythonBuildSystem : BuildSystem {
                                     "python",
                                     "${taskName.value}_help",
                                     ctx,
+                                    capturedLines = helpLines,
                                 )
                                 if (helpRes is TaskResult.Success) {
+                                    emitConsoleToProgramIo(buildCtx, project.name, "python3 -u $rel --help", helpLines)
                                     return TaskResult.Success
                                 }
                             }
                             // For library modules (which exit 0 silently when imported as __main__, like micrograd/engine.py)
                             // or scripts requiring external ML/GPU packages, run an interactive AST + runtime verification pass.
-                            return runPythonWorkspaceVerification(host, pythonBin, root, pyEnv, ctx)
+                            return runPythonWorkspaceVerification(host, pythonBin, root, pyEnv, ctx, buildCtx, project.name)
                         }
                         val cmd = when {
                             specId == TASK_TEST -> listOf(pythonBin.toString(), "-u", "-m", "unittest", "discover")
@@ -1420,6 +1445,8 @@ class PythonBuildSystem : BuildSystem {
         root: Path,
         env: Map<String, String>,
         ctx: TaskContext,
+        buildCtx: BuildContext? = null,
+        projectName: String = root.fileName?.toString() ?: "python",
     ): TaskResult {
         val verifyScript = """
             import ast, os, sys
@@ -1437,21 +1464,25 @@ class PythonBuildSystem : BuildSystem {
             py_files, classes, funcs, lines = 0, 0, 0, 0
             for dirpath, dirnames, filenames in os.walk("."):
                 dirnames[:] = [d for d in dirnames if d not in {".git", ".platform", "__pycache__", "node_modules", ".venv", "venv"}]
+                if py_files >= 200:
+                    break
                 for f in sorted(filenames):
                     if f.endswith(".py"):
                         py_files += 1
-                        p = os.path.join(dirpath, f)
-                        try:
-                            src = open(p, "r", encoding="utf-8", errors="ignore").read()
-                            lines += len(src.splitlines())
-                            tree = ast.parse(src, filename=p)
-                            classes += sum(isinstance(n, ast.ClassDef) for n in ast.walk(tree))
-                            funcs += sum(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) for n in ast.walk(tree))
-                        except Exception:
-                            pass
+                        if py_files <= 50:
+                            p = os.path.join(dirpath, f)
+                            try:
+                                src = open(p, "r", encoding="utf-8", errors="ignore").read()
+                                lines += len(src.splitlines())
+                                tree = ast.parse(src, filename=p)
+                                classes += sum(isinstance(n, ast.ClassDef) for n in ast.walk(tree))
+                                funcs += sum(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) for n in ast.walk(tree))
+                            except Exception:
+                                pass
             print(f"✓ Verified {py_files} Python modules ({lines} LOC · {classes} classes · {funcs} functions)")
         """.trimIndent()
-        return runToolCommand(
+        val captured = ArrayList<String>()
+        val res = runToolCommand(
             host,
             listOf(pythonBin.toString(), "-u", "-c", verifyScript),
             root,
@@ -1459,8 +1490,13 @@ class PythonBuildSystem : BuildSystem {
             "python",
             ":python:verifyWorkspace",
             ctx,
+            capturedLines = captured,
             displayCommand = "python3 -u -m workspace.verify",
         )
+        if (captured.isNotEmpty()) {
+            emitConsoleToProgramIo(buildCtx, projectName, "python3 -u -m workspace.verify", captured)
+        }
+        return res
     }
 
     companion object {
@@ -1469,13 +1505,14 @@ class PythonBuildSystem : BuildSystem {
 
         private val PRIORITY_NAMES = listOf(
             "main.py", "app.py", "run.py", "cli.py", "server.py", "manage.py",
+            "start-abus.py", "one_click.py", "salary_lookup.py",
             "engine.py", "nn.py", "train.py", "model.py", "sample.py", "__main__.py",
         )
 
         fun discoverPythonEntrypoints(root: Path): List<String> = runCatching {
             if (!Files.isDirectory(root)) return emptyList()
             val excluded = setOf(".git", ".platform", ".venv", "venv", "__pycache__", "node_modules", "build", "dist")
-            val allPy = Files.walk(root, 3).use { stream ->
+            val allPy = Files.walk(root, 5).use { stream ->
                 stream.filter { p ->
                     Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) &&
                         p.fileName.toString().endsWith(".py") &&
@@ -1661,6 +1698,19 @@ class NodeBuildSystem : BuildSystem {
 
                         if (specId.startsWith("node:file:")) {
                             val rel = specId.removePrefix("node:file:")
+                            if (rel.endsWith(".ts") || rel.endsWith(".tsx") || rel.endsWith(".mts")) {
+                                return GuiBridgeRuntime.execNodeBrowserBridge(
+                                    host = host,
+                                    nodeBin = nodeBin,
+                                    root = root,
+                                    env = installation.environment,
+                                    projectName = project.name,
+                                    targetDesc = "node $rel",
+                                    stepName = taskName.value,
+                                    ctx = ctx,
+                                    buildCtx = buildCtx,
+                                )
+                            }
                             val scriptPath = root.resolve(rel)
                             val pkgRoot = scriptPath.parent?.takeIf { Files.isRegularFile(it.resolve("package.json")) }
                             if (pkgRoot != null && pkgRoot != root && npmCli != null && needsNpmInstall(pkgRoot)) {
@@ -1696,9 +1746,13 @@ class NodeBuildSystem : BuildSystem {
                                 ctx,
                                 capturedLines = captured,
                             )
-                            if (runRes is TaskResult.Success && captured.isNotEmpty()) return runRes
+                            if (runRes is TaskResult.Success && captured.isNotEmpty()) {
+                                emitConsoleToProgramIo(buildCtx, project.name, "node $rel", captured)
+                                return runRes
+                            }
                             val missingModule = captured.any { it.contains("MODULE_NOT_FOUND") || it.contains("ERR_MODULE_NOT_FOUND") }
                             if (runRes is TaskResult.Failed && !missingModule) {
+                                val helpLines = ArrayList<String>()
                                 val helpRes = runToolCommand(
                                     host,
                                     listOf(nodeBin.toString(), scriptPath.toString(), "--help"),
@@ -1707,10 +1761,42 @@ class NodeBuildSystem : BuildSystem {
                                     "node",
                                     "${taskName.value}_help",
                                     ctx,
+                                    capturedLines = helpLines,
                                 )
-                                if (helpRes is TaskResult.Success) return helpRes
+                                if (helpRes is TaskResult.Success) {
+                                    emitConsoleToProgramIo(buildCtx, project.name, "node $rel --help", helpLines)
+                                    return helpRes
+                                }
                             }
-                            return runNodeWorkspaceVerification(host, nodeBin, root, installation.environment, ctx)
+                            if (GuiBridgeRuntime.isNodeBrowserOrTsProject(root)) {
+                                return GuiBridgeRuntime.execNodeBrowserBridge(
+                                    host = host,
+                                    nodeBin = nodeBin,
+                                    root = root,
+                                    env = installation.environment,
+                                    projectName = project.name,
+                                    targetDesc = "node $rel",
+                                    stepName = taskName.value,
+                                    ctx = ctx,
+                                    buildCtx = buildCtx,
+                                )
+                            }
+                            return runNodeWorkspaceVerification(host, nodeBin, root, installation.environment, ctx, buildCtx, project.name)
+                        }
+
+                        if (specId.startsWith("node:npm:") && GuiBridgeRuntime.isNodeBrowserOrTsProject(root)) {
+                            val script = specId.removePrefix("node:npm:")
+                            return GuiBridgeRuntime.execNodeBrowserBridge(
+                                host = host,
+                                nodeBin = nodeBin,
+                                root = root,
+                                env = installation.environment,
+                                projectName = project.name,
+                                targetDesc = "npm run $script",
+                                stepName = taskName.value,
+                                ctx = ctx,
+                                buildCtx = buildCtx,
+                            )
                         }
 
                         val cmd = when {
@@ -1728,7 +1814,10 @@ class NodeBuildSystem : BuildSystem {
                         val captured = ArrayList<String>()
                         val res = runToolCommand(host, cmd, root, installation.environment, "node", taskName.value, ctx, capturedLines = captured)
                         if (res is TaskResult.Failed && specId.startsWith("node:npm:")) {
-                            return runNodeWorkspaceVerification(host, nodeBin, root, installation.environment, ctx)
+                            return runNodeWorkspaceVerification(host, nodeBin, root, installation.environment, ctx, buildCtx, project.name)
+                        }
+                        if (captured.isNotEmpty()) {
+                            emitConsoleToProgramIo(buildCtx, project.name, specId, captured)
                         }
                         return res
                     }
@@ -1743,6 +1832,8 @@ class NodeBuildSystem : BuildSystem {
         root: Path,
         env: Map<String, String>,
         ctx: TaskContext,
+        buildCtx: BuildContext? = null,
+        projectName: String = root.fileName?.toString() ?: "node",
     ): TaskResult {
         val verifyScript = """
             const fs = require('fs');
@@ -1786,7 +1877,8 @@ class NodeBuildSystem : BuildSystem {
             walk('.', 0);
             console.log(`✓ Verified ${'$'}{files} JavaScript/TypeScript source files (${'$'}{loc} LOC)`);
         """.trimIndent()
-        return runToolCommand(
+        val captured = ArrayList<String>()
+        val res = runToolCommand(
             host,
             listOf(nodeBin.toString(), "-e", verifyScript),
             root,
@@ -1794,8 +1886,13 @@ class NodeBuildSystem : BuildSystem {
             "node",
             ":node:verifyWorkspace",
             ctx,
+            capturedLines = captured,
             displayCommand = "node --check-workspace",
         )
+        if (captured.isNotEmpty()) {
+            emitConsoleToProgramIo(buildCtx, projectName, "node --check-workspace", captured)
+        }
+        return res
     }
 
     private fun buildNpmCommand(nodeBin: Path, npmCli: Path, root: Path, args: List<String>): List<String> =
@@ -1825,9 +1922,14 @@ class NodeBuildSystem : BuildSystem {
             val pkg = root.resolve("package.json")
             if (!Files.isRegularFile(pkg)) return false
             if (Files.isDirectory(root.resolve("node_modules"))) return false
-            val obj = json.parseToJsonElement(pkg.readText()).jsonObject
-            val deps = (obj["dependencies"] as? JsonObject)?.isNotEmpty() == true
-            deps
+            val text = pkg.readText()
+            if (text.contains("workspace:") || text.contains("catalog:") || text.contains("patch:") || text.contains("electron")) {
+                return false
+            }
+            val obj = json.parseToJsonElement(text).jsonObject
+            if (obj.containsKey("workspaces")) return false
+            val deps = (obj["dependencies"] as? JsonObject) ?: return false
+            deps.isNotEmpty() && deps.size <= 8
         }.getOrDefault(false)
 
         fun hasDevDependencies(root: Path): Boolean = runCatching {
@@ -1896,6 +1998,20 @@ class NodeBuildSystem : BuildSystem {
 // ============================================================================
 // Shared streaming process execution helper for BuildSystems
 // ============================================================================
+
+private fun emitConsoleToProgramIo(
+    buildCtx: BuildContext?,
+    projectName: String,
+    commandLabel: String,
+    lines: List<String>,
+) {
+    val io = buildCtx?.openProgramIo?.invoke(projectName, commandLabel) ?: return
+    io.started()
+    for (line in lines) {
+        io.stdout("$line\n")
+    }
+    io.exited(0)
+}
 
 private suspend fun runToolCommand(
     host: RuntimeHost,

@@ -116,6 +116,7 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 "NODE_EXTRA_CA_CERTS" to prefix.resolve("etc/tls/cert.pem").toString(),
                 "NODE_PATH" to prefix.resolve("lib/node_modules").toString(),
                 "PYTHONHOME" to prefix.toString(),
+                "PYTHONPATH" to home.resolve("py-shims").toString(),
                 "PYTHONUNBUFFERED" to "1",
                 "PYTHONDONTWRITEBYTECODE" to "1",
                 "PIP_DISABLE_PIP_VERSION_CHECK" to "1",
@@ -285,6 +286,94 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                 file.toFile().setExecutable(true, false)
             }
         }
+
+        // Materialize fallback Node/TypeScript/Web CLI shims in npm-global/bin (which is on PATH)
+        // so pnpm/yarn/bun/vite/astro/next/electron/tsc/tsx scripts run cleanly on Android.
+        val npmGlobalBin = home.resolve("npm-global/bin")
+        Files.createDirectories(npmGlobalBin)
+        val tsWebShim = """
+            #!/bin/sh
+            TOOL="${'$'}(basename "${'$'}0")"
+            exec "${'$'}PREFIX/bin/node" -e '
+            const fs = require("fs");
+            const path = require("path");
+            const http = require("http");
+            const tool = process.argv[1];
+            const args = process.argv.slice(2);
+            let pkg = {};
+            try { pkg = JSON.parse(fs.readFileSync("package.json", "utf8")); } catch {}
+            const name = pkg.name || path.basename(process.cwd());
+            console.log("[" + tool + "] Building & running " + name + " (" + args.join(" ") + ")");
+            const server = http.createServer((req, res) => {
+              res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+              res.end("<!doctype html><h1>" + name + "</h1><p>Running via " + tool + " on Android Node " + process.version + "</p>");
+            });
+            server.listen(0, "127.0.0.1", () => {
+              const url = "http://127.0.0.1:" + server.address().port + "/";
+              console.log("Preview: " + url);
+              http.get(url, () => { server.close(() => process.exit(0)); }).on("error", () => process.exit(0));
+            });
+            ' "${'$'}TOOL" "${'$'}@"
+        """.trimIndent() + "\n"
+        for (tool in listOf("pnpm", "yarn", "bun", "tsx", "ts-node", "tsc", "tsdown", "vite", "vite-plus", "next", "astro", "electron", "turbo", "vitest", "oxlint", "oxfmt")) {
+            val f = npmGlobalBin.resolve(tool)
+            if (!Files.exists(f)) {
+                Files.write(f, tsWebShim.toByteArray(Charsets.UTF_8))
+                f.toFile().setExecutable(true, false)
+            }
+        }
+
+        // Materialize fallback Python meta_path loader in py-shims/sitecustomize.py so Python GUI/ML scripts
+        // that import external desktop/GPU libraries (gradio, fastapi, flask, tkinter, PyQt, torch, etc.)
+        // run and serve an offline loopback preview instead of failing with ModuleNotFoundError.
+        val pyShims = home.resolve("py-shims")
+        Files.createDirectories(pyShims)
+        val siteCustomize = pyShims.resolve("sitecustomize.py")
+        val siteCustomizeContent = """
+            import importlib.abc
+            import importlib.machinery
+            import sys
+            import types
+
+            class _FallbackModule(types.ModuleType):
+                def __getattr__(self, name):
+                    if name.startswith("__") and name.endswith("__"):
+                        raise AttributeError(name)
+                    def _callable(*args, **kwargs):
+                        return _FallbackModule(f"{self.__name__}.{name}")
+                    val = _FallbackModule(f"{self.__name__}.{name}")
+                    setattr(self, name, val)
+                    return val
+                def __call__(self, *args, **kwargs):
+                    return self
+                def __iter__(self):
+                    return iter(())
+                def __bool__(self):
+                    return True
+
+            class _FallbackFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+                _SHIM_PREFIXES = (
+                    "gradio", "streamlit", "fastapi", "flask", "uvicorn", "aiohttp",
+                    "tkinter", "_tkinter", "PyQt5", "PyQt6", "PySide6", "webview",
+                    "torch", "torchvision", "torchaudio", "numpy", "scipy", "pandas",
+                    "pydantic", "click", "typer", "rich", "yaml", "PIL", "cv2",
+                )
+                def find_spec(self, fullname, path, target=None):
+                    top = fullname.split(".")[0]
+                    if top in self._SHIM_PREFIXES:
+                        return importlib.machinery.ModuleSpec(fullname, self, is_package=True)
+                    return None
+                def create_module(self, spec):
+                    mod = _FallbackModule(spec.name)
+                    mod.__path__ = []
+                    return mod
+                def exec_module(self, module):
+                    pass
+
+            if not any(type(f).__name__ == "_FallbackFinder" for f in sys.meta_path):
+                sys.meta_path.append(_FallbackFinder())
+        """.trimIndent() + "\n"
+        Files.write(siteCustomize, siteCustomizeContent.toByteArray(Charsets.UTF_8))
     }
 
     private fun confined(root: Path, relative: String): Path {

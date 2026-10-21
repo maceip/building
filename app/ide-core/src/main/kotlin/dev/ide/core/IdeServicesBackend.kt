@@ -138,7 +138,17 @@ class IdeServicesBackend(
         synchronized(runnerCache) {
             runnerCache.getOrPut(services) {
                 val factory = buildRunnerFactory
-                val runner = if (factory != null && separateBuildProcessEnabled()) {
+                val isRuntimeSubprocessProject = runCatching {
+                    val modules = services.modules()
+                    modules.isNotEmpty() && modules.all { m ->
+                        m.type.id in setOf(
+                            dev.ide.core.node.NodeModuleType.id,
+                            dev.ide.core.python.PythonModuleType.id,
+                            dev.ide.core.swift.SwiftModuleType.id,
+                        )
+                    }
+                }.getOrDefault(false)
+                val runner = if (factory != null && !isRuntimeSubprocessProject && separateBuildProcessEnabled()) {
                     services.markExternalSourceWorkUnconfirmed()
                     factory(services)
                 } else services.buildRunner

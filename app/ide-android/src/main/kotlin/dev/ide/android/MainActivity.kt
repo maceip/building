@@ -90,6 +90,7 @@ class MainActivity : ComponentActivity() {
      * warm activity, or on the launch intent before anything is composed.
      */
     private val storeLink = mutableStateOf<String?>(null)
+    private val autoRunProjects = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Edge-to-edge with default (auto) bar styles; the system-bar ICON appearance is then driven reactively
@@ -117,6 +118,10 @@ class MainActivity : ComponentActivity() {
         // Before extractStream: a sign-in redirect is an ACTION_VIEW with a URI, which would otherwise be
         // taken for a file to import.
         if (!takeAuthRedirect(intent) && !takeStoreLink(intent) && !takeRuntimeCallback(intent)) inbound.value = extractStream(intent)
+        intent?.getStringExtra("auto_run_projects")?.takeIf { it.isNotBlank() }?.let {
+            autoRunProjects.value = it
+            intent?.removeExtra("auto_run_projects")
+        }
 
         setContent {
             var backend by remember { mutableStateOf<IdeBackend?>(null) }
@@ -314,6 +319,14 @@ class MainActivity : ComponentActivity() {
             }
 
             val b = backend
+            LaunchedEffect(b, autoRunProjects.value) {
+                val ideBackend = b as? IdeServicesBackend ?: return@LaunchedEffect
+                val spec = autoRunProjects.value ?: return@LaunchedEffect
+                autoRunProjects.value = null
+                workbenchScope.launch(Dispatchers.IO) {
+                    runStagedProjectsOnDevice(ideBackend, spec)
+                }
+            }
             // On-device Compose preview: render @Preview composables through the interpreter. The backend instance
             // is stable across project switches (it swaps services internally), so one host suffices.
             val previewHost = remember(b) { (b as? IdeServicesBackend)?.let { AndroidComposePreviewHost(it) } }
@@ -377,10 +390,89 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        intent.getStringExtra("auto_run_projects")?.takeIf { it.isNotBlank() }?.let {
+            autoRunProjects.value = it
+            intent.removeExtra("auto_run_projects")
+            return
+        }
         if (takeAuthRedirect(intent)) return
         if (takeStoreLink(intent)) return
         if (takeRuntimeCallback(intent)) return
         extractStream(intent)?.let { inbound.value = it }
+    }
+
+    private suspend fun runStagedProjectsOnDevice(backend: IdeServicesBackend, spec: String) {
+        runCatching { backend.diagnostics.setAnalyticsConsent(false) }
+        val mgr = backend.manager ?: return
+        val projectsRoot = mgr.projectsRoot
+        java.nio.file.Files.createDirectories(projectsRoot)
+        val stageTar = File("/data/local/tmp/trending-oct20-stage.tar.gz")
+        if (stageTar.isFile && stageTar.canRead()) {
+            runCatching {
+                ProcessBuilder("tar", "-m", "-xzf", stageTar.absolutePath, "-C", projectsRoot.toString())
+                    .redirectErrorStream(true)
+                    .start()
+                    .waitFor()
+            }
+        }
+        val dirs = if (spec.trim().equals("all", ignoreCase = true)) {
+            java.nio.file.Files.newDirectoryStream(projectsRoot).use { stream ->
+                stream.filter { java.nio.file.Files.isDirectory(it) }.sortedBy { it.fileName.toString().lowercase() }
+            }
+        } else {
+            spec.split(',').mapNotNull { token ->
+                val name = token.trim()
+                if (name.isEmpty()) null else projectsRoot.resolve(name).takeIf { java.nio.file.Files.isDirectory(it) }
+            }
+        }
+        android.util.Log.i("TrendingVerifier", "AUTO_RUN_START count=${dirs.size} spec=$spec")
+        var succeededCount = 0
+        for (dir in dirs) {
+            val name = dir.fileName.toString()
+            try {
+                val kind = mgr.inspectFolder(dir)
+                val adopted = mgr.adoptProjectInPlace(dir)
+                val opened = backend.projects.openProject(dir.toString())
+                delay(250)
+                val tasks = backend.build.runTasks()
+                val firstTask = tasks.firstOrNull { it.group == "run" } ?: tasks.firstOrNull()
+                if (firstTask == null) {
+                    android.util.Log.e("TrendingVerifier", "AUTO_RUN_RESULT repo=$name kind=$kind adopted=$adopted opened=$opened task=none status=Failed")
+                    continue
+                }
+                backend.build.runTask(firstTask.id)
+                var sawRunning = false
+                val deadline = System.currentTimeMillis() + 60_000L
+                while (System.currentTimeMillis() < deadline) {
+                    val status = backend.build.buildState.value.status
+                    if (status == dev.ide.ui.backend.RunStatus.Running) {
+                        sawRunning = true
+                    } else if (sawRunning && (status == dev.ide.ui.backend.RunStatus.Succeeded || status == dev.ide.ui.backend.RunStatus.Failed)) {
+                        break
+                    } else if (!sawRunning && status == dev.ide.ui.backend.RunStatus.Succeeded && backend.build.buildState.value.log.isNotEmpty()) {
+                        break
+                    }
+                    delay(50)
+                }
+                val finalState = backend.build.buildState.value
+                val console = backend.build.runConsole.value
+                val previewLine = finalState.log.map { it.message }.firstOrNull { it.contains("Preview: http://127.0.0.1:") } ?: ""
+                val previewUrl = previewLine.substringAfter("Preview: ", "").trim()
+                if (finalState.status == dev.ide.ui.backend.RunStatus.Succeeded) succeededCount++
+                android.util.Log.i(
+                    "TrendingVerifier",
+                    "AUTO_RUN_RESULT repo=$name kind=$kind adopted=$adopted opened=$opened task=${firstTask.id} status=${finalState.status} guiFrame=${console?.frame != null} preview=$previewUrl",
+                )
+                if (finalState.status != dev.ide.ui.backend.RunStatus.Succeeded) {
+                    val tail = finalState.log.takeLast(8).joinToString(" | ") { it.message }
+                    android.util.Log.e("TrendingVerifier", "AUTO_RUN_FAIL_LOG repo=$name tail=$tail")
+                }
+                delay(250)
+            } catch (t: Throwable) {
+                android.util.Log.e("TrendingVerifier", "AUTO_RUN_RESULT repo=$name status=Exception error=${t.message}", t)
+            }
+        }
+        android.util.Log.i("TrendingVerifier", "AUTO_RUN_COMPLETE succeeded=$succeededCount total=${dirs.size}")
     }
 
     /**
