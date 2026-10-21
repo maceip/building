@@ -45,6 +45,50 @@ class ApkRuntimeTest {
         assertTrue(DexFile.parse(notDex).isFailure)
     }
 
+    @Test
+    fun apkBuilderSynthesizesRunnableApkAndExecutesOnCreate() {
+        val spec = ApkBuilder.parseProjectSpec(
+            fallbackName = "BitChord",
+            manifestXml = """
+                <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                  <application android:name=".BitChordApplication" android:label="@string/app_name">
+                    <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                        <action android:name="android.intent.action.MAIN" />
+                        <category android:name="android.intent.category.APP_MUSIC" />
+                      </intent-filter>
+                    </activity>
+                  </application>
+                </manifest>
+            """.trimIndent(),
+            gradleTexts = listOf(
+                """
+                android {
+                    namespace = "com.music.bitchord"
+                    defaultConfig {
+                        applicationId = "com.music.bitchord"
+                    }
+                }
+                """.trimIndent(),
+            ),
+            stringsXml = """<resources><string name="app_name">BitChord</string></resources>""",
+            kotlinFileNames = listOf("MainActivity.kt", "HomeScreen.kt", "PlayerScreen.kt"),
+        )
+        assertEquals("com.music.bitchord", spec.packageName)
+        assertEquals("com.music.bitchord.MainActivity", spec.launchActivity)
+        assertEquals("BitChord", spec.appLabel)
+
+        val apkBytes = ApkBuilder.buildApkBytes(spec)
+        val logs = mutableListOf<String>()
+        val result = ApkRuntime { logs += it }.launch(apkBytes)
+        assertTrue(result.ok, "Expected APK launch to succeed, got: ${result.message}")
+        assertEquals("com.music.bitchord", result.packageName)
+        assertEquals("com.music.bitchord.MainActivity", result.activity)
+        assertTrue(result.dexClasses >= 1, "Expected at least 1 dex class, got ${result.dexClasses}")
+        assertTrue(result.message.contains("onCreate returned"), "Expected onCreate to return: ${result.message}")
+        assertTrue(logs.any { it.contains("BitChord") }, "Expected startup logs to mention BitChord: $logs")
+    }
+
     private fun zipOf(vararg entries: Pair<String, ByteArray>): ByteArray {
         // Minimal stored-zip writer (local headers + central directory + EOCD) with real CRC-32s:
         // ZipArchive rejects an entry whose crc does not match, so a zero crc makes read() answer null.

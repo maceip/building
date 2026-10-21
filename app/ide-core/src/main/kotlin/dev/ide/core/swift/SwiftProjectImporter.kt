@@ -62,15 +62,31 @@ class SwiftProjectImporter : ProjectImporter {
                 confidence = 6,
             )
         }
-        val xcodeproj = Files.list(root).use { stream ->
-            stream.filter { Files.isDirectory(it) && it.fileName.toString().endsWith(".xcodeproj") }
-                .findFirst().orElse(null)
+        val xcodeproj = Files.walk(root, 3).use { stream ->
+            stream.filter {
+                Files.isDirectory(it) &&
+                    (it.fileName.toString().endsWith(".xcodeproj") || it.fileName.toString().endsWith(".xcworkspace"))
+            }.findFirst().orElse(null)
         }
         if (xcodeproj != null) {
-            val name = xcodeproj.fileName.toString().removeSuffix(".xcodeproj")
+            val name = xcodeproj.fileName.toString()
+                .removeSuffix(".xcodeproj")
+                .removeSuffix(".xcworkspace")
             return Detection(
                 name = name,
                 markers = listOf(xcodeproj.toAbsolutePath()),
+                confidence = 6,
+            )
+        }
+        val nestedPackageSwift = Files.walk(root, 3).use { stream ->
+            stream.filter { Files.isRegularFile(it) && it.fileName.toString() == "Package.swift" }
+                .findFirst().orElse(null)
+        }
+        if (nestedPackageSwift != null) {
+            val name = extractPackageName(nestedPackageSwift) ?: root.fileName?.toString() ?: "swift-project"
+            return Detection(
+                name = name,
+                markers = listOf(nestedPackageSwift.toAbsolutePath()),
                 confidence = 6,
             )
         }
@@ -79,7 +95,7 @@ class SwiftProjectImporter : ProjectImporter {
             return Detection(
                 name = root.fileName?.toString() ?: "swift-project",
                 markers = listOf(swiftSource.toAbsolutePath()),
-                confidence = 5,
+                confidence = 6,
             )
         }
         null
@@ -120,7 +136,7 @@ class SwiftProjectImporter : ProjectImporter {
 
     private fun extractPackageName(packageSwift: Path): String? = runCatching {
         val text = Files.readString(packageSwift)
-        val match = Regex("""name:\s*"([^"]+)"""").find(text)
-        match?.groupValues?.get(1)
+        Regex("""Package\s*\(\s*name:\s*"([^"]+)"""").find(text)?.groupValues?.get(1)
+            ?: Regex("""name:\s*"([^"]+)"""").find(text)?.groupValues?.get(1)
     }.getOrNull()
 }

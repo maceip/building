@@ -32,31 +32,49 @@ class AndroidStubs(
                 else -> ""
             }
         }
+        val cleanOwner = owner.removeSurrounding("L", ";")
         return when {
-            owner == "android/util/Log" && name == "d" || owner == "android/util/Log" && name == "i" ||
-                owner == "android/util/Log" && name == "w" || owner == "android/util/Log" && name == "e" -> {
+            cleanOwner == "android/util/Log" && (name == "d" || name == "i" || name == "w" || name == "e" || name == "v") -> {
                 log("${name.uppercase()}/${asString(0)}: ${asString(1)}")
                 DexVm.DvmValue.IntV(0)
             }
 
-            owner == "android/util/Log" && name == "println" -> {
+            cleanOwner == "android/util/Log" && name == "println" -> {
                 log(asString(1))
                 DexVm.DvmValue.IntV(0)
             }
 
-            owner == "java/lang/System" && name == "out" && descriptor.contains("PrintStream") -> {
+            cleanOwner == "java/lang/System" && name == "out" && descriptor.contains("PrintStream") -> {
                 // getstatic-like via sget is handled in the VM; this is invoke.
                 DexVm.DvmValue.Null
             }
 
-            owner == "java/io/PrintStream" && name == "println" -> {
+            cleanOwner == "java/io/PrintStream" && name == "println" -> {
                 log(asString(0))
                 DexVm.DvmValue.Null
             }
 
-            owner.endsWith("/Activity") || owner == "android/app/Activity" -> when (name) {
+            cleanOwner == "java/lang/Object" && name == "<init>" -> {
+                DexVm.DvmValue.Null
+            }
+
+            cleanOwner == "android/app/Activity" ||
+                cleanOwner == "androidx/activity/ComponentActivity" ||
+                cleanOwner == "androidx/appcompat/app/AppCompatActivity" ||
+                cleanOwner == "androidx/fragment/app/FragmentActivity" ||
+                cleanOwner.endsWith("/Activity") -> when (name) {
+                "<init>" -> DexVm.DvmValue.Null
                 "onCreate", "onStart", "onResume", "onPause", "onStop", "onDestroy" -> {
-                    log("$owner.$name")
+                    log("$cleanOwner.$name")
+                    DexVm.DvmValue.Null
+                }
+                "setTitle" -> {
+                    activity.extras["title"] = asString(0)
+                    log("$cleanOwner.setTitle(${asString(0)})")
+                    DexVm.DvmValue.Null
+                }
+                "setContentView" -> {
+                    log("$cleanOwner.setContentView(${arg(0)})")
                     DexVm.DvmValue.Null
                 }
                 "finish" -> {
@@ -65,12 +83,12 @@ class AndroidStubs(
                 }
                 "getLocalClassName", "getComponentName" -> DexVm.DvmValue.ObjV(activity.name)
                 else -> {
-                    log("stub $owner.$name$descriptor")
+                    log("stub $cleanOwner.$name$descriptor")
                     DexVm.DvmValue.Null
                 }
             }
 
-            owner == "android/os/Bundle" -> when (name) {
+            cleanOwner == "android/os/Bundle" -> when (name) {
                 "putString" -> {
                     activity.extras[asString(0)] = asString(1)
                     DexVm.DvmValue.Null
@@ -79,7 +97,7 @@ class AndroidStubs(
                 else -> DexVm.DvmValue.Null
             }
 
-            owner == "java/lang/StringBuilder" && name == "append" -> {
+            cleanOwner == "java/lang/StringBuilder" && name == "append" -> {
                 DexVm.DvmValue.ObjV(asString(0) + (arg(1).let {
                     when (it) {
                         is DexVm.DvmValue.ObjV -> it.o?.toString() ?: "null"
@@ -90,7 +108,7 @@ class AndroidStubs(
                 }))
             }
 
-            owner == "java/lang/StringBuilder" && name == "toString" -> arg(0)
+            cleanOwner == "java/lang/StringBuilder" && name == "toString" -> arg(0)
 
             else -> null
         }

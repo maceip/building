@@ -20,9 +20,12 @@ object ManifestParser {
         // Text manifest (some test fixtures ship plaintext).
         if (bytes[0].toInt().toChar() == '<') {
             val text = bytes.decodeToString()
-            val pkg = Regex("""package\s*=\s*"([^"]+)"""").find(text)?.groupValues?.get(1) ?: ""
-            val act = Regex("""<activity[^>]*name\s*=\s*"([^"]+)"""").find(text)?.groupValues?.get(1)
-            return Manifest(pkg, normalizeActivity(pkg, act), null)
+            val manifestTag = Regex("""<manifest\b[^>]*>""", RegexOption.DOT_MATCHES_ALL).find(text)?.value ?: ""
+            val pkg = Regex("""\bpackage\s*=\s*"([^"]+)"""").find(manifestTag)?.groupValues?.get(1) ?: ""
+            val appTag = Regex("""<application\b[^>]*>""", RegexOption.DOT_MATCHES_ALL).find(text)?.value ?: ""
+            val appLabel = Regex("""\b(?:android:)?label\s*=\s*"([^"]+)"""").find(appTag)?.groupValues?.get(1)
+            val act = findLauncherActivityFromTextXml(text)
+            return Manifest(pkg, normalizeActivity(pkg, act), appLabel)
         }
         val r = LE(bytes)
         val magic = r.u16()
@@ -113,12 +116,91 @@ object ManifestParser {
         return Manifest(packageName ?: "", normalizeActivity(packageName, launchActivity), applicationLabel)
     }
 
-    private fun normalizeActivity(pkg: String?, name: String?): String? {
+    internal fun findLauncherActivityFromTextXml(text: String): String? {
+        val blocks = extractXmlTagBlocks(text, "activity")
+        val openTagRegex = Regex("""<activity\b[^>]*>""", RegexOption.DOT_MATCHES_ALL)
+        val nameRegex = Regex("""(?:android:)?name\s*=\s*"([^"]+)"""")
+        fun activityNameOf(block: String): String? {
+            val header = openTagRegex.find(block)?.value ?: block
+            return nameRegex.find(header)?.groupValues?.get(1)
+        }
+
+        // 1. Prefer <activity> with MAIN + LAUNCHER / LEANBACK_LAUNCHER / APP_MUSIC
+        for (block in blocks) {
+            if (block.contains("android.intent.action.MAIN") &&
+                (block.contains("android.intent.category.LAUNCHER") ||
+                    block.contains("android.intent.category.LEANBACK_LAUNCHER") ||
+                    block.contains("android.intent.category.APP_MUSIC"))
+            ) {
+                activityNameOf(block)?.let { return it }
+            }
+        }
+        // 2. Check <activity-alias> with MAIN + LAUNCHER targeting an activity
+        val aliases = extractXmlTagBlocks(text, "activity-alias")
+        val targetRegex = Regex("""(?:android:)?targetActivity\s*=\s*"([^"]+)"""")
+        for (alias in aliases) {
+            if (alias.contains("android.intent.action.MAIN")) {
+                targetRegex.find(alias)?.groupValues?.get(1)?.let { return it }
+            }
+        }
+        // 3. Prefer <activity> with MAIN action
+        for (block in blocks) {
+            if (block.contains("android.intent.action.MAIN")) {
+                activityNameOf(block)?.let { return it }
+            }
+        }
+        // 4. Prefer an activity named *MainActivity, *RouteActivity, or *WelcomeActivity
+        val allNames = blocks.mapNotNull { activityNameOf(it) }
+        allNames.firstOrNull {
+            it.endsWith("MainActivity") || it.endsWith("RouteActivity") || it.endsWith("WelcomeActivity")
+        }?.let { return it }
+
+        return allNames.firstOrNull()
+    }
+
+    private fun extractXmlTagBlocks(xml: String, tagName: String): List<String> {
+        val out = ArrayList<String>()
+        val openToken = "<$tagName"
+        val closeToken = "</$tagName>"
+        var cursor = 0
+        while (cursor < xml.length) {
+            val start = xml.indexOf(openToken, cursor)
+            if (start < 0) break
+            val afterTag = start + openToken.length
+            if (afterTag < xml.length) {
+                val nextChar = xml[afterTag]
+                if (!nextChar.isWhitespace() && nextChar != '>' && nextChar != '/') {
+                    cursor = afterTag
+                    continue
+                }
+            }
+            val openEnd = xml.indexOf('>', afterTag)
+            if (openEnd < 0) break
+            // Self-closing tag: <activity ... />
+            if (openEnd > start && xml[openEnd - 1] == '/') {
+                out.add(xml.substring(start, openEnd + 1))
+                cursor = openEnd + 1
+                continue
+            }
+            val closeStart = xml.indexOf(closeToken, openEnd + 1)
+            if (closeStart < 0) {
+                out.add(xml.substring(start, openEnd + 1))
+                cursor = openEnd + 1
+            } else {
+                val blockEnd = closeStart + closeToken.length
+                out.add(xml.substring(start, blockEnd))
+                cursor = blockEnd
+            }
+        }
+        return out
+    }
+
+    internal fun normalizeActivity(pkg: String?, name: String?): String? {
         if (name.isNullOrBlank()) return null
         return when {
-            name.startsWith(".") -> (pkg ?: "") + name
+            name.startsWith(".") -> if (pkg.isNullOrBlank()) name.removePrefix(".") else "$pkg$name"
             name.contains('.') -> name
-            else -> "${pkg.orEmpty()}.$name"
+            else -> if (pkg.isNullOrBlank()) name else "$pkg.$name"
         }
     }
 

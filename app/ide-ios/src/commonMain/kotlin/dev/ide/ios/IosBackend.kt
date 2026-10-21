@@ -754,8 +754,12 @@ class IosBackend(
         val options = mutableListOf<RunTaskOption>()
         if (root != null) {
             val apks = findApkArtifacts(root)
-            if (apks.isNotEmpty()) {
+            val isAndroidSource = IosAndroidProjectBuilder.isAndroidSourceProject(root)
+            if (apks.isNotEmpty() || isAndroidSource) {
                 options.add(RunTaskOption("android:apk:run", "Run Android APK", "Application"))
+                if (isAndroidSource) {
+                    options.add(RunTaskOption("android:apk:build", "Build Android APK", "Build"))
+                }
             }
             val guestArtifacts = GuestAppRunner.findGuestArtifacts(root)
             if (guestArtifacts.isNotEmpty()) {
@@ -783,6 +787,10 @@ class IosBackend(
                 runAndroidApk(root)
                 return
             }
+            "android:apk:build" -> {
+                buildAndroidApkOnly(root)
+                return
+            }
             "ios:guest:run" -> {
                 runGuestAppSession(root)
                 return
@@ -806,6 +814,10 @@ class IosBackend(
 
     override fun runBuild() {
         val root = active?.rootPath?.takeIf { it.isNotEmpty() } ?: return
+        if (findApkArtifacts(root).isNotEmpty() || IosAndroidProjectBuilder.isAndroidSourceProject(root)) {
+            runAndroidApk(root)
+            return
+        }
         val guestArtifacts = GuestAppRunner.findGuestArtifacts(root)
         if (guestArtifacts.isNotEmpty()) {
             runGuestAppSession(root)
@@ -822,6 +834,21 @@ class IosBackend(
 
     private fun findApkArtifacts(root: String): List<String> {
         val found = mutableListOf<String>()
+        val outputDirs = listOf(
+            IosFiles.join(root, "app/build/outputs/apk/debug"),
+            IosFiles.join(root, "app/build/outputs/apk/release"),
+            IosFiles.join(root, "androidApp/build/outputs/apk/debug"),
+            IosFiles.join(root, "build/outputs/apk/debug"),
+        )
+        for (outDir in outputDirs) {
+            if (IosFiles.isDirectory(outDir)) {
+                for (entry in IosFiles.list(outDir)) {
+                    if (entry.endsWith(".apk", ignoreCase = true)) {
+                        found.add(IosFiles.join(outDir, entry))
+                    }
+                }
+            }
+        }
         fun scan(d: String, depth: Int) {
             if (depth > 4) return
             for (entry in IosFiles.list(d)) {
@@ -829,7 +856,7 @@ class IosBackend(
                 val full = IosFiles.join(d, entry)
                 if (IosFiles.isDirectory(full)) {
                     if (entry != "build" && entry != ".git") scan(full, depth + 1)
-                } else if (entry.endsWith(".apk", ignoreCase = true)) {
+                } else if (entry.endsWith(".apk", ignoreCase = true) && full !in found) {
                     found.add(full)
                 }
             }
@@ -838,12 +865,58 @@ class IosBackend(
         return found
     }
 
+    private fun buildAndroidApkOnly(root: String) {
+        val currentRunning = activeRunSession
+        if (currentRunning != null) stopBuild()
+        val sessionId = (activeRunSession ?: 0) + 1
+        activeRunSession = sessionId
+
+        _buildState.value = BuildState(status = RunStatus.Running)
+        _runConsole.value = RunConsoleUi(
+            id = sessionId,
+            moduleName = active?.name ?: "app",
+            mainClass = "Android APK Builder",
+            phase = RunPhase.Building,
+            transcript = emptyList(),
+            acceptsInput = false,
+        )
+
+        runJob = backendScope.launch {
+            val onChunk: (ConsoleChunk) -> Unit = { chunk ->
+                _runConsole.update { console ->
+                    console?.copy(transcript = console.transcript + chunk)
+                }
+            }
+            onChunk(ConsoleChunk("=== Building Android APK on iOS ===\n", ConsoleChunkKind.SYSTEM))
+            val built = withContext(ioDispatcher) {
+                IosAndroidProjectBuilder.buildApkForProject(root) { line ->
+                    onChunk(ConsoleChunk("$line\n", ConsoleChunkKind.OUTPUT))
+                }
+            }
+            bumpFs()
+            _buildState.value = BuildState(
+                status = if (built.ok) RunStatus.Succeeded else RunStatus.Failed,
+                log = listOf(
+                    BuildLogLine(
+                        if (built.ok) "Built ${built.apkPath}" else "Failed to build APK for $root",
+                        if (built.ok) UiLogLevel.Info else UiLogLevel.Error,
+                    ),
+                ),
+            )
+            _runConsole.update {
+                it?.copy(phase = RunPhase.Finished, exitCode = if (built.ok) 0 else 1)
+            }
+            activeRunSession = null
+        }
+    }
+
     /**
      * Open a project's `.apk` on the phone with no Android runtime: unpack, parse the manifest,
      * interpret `classes*.dex` through `:android-apk`, and report what started.
      *
-     * This is the same seam as GuestAppRunner for IPAs — one run target, one console — so an APK
-     * dropped into the workspace is a first-class Run, not a side tool.
+     * When the project is a cloned Android source repository with no prebuilt `.apk`, [IosAndroidProjectBuilder]
+     * first synthesizes the `.apk` (`AndroidManifest.xml` + `classes.dex`) into `app/build/outputs/apk/debug/`
+     * and renders a Material 3 preview frame for the Run pane.
      */
     private fun runAndroidApk(root: String) {
         val currentRunning = activeRunSession
@@ -868,7 +941,19 @@ class IosBackend(
                 }
             }
             onChunk(ConsoleChunk("=== Launching Android APK ===\n", ConsoleChunkKind.SYSTEM))
-            val apks = findApkArtifacts(root)
+            var apks = findApkArtifacts(root)
+            if (apks.isEmpty() && IosAndroidProjectBuilder.isAndroidSourceProject(root)) {
+                onChunk(ConsoleChunk("Building Android source project in $root...\n", ConsoleChunkKind.SYSTEM))
+                val built = withContext(ioDispatcher) {
+                    IosAndroidProjectBuilder.buildApkForProject(root) { line ->
+                        onChunk(ConsoleChunk("$line\n", ConsoleChunkKind.OUTPUT))
+                    }
+                }
+                bumpFs()
+                if (built.ok) {
+                    apks = listOf(built.apkPath)
+                }
+            }
             if (apks.isEmpty()) {
                 onChunk(ConsoleChunk("No .apk found in $root\n", ConsoleChunkKind.SYSTEM))
                 _buildState.value = BuildState(status = RunStatus.Failed)
@@ -894,6 +979,25 @@ class IosBackend(
             if (result.nativeAbis.isNotEmpty()) {
                 onChunk(ConsoleChunk("Note: native libraries present (${result.nativeAbis}); the .so loader is not linked yet — Java/Kotlin dex runs here.\n", ConsoleChunkKind.SYSTEM))
             }
+
+            if (result.ok) {
+                runCatching {
+                    val spec = withContext(ioDispatcher) { IosAndroidProjectBuilder.inspectProject(root) }
+                    val pngBytes = withContext(ioDispatcher) {
+                        IosAndroidProjectBuilder.renderPreviewPng(spec, runSurfaceWidth, runSurfaceHeight)
+                    }
+                    val framePath = IosFiles.join(
+                        NSTemporaryDirectory(),
+                        "android-apk-frame-$sessionId-${++runFrameSeq}.png",
+                    )
+                    if (IosFiles.writeBytes(framePath, pngBytes)) {
+                        _runConsole.update {
+                            it?.copy(frame = RunFrameUi(framePath, runSurfaceWidth, runSurfaceHeight, runFrameSeq))
+                        }
+                    }
+                }
+            }
+
             _buildState.value = BuildState(
                 status = if (result.ok) RunStatus.Succeeded else RunStatus.Failed,
                 log = listOf(BuildLogLine(result.message, if (result.ok) UiLogLevel.Info else UiLogLevel.Error)),
@@ -2343,9 +2447,10 @@ class IosBackend(
         val isNode = projectModel.isNode(root)
         val isPython = projectModel.isPython(root)
         val isSwift = projectModel.isSwift(root)
-        val isAndroid = store?.workspace?.projects?.any { p ->
-            p.modules.any { it.type.id in listOf("android-app", "android-lib") }
-        } ?: false
+        val isAndroid = IosAndroidProjectBuilder.isAndroidSourceProject(root) ||
+            (store?.workspace?.projects?.any { p ->
+                p.modules.any { it.type.id in listOf("android-app", "android-lib") }
+            } ?: false)
         val unrecognized = !isNode && !isPython && !isSwift && !isAndroid &&
             (store?.workspace?.projects?.isEmpty() == true ||
                 store?.workspace?.projects?.all { it.modules.isEmpty() } == true)

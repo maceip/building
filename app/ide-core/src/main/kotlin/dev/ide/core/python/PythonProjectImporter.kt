@@ -79,6 +79,7 @@ class PythonProjectImporter : ProjectImporter {
         var subPyManifest: Path? = null
         var pyCount = 0
         var tsJsCount = 0
+        var swiftCount = 0
         Files.walk(root, 6).use { stream ->
             stream.filter { p ->
                 Files.isRegularFile(p) &&
@@ -90,6 +91,9 @@ class PythonProjectImporter : ProjectImporter {
                         pyCount++
                         if (firstPy == null) firstPy = p
                     }
+                    fileName.endsWith(".swift") -> {
+                        swiftCount++
+                    }
                     (fileName.endsWith(".ts") || fileName.endsWith(".tsx") || fileName.endsWith(".js") || fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) &&
                         !fileName.endsWith(".d.ts") -> {
                         tsJsCount++
@@ -99,6 +103,9 @@ class PythonProjectImporter : ProjectImporter {
                     }
                 }
             }
+        }
+        if (swiftCount > pyCount) {
+            return null
         }
         if (subPyManifest != null && pyCount > tsJsCount) {
             return Detection(

@@ -90,8 +90,9 @@ class ApkRuntime(private val log: (String) -> Unit = {}) {
 
     private fun runActivity(vm: DexVm, dex: DexFile, type: String, stubs: AndroidStubs): String? {
         val ctor = dex.findMethod(type, "<init>", "()V")
-        val onCreate = dex.findMethod(type, "onCreate", "Landroid/os/Bundle;")
+        val onCreate = dex.findMethod(type, "onCreate", "(Landroid/os/Bundle;)V")
             ?: dex.findMethod(type, "onCreate", "()V")
+            ?: dex.findMethod(type, "onCreate")
         if (ctor == null && onCreate == null) {
             log("apk: $type has no <init>/onCreate")
             return null
