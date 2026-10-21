@@ -109,3 +109,6 @@ AGENT_HANDOFF*.md
 
 # Scratch icon export zip (contains __MACOSX junk; extract to branding/ if needed)
 use.zip
+
+# Unpacked Agent-first redesign HTML bundle (design reference scratch; source HTML stays in Downloads)
+.tmp-redesign/
