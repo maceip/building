@@ -317,8 +317,8 @@ fun DependenciesPane(
 private fun OverlayCard(maxWidth: androidx.compose.ui.unit.Dp, content: @Composable () -> Unit) {
     Column(
         Modifier.padding(horizontal = 12.dp).widthIn(max = maxWidth).fillMaxWidth()
-            .background(Ide.colors.glassThick, RoundedCornerShape(Ca.radius.xl))
-            .border(1.dp, Ide.colors.glassEdge, RoundedCornerShape(Ca.radius.xl)),
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(Ca.radius.xl))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.xl)),
     ) { content() }
 }
 
@@ -924,8 +924,8 @@ private fun OptionChip(label: String, selected: Boolean, onClick: () -> Unit) {
         label = { Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1) },
         shape = RoundedCornerShape(Ca.radius.pill),
         colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-            selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
         ),
     )
 }
@@ -1206,8 +1206,8 @@ private fun ConfirmRemoveDialog(coordinate: String?, moduleName: String?, onDism
     DropdownOverlay(visible = coordinate != null, onDismiss = onDismiss, topPadding = 140.dp) {
         Column(
             Modifier.padding(horizontal = 12.dp).widthIn(max = 460.dp).fillMaxWidth()
-                .background(Ide.colors.glassThick, RoundedCornerShape(Ca.radius.xl))
-                .border(1.dp, Ide.colors.glassEdge, RoundedCornerShape(Ca.radius.xl)).padding(20.dp),
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(Ca.radius.xl))
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.xl)).padding(16.dp),
         ) {
             Text(stringResource(Res.string.dep_remove_dependency), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
@@ -1248,9 +1248,15 @@ private fun EditDependencySheet(
             val maxCardHeight = maxHeight
             Column(
                 Modifier.padding(horizontal = if (expanded) 12.dp else 0.dp).widthIn(max = 540.dp).fillMaxWidth()
-                    .then(if (expanded) Modifier.background(Ide.colors.glassThick, RoundedCornerShape(Ca.radius.xl)).border(1.dp, Ide.colors.glassEdge, RoundedCornerShape(Ca.radius.xl)) else Modifier)
+                    .then(
+                        if (expanded) {
+                            Modifier
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(Ca.radius.xl))
+                                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.xl))
+                        } else Modifier
+                    )
                     .heightIn(max = maxCardHeight)
-                    .padding(if (expanded) 20.dp else 4.dp),
+                    .padding(if (expanded) 16.dp else 4.dp),
             ) {
                 // Fixed header.
                 Text(stringResource(Res.string.dep_edit_dependency), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
@@ -1290,11 +1296,11 @@ private fun EditDependencySheet(
                 }
 
                 // Pinned action row — always visible, never scrolled off a small screen.
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Spacer(Modifier.weight(1f))
                     DialogButton(stringResource(Res.string.cancel), destructive = false, onClick = onDismiss)
-                    DialogButton(stringResource(Res.string.save), destructive = false, onClick = {
+                    DialogButton(stringResource(Res.string.save), destructive = false, primary = true, onClick = {
                         onSave(state.trimmedVersion, state.configuration, state.parsedExclusions)
                     })
                 }
@@ -1308,9 +1314,9 @@ private fun EditDependencySheet(
 /** A small section header inside the edit sheet. */
 @Composable
 private fun SheetSection(label: String) {
-    Spacer(Modifier.height(14.dp))
+    Spacer(Modifier.height(12.dp))
     Text(label.uppercase(), color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
-    Spacer(Modifier.height(6.dp))
+    Spacer(Modifier.height(4.dp))
 }
 
 /** A boxed text field with a leading icon, matching the sheet's other inputs. */
@@ -1428,9 +1434,17 @@ private fun round1(v: Double): String {
 }
 
 @Composable
-private fun DialogButton(label: String, destructive: Boolean, onClick: () -> Unit) {
-    val fill = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.surfaceContainerHighest
-    val fg = if (destructive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+private fun DialogButton(label: String, destructive: Boolean, onClick: () -> Unit, primary: Boolean = false) {
+    val fill = when {
+        destructive -> MaterialTheme.colorScheme.error
+        primary -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.surfaceContainerHighest
+    }
+    val fg = when {
+        destructive -> MaterialTheme.colorScheme.onError
+        primary -> MaterialTheme.colorScheme.onPrimary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     val interaction = remember { MutableInteractionSource() }
     Box(
         Modifier.background(fill, RoundedCornerShape(Ca.radius.control)).clickable(interaction, null, onClick = onClick)
@@ -1450,8 +1464,8 @@ private fun ToastHost(toast: ToastMsg?, modifier: Modifier) {
         ) {
             val t = toast
             Row(
-                Modifier.background(Ide.colors.glassThick, RoundedCornerShape(Ca.radius.pill))
-                    .border(1.dp, Ide.colors.glassEdge, RoundedCornerShape(Ca.radius.pill)).padding(horizontal = 16.dp, vertical = 11.dp),
+                Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(Ca.radius.pill))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.pill)).padding(horizontal = 16.dp, vertical = 11.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Icon(if (t?.error == true) CaIcons.warning else CaIcons.check, null, Modifier.size(16.dp), tint = if (t?.error == true) MaterialTheme.colorScheme.error else Ide.colors.run)

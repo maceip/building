@@ -2,6 +2,7 @@ package dev.ide.ui.screens
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -137,7 +138,9 @@ private fun VerdictHeader(result: UiChallengeVerdict) {
     val accepted = result.accepted
     val pair = tonalPair(if (accepted) 1 else 2)
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.lg)).background(pair.container).padding(18.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.lg)).background(pair.container)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.lg))
+            .padding(18.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -206,7 +209,9 @@ private fun ComplexityPanel(result: UiChallengeVerdict) {
     val matched = result.timeClass != null && result.timeClass == result.optimalTime
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.lg))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow).padding(16.dp),
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.lg))
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -258,7 +263,9 @@ private fun ComplexityPanel(result: UiChallengeVerdict) {
 private fun MetricTile(label: String, value: String, reference: String?, index: Int, modifier: Modifier = Modifier) {
     val pair = tonalPair(index)
     Column(
-        modifier.clip(RoundedCornerShape(Ca.radius.md)).background(pair.container).padding(14.dp),
+        modifier.clip(RoundedCornerShape(Ca.radius.md)).background(pair.container)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.md))
+            .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = pair.onContainer.copy(alpha = 0.7f))
@@ -284,7 +291,9 @@ private fun MetricTile(label: String, value: String, reference: String?, index: 
 private fun PlainTile(label: String, value: String, modifier: Modifier = Modifier) {
     Column(
         modifier.clip(RoundedCornerShape(Ca.radius.md))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(14.dp),
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.md))
+            .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
@@ -302,7 +311,9 @@ private fun PlainTile(label: String, value: String, modifier: Modifier = Modifie
 private fun ScorePanel(result: UiChallengeVerdict) {
     val pair = tonalPair(0)
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.lg)).background(pair.container).padding(16.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.lg)).background(pair.container)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.lg))
+            .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -341,7 +352,9 @@ private fun ScorePanel(result: UiChallengeVerdict) {
 private fun FailureDetail(message: String, result: UiChallengeVerdict) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.md))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow).padding(14.dp),
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.md))
+            .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text(
@@ -364,7 +377,9 @@ private fun FailureDetail(message: String, result: UiChallengeVerdict) {
 private fun GrowthCard(result: UiChallengeVerdict) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.lg))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow).padding(16.dp),
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.lg))
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -301,6 +301,6 @@ private fun DangerButton(label: String, onClick: () -> Unit) {
         Modifier.background(MaterialTheme.colorScheme.error, RoundedCornerShape(Ca.radius.control))
             .clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 9.dp),
     ) {
-        Text(label, color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        Text(label, color = MaterialTheme.colorScheme.onError, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
     }
 }

@@ -483,6 +483,7 @@ private fun DetailHero(
         shape = RoundedCornerShape(32.dp),
         color = pair.container,
         contentColor = pair.onContainer,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
     ) {
         Box(Modifier.clipToBounds()) {
@@ -690,8 +691,9 @@ private fun InstallRow(
             Surface(
                 onClick = onRate,
                 shape = RoundedCornerShape(topStart = 16.dp, topEnd = 28.dp, bottomEnd = 16.dp, bottomStart = 28.dp),
-                color = c.secondaryContainer,
-                contentColor = c.onSecondaryContainer,
+                color = c.surfaceContainerHigh,
+                contentColor = c.onSurface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
                 interactionSource = rateInteraction,
                 modifier = Modifier.size(56.dp).pressScale(rateInteraction, pressed = 0.96f),
             ) {
@@ -1017,7 +1019,7 @@ private fun RatingsPanel(item: UiStoreItem) {
                                 contentDescription = null,
                                 size = 13.dp,
                                 filled = i < item.rating.toInt(),
-                                tint = c.onPrimaryContainer,
+                                tint = if (i < item.rating.toInt()) Color(0xFFFFB800) else c.onPrimaryContainer.copy(alpha = 0.35f),
                             )
                         }
                     }
@@ -1057,6 +1059,7 @@ private fun ProseCard(text: String) {
     Surface(
         shape = RoundedCornerShape(28.dp),
         color = c.surfaceContainerLow,
+        border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 18.dp),
     ) {
         ListingProse(

@@ -356,7 +356,9 @@ private fun ProblemPane(problem: UiChallengeProblem) {
         problem.constraints?.takeIf { it.isNotBlank() }?.let { constraints ->
             Column(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.md))
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow).padding(14.dp),
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.md))
+                    .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Text(
@@ -383,7 +385,9 @@ private fun ProblemPane(problem: UiChallengeProblem) {
             if (hintShown) {
                 val pair = tonalPair(2)
                 Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.md)).background(pair.container).padding(14.dp),
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.md)).background(pair.container)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.md))
+                        .padding(14.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Symbol(CaSymbols.info, contentDescription = null, size = 18.dp, tint = pair.onContainer)
@@ -403,7 +407,9 @@ private fun ProblemPane(problem: UiChallengeProblem) {
 private fun SampleCard(sample: UiChallengeSample) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.md))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow).padding(14.dp),
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.md))
+            .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         MonoLine(stringResource(Res.string.challenge_input), sample.inputJson)
@@ -528,7 +534,9 @@ private fun LocalRunStrip(run: UiLocalRun) {
         else -> tonalPair(2)
     }
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.md)).background(pair.container).padding(12.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.md)).background(pair.container)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.md))
+            .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

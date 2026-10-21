@@ -213,7 +213,9 @@ private fun TodayHero(
     val remaining = if (day.nextDropAtMs > 0) day.nextDropAtMs - nowMillis() else 0L
 
     Column(
-        Modifier.fillMaxWidth().clip(cardShape(0)).background(pair.container).padding(20.dp),
+        Modifier.fillMaxWidth().clip(cardShape(0)).background(pair.container)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, cardShape(0))
+            .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -261,20 +263,21 @@ private fun TodayHero(
         }
 
         val solved = day.you.solved
+        val c = MaterialTheme.colorScheme
         Button(
             onClick = if (signedIn) onSolve else onSignIn,
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(Ca.radius.pill),
             colors = ButtonDefaults.buttonColors(
-                containerColor = pair.onContainer,
-                contentColor = pair.container,
+                containerColor = c.primary,
+                contentColor = c.onPrimary,
             ),
         ) {
             Symbol(
                 if (solved) CaSymbols.checkCircle else CaSymbols.bolt,
                 contentDescription = null,
                 size = 20.dp,
-                tint = pair.container,
+                tint = c.onPrimary,
                 filled = true,
             )
             Spacer(Modifier.width(8.dp))
@@ -337,7 +340,9 @@ private fun DifficultyPill(difficulty: String, onContainer: Color) {
 private fun YourResultCard(day: UiChallengeDay) {
     val pair = tonalPair(1)
     Row(
-        Modifier.fillMaxWidth().clip(cardShape(1)).background(pair.container).padding(16.dp),
+        Modifier.fillMaxWidth().clip(cardShape(1)).background(pair.container)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, cardShape(1))
+            .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -399,6 +404,7 @@ fun BoardRow(row: UiChallengeRank, modifier: Modifier = Modifier) {
 
     Row(
         modifier.fillMaxWidth().clip(RoundedCornerShape(Ca.radius.md)).background(background)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.md))
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -466,7 +472,9 @@ private fun StreakStrip(state: ChallengeTabState) {
 private fun StatTile(label: String, value: String, glyph: Char, index: Int, modifier: Modifier = Modifier) {
     val pair = tonalPair(index)
     Column(
-        modifier.clip(tileShape(index)).background(pair.container).padding(14.dp),
+        modifier.clip(tileShape(index)).background(pair.container)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, tileShape(index))
+            .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Symbol(glyph, contentDescription = null, size = 18.dp, tint = pair.onContainer, filled = true)
@@ -487,6 +495,7 @@ private fun ArchiveStrip(history: List<UiChallengeHistoryEntry>, onOpen: (String
             Column(
                 Modifier.width(150.dp).clip(RoundedCornerShape(Ca.radius.lg))
                     .background(pair.container.copy(alpha = faded))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.lg))
                     .clickable { onOpen(entry.date) }
                     .padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -524,7 +533,8 @@ private fun ArchiveStrip(history: List<UiChallengeHistoryEntry>, onOpen: (String
 private fun LoadingCard() {
     Box(
         Modifier.fillMaxWidth().height(180.dp).clip(cardShape(0))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow),
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, cardShape(0)),
         contentAlignment = Alignment.Center,
     ) {
         CircularProgressIndicator(strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
@@ -541,6 +551,7 @@ private fun LoadingCard() {
 private fun NothingScheduledCard(offline: Boolean) {
     Column(
         Modifier.fillMaxWidth().clip(cardShape(0)).background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, cardShape(0))
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),

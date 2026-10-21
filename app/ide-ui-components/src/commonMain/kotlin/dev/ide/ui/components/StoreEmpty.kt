@@ -141,8 +141,8 @@ fun EmptyStoreHero(
                     Surface(
                         onClick = onPublish,
                         shape = RoundedCornerShape(8.dp),
-                        color = c.onPrimaryContainer,
-                        contentColor = c.primaryContainer,
+                        color = c.primary,
+                        contentColor = c.onPrimary,
                         modifier = Modifier.height(36.dp),
                     ) {
                         Row(
@@ -166,7 +166,7 @@ fun EmptyStoreHero(
                         shape = RoundedCornerShape(8.dp),
                         color = Color.Transparent,
                         contentColor = c.onPrimaryContainer,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, c.onPrimaryContainer.copy(alpha = 0.45f)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
                         modifier = Modifier.height(36.dp),
                     ) {
                         Box(Modifier.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {

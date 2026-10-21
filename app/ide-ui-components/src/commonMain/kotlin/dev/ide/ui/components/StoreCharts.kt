@@ -291,6 +291,7 @@ fun ChartCard(
     Surface(
         shape = RoundedCornerShape(28.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp),
     ) {
         Column(Modifier.padding(vertical = 6.dp)) {

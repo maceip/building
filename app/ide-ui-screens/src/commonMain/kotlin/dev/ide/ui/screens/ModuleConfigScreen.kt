@@ -375,11 +375,12 @@ private fun ListPaneHeader(onBack: () -> Unit, onNewModule: (() -> Unit)?) {
 @Composable
 private fun ModuleRow(module: UiModuleRef, selected: Boolean, compact: Boolean, onOpen: () -> Unit, onRemove: () -> Unit) {
     val container = when {
-        selected -> MaterialTheme.colorScheme.secondaryContainer
+        // Restrained lime wash for the open module — not a full accent fill.
+        selected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.38f)
         compact -> Color.Transparent
         else -> MaterialTheme.colorScheme.surfaceContainer
     }
-    val onContainer = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+    val onContainer = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface
     Surface(onClick = onOpen, shape = MaterialTheme.shapes.large, color = container, modifier = Modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(start = 12.dp, end = 4.dp, top = if (compact) 8.dp else 12.dp, bottom = if (compact) 8.dp else 12.dp),
@@ -570,8 +571,8 @@ private fun ModulePage(modifier: Modifier, content: LazyListScope.(twoColumn: Bo
         val twoColumn = maxWidth - gutter * 2 >= MODULE_TWO_COLUMN_MIN
         LazyColumn(
             Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = gutter, end = gutter, top = 16.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(start = gutter, end = gutter, top = 12.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) { content(twoColumn) }
     }
 }
@@ -635,11 +636,11 @@ private fun ToggleCard(
         Column(
             Modifier.fillMaxWidth()
                 .toggleable(value = checked, enabled = enabled && !working, role = Role.Switch, onValueChange = onToggle)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(title, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium)
                     Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                 }
@@ -736,7 +737,14 @@ private fun PackagingPane(backend: IdeBackend, moduleName: String, codeFont: Fon
                 item("save") {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)) {
                         if (state.saving) CircularProgressIndicator(Modifier.size(20.dp), color = MaterialTheme.colorScheme.primary, strokeWidth = 2.dp)
-                        Button(onClick = state::save, enabled = !state.saving) {
+                        Button(
+                            onClick = state::save,
+                            enabled = !state.saving,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                            ),
+                        ) {
                             Icon(CaIcons.check, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
                             Text(stringResource(Res.string.modcfg_save))
@@ -867,8 +875,8 @@ private fun ConfirmModuleRemove(moduleName: String?, onDismiss: () -> Unit, onCo
     DropdownOverlay(visible = moduleName != null, onDismiss = onDismiss, topPadding = 160.dp) {
         Column(
             Modifier.padding(horizontal = 12.dp).widthIn(max = 440.dp).fillMaxWidth()
-                .background(Ide.colors.glassThick, RoundedCornerShape(Ca.radius.xl))
-                .border(1.dp, Ide.colors.glassEdge, RoundedCornerShape(Ca.radius.xl)).padding(20.dp),
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(Ca.radius.xl))
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.xl)).padding(16.dp),
         ) {
             Text(stringResource(Res.string.modcfg_remove_module), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
@@ -908,8 +916,8 @@ private fun NewModuleDialog(
         val types = remember { backend.modules.availableModuleTypes() }
         Column(
             Modifier.padding(horizontal = 12.dp).widthIn(max = 560.dp).fillMaxWidth()
-                .background(Ide.colors.glassThick, RoundedCornerShape(Ca.radius.xl))
-                .border(1.dp, Ide.colors.glassEdge, RoundedCornerShape(Ca.radius.xl)).padding(20.dp),
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(Ca.radius.xl))
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.xl)).padding(16.dp),
         ) {
             if (types.isEmpty()) {
                 Text(stringResource(Res.string.modcfg_no_module_types), color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.bodyLarge)
@@ -1198,7 +1206,13 @@ private fun SaveBar(onDiscard: () -> Unit, onSave: () -> Unit) {
                     modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 TextButton(onClick = onDiscard) { Text(stringResource(Res.string.modcfg_discard)) }
-                Button(onClick = onSave) { Text(stringResource(Res.string.modcfg_save)) }
+                Button(
+                    onClick = onSave,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                ) { Text(stringResource(Res.string.modcfg_save)) }
             }
         }
     }
@@ -1291,9 +1305,9 @@ private fun SectionCard(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     OutlinedCard(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large) {
-        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(title, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium)
                     subtitle?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
                 }
@@ -1417,17 +1431,17 @@ private fun FacetPanel(form: FacetForm, codeFont: FontFamily, twoColumn: Boolean
     val caret by animateFloatAsState(if (open) 0f else -90f, tween(Motion.FAST), label = "facetCaret")
     OutlinedCard(Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large) {
         Row(
-            Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 20.dp, vertical = 16.dp),
+            Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Box(Modifier.size(32.dp).background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(10.dp)), Alignment.Center) {
-                Icon(CaIcons.box, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            Box(Modifier.size(32.dp).background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(10.dp)), Alignment.Center) {
+                Icon(CaIcons.box, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Text(form.title, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             Icon(CaIcons.chevronDown, null, Modifier.size(20.dp).rotate(caret), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         AnimatedVisibility(open, enter = expandVertically(tween(Motion.FAST)) + fadeIn(), exit = shrinkVertically(tween(Motion.FAST)) + fadeOut()) {
-            Box(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 20.dp)) {
+            Box(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 16.dp)) {
                 FieldGrid(form.fields, codeFont, twoColumn)
             }
         }
@@ -1444,8 +1458,8 @@ private fun FieldGrid(fields: List<FieldState>, codeFont: FontFamily, twoColumn:
     val inputs = fields.filter { it is FieldState.TextF || it is FieldState.NumberF }
     val toggles = fields.filterIsInstance<FieldState.BoolF>()
     val blocks = fields.filter { it is FieldState.ListF || it is FieldState.TableF }
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        if (inputs.isNotEmpty()) GridRows(inputs, columns) { FieldEditor(it, codeFont, twoColumn) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (inputs.isNotEmpty()) GridRows(inputs, columns, spacing = 10.dp) { FieldEditor(it, codeFont, twoColumn) }
         if (toggles.isNotEmpty()) GridRows(toggles, columns, spacing = 8.dp) { ToggleRow(it) }
         blocks.forEach { FieldEditor(it, codeFont, twoColumn) }
     }
@@ -1608,8 +1622,8 @@ private fun ConfigToastHost(toast: ConfigToast?, modifier: Modifier) {
         ) {
             val t = toast
             Row(
-                Modifier.background(Ide.colors.glassThick, RoundedCornerShape(Ca.radius.pill))
-                    .border(1.dp, Ide.colors.glassEdge, RoundedCornerShape(Ca.radius.pill)).padding(horizontal = 16.dp, vertical = 11.dp),
+                Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(Ca.radius.pill))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(Ca.radius.pill)).padding(horizontal = 16.dp, vertical = 11.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Icon(if (t?.error == true) CaIcons.warning else CaIcons.check, null, Modifier.size(16.dp), tint = if (t?.error == true) MaterialTheme.colorScheme.error else Ide.colors.run)

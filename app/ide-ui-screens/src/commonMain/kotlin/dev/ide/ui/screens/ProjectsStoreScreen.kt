@@ -315,6 +315,7 @@ internal fun SearchEntry(onClick: () -> Unit, modifier: Modifier = Modifier) {
         shape = CircleShape,
         color = c.surfaceContainer,
         contentColor = c.onSurfaceVariant,
+        border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
         modifier = modifier.fillMaxWidth().height(52.dp),
     ) {
         Row(

@@ -46,6 +46,7 @@ import dev.ide.ui.generated.resources.learn_lessons_progress
 import dev.ide.ui.generated.resources.learn_minutes
 import dev.ide.ui.icons.CaIcons
 import dev.ide.ui.theme.Ca
+import dev.ide.ui.theme.bestInkOn
 import org.jetbrains.compose.resources.stringResource
 
 /**
@@ -134,7 +135,7 @@ private fun LessonRow(index: Int, lesson: UiLessonSummary, accent: Color, done: 
                 .background(if (done) accent else MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center,
         ) {
-            if (done) Icon(CaIcons.check, null, Modifier.size(18.dp), tint = Color.White)
+            if (done) Icon(CaIcons.check, null, Modifier.size(18.dp), tint = bestInkOn(accent))
             else Text(index.toString(), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {

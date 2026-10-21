@@ -80,6 +80,9 @@ object CodeMotifColors {
     val Dot = Color(0xFF2E2E36)
 }
 
+/** Rating stars stay gold — a content colour, not chrome. Shared by store rows, posters and reviews. */
+val RatingStarGold = Color(0xFFFFB800)
+
 /** One line of the abstract code motif: how wide it runs, what colour it is, and how far it is indented. */
 @Immutable
 data class MotifLine(val widthFraction: Float, val color: Color, val indent: Dp)
@@ -162,6 +165,7 @@ fun FeaturedHeroCard(
         shape = CaShapes.Hero,
         color = pair.container,
         contentColor = pair.onContainer,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         shadowElevation = 1.dp,
         interactionSource = interaction,
         modifier = modifier.width(296.dp).pressScale(interaction, pressed = 0.99f),
@@ -204,7 +208,7 @@ fun FeaturedHeroCard(
             ) {
                 if (rating >= 0f) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Symbol(CaSymbols.star, contentDescription = null, size = 16.dp, filled = true, tint = pair.onContainer)
+                        Symbol(CaSymbols.star, contentDescription = null, size = 16.dp, filled = true, tint = RatingStarGold)
                         Text(
                             formatRating(rating),
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
@@ -237,6 +241,7 @@ fun CategoryTile(
         shape = shape,
         color = pair.container,
         contentColor = pair.onContainer,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         interactionSource = interaction,
         modifier = modifier.height(104.dp).pressScale(interaction),
     ) {

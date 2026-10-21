@@ -101,6 +101,7 @@ fun StoreSearchScreen(
                 shape = CircleShape,
                 color = c.surfaceContainer,
                 contentColor = c.onSurfaceVariant,
+                border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
                 modifier = Modifier.fillMaxWidth().height(56.dp),
             ) {
                 Row(

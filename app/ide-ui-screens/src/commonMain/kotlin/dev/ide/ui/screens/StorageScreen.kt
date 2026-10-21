@@ -345,7 +345,7 @@ private fun DialogButton(text: String, modifier: Modifier, destructive: Boolean,
             .padding(vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = if (destructive) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+        Text(text, color = if (destructive) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
     }
 }
 

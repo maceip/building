@@ -129,6 +129,7 @@ fun PublishPitchBand(
         shape = RoundedCornerShape(topStart = 32.dp, topEnd = 12.dp, bottomEnd = 32.dp, bottomStart = 32.dp),
         color = c.primaryContainer,
         contentColor = c.onPrimaryContainer,
+        border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
         modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp),
     ) {
         Box(Modifier.clipToBounds()) {
@@ -164,8 +165,8 @@ fun PublishPitchBand(
                     Surface(
                         onClick = onPublish,
                         shape = RoundedCornerShape(topStart = 15.dp, topEnd = 24.dp, bottomEnd = 15.dp, bottomStart = 24.dp),
-                        color = c.onPrimaryContainer,
-                        contentColor = c.primaryContainer,
+                        color = c.primary,
+                        contentColor = c.onPrimary,
                         modifier = Modifier.height(44.dp),
                     ) {
                         Row(
@@ -182,7 +183,7 @@ fun PublishPitchBand(
                         shape = CircleShape,
                         color = Color.Transparent,
                         contentColor = c.onPrimaryContainer,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, c.onPrimaryContainer),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
                         modifier = Modifier.height(44.dp),
                     ) {
                         Box(Modifier.padding(horizontal = 18.dp), contentAlignment = Alignment.Center) {

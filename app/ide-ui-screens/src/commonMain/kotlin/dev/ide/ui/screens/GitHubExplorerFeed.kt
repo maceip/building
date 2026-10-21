@@ -363,7 +363,7 @@ fun GitHubExplorerFeed(
                         fontFamily = FontFamily.Monospace,
                         letterSpacing = 1.sp
                     ),
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 LazyRow(
@@ -401,7 +401,7 @@ fun GitHubExplorerFeed(
                         fontFamily = FontFamily.Monospace,
                         letterSpacing = 1.sp
                     ),
-                    color = MaterialTheme.colorScheme.secondary
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 Column(
@@ -433,7 +433,7 @@ fun GitHubExplorerFeed(
                         fontFamily = FontFamily.Monospace,
                         letterSpacing = 1.sp
                     ),
-                    color = MaterialTheme.colorScheme.tertiary
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 LazyRow(
@@ -742,13 +742,13 @@ private fun NorthStarBenchmarkCard(
                 interactionSource = cloneInteraction,
                 modifier = Modifier.pressScale(cloneInteraction),
                 shape = RoundedCornerShape(8.dp),
-                color = c.secondaryContainer
+                color = c.primary
             ) {
                 Text(
                     "Clone",
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                    color = c.onSecondaryContainer
+                    color = c.onPrimary
                 )
             }
         }
@@ -789,7 +789,7 @@ private fun AuthorPeerCard(
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Medium
                 ),
-                color = c.tertiary,
+                color = c.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -833,13 +833,13 @@ private fun AuthorPeerCard(
                     .fillMaxWidth()
                     .pressScale(peerInteraction),
                 shape = RoundedCornerShape(6.dp),
-                color = c.surfaceContainerHigh
+                color = c.primary
             ) {
                 Text(
                     "Clone & Inspect",
                     modifier = Modifier.padding(vertical = 5.dp),
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                    color = c.onSurface,
+                    color = c.onPrimary,
                     maxLines = 1
                 )
             }

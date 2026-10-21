@@ -90,6 +90,7 @@ fun CollectionCard(
         shape = cardShape(index),
         color = pair.container,
         contentColor = pair.onContainer,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         interactionSource = interaction,
         modifier = modifier.width(246.dp).pressScale(interaction),
     ) {
@@ -189,7 +190,8 @@ fun PosterCard(
         Box(
             Modifier.fillMaxWidth().height(104.dp)
                 .clip(cardShape(index + 1))
-                .background(pair.container),
+                .background(pair.container)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, cardShape(index + 1)),
             contentAlignment = Alignment.Center,
         ) {
             if (preview != null) {
@@ -231,7 +233,7 @@ fun PosterCard(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             if (item.rating >= 0f) {
-                Symbol(CaSymbols.star, contentDescription = null, size = 13.dp, filled = true, tint = c.primary)
+                Symbol(CaSymbols.star, contentDescription = null, size = 13.dp, filled = true, tint = RatingStarGold)
                 Text(
                     formatRating(item.rating),
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
@@ -273,8 +275,9 @@ fun SpotlightCard(
     Surface(
         onClick = onOpen,
         shape = RoundedCornerShape(topStart = 32.dp, topEnd = 12.dp, bottomEnd = 32.dp, bottomStart = 32.dp),
-        color = c.secondaryContainer,
-        contentColor = c.onSecondaryContainer,
+        color = c.surfaceContainerHigh,
+        contentColor = c.onSurface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
         interactionSource = interaction,
         modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp).pressScale(interaction, pressed = 0.99f),
     ) {
@@ -283,13 +286,13 @@ fun SpotlightCard(
                 CaSymbols.apartment,
                 contentDescription = null,
                 size = 140.dp,
-                tint = c.onSecondaryContainer.copy(alpha = 0.12f),
+                tint = c.onSurface.copy(alpha = 0.12f),
                 modifier = Modifier.align(Alignment.BottomEnd).offset(x = 18.dp, y = 26.dp),
             )
             Column(Modifier.padding(20.dp)) {
                 Eyebrow(
                     stringResource(Res.string.store_publisher_spotlight),
-                    color = c.onSecondaryContainer.copy(alpha = 0.75f),
+                    color = c.onSurfaceVariant,
                 )
                 Row(
                     Modifier.padding(top = 12.dp),
@@ -298,14 +301,14 @@ fun SpotlightCard(
                 ) {
                     Box(
                         Modifier.size(52.dp).clip(RoundedCornerShape(18.dp))
-                            .background(c.onSecondaryContainer),
+                            .background(c.primary),
                         contentAlignment = Alignment.Center,
                     ) {
                         Symbol(
                             CaSymbols.apartment,
                             contentDescription = null,
                             size = 26.dp,
-                            tint = c.secondaryContainer,
+                            tint = c.onPrimary,
                         )
                     }
                     Column(Modifier.weight(1f)) {
@@ -316,7 +319,7 @@ fun SpotlightCard(
                             Text(
                                 publisher.name,
                                 style = MaterialTheme.typography.titleSmall.copy(fontSize = 18.sp),
-                                color = c.onSecondaryContainer,
+                                color = c.onSurface,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -325,13 +328,13 @@ fun SpotlightCard(
                                     CaSymbols.verified,
                                     contentDescription = stringResource(Res.string.store_verified_publisher),
                                     size = 16.dp,
-                                    tint = c.onSecondaryContainer,
+                                    tint = c.primary,
                                 )
                             }
                         }
                         SupportingOnContainer(
                             text = publisherStats(publisher),
-                            onContainer = c.onSecondaryContainer,
+                            onContainer = c.onSurfaceVariant,
                             modifier = Modifier.padding(top = 2.dp),
                         )
                     }
@@ -340,7 +343,7 @@ fun SpotlightCard(
                     Text(
                         bio,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = c.onSecondaryContainer.copy(alpha = 0.85f),
+                        color = c.onSurfaceVariant,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 12.dp),
@@ -349,8 +352,8 @@ fun SpotlightCard(
                 FollowButton(
                     following = following,
                     onClick = onToggleFollow,
-                    container = c.onSecondaryContainer,
-                    content = c.secondaryContainer,
+                    container = c.primary,
+                    content = c.onPrimary,
                     modifier = Modifier.padding(top = 16.dp),
                 )
             }

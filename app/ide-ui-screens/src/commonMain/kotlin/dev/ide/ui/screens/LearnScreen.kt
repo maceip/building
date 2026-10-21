@@ -186,19 +186,20 @@ private fun ContinueCard(resume: UiResumePoint, catalog: UiLearnCatalog, onResum
     val minutes = track?.lessons?.sumOf { it.estMinutes } ?: 0
     Surface(
         shape = CaShapes.Continue,
-        color = c.secondaryContainer,
-        contentColor = c.onSecondaryContainer,
+        color = c.surfaceContainerHigh,
+        contentColor = c.onSurface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 12.dp),
     ) {
         Column(Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                ProgressRing(resume.fractionComplete, c.onSecondaryContainer, c.secondaryContainer)
+                ProgressRing(resume.fractionComplete, c.primary, c.surfaceContainerHighest)
                 Column(Modifier.weight(1f)) {
-                    Eyebrow(stringResource(Res.string.learn_continue), color = c.onSecondaryContainer.copy(alpha = 0.80f))
+                    Eyebrow(stringResource(Res.string.learn_continue), color = c.onSurfaceVariant)
                     Text(
                         resume.trackTitle,
                         style = MaterialTheme.typography.titleMedium,
-                        color = c.onSecondaryContainer,
+                        color = c.onSurface,
                         modifier = Modifier.padding(top = 3.dp),
                     )
                     SupportingOnContainer(
@@ -207,17 +208,18 @@ private fun ContinueCard(resume: UiResumePoint, catalog: UiLearnCatalog, onResum
                         } else {
                             resume.lessonTitle
                         },
-                        onContainer = c.onSecondaryContainer,
+                        onContainer = c.onSurfaceVariant,
                         modifier = Modifier.padding(top = 3.dp),
                     )
                 }
             }
             val interaction = remember { MutableInteractionSource() }
+            // Lime primary CTA — the one saturated action on the screen.
             Surface(
                 onClick = onResume,
                 shape = CircleShape,
-                color = c.onSecondaryContainer,
-                contentColor = c.secondaryContainer,
+                color = c.primary,
+                contentColor = c.onPrimary,
                 interactionSource = interaction,
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp).height(46.dp)
                     .pressScale(interaction, pressed = 0.99f),

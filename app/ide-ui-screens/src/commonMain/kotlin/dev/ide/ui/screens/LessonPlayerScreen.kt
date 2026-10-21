@@ -516,7 +516,7 @@ private fun PlayerButton(
     val fg by animateColorAsState(
         when {
             !primary -> MaterialTheme.colorScheme.onSurface
-            enabled -> Color.White
+            enabled -> MaterialTheme.colorScheme.onPrimary
             else -> MaterialTheme.colorScheme.outline
         },
         tween(Motion.BASE), label = "btn-fg",

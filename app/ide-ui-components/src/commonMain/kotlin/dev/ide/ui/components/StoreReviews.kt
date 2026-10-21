@@ -59,7 +59,7 @@ fun StarRow(
     stars: Int,
     modifier: Modifier = Modifier,
     size: androidx.compose.ui.unit.Dp = 16.dp,
-    tint: Color = MaterialTheme.colorScheme.primary,
+    tint: Color = RatingStarGold,
     onSelect: ((Int) -> Unit)? = null,
 ) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(if (onSelect != null) 6.dp else 1.dp)) {
@@ -153,6 +153,7 @@ fun ReviewCard(
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = if (review.mine) c.primaryContainer.copy(alpha = 0.45f) else c.surfaceContainerLow,
+        border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
         modifier = modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(16.dp)) {
@@ -266,7 +267,11 @@ fun ReviewCard(
             }
             review.reply?.takeIf { it.isNotBlank() }?.let { reply ->
                 Spacer(Modifier.height(12.dp))
-                Surface(shape = RoundedCornerShape(14.dp), color = c.surfaceContainerHighest) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = c.surfaceContainerHighest,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, c.outlineVariant),
+                ) {
                     Column(Modifier.padding(12.dp)) {
                         Eyebrow(stringResource(Res.string.reviews_reply))
                         Spacer(Modifier.height(4.dp))
