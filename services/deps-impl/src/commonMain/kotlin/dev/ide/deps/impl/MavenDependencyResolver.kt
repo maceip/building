@@ -186,6 +186,9 @@ class MavenDependencyResolver(
         val platformManaged = LinkedHashMap<GA, String>()
         for (p in platforms) {
             val eff = loadEffective(p, repos, HashSet())
+                ?: newestGoogleVersion(fetchVersionIndex(p.group, p.name, repos))
+                    ?.takeIf { it != p.version }
+                    ?.let { loadEffective(p.copy(version = it), repos, HashSet()) }
             if (eff == null) { unresolved += p; continue }
             eff.managed.forEach { (ga, v) -> platformManaged.getOrPut(ga) { v } }
         }
@@ -258,7 +261,25 @@ class MavenDependencyResolver(
                 // Fetch + parse this wave's metadata in parallel (the actual bottleneck). [loadNode] reads
                 // Gradle Module Metadata when present (variant selection), falling back to the POM otherwise.
                 val loaded = toWalk.entries.map { (coord, req) ->
-                    async(ioDispatcher) { sem.withPermit { Triple(coord, req, loadNode(coord, repos)) } }
+                    async(ioDispatcher) {
+                        sem.withPermit {
+                            val directNode = loadNode(coord, repos)
+                            if (directNode != null) {
+                                Triple(coord, req, directNode)
+                            } else {
+                                val fallbackVer = newestGoogleVersion(fetchVersionIndex(coord.group, coord.name, repos))
+                                    ?.takeIf { it != coord.version }
+                                val fallbackCoord = fallbackVer?.let { coord.copy(version = it) }
+                                val fallbackNode = fallbackCoord?.let { loadNode(it, repos) }
+                                if (fallbackCoord != null && fallbackNode != null) {
+                                    log.info("fallback ${coord.ga}: ${coord.version} -> ${fallbackCoord.version} (latest published)")
+                                    Triple(fallbackCoord, req.copy(coord = fallbackCoord), fallbackNode)
+                                } else {
+                                    Triple(coord, req, null)
+                                }
+                            }
+                        }
+                    }
                 }.awaitAll()
 
                 // Fold the results back into the graph single-threaded, in frontier order.
@@ -267,6 +288,15 @@ class MavenDependencyResolver(
                     if (node == null) {
                         if (req.direct) unresolved += req.coord
                         continue
+                    }
+                    if (chosen[ga] != coord.version) {
+                        toWalk.keys.firstOrNull { it.ga == ga }?.version?.let { oldVer ->
+                            seenVersions[ga]?.remove(oldVer)
+                        }
+                        seenVersions.getOrPut(ga) { linkedSetOf() }.add(coord.version)
+                        if (ga in directVersions) directVersions[ga] = coord.version
+                        chosen[ga] = coord.version
+                        walked += coord
                     }
                     packagingByGa[ga] = node.packaging
                     metaVersion[ga] = coord.version
@@ -1290,7 +1320,7 @@ const val AAR_EXPLODE_VERSION = "5"
  * `com.google.android:android`, a 2012 API-16 android.jar plus the seven legacy jars behind it)
  * stops resolving as `compile` onto the classpath.
  */
-const val RESOLVER_GRAPH_VERSION = "2"
+const val RESOLVER_GRAPH_VERSION = "3"
 
 /**
  * Maven Central's search hosts, in the order [MavenDependencyResolver] tries them.

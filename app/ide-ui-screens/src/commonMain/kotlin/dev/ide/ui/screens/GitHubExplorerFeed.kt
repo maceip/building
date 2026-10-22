@@ -291,6 +291,103 @@ fun GitHubExplorerFeed(
             }
         }
 
+        // Direct GitHub URL / owner/repo Clone Input Bar inside Discover / Explorer
+        val clipboard = LocalClipboardManager.current
+        var directCloneUrl by remember { mutableStateOf("") }
+        val cloneShape = RoundedCornerShape(10.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(38.dp)
+                    .clip(cloneShape)
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, cloneShape)
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Symbol(CaSymbols.forkRight, contentDescription = null, size = 15.dp, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                BasicTextField(
+                    value = directCloneUrl,
+                    onValueChange = { directCloneUrl = it },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
+                    modifier = Modifier.weight(1f),
+                    decorationBox = { inner ->
+                        Box(contentAlignment = Alignment.CenterStart) {
+                            if (directCloneUrl.isEmpty()) {
+                                Text(
+                                    "Paste GitHub URL or owner/repo to clone…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            inner()
+                        }
+                    }
+                )
+            }
+            Surface(
+                onClick = {
+                    val clip = clipboard.getText()?.text?.trim().orEmpty()
+                    if (clip.isNotBlank()) directCloneUrl = clip
+                },
+                shape = cloneShape,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.height(38.dp)
+            ) {
+                Box(modifier = Modifier.padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                    Text("Paste", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            Surface(
+                onClick = {
+                    val clean = directCloneUrl.trim()
+                    val targetUrl = if (clean.isNotEmpty()) {
+                        if (
+                            clean.startsWith("http://", ignoreCase = true) ||
+                            clean.startsWith("https://", ignoreCase = true) ||
+                            clean.startsWith("git@")
+                        ) {
+                            clean
+                        } else {
+                            "https://github.com/${clean.trim('/')}"
+                        }
+                    } else {
+                        activeHeroRepo?.htmlUrl.orEmpty()
+                    }
+                    if (targetUrl.isNotBlank()) {
+                        val repoName = targetUrl.trimEnd('/').substringAfterLast('/').removeSuffix(".git").ifBlank { "repo" }
+                        onCloneAndOpen(targetUrl, repoName)
+                    }
+                },
+                shape = cloneShape,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.height(38.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Symbol(CaSymbols.forkRight, contentDescription = null, size = 14.dp, tint = MaterialTheme.colorScheme.onPrimary)
+                    Text(
+                        "Clone",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+            }
+        }
+
         // Category Pills Filter Row
         LazyRow(
             contentPadding = PaddingValues(horizontal = 20.dp),

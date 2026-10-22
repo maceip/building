@@ -374,6 +374,11 @@ internal class GenerateLibraryRTask(
         rTxt?.let { filePath("rTxt", it) }
     }
 
+    private val effectivePackageName: String = packageName.trim().ifEmpty {
+        val seg = name.value.substringBefore(':').trim(':').replace(Regex("[^a-zA-Z0-9_]"), "_").lowercase().ifEmpty { "lib" }
+        "dev.building.$seg"
+    }
+
     override suspend fun execute(ctx: TaskContext): TaskResult {
         ctx.checkCanceled()
         val m = ensureManifestHasPackage()
@@ -384,7 +389,7 @@ internal class GenerateLibraryRTask(
             compile.archives,
             m,
             androidJar,
-            packageName,
+            effectivePackageName,
             emptyList(),
             minSdk,
             minSdk,
@@ -400,9 +405,10 @@ internal class GenerateLibraryRTask(
     private fun ensureManifestHasPackage(): Path {
         if (!Files.isRegularFile(manifest)) return synthesizeManifest()
         val raw = runCatching { manifest.readText() }.getOrDefault("")
-        if (Regex("""\bpackage\s*=\s*["']""").containsMatchIn(raw)) return manifest
-        val patched = Regex("""<manifest\b""").replaceFirst(raw, "<manifest package=\"$packageName\"")
-        if (patched == raw) return synthesizeManifest()
+        if (Regex("""\bpackage\s*=\s*["'][^"']+["']""").containsMatchIn(raw)) return manifest
+        val withoutEmpty = raw.replace(Regex("""\bpackage\s*=\s*["']\s*["']"""), "")
+        val patched = Regex("""<manifest\b""").replaceFirst(withoutEmpty, "<manifest package=\"$effectivePackageName\"")
+        if (patched == withoutEmpty) return synthesizeManifest()
         synthManifest.parent?.let { Files.createDirectories(it) }
         synthManifest.writeText(patched)
         return synthManifest
@@ -411,7 +417,7 @@ internal class GenerateLibraryRTask(
     private fun synthesizeManifest(): Path {
         synthManifest.parent?.let { Files.createDirectories(it) }
         synthManifest.writeText(
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" + "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"$packageName\"/>\n"
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" + "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"$effectivePackageName\"/>\n"
         )
         return synthManifest
     }

@@ -342,22 +342,7 @@ fun ProjectsHomeScreen(
                 item("quickClone") {
                     QuickCloneBar(
                         onCloneUrl = { rawUrl ->
-                            val clean = rawUrl.trim()
-                            if (clean.isNotEmpty() && onCloneAndOpen != null) {
-                                val normalizedUrl = if (
-                                    clean.startsWith("http://", ignoreCase = true) ||
-                                    clean.startsWith("https://", ignoreCase = true) ||
-                                    clean.startsWith("git@")
-                                ) {
-                                    clean
-                                } else {
-                                    "https://github.com/${clean.trim('/')}"
-                                }
-                                val repoName = normalizedUrl.trimEnd('/').substringAfterLast('/').removeSuffix(".git").ifBlank { "repo" }
-                                onCloneAndOpen(normalizedUrl, repoName)
-                            } else {
-                                effectiveClone?.invoke()
-                            }
+                            dispatchQuickCloneUrl(rawUrl, onCloneAndOpen, effectiveClone)
                         },
                     )
                 }
@@ -539,12 +524,40 @@ private fun HomeActions(
     }
 }
 
+internal fun dispatchQuickCloneUrl(
+    rawUrl: String,
+    onCloneAndOpen: ((String, String) -> Unit)?,
+    onCloneRepository: (() -> Unit)?,
+) {
+    val clean = rawUrl.trim()
+    if (clean.isNotEmpty() && onCloneAndOpen != null) {
+        val normalizedUrl = if (
+            clean.startsWith("http://", ignoreCase = true) ||
+            clean.startsWith("https://", ignoreCase = true) ||
+            clean.startsWith("git@")
+        ) {
+            clean
+        } else {
+            "https://github.com/${clean.trim('/')}"
+        }
+        val repoName = normalizedUrl
+            .trimEnd('/')
+            .substringAfterLast('/')
+            .substringAfterLast(':')
+            .removeSuffix(".git")
+            .ifBlank { "repo" }
+        onCloneAndOpen(normalizedUrl, repoName)
+    } else {
+        onCloneRepository?.invoke()
+    }
+}
+
 /**
  * Direct Git/GitHub URL input + Paste + Clone bar right on the Projects Home screen so users can
  * paste a repository URL and clone immediately in one tap without hunting through menus.
  */
 @Composable
-private fun QuickCloneBar(
+internal fun QuickCloneBar(
     onCloneUrl: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1406,22 +1419,7 @@ private fun WideProjectsHome(
             if (onCloneAndOpen != null || onCloneRepository != null) {
                 QuickCloneBar(
                     onCloneUrl = { rawUrl ->
-                        val clean = rawUrl.trim()
-                        if (clean.isNotEmpty() && onCloneAndOpen != null) {
-                            val normalizedUrl = if (
-                                clean.startsWith("http://", ignoreCase = true) ||
-                                clean.startsWith("https://", ignoreCase = true) ||
-                                clean.startsWith("git@")
-                            ) {
-                                clean
-                            } else {
-                                "https://github.com/${clean.trim('/')}"
-                            }
-                            val repoName = normalizedUrl.trimEnd('/').substringAfterLast('/').removeSuffix(".git").ifBlank { "repo" }
-                            onCloneAndOpen(normalizedUrl, repoName)
-                        } else {
-                            onCloneRepository?.invoke()
-                        }
+                        dispatchQuickCloneUrl(rawUrl, onCloneAndOpen, onCloneRepository)
                     },
                     modifier = Modifier.padding(bottom = 8.dp),
                 )

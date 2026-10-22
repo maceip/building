@@ -200,20 +200,27 @@ class AndroidBuildSystem(
      * at compile time. Compile-only — these are never fed to D8/aapt2/the dexer (D8 desugars the indy), so
      * only the `compileJava` classpaths use this; `sdk.androidJar` stays the lone arg everywhere else.
      */
+    private val api37CompatJar: Path? = Api37CompatJar.ensureFor(sdk.androidJar, dexCacheRoot)
+
     private val compileBootclasspath: List<Path> =
-        listOf(sdk.androidJar) + listOfNotNull(sdk.coreLambdaStubs.takeIf { Files.exists(it) })
+        listOfNotNull(api37CompatJar) + listOf(sdk.androidJar) + listOfNotNull(sdk.coreLambdaStubs.takeIf { Files.exists(it) })
 
     /** [facet]'s compileSdk `android.jar` from [platformFor], or the build's default when it is not installed. */
     private fun androidJarFor(facet: AndroidFacet): Path =
         platformFor(facet.compileSdk)?.takeIf { Files.isRegularFile(it) } ?: sdk.androidJar
 
     /** [compileBootclasspath] with [androidJar] in place of the default `android.jar`. */
-    private fun compileBootclasspathFor(androidJar: Path): List<Path> =
-        if (androidJar == sdk.androidJar) compileBootclasspath else listOf(androidJar) + compileBootclasspath.drop(1)
+    private fun compileBootclasspathFor(androidJar: Path): List<Path> {
+        val compat = if (androidJar == sdk.androidJar) api37CompatJar else Api37CompatJar.ensureFor(androidJar, dexCacheRoot)
+        return listOfNotNull(compat, androidJar) + listOfNotNull(sdk.coreLambdaStubs.takeIf { Files.exists(it) })
+    }
 
     /** [bootClasspath] with [androidJar] in place of the default `android.jar` (on ART the boot path holds it). */
-    private fun bootClasspathFor(androidJar: Path): List<Path> =
-        bootClasspath.map { if (it == sdk.androidJar) androidJar else it }
+    private fun bootClasspathFor(androidJar: Path): List<Path> {
+        val compat = if (androidJar == sdk.androidJar) api37CompatJar else Api37CompatJar.ensureFor(androidJar, dexCacheRoot)
+        val base = bootClasspath.map { if (it == sdk.androidJar) androidJar else it }
+        return if (compat != null && compat !in base) listOf(compat) + base else base
+    }
 
     override fun supports(moduleType: ModuleType): Boolean = moduleType.id.startsWith("android")
 
@@ -293,7 +300,7 @@ class AndroidBuildSystem(
         val tasks = DefaultTaskContainer()
         // Plain library modules pulled into an Android build compile against the Android platform (android.jar)
         // like the app itself — the same boot classpath for every module in this graph.
-        val javaPlugin = JavaPlugin({ bootClasspath }, kotlin, plugins)
+        val javaPlugin = JavaPlugin({ bootClasspathFor(sdk.androidJar) }, kotlin, plugins)
         val withJar = request.goal != BuildGoal.COMPILE_ONLY
         val registered = HashSet<ModuleId>()
         // Made before any task is registered, because the packaging tasks read what plugins declare on it
@@ -1849,5 +1856,100 @@ class AndroidBuildSystem(
         /** A debug-signed [subprocess] build system, creating the shared debug keystore on demand. */
         fun debug(sdk: AndroidSdk, debugKeystore: Path, bootClasspath: List<Path> = emptyList()): AndroidBuildSystem =
             subprocess(sdk, DebugKeystore.getOrCreate(debugKeystore, sdk.keytool), bootClasspath)
+    }
+}
+
+/**
+ * Generates a tiny compile-time overlay jar containing `android.os.Build$VERSION_CODES` and
+ * `android.Manifest$permission` augmented with Android 16/17 (API 36/37) constants (`BAKLAVA`,
+ * `CINNAMON_BUN`, `ACCESS_LOCAL_NETWORK`) when the installed `android.jar` predates API 37.
+ */
+private object Api37CompatJar {
+    fun ensureFor(androidJar: Path, cacheRoot: Path?): Path? = runCatching {
+        if (!Files.isRegularFile(androidJar)) return null
+        val dir = cacheRoot ?: androidJar.parent ?: Paths.get(System.getProperty("java.io.tmpdir", "/tmp"))
+        Files.createDirectories(dir)
+        val outJar = dir.resolve("android-api37-compat-v1.jar")
+        if (Files.isRegularFile(outJar) && Files.size(outJar) > 100L) return outJar
+
+        val versionCodesEntry = "android/os/Build\$VERSION_CODES.class"
+        val permissionEntry = "android/Manifest\$permission.class"
+        val patchedEntries = LinkedHashMap<String, ByteArray>()
+
+        java.util.zip.ZipFile(androidJar.toFile()).use { zf ->
+            zf.getEntry(versionCodesEntry)?.let { entry ->
+                val raw = zf.getInputStream(entry).use { it.readBytes() }
+                patchedEntries[versionCodesEntry] = patchClassConstants(
+                    raw,
+                    mapOf(
+                        "BAKLAVA" to ("I" to Integer.valueOf(36)),
+                        "CINNAMON_BUN" to ("I" to Integer.valueOf(37)),
+                    ),
+                )
+            }
+            zf.getEntry(permissionEntry)?.let { entry ->
+                val raw = zf.getInputStream(entry).use { it.readBytes() }
+                patchedEntries[permissionEntry] = patchClassConstants(
+                    raw,
+                    mapOf(
+                        "ACCESS_LOCAL_NETWORK" to ("Ljava/lang/String;" to "android.permission.ACCESS_LOCAL_NETWORK"),
+                    ),
+                )
+            }
+        }
+        if (patchedEntries.isEmpty()) return null
+
+        val tmpJar = dir.resolve("android-api37-compat-v1.jar.tmp.${System.nanoTime()}")
+        java.util.zip.ZipOutputStream(Files.newOutputStream(tmpJar)).use { zos ->
+            for ((name, bytes) in patchedEntries) {
+                val e = java.util.zip.ZipEntry(name)
+                e.time = 0L
+                zos.putNextEntry(e)
+                zos.write(bytes)
+                zos.closeEntry()
+            }
+        }
+        try {
+            Files.move(tmpJar, outJar, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: Throwable) {
+            Files.move(tmpJar, outJar, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+        outJar
+    }.getOrNull()
+
+    private fun patchClassConstants(
+        classBytes: ByteArray,
+        constants: Map<String, Pair<String, Any>>,
+    ): ByteArray {
+        val existingFields = HashSet<String>()
+        val cr = org.objectweb.asm.ClassReader(classBytes)
+        val cw = org.objectweb.asm.ClassWriter(cr, 0)
+        val cv = object : org.objectweb.asm.ClassVisitor(org.objectweb.asm.Opcodes.ASM9, cw) {
+            override fun visitField(
+                access: Int,
+                name: String,
+                descriptor: String,
+                signature: String?,
+                value: Any?,
+            ): org.objectweb.asm.FieldVisitor? {
+                existingFields.add(name)
+                return super.visitField(access, name, descriptor, signature, value)
+            }
+
+            override fun visitEnd() {
+                val flags = org.objectweb.asm.Opcodes.ACC_PUBLIC or
+                    org.objectweb.asm.Opcodes.ACC_STATIC or
+                    org.objectweb.asm.Opcodes.ACC_FINAL
+                for ((name, spec) in constants) {
+                    if (name !in existingFields) {
+                        val (desc, constVal) = spec
+                        super.visitField(flags, name, desc, null, constVal)?.visitEnd()
+                    }
+                }
+                super.visitEnd()
+            }
+        }
+        cr.accept(cv, 0)
+        return cw.toByteArray()
     }
 }

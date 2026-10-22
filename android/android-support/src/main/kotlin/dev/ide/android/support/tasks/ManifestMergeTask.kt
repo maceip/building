@@ -114,15 +114,16 @@ internal class ManifestMergeTask(
          * `namespace` in Gradle and omit it from the manifest — AGP injects it, and so must we.
          */
         fun ensurePackage(xml: String, packageName: String): String {
-            if (packageName.isBlank()) return xml
+            val effectivePkg = packageName.trim().ifEmpty { "dev.building.app" }
             val start = xml.indexOf("<manifest")
             if (start < 0) return xml
             val tagEnd = xml.indexOf('>', start)
             if (tagEnd < 0) return xml
             val openTag = xml.substring(start, tagEnd)
-            if (Regex("""\bpackage\s*=""").containsMatchIn(openTag)) return xml
+            if (Regex("""\bpackage\s*=\s*["'][^"']+["']""").containsMatchIn(openTag)) return xml
+            val cleanedXml = xml.replaceRange(start, tagEnd, openTag.replace(Regex("""\bpackage\s*=\s*["']\s*["']"""), ""))
             val insertAt = start + "<manifest".length
-            return xml.substring(0, insertAt) + " package=\"$packageName\"" + xml.substring(insertAt)
+            return cleanedXml.substring(0, insertAt) + " package=\"$effectivePkg\"" + cleanedXml.substring(insertAt)
         }
 
         /**

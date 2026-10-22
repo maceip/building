@@ -62,7 +62,13 @@ class SwiftProjectImporter : ProjectImporter {
                 confidence = 6,
             )
         }
-        val xcodeproj = Files.walk(root, 3).use { stream ->
+        val hasForeignRootManifest = listOf(
+            "package.json", "tsconfig.json",
+            "pyproject.toml", "setup.py", "requirements.txt", "Pipfile",
+            "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
+            "Cargo.toml", "go.mod", "WORKSPACE", "MODULE.bazel",
+        ).any { Files.isRegularFile(root.resolve(it)) }
+        val xcodeproj = Files.walk(root, if (hasForeignRootManifest) 1 else 3).use { stream ->
             stream.filter {
                 Files.isDirectory(it) &&
                     (it.fileName.toString().endsWith(".xcodeproj") || it.fileName.toString().endsWith(".xcworkspace"))
@@ -78,6 +84,7 @@ class SwiftProjectImporter : ProjectImporter {
                 confidence = 6,
             )
         }
+        if (hasForeignRootManifest) return null
         val nestedPackageSwift = Files.walk(root, 3).use { stream ->
             stream.filter { Files.isRegularFile(it) && it.fileName.toString() == "Package.swift" }
                 .findFirst().orElse(null)
@@ -87,7 +94,7 @@ class SwiftProjectImporter : ProjectImporter {
             return Detection(
                 name = name,
                 markers = listOf(nestedPackageSwift.toAbsolutePath()),
-                confidence = 6,
+                confidence = 4,
             )
         }
         val swiftSource = dev.ide.core.runtime.SwiftBuildSystem.findSwiftSourceFiles(root).firstOrNull()
@@ -95,7 +102,7 @@ class SwiftProjectImporter : ProjectImporter {
             return Detection(
                 name = root.fileName?.toString() ?: "swift-project",
                 markers = listOf(swiftSource.toAbsolutePath()),
-                confidence = 6,
+                confidence = 4,
             )
         }
         null

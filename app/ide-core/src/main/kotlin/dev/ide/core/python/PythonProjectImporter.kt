@@ -77,9 +77,11 @@ class PythonProjectImporter : ProjectImporter {
         val excluded = setOf(".git", ".platform", "node_modules", "build", "dist", ".venv", "venv", "__pycache__")
         var firstPy: Path? = null
         var subPyManifest: Path? = null
+        var firstDocOrConfig: Path? = null
         var pyCount = 0
         var tsJsCount = 0
         var swiftCount = 0
+        var ktJavaGradleCount = 0
         Files.walk(root, 6).use { stream ->
             stream.filter { p ->
                 Files.isRegularFile(p) &&
@@ -94,12 +96,18 @@ class PythonProjectImporter : ProjectImporter {
                     fileName.endsWith(".swift") -> {
                         swiftCount++
                     }
+                    fileName.endsWith(".kt") || fileName.endsWith(".kts") || fileName.endsWith(".java") || fileName == "build.gradle" || fileName == "WORKSPACE" -> {
+                        ktJavaGradleCount++
+                    }
                     (fileName.endsWith(".ts") || fileName.endsWith(".tsx") || fileName.endsWith(".js") || fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) &&
                         !fileName.endsWith(".d.ts") -> {
                         tsJsCount++
                     }
                     fileName in setOf("pyproject.toml", "setup.py", "requirements.txt") && subPyManifest == null -> {
                         subPyManifest = p
+                    }
+                    (fileName.endsWith(".md") || fileName.endsWith(".json") || fileName.endsWith(".yaml") || fileName.endsWith(".yml") || fileName.endsWith(".toml") || fileName.endsWith(".sh")) && firstDocOrConfig == null -> {
+                        firstDocOrConfig = p
                     }
                 }
             }
@@ -118,6 +126,14 @@ class PythonProjectImporter : ProjectImporter {
         if (anyPy != null) {
             val conf = if (pyCount > tsJsCount) 4 else 3
             return Detection(name = root.fileName?.toString() ?: "python-project", markers = listOf(anyPy.toAbsolutePath()), confidence = conf)
+        }
+        val fallbackMarker = firstDocOrConfig
+        if (fallbackMarker != null && tsJsCount == 0 && swiftCount == 0 && ktJavaGradleCount == 0) {
+            return Detection(
+                name = root.fileName?.toString() ?: "python-project",
+                markers = listOf(fallbackMarker.toAbsolutePath()),
+                confidence = 1,
+            )
         }
         null
     }.getOrNull()

@@ -48,4 +48,68 @@ class TrendingAndroidProjectsIntegrationTest {
             backend.close()
         }
     }
+
+    @Test
+    fun importsBuildsAndRunsAll9Oct22TrendingKotlinRepositories() = withTempDir("trending-oct22-kotlin") { temp ->
+        val oct22Root = Path.of("/tmp/trending_oct22/kotlin")
+        assumeTrue(Files.isDirectory(oct22Root), "/tmp/trending_oct22/kotlin must exist")
+        val repoDirs = listOf(
+            "BitChord",
+            "android-airplay-server",
+            "nowinandroid",
+            "web-to-app",
+            "legado-with-MD3",
+            "rethink-app",
+            "tailscale-android",
+            "private-compute-services",
+            "AiCode",
+        ).map { oct22Root.resolve(it) }.filter { Files.isDirectory(it) }
+        assumeTrue(repoDirs.isNotEmpty(), "At least one Oct 22 Kotlin trending repo must be present")
+
+        val fakeInstaller = object : ApkInstaller {
+            override suspend fun installAndLaunch(apk: Path, packageName: String, log: (String) -> Unit): Boolean {
+                log("Fake installed $packageName from ${apk.fileName}")
+                return true
+            }
+        }
+        val manager = ProjectManager.desktop(temp.resolve("projects"), apkInstaller = fakeInstaller)
+        val backend = IdeServicesBackend(manager = manager)
+        try {
+            runBlocking {
+                for (repoDir in repoDirs) {
+                    val repoName = repoDir.fileName.toString()
+                    val imported = backend.projects.importExternalProject(repoDir.toString())
+                    assertTrue(imported.success, "Failed to import $repoName: ${imported.message}")
+                    assertTrue(backend.project.moduleCount > 0, "$repoName imported 0 modules")
+
+                    val tasks = backend.build.runTasks()
+                    assertTrue(tasks.isNotEmpty(), "$repoName has 0 runTasks")
+                    backend.build.runBuild()
+
+                    val deadline = System.currentTimeMillis() + 180_000L
+                    while (System.currentTimeMillis() < deadline) {
+                        val st = backend.build.buildState.value.status
+                        if (st == dev.ide.ui.backend.RunStatus.Succeeded || st == dev.ide.ui.backend.RunStatus.Failed) {
+                            break
+                        }
+                        kotlinx.coroutines.delay(100)
+                    }
+                    val finalBuild = backend.build.buildState.value
+                    val errors = finalBuild.diagnostics.filter { it.severity == dev.ide.ui.backend.UiSeverity.Error }
+                    assertEquals(
+                        dev.ide.ui.backend.RunStatus.Succeeded,
+                        finalBuild.status,
+                        "$repoName build failed: ${finalBuild.log.takeLast(10).joinToString("\n") { it.message }} | errors=$errors",
+                    )
+                    assertTrue(errors.isEmpty(), "$repoName had error diagnostics: $errors")
+                    val rc = backend.build.runConsole.value
+                    assertNotNull(rc, "$repoName did not open RunConsoleUi")
+                    assertNotNull(rc.frame, "$repoName did not emit a live GUI frame")
+                    assertTrue(rc.frame!!.path.contains("\"type\""), "$repoName frame is not valid ViewNode JSON")
+                }
+            }
+        } finally {
+            backend.close()
+        }
+    }
 }

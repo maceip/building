@@ -153,6 +153,7 @@ fun dispatchScreenTap(xPt: Double, yPt: Double): Boolean {
     activeComposeScene?.let { scene ->
         scene.sendPointerEvent(PointerEventType.Press, pos)
         scene.sendPointerEvent(PointerEventType.Release, pos)
+        return true
     }
     val owner = activeSemanticsOwner
     if (owner != null) {

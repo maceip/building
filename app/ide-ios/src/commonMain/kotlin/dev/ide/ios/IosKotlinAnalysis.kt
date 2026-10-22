@@ -417,7 +417,45 @@ internal class IosKotlinAnalysis(
         }
     }
 
-    private fun initialSourceRootsFor(root: String): List<VirtualFile> = listOf(IosVirtualFile(root))
+    private fun initialSourceRootsFor(root: String): List<VirtualFile> {
+        val found = mutableListOf<String>()
+        val skipDirs = setOf(
+            "build", "node_modules", "test", "androidTest", "commonTest", "jvmTest", "iosTest",
+            "testData", "samples", "benchmarks", "docs", "gradle",
+        )
+        fun collectUpTo(dir: String, depth: Int, limit: Int) {
+            if (depth > 6 || found.size > limit) return
+            for (entry in IosFiles.list(dir)) {
+                if (entry.startsWith(".") || entry in skipDirs) continue
+                val full = IosFiles.join(dir, entry)
+                if (IosFiles.isDirectory(full)) {
+                    collectUpTo(full, depth + 1, limit)
+                    if (found.size > limit) return
+                } else if (entry.endsWith(".kt")) {
+                    found.add(full)
+                    if (found.size > limit) return
+                }
+            }
+        }
+        collectUpTo(root, 0, 16)
+        if (found.size <= 16) return listOf(IosVirtualFile(root))
+
+        val prioritized = found.sortedWith(
+            compareBy<String>(
+                { f ->
+                    val name = IosFiles.nameOf(f)
+                    when {
+                        name == "MainActivity.kt" || name == "App.kt" || name == "Main.kt" -> 0
+                        "Preview" in name || "Screen" in name -> 1
+                        "/ui/" in f.lowercase() -> 2
+                        else -> 3
+                    }
+                },
+                { it.length },
+            ),
+        ).take(12)
+        return prioritized.map { IosVirtualFile(it) }
+    }
 
     /**
      * For large multi-module repositories (> 250 `.kt` files), returns a scoped list of source roots centered on
@@ -440,17 +478,20 @@ internal class IosKotlinAnalysis(
                 }
             }
         }
-        countUpTo(root, 250)
-        if (totalKt <= 250) return null
+        countUpTo(root, 12)
+        if (totalKt <= 12) return null
 
         val targetDir = IosFiles.parentOf(targetFilePath) ?: return null
         val selectedRoots = LinkedHashSet<String>()
 
         val targetDirKtFiles = IosFiles.list(targetDir)
             .filter { it.endsWith(".kt") }
+            .take(12)
             .map { IosFiles.join(targetDir, it) }
-        selectedRoots.add(targetDir)
         targetDirKtFiles.forEach { selectedRoots.add(it) }
+        if (targetFilePath !in selectedRoots && targetFilePath.endsWith(".kt")) {
+            selectedRoots.add(targetFilePath)
+        }
 
         var curr: String? = targetDir
         var sourceBase: String? = null
@@ -472,19 +513,19 @@ internal class IosKotlinAnalysis(
 
         val includedDirNames = setOf(
             "theme", "design", "components", "component", "common", "preview", "icons", "shimmer",
-            "data", "domain", "model", "models", "feature", "features", "ui", "presentation",
-            "repository", "repositories", "network", "api", "core", "util", "utils", "state",
+            "model", "models", "ui", "state",
         )
         for (base in searchBases) {
-            if (!IosFiles.isDirectory(base)) continue
+            if (!IosFiles.isDirectory(base) || selectedRoots.size >= 24) break
             for (entry in IosFiles.list(base)) {
+                if (selectedRoots.size >= 24) break
                 val full = IosFiles.join(base, entry)
                 val lower = entry.lowercase()
-                if (IosFiles.isDirectory(full) && (lower in includedDirNames || lower == "src" || lower == "main")) {
-                    selectedRoots.add(full)
+                if (IosFiles.isDirectory(full) && lower in includedDirNames) {
                     for (sub in IosFiles.list(full)) {
+                        if (selectedRoots.size >= 24) break
                         val subFull = IosFiles.join(full, sub)
-                        if (IosFiles.isDirectory(subFull)) {
+                        if (sub.endsWith(".kt") && !IosFiles.isDirectory(subFull)) {
                             selectedRoots.add(subFull)
                         }
                     }
