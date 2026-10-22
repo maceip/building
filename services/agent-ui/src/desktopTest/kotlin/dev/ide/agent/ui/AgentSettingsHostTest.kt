@@ -22,6 +22,9 @@ import dev.ide.ui.ext.ScreenContext
 import dev.ide.ui.theme.CodeAssistTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import dev.ide.ui.testing.DeviceConfig
+import dev.ide.ui.testing.PaparazziSession
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -250,6 +253,58 @@ class AgentSettingsHostTest {
             assertEquals(listOf("__hub__"), openedScreens)
         } finally {
             scene.close()
+        }
+    }
+
+    @Test
+    fun paparazziAccessibilityAuditAndZeroDeadClickablesOnAgentSettings() {
+        val fakeAgent = FakeAgentService()
+        val backend = object : StubBackend() {
+            override val agent: AgentService = fakeAgent
+        }
+        val openedScreens = mutableListOf<String>()
+        var backCalls = 0
+        val ctx = object : ScreenContext {
+            override val backend = backend
+            override fun back() {
+                backCalls++
+            }
+            override fun openScreen(id: String) {
+                openedScreens += id
+            }
+        }
+
+        val reportDir = File("build/reports/paparazzi/agent-settings")
+        PaparazziSession(
+            deviceConfig = DeviceConfig.PIXEL_9_PRO.withHeight(2400),
+            reportDir = reportDir,
+        ) {
+            CodeAssistTheme(dark = true) {
+                AgentSettingsScreen(ctx)
+            }
+        }.use { session ->
+            // 1. Capture side-by-side AccessibilityRenderExtension overlay + legend
+            val a11yPng = session.snapshot("agent_settings_accessibility", includeAccessibilityOverlay = true)
+            assertTrue(a11yPng.exists() && a11yPng.length() > 5_000)
+
+            // 2. Capture 3-pane golden comparison
+            val cmp = session.verifySnapshot("agent_settings")
+            assertTrue(cmp.passed)
+
+            // 3. Audit every clickable control on AgentSettingsScreen for dead/no-op handlers
+            val verified = session.assertNoDeadClickables(
+                backendStateSnapshot = {
+                    listOf(
+                        fakeAgent.selectedProviderId,
+                        fakeAgent.selectedModelId,
+                        fakeAgent.selectedEffort,
+                        fakeAgent.selectedMode,
+                        openedScreens.toList(),
+                        backCalls,
+                    )
+                },
+            )
+            assertTrue(verified.size >= 8, "Expected at least 8 verified interactive controls, found ${verified.size}")
         }
     }
 }

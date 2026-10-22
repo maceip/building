@@ -21,6 +21,9 @@ import dev.ide.ui.backend.UiAgentProvider
 import dev.ide.ui.theme.CodeAssistTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import dev.ide.ui.testing.DeviceConfig
+import dev.ide.ui.testing.PaparazziSession
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -180,6 +183,55 @@ class AgentHomeRowsTest {
             assertNull(nodeSpan.brush)
         } finally {
             scene.close()
+        }
+    }
+
+    @Test
+    fun paparazziGifFramesVerifySubtitleShimmerAnimatesWhileProjectTitleStaysStatic() {
+        val reportDir = File("build/reports/paparazzi/home-rows")
+        PaparazziSession(
+            deviceConfig = DeviceConfig.PIXEL_9_PRO.withHeight(500),
+            reportDir = reportDir,
+        ) {
+            CodeAssistTheme(dark = true) {
+                AgentProjectRow(
+                    title = "SignalAndroid",
+                    meta = "Android · 3 modules",
+                    time = "2m",
+                    letter = "S",
+                    stackLabel = "Android",
+                    stackColor = projectStackColor(isAndroid = true),
+                    modulesLabel = "3 modules",
+                    tags = listOf("android", "kotlin", "compose"),
+                    shimmerSubtitle = true,
+                    selected = true,
+                    onClick = {},
+                )
+            }
+        }.use { session ->
+            val titleNode = session.findNodeByText("SignalAndroid")
+            assertNotNull(titleNode, "Expected project title node")
+            val subtitleNode = session.findNodeByText("Android · 3 modules · android · kotlin · compose", substring = true)
+            assertNotNull(subtitleNode, "Expected inline subtitle node")
+
+            // Capture 6 animation frames @ 140ms step and generate GIF + PNG filmstrip + HTML report
+            val gifResult = session.captureGifFrames(
+                name = "most_recent_project_shimmer",
+                frameCount = 6,
+                frameStepMs = 140L,
+            )
+            assertTrue(gifResult.gifFile.exists() && gifResult.gifFile.length() > 500)
+            assertTrue(gifResult.stripFile.exists() && gifResult.stripFile.length() > 1000)
+
+            // Verify pixel animation: the subtitle's bounding box MUST have animated pixels across frames,
+            // while the project title's bounding box must have 0 animated pixels!
+            val titleAnimatedPixels = gifResult.countAnimatedPixelsInRect(titleNode.boundsInRoot)
+            val subtitleAnimatedPixels = gifResult.countAnimatedPixelsInRect(subtitleNode.boundsInRoot)
+            assertEquals(0, titleAnimatedPixels, "Project title pixels must NOT shimmer across animation frames")
+            assertTrue(
+                subtitleAnimatedPixels > 20,
+                "Most recent project subtitle (OS, modules, tags) pixels MUST animate across frames (found $subtitleAnimatedPixels animated px)",
+            )
         }
     }
 }

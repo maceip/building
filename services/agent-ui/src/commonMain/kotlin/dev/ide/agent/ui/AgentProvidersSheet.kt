@@ -35,6 +35,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -186,6 +188,7 @@ internal fun ProviderCard(
             .clip(shape)
             .background(container, shape)
             .border(1.dp, if (selected) chrome.accent else chrome.hairline, shape)
+            .semantics { this.selected = selected }
             .clickable(onClick = onSelect)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
