@@ -28,6 +28,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import dev.ide.core.project.CaprojFormat
 import dev.ide.core.IdeServicesBackend
+import dev.ide.platform.log.Log
+import io.github.oshai.kotlinlogging.KotlinLogging
 import dev.ide.ui.CodeAssistApp
 import dev.ide.ui.editor.preview.OffscreenPreviewRenderer
 import dev.ide.ui.ext.AppKeys
@@ -91,6 +93,7 @@ class MainActivity : ComponentActivity() {
      */
     private val storeLink = mutableStateOf<String?>(null)
     private val autoRunProjects = mutableStateOf<String?>(null)
+    private val klogger = KotlinLogging.logger("dev.ide.android.MainActivity")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Edge-to-edge with default (auto) bar styles; the system-bar ICON appearance is then driven reactively
@@ -98,6 +101,26 @@ class MainActivity : ComponentActivity() {
         // `SystemBarStyle.dark` here forced light icons even in light mode.
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        AndroidIde.ensureSnortConnected(applicationContext)
+        Log.logger("dev.ide.android.MainActivity").traceSpan(
+            operation = "android.activity.onCreate",
+            initialAttributes = mapOf(
+                "device.manufacturer" to (Build.MANUFACTURER ?: ""),
+                "device.model" to (Build.MODEL ?: ""),
+                "os.sdk_int" to Build.VERSION.SDK_INT.toString(),
+            ),
+        ) {
+            klogger.atInfo {
+                message = "MainActivity launched on physical Android device"
+                payload = mapOf(
+                    "device.manufacturer" to (Build.MANUFACTURER ?: ""),
+                    "device.model" to (Build.MODEL ?: ""),
+                    "os.release" to (Build.VERSION.RELEASE ?: ""),
+                    "os.sdk_int" to Build.VERSION.SDK_INT,
+                    "package" to packageName,
+                )
+            }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes = window.attributes.apply {
                 layoutInDisplayCutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

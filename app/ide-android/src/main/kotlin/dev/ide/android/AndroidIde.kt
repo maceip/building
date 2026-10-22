@@ -34,6 +34,8 @@ import dev.ide.core.project.ProjectManager
 import dev.ide.core.settings.BuiltInSettingsPages
 import dev.ide.platform.log.Log
 import dev.ide.platform.log.Log.addSink
+import dev.ide.platform.log.SnortLogSink
+import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.File
 import java.io.IOException
 import java.nio.file.Path
@@ -57,9 +59,31 @@ import java.util.concurrent.atomic.AtomicReference
  */
 object AndroidIde {
 
+    private val klogger = KotlinLogging.logger("dev.ide.android.AndroidIde")
+    private val snortSinkRef = AtomicReference<SnortLogSink?>(null)
+
+    fun ensureSnortConnected(context: Context): SnortLogSink {
+        snortSinkRef.get()?.let { return it }
+        val home = appHomeDir(context).apply { mkdirs() }
+        val hostTag = "${Build.MANUFACTURER ?: "android"}-${Build.MODEL ?: "device"}"
+        val created = Log.connectSnort(
+            endpointBaseUrl = "http://127.0.0.1:8788",
+            serviceName = "codeassist-android",
+            hostName = hostTag,
+            walFilePath = File(home, "snort-wal.jsonl").absolutePath,
+            shipImmediately = true,
+        )
+        if (snortSinkRef.compareAndSet(null, created)) {
+            return created
+        }
+        Log.disconnectSnort(created)
+        return snortSinkRef.get()!!
+    }
+
     /** Heavy (file copy + project gen + JDT init) — call off the main thread. */
     fun bootstrap(context: Context): Session {
         val startNs = System.nanoTime()
+        val snortSink = ensureSnortConnected(context)
 
         // Pin the process word-size BEFORE any engine is created. On a 32-bit ARM process the engine collapses
         // background index concurrency to stop provoking the 32-bit-ART torn-reference SIGSEGV (see RuntimeInfo).
@@ -68,7 +92,25 @@ object AndroidIde {
 
         // App-specific EXTERNAL storage (Android/data/<pkg>/files/codeassist)
         val home = appHomeDir(context).apply { mkdirs() }
-        val manager = createProjectManager(context)
+        val manager = Log.logger("dev.ide.android.AndroidIde").traceSpan(
+            operation = "android.ide.createProjectManager",
+            initialAttributes = mapOf(
+                "device.manufacturer" to (Build.MANUFACTURER ?: ""),
+                "device.model" to (Build.MODEL ?: ""),
+                "os.sdk_int" to Build.VERSION.SDK_INT.toString(),
+            ),
+        ) {
+            klogger.atInfo {
+                message = "Provisioning on-device Android IDE ProjectManager"
+                payload = mapOf(
+                    "device.manufacturer" to (Build.MANUFACTURER ?: ""),
+                    "device.model" to (Build.MODEL ?: ""),
+                    "os.sdk_int" to Build.VERSION.SDK_INT,
+                    "is_64_bit" to android.os.Process.is64Bit(),
+                )
+            }
+            createProjectManager(context)
+        }
 
         // Measure the forked-VM R8 heap ceiling once per app version, in the background, and cache it. The
         // Build Runtime settings use it as the heap slider's MAX (user scales down from the real device
@@ -173,6 +215,16 @@ object AndroidIde {
             backend.diagnostics.track(
                 dev.ide.analytics.Events.COLD_START,
                 mapOf("duration_ms" to ((System.nanoTime() - startNs) / 1_000_000).toString())
+            )
+        }
+        val durationMs = (System.nanoTime() - startNs) / 1_000_000
+        klogger.atInfo {
+            message = "AndroidIde bootstrap completed on physical device"
+            payload = mapOf(
+                "duration_ms" to durationMs,
+                "device.model" to (Build.MODEL ?: ""),
+                "snort.shipped_logs" to snortSink.shippedLogCount,
+                "snort.shipped_spans" to snortSink.shippedSpanCount,
             )
         }
 
