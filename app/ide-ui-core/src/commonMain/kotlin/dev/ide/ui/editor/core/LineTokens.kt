@@ -538,7 +538,7 @@ private fun styleCodeLine(
                 spans.add(LineSpan(i, close + 2, kind))
                 i = close + 2
             }
-            c == '"' || c == '\'' -> {
+            c == '"' || c == '\'' || c == '`' -> {
                 val start = i; i++
                 while (i < n && line[i] != c) { if (line[i] == '\\') i++; i++ }
                 if (i < n) i++
