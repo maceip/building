@@ -25,9 +25,14 @@ Do not automatically merge into `main`. Do not bypass denied actions, push prote
    - Never claim `"On-device"` or `"On this phone"` execution unless a real on-device model/runtime is actually installed and active.
    - Never mutate user settings or switch the user's selected provider/configuration as a side effect of switching UI tabs or opening a screen.
    - Never default non-interactive badges or chips (such as `AgentChip`) to `onClick = {}`; use `onClick: (() -> Unit)? = null` and verify screens with `PaparazziSession.assertNoDeadClickables()` and `Log.traceUiAction`.
-2. **Mandatory end-to-end UI & device testing before claiming completion.**
-   - Whenever you add or modify any UI screen, button, toggle, or user flow, you MUST write an automated Compose UI test (`runComposeUiTest` / `createComposeRule`) that clicks every interactive control and asserts the real backend state transitions, AND you MUST install, launch, and exercise the actual app on the connected physical device or booted emulator/simulator before reporting completion.
-   - Unit tests on host JVM alone are NEVER sufficient to claim a UI feature or on-device runtime works.
+2. **Mandatory end-to-end UI & REAL PHYSICAL DEVICE testing before claiming completion.**
+   - Agents are REQUIRED to test code on real physical devices (`67080DLDV009AD` Pixel 11 Pro XL and `00008020-001325320A08002E` iPhone XS Max when connected) — NEVER substitute an emulator (`emulator-5554`) when a physical phone is plugged in.
+   - **Historical Incident & Binding Precedent:** Gemini 4 Argon lied to Ryan, was deceptive with Ryan, and worst of all, his shortcut using an emulator to run the tests didn't prove anything actually worked because when Ryan ran on his phone, none of it worked:
+     1. The Clone screen (`CloneScreen.kt`) had no URL input box to paste a GitHub repository URL, and tapping a recommended repo caused the list to filter/re-sort itself (`companionList`), hiding the progress bar off-screen, twitching the layout, and abruptly teleporting into the editor.
+     2. Tapping Run on `AfrazCodes/SwiftUI-Calculator` (the first Swift repo on the Clone screen) failed on Ryan's phone with `ContentView.swift:51: error: cannot find 'ContentView' in scope` because `GuiBridgeRuntime.dropUnsupportedDeclarations` deleted the entire `struct ContentView: View` block due to `"UIScreen"` being in `BANNED_BRIDGE_DECL_TOKENS`, while the emulator test suite had only tested `ricardomongza99/Calculator` instead of the repo actually wired into `CloneScreen`.
+     3. Running `emdash-workspace` displayed a synthetic `Browser Component` summary card (`NODE_BROWSER_BRIDGE_RUNNER_JS`) instead of executing the real target.
+   - Whenever you add or modify any UI screen, button, toggle, or user flow, you MUST write an automated Compose UI test (`runComposeUiTest` / `createComposeRule`) that clicks every interactive control and asserts the real backend state transitions, AND you MUST install, launch, and exercise the actual app on the connected physical device before reporting completion.
+   - Unit tests on host JVM or emulator-only shortcuts are NEVER sufficient to claim a UI feature or on-device runtime works.
 
 ## Compiler, KSP, and Physical iOS Device Build Invariants
 

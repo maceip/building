@@ -343,8 +343,6 @@ object GuiBridgeRuntime {
         "CursorToggleStyle",
         "NSApplication",
         "NSWindow",
-        "UIApplication",
-        "UIScreen",
     )
 
     internal fun dropUnsupportedDeclarations(text: String): String {
@@ -410,6 +408,10 @@ object GuiBridgeRuntime {
         }
         t = t.replace("private struct ", "struct ")
         t = t.replace("private enum ", "enum ")
+        t = t.replace(
+            Regex("""@main\s*(?=(?:public\s+|internal\s+)?struct\s+\w+\s*:\s*App\b)"""),
+            "// [sanitized @main on App]\n",
+        )
         t = t.replace(
             Regex("""@FocusState\s+(private\s+)?var\s+(\w+)\s*:\s*Bool(?!\s*=)"""),
             "@State $1var $2: Bool = false",
@@ -698,7 +700,11 @@ object GuiBridgeRuntime {
                 !text.contains("Swift TargetReady")
             } else true
         }.ifEmpty { allSwiftFiles }
-        val swiftUiFiles = selectSwiftUiTargetFiles(compileRoot, filteredFiles)
+        val swiftUiFiles = if (shadowRoot != null) {
+            filteredFiles
+        } else {
+            selectSwiftUiTargetFiles(compileRoot, filteredFiles)
+        }
 
         if (swiftUiFiles.isEmpty()) {
             return TaskResult.Failed("No Swift source files found in $compileRoot")

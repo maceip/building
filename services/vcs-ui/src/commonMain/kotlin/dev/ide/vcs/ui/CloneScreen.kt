@@ -44,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,15 +66,18 @@ import dev.ide.ui.theme.Ide
 import dev.ide.vcs.ui.generated.resources.Res
 import dev.ide.vcs.ui.generated.resources.vcs_accounts
 import dev.ide.vcs.ui.generated.resources.vcs_cancel
+import dev.ide.vcs.ui.generated.resources.vcs_clone_action
 import dev.ide.vcs.ui.generated.resources.vcs_clone_auth_signed_in
 import dev.ide.vcs.ui.generated.resources.vcs_clone_auth_signed_out
 import dev.ide.vcs.ui.generated.resources.vcs_clone_auth_title
+import dev.ide.vcs.ui.generated.resources.vcs_clone_folder
 import dev.ide.vcs.ui.generated.resources.vcs_clone_none
 import dev.ide.vcs.ui.generated.resources.vcs_clone_search
 import dev.ide.vcs.ui.generated.resources.vcs_clone_title
 import dev.ide.vcs.ui.generated.resources.vcs_clone_unrecognized_body
 import dev.ide.vcs.ui.generated.resources.vcs_clone_unrecognized_open
 import dev.ide.vcs.ui.generated.resources.vcs_clone_unrecognized_title
+import dev.ide.vcs.ui.generated.resources.vcs_clone_url
 import dev.ide.vcs.ui.generated.resources.vcs_clone_yours
 import dev.ide.vcs.ui.generated.resources.vcs_fork
 import dev.ide.vcs.ui.generated.resources.vcs_private
@@ -194,14 +198,27 @@ private val COMPANION_RECOMMENDATIONS = listOf(
     ),
 )
 
+private fun normalizeCloneUrl(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return ""
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("git@") || trimmed.startsWith("ssh://")) {
+        return trimmed
+    }
+    if (trimmed.startsWith("github.com/")) {
+        return "https://$trimmed"
+    }
+    if (trimmed.count { it == '/' } == 1 && !trimmed.contains(' ') && !trimmed.startsWith('/')) {
+        return "https://github.com/$trimmed.git"
+    }
+    return trimmed
+}
+
+private fun deriveRepoName(url: String): String =
+    url.trim().trimEnd('/').substringAfterLast('/').removeSuffix(".git").trim()
+
 /**
- * In-app Git Clone & Multitasking Workspace Puller.
- *
- * Eliminates empty URL paste boxes and dead-end screens:
- * - Emits the unique **Git Clone "Rat-a-tat"** tactile haptics signature ([IdeHaptics.cloneStart],
- *   periodic [IdeHaptics.cloneRatatatPulse] while objects stream, and [IdeHaptics.cloneComplete]).
- * - While a clone is running, presents **Complementary & Related Projects to Pull In** so the user can
- *   queue additional companion repositories with 1 tap while feeling the clone progress through haptics.
+ * In-app Git Clone screen with a pinned URL & Paste bar at the top, inline live progress bars,
+ * and curated companion repositories below in a stable, non-jumping layout.
  */
 @Composable
 internal fun CloneScreen(ctx: ScreenContext) {
@@ -211,28 +228,32 @@ internal fun CloneScreen(ctx: ScreenContext) {
     val scope = rememberCoroutineScope()
     val feedback = rememberVcsFeedback()
     val haptics = rememberIdeHaptics()
+    val clipboard = LocalClipboardManager.current
 
     val initialUrl = (ctx.argument as? String)?.trim().orEmpty()
+    var urlInput by remember(initialUrl) { mutableStateOf(initialUrl) }
+    var folderInput by remember(initialUrl) {
+        mutableStateOf(if (initialUrl.isNotBlank()) deriveRepoName(initialUrl) else "")
+    }
     var activeCloneUrl by remember(initialUrl) { mutableStateOf(initialUrl) }
     var activeCloneName by remember(initialUrl) {
-        mutableStateOf(
-            if (initialUrl.isNotBlank()) initialUrl.substringAfterLast('/').removeSuffix(".git") else ""
-        )
+        mutableStateOf(if (initialUrl.isNotBlank()) deriveRepoName(initialUrl) else "")
     }
     var autoCloneTriggered by remember(initialUrl) { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var repos by remember { mutableStateOf(emptyList<UiForgeRepo>()) }
     var loading by remember { mutableStateOf(false) }
     var unrecognized by remember { mutableStateOf<ClonedFolder?>(null) }
+    var lastCloned by remember { mutableStateOf<ClonedFolder?>(null) }
+    var lastCloneError by remember { mutableStateOf<String?>(null) }
     var authFailed by remember { mutableStateOf(false) }
 
     // Repositories queued by the user while a primary clone is running
     val queuedClones = remember { mutableStateListOf<CompanionRepoRecommendation>() }
     val completedCompanions = remember { mutableStateListOf<String>() }
+    val completedPaths = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
 
-    // Periodic "Rat-a-tat" tactile pulse while a clone is actively running so the user can multitask
-    // and feel the clone's heartbeat + completion without staring at a spinner.
-    // Interval and category gating come directly from the persisted HapticsConfig.
+    // Periodic "Rat-a-tat" tactile pulse while a clone is actively running
     val pulseIntervalMs = haptics.config.clonePulseIntervalMs.coerceIn(500, 5000).toLong()
     val cloneHapticsActive = haptics.config.isEnabledFor(HapticCategory.GIT_CLONE)
     LaunchedEffect(activity.busy, pulseIntervalMs, cloneHapticsActive) {
@@ -258,11 +279,12 @@ internal fun CloneScreen(ctx: ScreenContext) {
 
     fun executeClone(targetUrl: String, targetName: String, openWhenDone: Boolean = true) {
         if (activity.busy) return
-        val cleanUrl = targetUrl.trim()
+        val cleanUrl = normalizeCloneUrl(targetUrl)
         if (cleanUrl.isBlank()) return
-        val cleanName = targetName.trim().ifBlank { cleanUrl.substringAfterLast('/').removeSuffix(".git") }
+        val cleanName = targetName.trim().ifBlank { deriveRepoName(cleanUrl) }
         activeCloneUrl = cleanUrl
         activeCloneName = cleanName
+        lastCloneError = null
         haptics.cloneStart()
         scope.launch {
             unrecognized = null
@@ -272,31 +294,41 @@ internal fun CloneScreen(ctx: ScreenContext) {
             authFailed = !result.ok && result.authRequired
             val path = result.path
             if (!result.ok || path == null) {
+                val errMsg = result.text?.localized() ?: result.message.ifBlank { "Clone failed for $cleanUrl" }
+                lastCloneError = errMsg
                 haptics.buildFailed()
                 return@launch
             }
             haptics.cloneComplete()
-            completedCompanions.add(cleanUrl)
+            if (!completedCompanions.contains(cleanUrl)) {
+                completedCompanions.add(cleanUrl)
+            }
+            completedPaths[cleanUrl] = path
+            lastCloned = ClonedFolder(cleanName, path)
 
-            // If the user queued companion repos while multitasking, pull them in before opening!
+            // If the user queued companion repos while multitasking, pull them in next
             while (queuedClones.isNotEmpty()) {
                 val next = queuedClones.removeAt(0)
                 activeCloneUrl = next.cloneUrl
                 activeCloneName = next.name
                 haptics.cloneStart()
                 val nextRes = vcs.cloneRepository(next.cloneUrl, next.name)
-                if (nextRes.ok) {
+                val nextPath = nextRes.path
+                if (nextRes.ok && nextPath != null) {
                     haptics.cloneComplete()
-                    completedCompanions.add(next.cloneUrl)
+                    if (!completedCompanions.contains(next.cloneUrl)) {
+                        completedCompanions.add(next.cloneUrl)
+                    }
+                    completedPaths[next.cloneUrl] = nextPath
+                    lastCloned = ClonedFolder(next.name, nextPath)
                 }
             }
 
             if (openWhenDone) {
-                if (result.projectKind == UiProjectFolderKind.UNKNOWN) {
-                    unrecognized = ClonedFolder(cleanName, path)
-                } else {
-                    ctx.backend.projects.openProject(path)
-                }
+                delay(500)
+                ctx.backend.projects.openProject(path)
+            } else if (result.projectKind == UiProjectFolderKind.UNKNOWN) {
+                unrecognized = ClonedFolder(cleanName, path)
             }
         }
     }
@@ -308,160 +340,186 @@ internal fun CloneScreen(ctx: ScreenContext) {
         }
     }
 
-    val companionList = remember(activeCloneName, activeCloneUrl) {
-        val hint = "$activeCloneUrl $activeCloneName".lowercase()
-        val preferredLanguage = when {
-            hint.contains("swift") || hint.contains("ink") || hint.contains("defaults") || hint.contains("publish") || hint.contains("dealer") -> "Swift"
-            hint.contains("python") || hint.contains("gpt") || hint.contains("micrograd") || hint.contains("click") -> "Python"
-            hint.contains("node") || hint.contains("polka") || hint.contains("kleur") || hint.contains("mitt") || hint.contains("commander") || hint.contains("/ms") -> "JavaScript"
-            else -> "Kotlin"
-        }
-        COMPANION_RECOMMENDATIONS
-            .filter { !it.name.equals(activeCloneName, ignoreCase = true) }
-            .sortedByDescending { it.language.equals(preferredLanguage, ignoreCase = true) }
-    }
+    // Keep the recommended list in a 100% fixed, stable order so tapping a card never removes or re-sorts items!
+    val companionList = COMPANION_RECOMMENDATIONS
 
     ExpressiveScaffold(
         title = stringResource(Res.string.vcs_clone_title),
         onBack = ctx::back,
         large = false,
     ) { padding ->
-        LazyColumn(
+        Column(
             modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // 1. Live Clone Status Card
-            if (activeCloneUrl.isNotBlank() || activity.busy) {
-                item("activeCloneCard") {
-                    ActiveCloneTelemetryCard(
-                        repoName = activeCloneName.ifBlank { activeCloneUrl },
-                        repoUrl = activeCloneUrl,
-                        busy = activity.busy,
-                        taskLabel = localizedText(activity.taskText, activity.task),
-                        fraction = activity.fraction,
-                        queuedCount = queuedClones.size,
+            // Pinned top URL & Paste Box + Live Progress Telemetry (never scrolls off-screen)
+            CloneUrlInputCard(
+                urlInput = urlInput,
+                onUrlChange = { newUrl ->
+                    val prevAutoFolder = deriveRepoName(urlInput)
+                    urlInput = newUrl
+                    if (folderInput.isBlank() || folderInput == prevAutoFolder) {
+                        folderInput = deriveRepoName(newUrl)
+                    }
+                },
+                folderInput = folderInput,
+                onFolderChange = { folderInput = it },
+                onPasteUrl = {
+                    val clipText = clipboard.getText()?.text?.trim().orEmpty()
+                    if (clipText.isNotBlank()) {
+                        urlInput = clipText
+                        folderInput = deriveRepoName(clipText)
+                    }
+                },
+                busy = activity.busy,
+                activeCloneName = activeCloneName,
+                activeCloneUrl = activeCloneUrl,
+                taskLabel = localizedText(activity.taskText, activity.task),
+                fraction = activity.fraction,
+                queuedCount = queuedClones.size,
+                lastCloned = lastCloned,
+                lastCloneError = lastCloneError,
+                onCloneUrl = {
+                    executeClone(
+                        targetUrl = urlInput,
+                        targetName = folderInput.ifBlank { deriveRepoName(urlInput) },
+                        openWhenDone = true,
                     )
+                },
+                onOpenLastCloned = { cloned ->
+                    scope.launch { ctx.backend.projects.openProject(cloned.path) }
+                },
+            )
+
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item("feedback") {
+                    FeedbackStrip(feedback)
                 }
-            }
 
-            item("feedback") {
-                FeedbackStrip(feedback)
-            }
-
-            if (authFailed) {
-                item("authFailed") {
-                    CloneAuthNotice(
-                        signedIn = accounts.isNotEmpty(),
-                        onDismiss = { authFailed = false },
-                        onSignIn = { ctx.openScreen(VcsService.SCREEN_ACCOUNTS) },
-                    )
-                }
-            }
-
-            unrecognized?.let { cloned ->
-                item("unrecognized") {
-                    UnrecognizedCloneNotice(
-                        name = cloned.name,
-                        onDismiss = { unrecognized = null },
-                        onOpen = {
-                            unrecognized = null
-                            scope.launch { ctx.backend.projects.openProject(cloned.path) }
-                        },
-                    )
-                }
-            }
-
-            // 2. Multitasking Companion Repositories ("Consider Pulling In As Well")
-            item("companionHeader") {
-                Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            if (activity.busy) "While Cloning · Consider Pulling In" else "Recommended Repositories to Pull In",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Chip(
-                            text = "${companionList.size} curated",
-                            fill = MaterialTheme.colorScheme.primaryContainer,
-                            textColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                if (authFailed) {
+                    item("authFailed") {
+                        CloneAuthNotice(
+                            signedIn = accounts.isNotEmpty(),
+                            onDismiss = { authFailed = false },
+                            onSignIn = { ctx.openScreen(VcsService.SCREEN_ACCOUNTS) },
                         )
                     }
-                    Text(
-                        if (activity.busy) {
-                            "Queue complementary libraries & reference projects now — they will be cloned into your workspace automatically next."
-                        } else {
-                            "1-tap clone directly into your workspace without leaving the app."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
-            }
 
-            items(companionList, key = { it.fullName }) { companion ->
-                val isQueued = queuedClones.any { it.cloneUrl == companion.cloneUrl }
-                val isCompleted = completedCompanions.contains(companion.cloneUrl)
-                val isCurrentlyCloning = activity.busy && activeCloneUrl == companion.cloneUrl
-                CompanionRepoCard(
-                    repo = companion,
-                    isQueued = isQueued,
-                    isCompleted = isCompleted,
-                    isCurrentlyCloning = isCurrentlyCloning,
-                    cloneBusy = activity.busy,
-                    onAction = {
-                        when {
-                            isCompleted || isCurrentlyCloning -> Unit
-                            isQueued -> {
-                                haptics.tap()
-                                queuedClones.removeAll { it.cloneUrl == companion.cloneUrl }
-                            }
-                            activity.busy -> {
-                                haptics.cloneRatatatPulse()
-                                queuedClones.add(companion)
-                            }
-                            else -> {
-                                executeClone(companion.cloneUrl, companion.name, openWhenDone = true)
-                            }
+                unrecognized?.let { cloned ->
+                    item("unrecognized") {
+                        UnrecognizedCloneNotice(
+                            name = cloned.name,
+                            onDismiss = { unrecognized = null },
+                            onOpen = {
+                                unrecognized = null
+                                scope.launch { ctx.backend.projects.openProject(cloned.path) }
+                            },
+                        )
+                    }
+                }
+
+                // 2. Curated Repositories (stable order, inline progress bar on active card)
+                item("companionHeader") {
+                    Column(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                if (activity.busy) "While Cloning · Queue Additional Repos" else "Recommended Repositories to Clone",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Chip(
+                                text = "${companionList.size} curated",
+                                fill = MaterialTheme.colorScheme.primaryContainer,
+                                textColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
                         }
-                    },
-                )
-            }
+                        Text(
+                            if (activity.busy) {
+                                "Tap any repository below to queue it next while the current clone finishes."
+                            } else {
+                                "1-tap clone into your workspace with live progress, then tap Open Project when ready."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
 
-            // 3. Signed-in Account's Own Repositories (if connected)
-            if (accounts.isNotEmpty()) {
-                item("yourReposHeader") {
-                    Spacer(Modifier.height(4.dp))
-                    SignInAgainCard(accounts) { ctx.openScreen(VcsService.SCREEN_ACCOUNTS) }
-                    SectionHeader(stringResource(Res.string.vcs_clone_yours), repos.size)
-                    VcsField(
-                        query,
-                        { query = it },
-                        stringResource(Res.string.vcs_clone_search),
-                        leading = CaIcons.search,
-                        modifier = Modifier.padding(horizontal = 16.dp),
+                items(companionList, key = { it.fullName }) { companion ->
+                    val isQueued = queuedClones.any { it.cloneUrl == companion.cloneUrl }
+                    val isCompleted = completedCompanions.contains(companion.cloneUrl)
+                    val isCurrentlyCloning = activity.busy && activeCloneUrl == companion.cloneUrl
+                    val clonedPath = completedPaths[companion.cloneUrl]
+                    CompanionRepoCard(
+                        repo = companion,
+                        isQueued = isQueued,
+                        isCompleted = isCompleted,
+                        isCurrentlyCloning = isCurrentlyCloning,
+                        cloneBusy = activity.busy,
+                        progressFraction = if (isCurrentlyCloning) activity.fraction else -1f,
+                        progressTaskLabel = if (isCurrentlyCloning) localizedText(activity.taskText, activity.task) else "",
+                        onAction = {
+                            when {
+                                isCurrentlyCloning -> Unit
+                                isCompleted && clonedPath != null -> {
+                                    haptics.tap()
+                                    scope.launch { ctx.backend.projects.openProject(clonedPath) }
+                                }
+                                isQueued -> {
+                                    haptics.tap()
+                                    queuedClones.removeAll { it.cloneUrl == companion.cloneUrl }
+                                }
+                                activity.busy -> {
+                                    haptics.cloneRatatatPulse()
+                                    queuedClones.add(companion)
+                                }
+                                else -> {
+                                    executeClone(companion.cloneUrl, companion.name, openWhenDone = false)
+                                }
+                            }
+                        },
                     )
                 }
-                if (repos.isEmpty() && !loading) {
-                    item("noAccountRepos") {
-                        Text(
-                            stringResource(Res.string.vcs_clone_none),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline,
+
+                // 3. Signed-in Account's Own Repositories (if connected)
+                if (accounts.isNotEmpty()) {
+                    item("yourReposHeader") {
+                        Spacer(Modifier.height(4.dp))
+                        SignInAgainCard(accounts) { ctx.openScreen(VcsService.SCREEN_ACCOUNTS) }
+                        SectionHeader(stringResource(Res.string.vcs_clone_yours), repos.size)
+                        VcsField(
+                            query,
+                            { query = it },
+                            stringResource(Res.string.vcs_clone_search),
+                            leading = CaIcons.search,
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     }
-                } else {
-                    itemsKeyed(repos, key = { it.fullName }) { repo ->
-                        RepoRow(repo) {
-                            executeClone(repo.cloneUrl, repo.name, openWhenDone = true)
+                    if (repos.isEmpty() && !loading) {
+                        item("noAccountRepos") {
+                            Text(
+                                stringResource(Res.string.vcs_clone_none),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                            )
+                        }
+                    } else {
+                        itemsKeyed(repos, key = { it.fullName }) { repo ->
+                            RepoRow(repo) {
+                                executeClone(repo.cloneUrl, repo.name, openWhenDone = false)
+                            }
                         }
                     }
                 }
@@ -471,13 +529,22 @@ internal fun CloneScreen(ctx: ScreenContext) {
 }
 
 @Composable
-private fun ActiveCloneTelemetryCard(
-    repoName: String,
-    repoUrl: String,
+private fun CloneUrlInputCard(
+    urlInput: String,
+    onUrlChange: (String) -> Unit,
+    folderInput: String,
+    onFolderChange: (String) -> Unit,
+    onPasteUrl: () -> Unit,
     busy: Boolean,
+    activeCloneName: String,
+    activeCloneUrl: String,
     taskLabel: String,
     fraction: Float,
     queuedCount: Int,
+    lastCloned: ClonedFolder?,
+    lastCloneError: String?,
+    onCloneUrl: () -> Unit,
+    onOpenLastCloned: (ClonedFolder) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(Ca.radius.lg)
@@ -493,15 +560,15 @@ private fun ActiveCloneTelemetryCard(
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .padding(horizontal = 16.dp, vertical = 6.dp)
             .cossElevation(
                 interaction = interaction,
                 shape = shape,
                 restElevation = 6.dp,
                 topHighlight = Ide.colors.glassEdgeTop,
             )
-            .background(scheme.surfaceContainerHigh, shape)
-            .padding(16.dp),
+            .background(scheme.surfaceContainerLow, shape)
+            .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(
@@ -509,74 +576,166 @@ private fun ActiveCloneTelemetryCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f),
-            ) {
-                Box(
-                    Modifier
-                        .size(10.dp)
-                        .background(
-                            if (busy) scheme.primary.copy(alpha = pulseAlpha) else Ide.colors.run,
-                            CircleShape,
-                        )
-                )
-                Text(
-                    repoName,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = scheme.onSurface,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Chip(
-                text = if (busy) "Cloning…" else "Clone Ready",
-                fill = if (busy) scheme.primaryContainer else scheme.secondaryContainer,
-                textColor = if (busy) scheme.onPrimaryContainer else scheme.onSecondaryContainer,
+            Text(
+                "Clone from GitHub or Git URL",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = scheme.onSurface,
+            )
+            VcsLabelledButton(
+                icon = CaIcons.copy,
+                label = "Paste URL",
+                tooltip = "Paste repository URL from clipboard",
+                onClick = onPasteUrl,
             )
         }
 
-        Text(
-            repoUrl,
-            style = MaterialTheme.typography.bodySmall,
-            color = scheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        VcsField(
+            value = urlInput,
+            onValueChange = onUrlChange,
+            placeholder = "https://github.com/owner/repo or owner/repo",
+            leading = CaIcons.cloudDownload,
         )
 
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            VcsField(
+                value = folderInput,
+                onValueChange = onFolderChange,
+                placeholder = stringResource(Res.string.vcs_clone_folder),
+                leading = CaIcons.folder,
+                modifier = Modifier.weight(1f),
+            )
+            PrimaryButton(
+                text = if (busy) "Cloning…" else stringResource(Res.string.vcs_clone_action),
+                onClick = {
+                    if (!busy && urlInput.isNotBlank()) {
+                        onCloneUrl()
+                    }
+                },
+                icon = CaIcons.cloudDownload,
+            )
+        }
+
+        // Pinned live progress telemetry so progress is ALWAYS visible at the top of the screen
         if (busy) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(scheme.surfaceContainerHigh, RoundedCornerShape(10.dp))
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Box(
+                            Modifier
+                                .size(9.dp)
+                                .background(scheme.primary.copy(alpha = pulseAlpha), CircleShape),
+                        )
+                        Text(
+                            "Cloning ${activeCloneName.ifBlank { activeCloneUrl }}…",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = scheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (fraction >= 0f) {
+                        Text(
+                            "${(fraction * 100).toInt().coerceIn(0, 100)}%",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = scheme.primary,
+                        )
+                    }
+                }
                 Text(
                     taskLabel.ifBlank { "Receiving pack objects & indexing tree…" },
                     style = MaterialTheme.typography.labelSmall,
-                    color = scheme.primary,
+                    color = scheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
                 )
+                if (fraction >= 0f) {
+                    LinearProgressIndicator(
+                        progress = { fraction },
+                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(999.dp)),
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(999.dp)),
+                    )
+                }
                 if (queuedCount > 0) {
                     Text(
                         "+$queuedCount queued next",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
-                        color = scheme.onSurfaceVariant,
+                        color = scheme.primary,
                     )
                 }
             }
-            if (fraction >= 0f) {
-                LinearProgressIndicator(
-                    progress = { fraction },
-                    modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(999.dp)),
+        } else if (lastCloneError != null) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(scheme.errorContainer, RoundedCornerShape(10.dp))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(CaIcons.warning, null, Modifier.size(16.dp), tint = scheme.onErrorContainer)
+                Text(
+                    lastCloneError,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = scheme.onErrorContainer,
                 )
-            } else {
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(999.dp)),
+            }
+        } else if (lastCloned != null) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(scheme.secondaryContainer.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Cloned ${lastCloned.name} ✓",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = scheme.onSecondaryContainer,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "Ready in workspace — open whenever you're ready",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = scheme.onSecondaryContainer.copy(alpha = 0.8f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                PrimaryButton(
+                    text = "Open Project",
+                    onClick = { onOpenLastCloned(lastCloned) },
+                    icon = CaIcons.folder,
                 )
             }
         }
@@ -590,6 +749,8 @@ private fun CompanionRepoCard(
     isCompleted: Boolean,
     isCurrentlyCloning: Boolean,
     cloneBusy: Boolean,
+    progressFraction: Float,
+    progressTaskLabel: String,
     onAction: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -636,17 +797,49 @@ private fun CompanionRepoCard(
             }
             Spacer(Modifier.width(8.dp))
             val buttonLabel = when {
-                isCompleted -> "Cloned ✓"
+                isCompleted -> "Open Project"
                 isCurrentlyCloning -> "Cloning…"
                 isQueued -> "Queued ✓"
                 cloneBusy -> "Queue Next"
-                else -> "Pull In"
+                else -> "Clone"
             }
             PrimaryButton(
                 text = buttonLabel,
                 onClick = onAction,
-                icon = if (isCompleted || isQueued) null else CaIcons.cloudDownload,
+                icon = when {
+                    isCompleted -> CaIcons.folder
+                    isQueued -> null
+                    else -> CaIcons.cloudDownload
+                },
             )
+        }
+
+        if (isCurrentlyCloning) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(scheme.surfaceContainerHigh, RoundedCornerShape(8.dp))
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    progressTaskLabel.ifBlank { "Cloning ${repo.name}…" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = scheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (progressFraction >= 0f) {
+                    LinearProgressIndicator(
+                        progress = { progressFraction },
+                        modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(999.dp)),
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().height(5.dp).clip(RoundedCornerShape(999.dp)),
+                    )
+                }
+            }
         }
 
         Text(

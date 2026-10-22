@@ -261,47 +261,13 @@ class IosBackend(
             }
             val targetPath = IosFiles.join(projectsRoot, targetName)
             if (IosFiles.exists(targetPath)) {
-                return UiVcsResult(false, "Directory already exists: $targetName")
+                IosFiles.delete(targetPath)
             }
 
             _activity.value = UiVcsActivity(busy = true, task = "Cloning $targetName...")
             try {
-                var success = false
-                val gitBin = listOf(
-                    "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
-                    "/Library/Developer/CommandLineTools/usr/bin/git",
-                    "/opt/homebrew/bin/git",
-                    "/usr/local/bin/git",
-                    "/usr/bin/git",
-                ).firstOrNull { IosFiles.exists(it) } ?: "git"
-                val toolPath = "/Applications/Xcode.app/Contents/Developer/usr/bin:/Library/Developer/CommandLineTools/usr/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-                val cmd = "unset SIMULATOR_ROOT IPHONE_SIMULATOR_ROOT DYLD_ROOT_PATH; PATH=\"$toolPath\" \"$gitBin\" clone --depth 1 \"$trimmedUrl\" \"$targetPath\""
-                val pipe = platform.posix.popen(cmd, "r")
-                if (pipe != null) {
-                    val code = platform.posix.pclose(pipe)
-                    if (code == 0 && IosFiles.exists(targetPath)) {
-                        success = true
-                    }
-                }
-
-                if (!success) {
-                    val localMirror = listOf(
-                        "/tmp/cross-run-repos/android/$targetName",
-                        "/tmp/cross-run-repos/ios/$targetName",
-                    ).firstOrNull { IosFiles.exists("$it/.git") }
-                    if (localMirror != null) {
-                        val localCmd = "unset SIMULATOR_ROOT IPHONE_SIMULATOR_ROOT DYLD_ROOT_PATH; PATH=\"$toolPath\" \"$gitBin\" clone --depth 1 \"file://$localMirror\" \"$targetPath\""
-                        val lp = platform.posix.popen(localCmd, "r")
-                        if (lp != null) {
-                            val code = platform.posix.pclose(lp)
-                            if (code == 0 && IosFiles.exists(targetPath)) {
-                                success = true
-                            }
-                        }
-                    }
-                }
-
-                if (!success) {
+                val success = withContext(ioDispatcher) {
+                    var cloned = false
                     val cleanUrl = trimmedUrl.removeSuffix(".git").trimEnd('/')
                     if (cleanUrl.startsWith("https://github.com/")) {
                         val parts = cleanUrl.removePrefix("https://github.com/").split('/')
@@ -322,13 +288,34 @@ class IosBackend(
                                     val zipBytes = IosFiles.readBytes(tempZip)
                                     IosFiles.delete(tempZip)
                                     if (zipBytes != null && IosZipExtractor.extractRepositoryZip(zipBytes, targetPath)) {
-                                        success = true
+                                        cloned = true
                                         break
                                     }
                                 }
                             }
                         }
                     }
+                    if (!cloned) {
+                        val gitBin = listOf(
+                            "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+                            "/Library/Developer/CommandLineTools/usr/bin/git",
+                            "/opt/homebrew/bin/git",
+                            "/usr/local/bin/git",
+                            "/usr/bin/git",
+                        ).firstOrNull { IosFiles.exists(it) }
+                        if (gitBin != null) {
+                            val toolPath = "/Applications/Xcode.app/Contents/Developer/usr/bin:/Library/Developer/CommandLineTools/usr/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+                            val cmd = "unset SIMULATOR_ROOT IPHONE_SIMULATOR_ROOT DYLD_ROOT_PATH; PATH=\"$toolPath\" \"$gitBin\" clone --depth 1 \"$trimmedUrl\" \"$targetPath\""
+                            val pipe = platform.posix.popen(cmd, "r")
+                            if (pipe != null) {
+                                val code = platform.posix.pclose(pipe)
+                                if (code == 0 && IosFiles.exists(targetPath)) {
+                                    cloned = true
+                                }
+                            }
+                        }
+                    }
+                    cloned
                 }
 
                 if (!success) {
@@ -338,7 +325,6 @@ class IosBackend(
 
                 bumpProjects()
                 val kind = inspectProjectFolder(targetPath)
-                openProject(targetPath)
                 return UiVcsResult(
                     ok = true,
                     message = "Cloned $targetName",
@@ -361,57 +347,6 @@ class IosBackend(
         // projects the rebuilt build system cannot open. This is the first CodeAssist on iOS, so there is
         // nothing to have upgraded from and nothing to back up: acknowledge it before it is ever asked.
         if (preferences.get(MIGRATION_ACK_PREF) == null) preferences.put(MIGRATION_ACK_PREF, "true")
-
-        val autoVerifyRepos = platform.Foundation.NSProcessInfo.processInfo.environment["CODEASSIST_AUTO_VERIFY_REPOS"] as? String
-        if (!autoVerifyRepos.isNullOrBlank()) {
-            CoroutineScope(SupervisorJob() + ioDispatcher).launch {
-                runAutoVerifyRepos(autoVerifyRepos)
-            }
-        }
-    }
-
-    private suspend fun runAutoVerifyRepos(rawSpec: String) {
-        val urls = rawSpec.split(',').map { it.trim() }.filter { it.isNotEmpty() }
-        println("=== [CODEASSIST_AUTO_VERIFY_REPOS] Starting physical iOS verification for ${urls.size} repos ===")
-        for (url in urls) {
-            val dirName = url.removeSuffix(".git").trimEnd('/').substringAfterLast('/')
-            val existingPath = IosFiles.join(projectsRoot, dirName)
-            if (IosFiles.exists(existingPath)) {
-                deleteProject(existingPath)
-            }
-            println(">>> [iPhone Physical Device] Cloning $url -> $dirName ...")
-            val cloned = vcs.cloneRepository(url, dirName)
-            println(">>> [iPhone Physical Device] Clone result for $dirName: ok=${cloned.ok} path=${cloned.path} kind=${cloned.projectKind} msg=${cloned.message}")
-            if (!cloned.ok || cloned.path == null) {
-                println("FAIL [iPhone Physical Device] Clone failed for $dirName: ${cloned.message}")
-                continue
-            }
-            val clonedPath = cloned.path!!
-            println(">>> [iPhone Physical Device] Running build/window for $dirName ...")
-            runBuild()
-            var attempts = 0
-            while (attempts < 1200) {
-                val st = buildState.value.status
-                val frame = runConsole.value?.frame
-                if (st == RunStatus.Failed) break
-                if (st == RunStatus.Succeeded && frame != null) break
-                delay(50)
-                attempts++
-            }
-            val st = buildState.value
-            val console = runConsole.value
-            val frame = console?.frame
-            println(
-                "PASS [iPhone Physical Device] $dirName | status=${st.status} | " +
-                    "module=${console?.moduleName} | main=${console?.mainClass} | " +
-                    "frame=${frame != null} (w=${frame?.width}, h=${frame?.height}, pathLen=${frame?.path?.length ?: 0})",
-            )
-            stopBuild()
-            delay(100)
-            val removed = deleteProject(clonedPath)
-            println(">>> [iPhone Physical Device] Removed clone $dirName ($clonedPath): removed=$removed exists=${IosFiles.exists(clonedPath)}")
-        }
-        println("=== [CODEASSIST_AUTO_VERIFY_REPOS] Completed physical iOS verification & cleanup ===")
     }
 
     // ---- identity -----------------------------------------------------------------------------------
@@ -1234,7 +1169,6 @@ class IosBackend(
             onChunk(ConsoleChunk("=== Launching ${task.option.label} ===\n", ConsoleChunkKind.SYSTEM))
 
             val exitCode: Int
-            var bridgeFrameUi: RunFrameUi? = null
 
             if (task.runtime == IosRuntimeRunner.RuntimeKind.NODE && task.targetFile != null && !hasNodeExecutable()) {
                 val script = IosFiles.readText(task.targetFile)
@@ -1248,47 +1182,14 @@ class IosBackend(
                 if (procCode == 0) {
                     exitCode = 0
                 } else {
-                    val bridgeJson = withContext(ioDispatcher) {
-                        IosRuntimeRunner.buildInteractiveBridgeWindow(
-                            task = task,
-                            root = root,
-                            interactions = activeBridgeInteractions,
-                            emitLogs = true,
-                            onChunk = onChunk,
-                        )
-                    }
-                    bridgeFrameUi = RunFrameUi(
-                        path = bridgeJson,
-                        width = 0,
-                        height = 0,
-                        seq = ++runFrameSeq,
+                    onChunk(
+                        ConsoleChunk(
+                            "External command '$cmd' cannot execute in the iOS sandbox (exit code $procCode).\n",
+                            ConsoleChunkKind.OUTPUT,
+                        ),
                     )
-                    exitCode = 0
+                    exitCode = if (procCode != 0) procCode else 1
                 }
-            }
-
-            if (bridgeFrameUi == null && task.runtime in setOf(
-                    IosRuntimeRunner.RuntimeKind.SWIFT,
-                    IosRuntimeRunner.RuntimeKind.NODE,
-                    IosRuntimeRunner.RuntimeKind.PYTHON,
-                    IosRuntimeRunner.RuntimeKind.WEB,
-                )
-            ) {
-                val bridgeJson = withContext(ioDispatcher) {
-                    IosRuntimeRunner.buildInteractiveBridgeWindow(
-                        task = task,
-                        root = root,
-                        interactions = activeBridgeInteractions,
-                        emitLogs = false,
-                        onChunk = onChunk,
-                    )
-                }
-                bridgeFrameUi = RunFrameUi(
-                    path = bridgeJson,
-                    width = 0,
-                    height = 0,
-                    seq = ++runFrameSeq,
-                )
             }
 
             onChunk(ConsoleChunk("\n[Process finished with exit code $exitCode]\n", ConsoleChunkKind.SYSTEM))
@@ -1305,8 +1206,7 @@ class IosBackend(
                 it?.copy(
                     phase = RunPhase.Finished,
                     exitCode = exitCode,
-                    acceptsInput = bridgeFrameUi != null,
-                    frame = bridgeFrameUi ?: it.frame,
+                    acceptsInput = false,
                 )
             }
             activeRunSession = null
@@ -1434,12 +1334,12 @@ class IosBackend(
                             .filter { (file, text) ->
                                 "@Composable" in text &&
                                     !file.endsWith("Theme.kt") &&
-                                    !file.endsWith("Activity.kt") &&
                                     uiPrimitives.any { it in text }
                             }
                             .sortedWith(
                                 compareBy<Pair<String, String>>(
                                     { (_, text) -> if (isCleanComposeFile(text)) 0 else 1 },
+                                    { (file, _) -> if (!file.endsWith("Activity.kt")) 0 else 1 },
                                     { (file, _) ->
                                         val lower = file.lowercase()
                                         if ("/ui/component" in lower || "/ui/design" in lower || "/ui/common" in lower || "/ui/shimmer" in lower || "/ui/" in lower) 0 else 1
@@ -1479,23 +1379,33 @@ class IosBackend(
                     }
                 }
 
-                if (targetPath == null || targetText == null || targetFn == null) {
-                    _buildState.value = BuildState(
-                        status = RunStatus.Failed,
-                        log = listOf(BuildLogLine("No runnable Kotlin Compose entry point found in $root", UiLogLevel.Error)),
-                    )
-                    _runConsole.update { it?.copy(phase = RunPhase.Finished) }
-                    return@launch
-                }
-
                 val blob = loweredBlob
-
-                if (blob == null) {
+                if (blob == null || targetPath == null || targetText == null || targetFn == null) {
+                    if (apkLaunchResult != null && apkLaunchResult.ok) {
+                        _buildState.value = BuildState(
+                            status = RunStatus.Succeeded,
+                            log = listOf(BuildLogLine(apkLaunchResult.message, UiLogLevel.Info)),
+                        )
+                        _runConsole.update {
+                            it?.copy(
+                                moduleName = apkLaunchResult.packageName.ifBlank { "app" },
+                                mainClass = apkLaunchResult.activity ?: "MainActivity",
+                                phase = RunPhase.Finished,
+                                exitCode = 0,
+                            )
+                        }
+                        return@launch
+                    }
+                    val errMsg = if (targetPath == null) {
+                        "No runnable Kotlin Compose entry point found in $root"
+                    } else {
+                        "Failed to lower '${targetFn ?: "App"}' in $targetPath"
+                    }
                     _buildState.value = BuildState(
                         status = RunStatus.Failed,
-                        log = listOf(BuildLogLine("Failed to lower '$targetFn' in $targetPath", UiLogLevel.Error)),
+                        log = listOf(BuildLogLine(errMsg, UiLogLevel.Error)),
                     )
-                    _runConsole.update { it?.copy(phase = RunPhase.Finished) }
+                    _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = 1) }
                     return@launch
                 }
 
@@ -1583,29 +1493,6 @@ class IosBackend(
     }
 
     override fun sendRunInput(text: String) {
-        val trimmed = text.trim()
-        val bridge = activeBridgeTask
-        if (trimmed.startsWith("{") && bridge != null) {
-            activeBridgeInteractions += 1
-            val updatedJson = IosRuntimeRunner.buildInteractiveBridgeWindow(
-                task = bridge.first,
-                root = bridge.second,
-                interactions = activeBridgeInteractions,
-                emitLogs = false,
-                onChunk = {},
-            )
-            _runConsole.update { console ->
-                console?.copy(
-                    frame = RunFrameUi(
-                        path = updatedJson,
-                        width = 0,
-                        height = 0,
-                        seq = ++runFrameSeq,
-                    ),
-                )
-            }
-            return
-        }
         val line = if (text.endsWith("\n")) text else "$text\n"
         val chunk = ConsoleChunk(line, ConsoleChunkKind.INPUT)
         if (_runConsole.value == null) {
@@ -1668,14 +1555,26 @@ class IosBackend(
     /** The project's libraries as the preview runs them, re-resolved only when the declarations change. */
     private suspend fun previewLibraryJars(): List<String> = withContext(ioDispatcher) {
         val root = active?.rootPath?.takeIf { it.isNotEmpty() } ?: return@withContext emptyList()
-        val store = projectModel.storeFor(root) ?: return@withContext emptyList()
-        val bridge = DependencyModelBridge(store)
-        val declared = store.workspace.projects.flatMap { it.modules }
-            .flatMap { bridge.declared(it) }.map { it.coordinate }.distinct()
-        if (declared.all { it.toString().startsWith("org.jetbrains.kotlin:kotlin-stdlib") } &&
-            previewRuntimeJars().any { "/org.jetbrains.kotlin/kotlin-stdlib" in it }
+        val store = projectModel.storeFor(root) ?: projectModel.open(root)
+        val rawDeclared = store?.let { s ->
+            val bridge = DependencyModelBridge(s)
+            s.workspace.projects.flatMap { it.modules }
+                .flatMap { bridge.declared(it) }.map { it.coordinate }.distinct()
+        }.orEmpty()
+        val runtimeHasCompose = previewRuntimeJars().any {
+            val name = IosFiles.nameOf(it)
+            "/org.jetbrains.compose" in it || "/androidx.compose" in it ||
+                name.startsWith("ui-desktop") || name.startsWith("material3-desktop")
+        }
+        if (rawDeclared.all { it.toString().startsWith("org.jetbrains.kotlin:kotlin-stdlib") } &&
+            runtimeHasCompose
         ) {
             return@withContext emptyList()
+        }
+        val declared = if (!runtimeHasCompose && rawDeclared.none { "compose" in it.group }) {
+            rawDeclared + Coordinate("org.jetbrains.compose.material3", "material3", "1.9.0")
+        } else {
+            rawDeclared
         }
         previewLibraries?.takeIf { it.first == declared }?.second
             ?: resolving(message = "Resolving preview libraries", showUntilReported = true) { progress ->
@@ -1722,13 +1621,10 @@ class IosBackend(
         val hasCompose = declared.any { "/org.jetbrains.compose" in it || "/androidx.compose" in it }
         if (hasCompose) return declared
         val runtimeLibs = previewRuntimeJars().filter { jar ->
-            listOf(
-                "/org.jetbrains.compose",
-                "/androidx.",
-                "/org.jetbrains.kotlin/kotlin-stdlib",
-                "/org.jetbrains.kotlinx/kotlinx-coroutines",
-                "/org.jetbrains.skiko",
-            ).any { it in jar } && "compiler" !in jar && "preview-runtime" !in jar
+            val name = IosFiles.nameOf(jar)
+            name != "preview-runtime.jar" &&
+                !name.startsWith("asm-") &&
+                "compiler" !in name
         }
         return (declared + runtimeLibs).distinct()
     }

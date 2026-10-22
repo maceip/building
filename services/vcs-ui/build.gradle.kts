@@ -44,6 +44,14 @@ kotlin {
             implementation(compose.components.resources) // the vcs_* strings live in this module's composeResources/
             implementation(libs.kotlinx.coroutines.core)
         }
+
+        val desktopTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+                implementation(project(":ide-ui-testing"))
+                implementation(compose.desktop.currentOs)
+            }
+        }
     }
 }
 

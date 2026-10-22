@@ -1431,22 +1431,6 @@ class PythonBuildSystem : BuildSystem {
                                 ":python:compileBytecode",
                                 ctx,
                             )
-                            // If this Python project declares or uses a GUI or Web UI framework (Gradio, ComfyUI,
-                            // Streamlit, FastAPI, Flask, Tkinter, PyQt, PySide, aiohttp, pywebview), launch our
-                            // interactive Python GUI & Web Bridge so RunScreen renders the live GUI window.
-                            if (GuiBridgeRuntime.isPythonGuiOrWebProject(root)) {
-                                return GuiBridgeRuntime.execPythonGuiBridge(
-                                    host = host,
-                                    pythonBin = pythonBin,
-                                    root = root,
-                                    env = pyEnv,
-                                    projectName = project.name,
-                                    targetScript = rel,
-                                    stepName = taskName.value,
-                                    ctx = ctx,
-                                    buildCtx = buildCtx,
-                                )
-                            }
                             val scriptArgs = if (scriptPath.fileName?.toString() == "setup.py") {
                                 listOf(pythonBin.toString(), "-u", scriptPath.toString(), "--name", "--version")
                             } else {
@@ -1761,19 +1745,6 @@ class NodeBuildSystem : BuildSystem {
 
                         if (specId.startsWith("node:file:")) {
                             val rel = specId.removePrefix("node:file:")
-                            if (rel.endsWith(".ts") || rel.endsWith(".tsx") || rel.endsWith(".mts")) {
-                                return GuiBridgeRuntime.execNodeBrowserBridge(
-                                    host = host,
-                                    nodeBin = nodeBin,
-                                    root = root,
-                                    env = installation.environment,
-                                    projectName = project.name,
-                                    targetDesc = "node $rel",
-                                    stepName = taskName.value,
-                                    ctx = ctx,
-                                    buildCtx = buildCtx,
-                                )
-                            }
                             val scriptPath = root.resolve(rel)
                             val pkgRoot = scriptPath.parent?.takeIf { Files.isRegularFile(it.resolve("package.json")) }
                             if (pkgRoot != null && pkgRoot != root && npmCli != null && needsNpmInstall(pkgRoot)) {
@@ -1831,35 +1802,7 @@ class NodeBuildSystem : BuildSystem {
                                     return helpRes
                                 }
                             }
-                            if (GuiBridgeRuntime.isNodeBrowserOrTsProject(root)) {
-                                return GuiBridgeRuntime.execNodeBrowserBridge(
-                                    host = host,
-                                    nodeBin = nodeBin,
-                                    root = root,
-                                    env = installation.environment,
-                                    projectName = project.name,
-                                    targetDesc = "node $rel",
-                                    stepName = taskName.value,
-                                    ctx = ctx,
-                                    buildCtx = buildCtx,
-                                )
-                            }
                             return runNodeWorkspaceVerification(host, nodeBin, root, installation.environment, ctx, buildCtx, project.name)
-                        }
-
-                        if (specId.startsWith("node:npm:") && GuiBridgeRuntime.isNodeBrowserOrTsProject(root)) {
-                            val script = specId.removePrefix("node:npm:")
-                            return GuiBridgeRuntime.execNodeBrowserBridge(
-                                host = host,
-                                nodeBin = nodeBin,
-                                root = root,
-                                env = installation.environment,
-                                projectName = project.name,
-                                targetDesc = "npm run $script",
-                                stepName = taskName.value,
-                                ctx = ctx,
-                                buildCtx = buildCtx,
-                            )
                         }
 
                         val cmd = when {

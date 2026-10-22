@@ -98,7 +98,17 @@ val previewRuntimeJar by tasks.registering(Jar::class) {
 
 /** The jars of the runtime: [previewRuntimeJar] and the external libraries the interpreter itself needs. */
 val previewRuntimeLibraries = previewRuntime.incoming.artifactView {
-    componentFilter { it is org.gradle.api.artifacts.component.ModuleComponentIdentifier && it.group == "org.ow2.asm" }
+    componentFilter {
+        it is org.gradle.api.artifacts.component.ModuleComponentIdentifier &&
+            (it.group == "org.ow2.asm" ||
+                it.group.startsWith("androidx.") ||
+                it.group.startsWith("org.jetbrains.compose") ||
+                it.group.startsWith("org.jetbrains.androidx") ||
+                it.group == "org.jetbrains.skiko" ||
+                it.group == "org.jetbrains.kotlinx" ||
+                (it.group == "org.jetbrains.kotlin" && it.module == "kotlin-stdlib") ||
+                (it.group == "org.jetbrains" && it.module == "annotations"))
+    }
 }.files
 
 // Called from the Xcode build phase, like `syncComposeResourcesForIos`: copies the runtime into the app bundle,
@@ -142,6 +152,9 @@ kotlin {
     // Both iOS targets: the simulator, and the device (arm64) the app is signed and installed onto. They
     // declare the same framework, and Xcode picks the one matching whatever it is building for.
     listOf(iosSimulatorArm64(), iosArm64()).forEach { target ->
+        target.compilerOptions {
+            freeCompilerArgs.add("-Xdont-warn-on-error-suppression")
+        }
         target.binaries.framework {
             baseName = "CodeAssistUi"
             // Static: the Xcode app links one archive and has no dynamic framework to embed or sign.
