@@ -126,4 +126,85 @@ class IosAndroidCrossRunTest {
             IosFiles.delete(tempRoot)
         }
     }
+
+    @Test
+    fun cloneBuildRunTwoDemoProjectsOnIosAndRemoveClones() = runBlocking {
+        val tempRoot = IosFiles.join(
+            NSTemporaryDirectory().trimEnd('/'),
+            "ios-demo-orchestration-${dev.ide.platform.epochMillis()}",
+        )
+        IosFiles.mkdirs(tempRoot)
+        val prefs = IosPreferences(NSUserDefaults(suiteName = "ios-demo-orchestration"))
+        val backend = IosBackend(tempRoot, prefs).apply {
+            previewRuntimeJars = { PreviewTestClasspath.jars }
+            dependenciesFor = { IosDependencies(it, ArtifactFetcher { null }) }
+        }
+
+        try {
+            // 1. Android Music Player: vivi-music
+            val vivi = AndroidRepoTarget("vivi-music", "https://github.com/vivizzz007/vivi-music")
+            val clonedVivi = backend.vcs.cloneRepository(vivi.url, vivi.dirName)
+            assertTrue(clonedVivi.ok, "Expected cloneRepository(${vivi.url}) to succeed: ${clonedVivi.message}")
+            val viviPath = requireNotNull(clonedVivi.path)
+            assertTrue(backend.project.isAndroid, "Expected vivi-music to be detected as Android project")
+
+            backend.build.runBuild()
+            var attempts = 0
+            while (attempts < 1200) {
+                val st = backend.build.buildState.value.status
+                val f = backend.build.runConsole.value?.frame
+                if (st == RunStatus.Failed) break
+                if (st == RunStatus.Succeeded && f != null) break
+                delay(50)
+                attempts++
+            }
+            assertEquals(RunStatus.Succeeded, backend.build.buildState.value.status)
+            val viviFrame = assertNotNull(backend.build.runConsole.value?.frame, "Expected rendered frame for vivi-music")
+            val viviBytes = assertNotNull(IosFiles.readBytes(viviFrame.path))
+            assertTrue(viviBytes.size > 100, "Expected non-empty PNG frame for vivi-music")
+            backend.build.stopBuild()
+            delay(50)
+            assertTrue(backend.projects.deleteProject(viviPath), "Expected deleteProject(vivi-music) to succeed")
+            assertTrue(!IosFiles.exists(viviPath), "Expected vivi-music directory to be removed after test")
+            println("PASS [iOS Demo 1/2 -> vivi-music]: built APK + rendered ${viviFrame.width}x${viviFrame.height} frame (${viviBytes.size}B) + removed clone")
+
+            // 2. iOS SwiftUI Window: Delta
+            val delta = AndroidRepoTarget("Delta", "https://github.com/rileytestut/Delta")
+            val clonedDelta = backend.vcs.cloneRepository(delta.url, delta.dirName)
+            assertTrue(clonedDelta.ok, "Expected cloneRepository(${delta.url}) to succeed: ${clonedDelta.message}")
+            val deltaPath = requireNotNull(clonedDelta.path)
+            assertTrue(backend.project.isSwift, "Expected Delta to be detected as Swift/iOS project")
+
+            backend.build.runBuild()
+            attempts = 0
+            while (attempts < 600) {
+                val st = backend.build.buildState.value.status
+                val f = backend.build.runConsole.value?.frame
+                if (st == RunStatus.Failed) break
+                if (st == RunStatus.Succeeded && f != null) break
+                delay(50)
+                attempts++
+            }
+            assertEquals(RunStatus.Succeeded, backend.build.buildState.value.status)
+            val deltaFrame = assertNotNull(backend.build.runConsole.value?.frame, "Expected Cupertino ViewNode frame for Delta")
+            assertTrue(
+                deltaFrame.path.contains("\"type\":\"ScrollView\"") && deltaFrame.path.contains("Delta"),
+                "Expected Cupertino ViewNode JSON tree for Delta, got: ${deltaFrame.path.take(200)}",
+            )
+            // Exercise interactive callback in BridgeGuiWindow
+            backend.build.sendRunInput("""{"id":"1","kind":"void"}""")
+            val updatedDeltaFrame = assertNotNull(backend.build.runConsole.value?.frame)
+            assertTrue(updatedDeltaFrame.seq > deltaFrame.seq, "Expected frame seq to advance after button tap")
+            assertTrue(updatedDeltaFrame.path.contains("Interactions: 1"), "Expected Interactions: 1 in updated frame")
+
+            backend.build.stopBuild()
+            delay(50)
+            assertTrue(backend.projects.deleteProject(deltaPath), "Expected deleteProject(Delta) to succeed")
+            assertTrue(!IosFiles.exists(deltaPath), "Expected Delta directory to be removed after test")
+            println("PASS [iOS Demo 2/2 -> Delta]: rendered interactive Cupertino window (${updatedDeltaFrame.path.length}B) + removed clone")
+        } finally {
+            backend.build.stopBuild()
+            IosFiles.delete(tempRoot)
+        }
+    }
 }

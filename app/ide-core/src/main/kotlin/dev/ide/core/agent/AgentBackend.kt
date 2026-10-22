@@ -126,12 +126,56 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         }
     }
 
+    /** The `clone_repository` tool: clones a Git repository URL into the IDE projects directory and opens it. */
+    private val cloneRepositoryTool = object : AgentTool {
+        override val spec = ToolSpec(
+            name = "clone_repository",
+            description = "Clone a Git repository (e.g. https://github.com/owner/repo) into the IDE workspace and open it as the active project.",
+            parameters = toolSchema {
+                string("url", "The HTTPS Git repository URL to clone (e.g. https://github.com/owner/repo).")
+                string("directory_name", "Optional target folder name. Defaults to the repository name.", required = false)
+            },
+        )
+        override suspend fun execute(args: ToolArgs): ToolExecutionResult {
+            val ideBackend = ctx as? dev.ide.ui.backend.IdeBackend
+                ?: return ToolExecutionResult.error("VCS service is unavailable in this context.")
+            val url = args.string("url").trim()
+            val dirName = args.optString("directory_name")?.trim().orEmpty().ifBlank {
+                url.removeSuffix(".git").trimEnd('/').substringAfterLast('/')
+            }
+            val res = ideBackend.vcs.cloneRepository(url, dirName)
+            if (!res.ok) return ToolExecutionResult.error(res.message)
+            val clonedPath = res.path
+            if (!clonedPath.isNullOrBlank()) {
+                ideBackend.projects.openProject(clonedPath)
+            }
+            return ToolExecutionResult.ok(
+                "Cloned $url into ${clonedPath ?: dirName} (${res.projectKind ?: "project"}) and opened it as the active project.",
+            )
+        }
+    }
+
+    /** The `run_project` tool: builds and runs the currently open project in the IDE's Run screen. */
+    private val runProjectTool = object : AgentTool {
+        override val spec = ToolSpec(
+            name = "run_project",
+            description = "Build and run the currently open project in the IDE's Run screen (opens its window, preview, or console output).",
+            parameters = toolSchema { },
+        )
+        override suspend fun execute(args: ToolArgs): ToolExecutionResult {
+            val ideBackend = ctx as? dev.ide.ui.backend.IdeBackend
+                ?: return ToolExecutionResult.error("Build service is unavailable in this context.")
+            ideBackend.build.runBuild()
+            return ToolExecutionResult.ok("Started build & run for project '${ideBackend.project.name}'.")
+        }
+    }
+
     private val spillStore = dev.ide.agent.impl.ToolResultSpillStore(checkpoints)
     private val usageLedger = dev.ide.agent.impl.UsageLedger()
 
     private val tools = dev.ide.agent.impl.createSelfExtendingToolRegistry(
         workspace = checkpoints,
-        extraTools = listOf(ftpControlTool),
+        extraTools = listOf(ftpControlTool, cloneRepositoryTool, runProjectTool),
         gateProvider = { gate },
         spillStore = spillStore,
         usageLedger = usageLedger,
@@ -141,7 +185,7 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
      *  and recording them into one would let that turn's Undo revert someone else's work. */
     private val mcpTools = dev.ide.agent.impl.createSelfExtendingToolRegistry(
         workspace = workspace,
-        extraTools = listOf(ftpControlTool),
+        extraTools = listOf(ftpControlTool, cloneRepositoryTool, runProjectTool),
         gateProvider = { AllowAllGate },
     )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -974,6 +1018,24 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
                 val last = _chatState.value.messages.lastOrNull { it.role == UiAgentRole.USER && it.canUndo }
                 if (last != null) undoTurn(last.id) else appendInfo("Nothing to undo: the agent has not changed any files.")
             }
+            "clone" -> {
+                val url = args.trim().substringBefore(' ')
+                if (url.isBlank()) {
+                    appendInfo("Usage: `/clone https://github.com/owner/repo`")
+                    return true
+                }
+                val ideBackend = ctx as? dev.ide.ui.backend.IdeBackend ?: return false
+                val dirName = url.removeSuffix(".git").trimEnd('/').substringAfterLast('/')
+                scope.launch {
+                    val res = ideBackend.vcs.cloneRepository(url, dirName)
+                    if (res.ok && !res.path.isNullOrBlank()) {
+                        ideBackend.projects.openProject(res.path!!)
+                        appendInfo("✓ Cloned **$dirName** from `$url` into `${res.path}` and opened it.")
+                    } else {
+                        appendError("Clone failed for `$url`: ${res.message}")
+                    }
+                }
+            }
             else -> return false
         }
         return true
@@ -1135,6 +1197,7 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         private val COMMANDS = listOf(
             UiAgentCommand("clear", "Start a new conversation"),
             UiAgentCommand("compact", "Summarize the conversation to free up context"),
+            UiAgentCommand("clone", "Clone a GitHub repository URL and open it in the IDE"),
             UiAgentCommand("init", "Explore the project and write an AGENTS.md for future sessions"),
             UiAgentCommand("undo", "Revert the files the agent changed in the last turn"),
             UiAgentCommand("resume", "Open a saved conversation"),

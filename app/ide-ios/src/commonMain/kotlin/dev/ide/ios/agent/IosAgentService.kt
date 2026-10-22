@@ -275,6 +275,7 @@ class IosAgentService(
 
     override fun commands(): List<UiAgentCommand> = listOf(
         UiAgentCommand("help", "Show available agent commands and guidance"),
+        UiAgentCommand("clone", "Clone a GitHub repository URL and open it in the IDE"),
         UiAgentCommand("explain", "Explain the active file or selected code"),
         UiAgentCommand("fix", "Diagnose and fix compiler errors or lint warnings"),
         UiAgentCommand("test", "Generate unit and component tests"),
@@ -288,10 +289,28 @@ class IosAgentService(
                 newSession()
                 return true
             }
+            "clone" -> {
+                val url = args.trim().substringBefore(' ')
+                if (url.isBlank()) {
+                    appendAssistantMessage("Usage: `/clone https://github.com/owner/repo`")
+                    return true
+                }
+                val dirName = url.removeSuffix(".git").trimEnd('/').substringAfterLast('/')
+                scope.launch {
+                    val res = backend.vcs.cloneRepository(url, dirName)
+                    if (res.ok && !res.path.isNullOrBlank()) {
+                        appendAssistantMessage("✓ Cloned **$dirName** from `$url` into `${res.path}` and opened it.")
+                    } else {
+                        appendAssistantMessage("⚠️ Clone failed for `$url`: ${res.message}")
+                    }
+                }
+                return true
+            }
             "help" -> {
                 val helpText = """
                 **Available Slash Commands:**
                 - `/help`: Display this command reference.
+                - `/clone <url>`: Clone a GitHub repository and open it as the active project.
                 - `/explain [file]`: Deep-dive architectural explanation of code.
                 - `/fix`: Scan active file diagnostics and propose verified fixes.
                 - `/test`: Generate comprehensive unit tests.
@@ -399,6 +418,10 @@ class IosAgentService(
         Active project: ${backend.project.name}
         Root path: $root
         Top files: ${projectFiles.joinToString(", ")}
+        Available tools you can invoke by including their marker in your response:
+        - `tool:clone_repository(https://github.com/owner/repo)` — clones a GitHub repository and opens it in the IDE.
+        - `tool:run_project` — builds and runs the active project in the Run screen.
+        - `tool:list_files` — lists files in the workspace.
         Always provide accurate code solutions adhering to clean architectural patterns.
         """.trimIndent()
 
@@ -412,7 +435,7 @@ class IosAgentService(
 
         val text = responseResult.text
         val usage = responseResult.usage
-        val toolCalls = checkAndExecuteToolCalls(text, root)
+        val toolCalls = checkAndExecuteToolCalls(query, text, root)
 
         _chatState.update { state ->
             val msgs = state.messages.map { m ->
@@ -606,11 +629,39 @@ class IosAgentService(
         }
     }
 
-    private fun checkAndExecuteToolCalls(text: String, root: String): List<UiAgentToolCall> {
+    private suspend fun checkAndExecuteToolCalls(query: String, text: String, root: String): List<UiAgentToolCall> {
         val toolCalls = mutableListOf<UiAgentToolCall>()
-        if (root.isBlank()) return toolCalls
-
-        if (text.contains("tool:list_files")) {
+        val combined = "$query\n$text"
+        val ghUrlRegex = Regex("""https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+""")
+        val shouldClone = text.contains("tool:clone_repository") ||
+            (query.contains("clone", ignoreCase = true) && ghUrlRegex.containsMatchIn(query))
+        if (shouldClone) {
+            val matchUrl = ghUrlRegex.find(combined)?.value
+            if (matchUrl != null) {
+                val dirName = matchUrl.removeSuffix(".git").trimEnd('/').substringAfterLast('/')
+                val res = backend.vcs.cloneRepository(matchUrl, dirName)
+                toolCalls.add(
+                    UiAgentToolCall(
+                        id = "call-clone-${++messageIdCounter}",
+                        title = "clone_repository ($dirName)",
+                        status = if (res.ok) UiAgentToolStatus.OK else UiAgentToolStatus.ERROR,
+                        detail = res.message,
+                    ),
+                )
+            }
+        }
+        if (text.contains("tool:run_project") || (shouldClone && query.contains("run", ignoreCase = true))) {
+            backend.build.runBuild()
+            toolCalls.add(
+                UiAgentToolCall(
+                    id = "call-run-${++messageIdCounter}",
+                    title = "run_project (${backend.project.name})",
+                    status = UiAgentToolStatus.OK,
+                    detail = "Started build & run in Run screen",
+                ),
+            )
+        }
+        if (root.isNotBlank() && text.contains("tool:list_files")) {
             val files = IosFiles.list(root)
             toolCalls.add(
                 UiAgentToolCall(

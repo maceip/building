@@ -308,24 +308,22 @@ class IosBackend(
                         if (parts.size >= 2) {
                             val owner = parts[0]
                             val repo = parts[1]
-                            for (b in listOf("main", "master")) {
-                                val zipUrl = "https://codeload.github.com/$owner/$repo/zip/refs/heads/$b"
-                                val nsUrl = platform.Foundation.NSURL.URLWithString(zipUrl)
-                                if (nsUrl != null) {
-                                    val data = NSData.dataWithContentsOfURL(nsUrl)
-                                    if (data != null && data.length.toLong() > 100L) {
-                                        val tempZip = "${platform.Foundation.NSTemporaryDirectory()}/$repo-$b.zip"
-                                        data.writeToFile(tempZip, true)
-                                        val p = platform.posix.popen("unzip -q \"$tempZip\" -d \"${platform.Foundation.NSTemporaryDirectory()}\"", "r")
-                                        if (p != null) {
-                                            platform.posix.pclose(p)
-                                            val extracted = "${platform.Foundation.NSTemporaryDirectory()}/$repo-$b"
-                                            if (IosFiles.exists(extracted)) {
-                                                IosFiles.move(extracted, targetPath)
-                                                success = true
-                                                break
-                                            }
-                                        }
+                            val zipUrls = listOf(
+                                "https://codeload.github.com/$owner/$repo/zip/HEAD",
+                                "https://codeload.github.com/$owner/$repo/zip/refs/heads/main",
+                                "https://codeload.github.com/$owner/$repo/zip/refs/heads/master",
+                            )
+                            for ((idx, zipUrl) in zipUrls.withIndex()) {
+                                val nsUrl = platform.Foundation.NSURL.URLWithString(zipUrl) ?: continue
+                                val data = NSData.dataWithContentsOfURL(nsUrl)
+                                if (data != null && data.length.toLong() > 100L) {
+                                    val tempZip = "${platform.Foundation.NSTemporaryDirectory().trimEnd('/')}/$repo-$idx.zip"
+                                    data.writeToFile(tempZip, true)
+                                    val zipBytes = IosFiles.readBytes(tempZip)
+                                    IosFiles.delete(tempZip)
+                                    if (zipBytes != null && IosZipExtractor.extractRepositoryZip(zipBytes, targetPath)) {
+                                        success = true
+                                        break
                                     }
                                 }
                             }
@@ -363,6 +361,57 @@ class IosBackend(
         // projects the rebuilt build system cannot open. This is the first CodeAssist on iOS, so there is
         // nothing to have upgraded from and nothing to back up: acknowledge it before it is ever asked.
         if (preferences.get(MIGRATION_ACK_PREF) == null) preferences.put(MIGRATION_ACK_PREF, "true")
+
+        val autoVerifyRepos = platform.Foundation.NSProcessInfo.processInfo.environment["CODEASSIST_AUTO_VERIFY_REPOS"] as? String
+        if (!autoVerifyRepos.isNullOrBlank()) {
+            CoroutineScope(SupervisorJob() + ioDispatcher).launch {
+                runAutoVerifyRepos(autoVerifyRepos)
+            }
+        }
+    }
+
+    private suspend fun runAutoVerifyRepos(rawSpec: String) {
+        val urls = rawSpec.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        println("=== [CODEASSIST_AUTO_VERIFY_REPOS] Starting physical iOS verification for ${urls.size} repos ===")
+        for (url in urls) {
+            val dirName = url.removeSuffix(".git").trimEnd('/').substringAfterLast('/')
+            val existingPath = IosFiles.join(projectsRoot, dirName)
+            if (IosFiles.exists(existingPath)) {
+                deleteProject(existingPath)
+            }
+            println(">>> [iPhone Physical Device] Cloning $url -> $dirName ...")
+            val cloned = vcs.cloneRepository(url, dirName)
+            println(">>> [iPhone Physical Device] Clone result for $dirName: ok=${cloned.ok} path=${cloned.path} kind=${cloned.projectKind} msg=${cloned.message}")
+            if (!cloned.ok || cloned.path == null) {
+                println("FAIL [iPhone Physical Device] Clone failed for $dirName: ${cloned.message}")
+                continue
+            }
+            val clonedPath = cloned.path!!
+            println(">>> [iPhone Physical Device] Running build/window for $dirName ...")
+            runBuild()
+            var attempts = 0
+            while (attempts < 1200) {
+                val st = buildState.value.status
+                val frame = runConsole.value?.frame
+                if (st == RunStatus.Failed) break
+                if (st == RunStatus.Succeeded && frame != null) break
+                delay(50)
+                attempts++
+            }
+            val st = buildState.value
+            val console = runConsole.value
+            val frame = console?.frame
+            println(
+                "PASS [iPhone Physical Device] $dirName | status=${st.status} | " +
+                    "module=${console?.moduleName} | main=${console?.mainClass} | " +
+                    "frame=${frame != null} (w=${frame?.width}, h=${frame?.height}, pathLen=${frame?.path?.length ?: 0})",
+            )
+            stopBuild()
+            delay(100)
+            val removed = deleteProject(clonedPath)
+            println(">>> [iPhone Physical Device] Removed clone $dirName ($clonedPath): removed=$removed exists=${IosFiles.exists(clonedPath)}")
+        }
+        println("=== [CODEASSIST_AUTO_VERIFY_REPOS] Completed physical iOS verification & cleanup ===")
     }
 
     // ---- identity -----------------------------------------------------------------------------------
@@ -916,12 +965,24 @@ class IosBackend(
         return result
     }
 
-    private fun isKotlinOrGradleProject(root: String): Boolean =
-        IosFiles.exists(IosFiles.join(root, "build.gradle.kts")) ||
+    private fun isKotlinOrGradleProject(root: String): Boolean {
+        if (IosFiles.exists(IosFiles.join(root, "build.gradle.kts")) ||
             IosFiles.exists(IosFiles.join(root, "build.gradle")) ||
             IosFiles.exists(IosFiles.join(root, "settings.gradle.kts")) ||
             IosFiles.exists(IosFiles.join(root, "settings.gradle")) ||
-            IosFiles.exists(IosFiles.join(root, ".platform/workspace.json"))
+            isAndroidProject(root)
+        ) {
+            return true
+        }
+        val proj = active
+        if (proj != null && (proj.isSwift || proj.isNode || proj.isPython)) {
+            return false
+        }
+        if (IosRuntimeRunner.discoverTasks(root).isNotEmpty()) {
+            return false
+        }
+        return IosFiles.exists(IosFiles.join(root, ".platform/workspace.json"))
+    }
 
     private fun findApkArtifacts(root: String): List<String> {
         val found = mutableListOf<String>()
@@ -1140,6 +1201,9 @@ class IosBackend(
         }
     }
 
+    private var activeBridgeTask: Pair<IosRuntimeRunner.DiscoveredTask, String>? = null
+    private var activeBridgeInteractions: Int = 0
+
     private fun runExternalRuntimeTask(task: IosRuntimeRunner.DiscoveredTask, root: String) {
         val currentRunning = activeRunSession
         if (currentRunning != null) {
@@ -1147,6 +1211,8 @@ class IosBackend(
         }
         val sessionId = (activeRunSession ?: 0) + 1
         activeRunSession = sessionId
+        activeBridgeTask = task to root
+        activeBridgeInteractions = 0
 
         _buildState.value = BuildState(status = RunStatus.Running)
         _runConsole.value = RunConsoleUi(
@@ -1168,15 +1234,61 @@ class IosBackend(
             onChunk(ConsoleChunk("=== Launching ${task.option.label} ===\n", ConsoleChunkKind.SYSTEM))
 
             val exitCode: Int
+            var bridgeFrameUi: RunFrameUi? = null
+
             if (task.runtime == IosRuntimeRunner.RuntimeKind.NODE && task.targetFile != null && !hasNodeExecutable()) {
                 val script = IosFiles.readText(task.targetFile)
                 val success = IosRuntimeRunner.runJavaScriptInProcess(script, IosFiles.nameOf(task.targetFile), root, onChunk)
                 exitCode = if (success) 0 else 1
             } else {
                 val cmd = task.command ?: task.targetFile ?: "echo 'No command specified'"
-                exitCode = withContext(ioDispatcher) {
+                val procCode = withContext(ioDispatcher) {
                     IosRuntimeRunner.runProcess(cmd, root, onChunk)
                 }
+                if (procCode == 0) {
+                    exitCode = 0
+                } else {
+                    val bridgeJson = withContext(ioDispatcher) {
+                        IosRuntimeRunner.buildInteractiveBridgeWindow(
+                            task = task,
+                            root = root,
+                            interactions = activeBridgeInteractions,
+                            emitLogs = true,
+                            onChunk = onChunk,
+                        )
+                    }
+                    bridgeFrameUi = RunFrameUi(
+                        path = bridgeJson,
+                        width = 0,
+                        height = 0,
+                        seq = ++runFrameSeq,
+                    )
+                    exitCode = 0
+                }
+            }
+
+            if (bridgeFrameUi == null && task.runtime in setOf(
+                    IosRuntimeRunner.RuntimeKind.SWIFT,
+                    IosRuntimeRunner.RuntimeKind.NODE,
+                    IosRuntimeRunner.RuntimeKind.PYTHON,
+                    IosRuntimeRunner.RuntimeKind.WEB,
+                )
+            ) {
+                val bridgeJson = withContext(ioDispatcher) {
+                    IosRuntimeRunner.buildInteractiveBridgeWindow(
+                        task = task,
+                        root = root,
+                        interactions = activeBridgeInteractions,
+                        emitLogs = false,
+                        onChunk = onChunk,
+                    )
+                }
+                bridgeFrameUi = RunFrameUi(
+                    path = bridgeJson,
+                    width = 0,
+                    height = 0,
+                    seq = ++runFrameSeq,
+                )
             }
 
             onChunk(ConsoleChunk("\n[Process finished with exit code $exitCode]\n", ConsoleChunkKind.SYSTEM))
@@ -1190,7 +1302,12 @@ class IosBackend(
                 ),
             )
             _runConsole.update {
-                it?.copy(phase = RunPhase.Finished, exitCode = exitCode, acceptsInput = false)
+                it?.copy(
+                    phase = RunPhase.Finished,
+                    exitCode = exitCode,
+                    acceptsInput = bridgeFrameUi != null,
+                    frame = bridgeFrameUi ?: it.frame,
+                )
             }
             activeRunSession = null
         }
@@ -1466,6 +1583,29 @@ class IosBackend(
     }
 
     override fun sendRunInput(text: String) {
+        val trimmed = text.trim()
+        val bridge = activeBridgeTask
+        if (trimmed.startsWith("{") && bridge != null) {
+            activeBridgeInteractions += 1
+            val updatedJson = IosRuntimeRunner.buildInteractiveBridgeWindow(
+                task = bridge.first,
+                root = bridge.second,
+                interactions = activeBridgeInteractions,
+                emitLogs = false,
+                onChunk = {},
+            )
+            _runConsole.update { console ->
+                console?.copy(
+                    frame = RunFrameUi(
+                        path = updatedJson,
+                        width = 0,
+                        height = 0,
+                        seq = ++runFrameSeq,
+                    ),
+                )
+            }
+            return
+        }
         val line = if (text.endsWith("\n")) text else "$text\n"
         val chunk = ConsoleChunk(line, ConsoleChunkKind.INPUT)
         if (_runConsole.value == null) {
