@@ -14,6 +14,17 @@ plugins {
     // AGP 9 ships built-in Kotlin, so no kotlin-android plugin; KMP modules use the kmp-library plugin.
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.android.kmp.library) apply false
+    // Build & quality governance plugins (opt-in per module or via root tasks):
+    alias(libs.plugins.dependency.analysis) apply false
+    alias(libs.plugins.licensee) apply false
+    alias(libs.plugins.version.catalog.update) apply false
+    alias(libs.plugins.ben.manes.versions)
+    alias(libs.plugins.binary.compatibility.validator) apply false
+    alias(libs.plugins.spotless) apply false
+    alias(libs.plugins.detekt) apply false
+    alias(libs.plugins.burst) apply false
+    alias(libs.plugins.owasp.dependencycheck) apply false
+    alias(libs.plugins.vanniktech.maven.publish) apply false
 }
 
 subprojects {

@@ -142,7 +142,7 @@ internal object JavaSourceDocScan {
                     // `@interface`/`interface`/`class`/`enum` — the name is the next identifier (annotations and
                     // modifiers before the keyword are earlier tokens; the `@` of `@interface` is ignored above).
                     val nameTok = toks.getOrNull(i + 1)
-                    if (nameTok?.type == JavaTokenType.IDENTIFIER) { openType(nameTok.text); i += 2 }
+                    if (nameTok != null && nameTok.type == JavaTokenType.IDENTIFIER) { openType(nameTok.text); i += 2 }
                     else { pendingDoc = null; i++ }
                 }
 
@@ -150,7 +150,7 @@ internal object JavaSourceDocScan {
                     val next = toks.getOrNull(i + 1)
                     when {
                         // `record` is a soft keyword (lexed as an identifier): `record Name(` at a type-decl spot.
-                        tk.text == "record" && atDeclLevel() && next?.type == JavaTokenType.IDENTIFIER &&
+                        tk.text == "record" && atDeclLevel() && next != null && next.type == JavaTokenType.IDENTIFIER &&
                             toks.getOrNull(i + 2)?.type == JavaTokenType.LPARENTH -> {
                             openType(next.text); i += 2
                         }
