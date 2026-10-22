@@ -24,6 +24,12 @@ Do not automatically merge into `main`. Do not bypass denied actions, push prote
    - Never render unbacked local `remember { mutableStateOf(...) }` toggles that do not persist or take effect in the backend.
    - Never claim `"On-device"` or `"On this phone"` execution unless a real on-device model/runtime is actually installed and active.
    - Never mutate user settings or switch the user's selected provider/configuration as a side effect of switching UI tabs or opening a screen.
+   - Never default non-interactive badges or chips (such as `AgentChip`) to `onClick = {}`; use `onClick: (() -> Unit)? = null` and verify screens with `PaparazziSession.assertNoDeadClickables()` and `Log.traceUiAction`.
 2. **Mandatory end-to-end UI & device testing before claiming completion.**
    - Whenever you add or modify any UI screen, button, toggle, or user flow, you MUST write an automated Compose UI test (`runComposeUiTest` / `createComposeRule`) that clicks every interactive control and asserts the real backend state transitions, AND you MUST install, launch, and exercise the actual app on the connected physical device or booted emulator/simulator before reporting completion.
    - Unit tests on host JVM alone are NEVER sufficient to claim a UI feature or on-device runtime works.
+
+## Compiler, KSP, and Physical iOS Device Build Invariants
+
+1. **Single Kotlin Compiler Architecture.** Never bundle a second Kotlin compiler or `symbol-processing-aa-embeddable` into `:ide-android` or `:ide-desktop`. Always run KSP2 via `:lang-ksp`'s `ksp-thin.jar` against the single shared compiler in `:kotlin-compiler-deps`.
+2. **Physical iOS Device Deployment (`:ide-ios`).** When building `app/ide-ios/iosApp/iosApp.xcodeproj` for a connected physical iPhone (e.g. `00008020-001325320A08002E`), pass `DEVELOPMENT_TEAM=UVTLR432J3 PRODUCT_BUNDLE_IDENTIFIER=com.ryanmacarthur.foundry` (or the matching provisioned App ID in `~/Library/Developer/Xcode/UserData/Provisioning Profiles/`) to `xcodebuild`, then install and launch via `xcrun devicectl device install app` and `xcrun devicectl device process launch`.
