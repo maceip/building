@@ -275,7 +275,7 @@ private fun AppRoute(
             onCancel = { app.navigateTo(Screen.Projects) },
             onCreated = { app.navigateTo(Screen.Editor) },
             initialTemplateId = app.createTemplateId,
-            onCloneRepository = null,
+            onCloneRepository = { app.openPluginScreen(VcsService.SCREEN_CLONE) },
             onImportProject = if (fileActions.canPickDirectory || fileActions.canPickFile) app::requestProjectImport else null,
         )
 
@@ -753,7 +753,7 @@ private fun ProjectPickerRoute(
         onDeleteProject = app::deleteProject,
         // One "Import project" entry for both sources; it asks which when the host can do both.
         onImportProject = if (fileActions.canPickDirectory || fileActions.canPickFile) app::requestProjectImport else null,
-        onCloneRepository = null,
+        onCloneRepository = { app.openPluginScreen(VcsService.SCREEN_CLONE) },
         onExportProject = if (fileActions.canShare || fileActions.canExport || fileActions.canReveal) {
             app::startExport
         } else null,

@@ -160,6 +160,7 @@ internal fun GitPanel(ctx: ToolWindowContext) {
             onBranches = { ctx.openScreen(VcsService.SCREEN_BRANCHES) },
             onHistory = { ctx.openScreen(VcsService.SCREEN_HISTORY, null) },
             onGitHub = { ctx.openScreen(VcsService.SCREEN_GITHUB) },
+            onClone = { ctx.openScreen(VcsService.SCREEN_CLONE) },
             onStashes = { ctx.openScreen(VcsService.SCREEN_STASHES) },
             onFetch = { perform { vcs.fetch() } },
             onIgnores = { perform { vcs.addDefaultIgnores() } },
@@ -206,6 +207,7 @@ private fun PanelHeader(
     onBranches: () -> Unit,
     onHistory: () -> Unit,
     onGitHub: () -> Unit,
+    onClone: () -> Unit,
     onStashes: () -> Unit,
     onFetch: () -> Unit,
     onIgnores: () -> Unit,
@@ -216,8 +218,16 @@ private fun PanelHeader(
         Row(verticalAlignment = Alignment.CenterVertically) {
             BranchChip(status, Modifier.weight(1f), enabled = enabled, onClick = onBranches)
             Spacer(Modifier.width(4.dp))
+            VcsIconButton(CaIcons.cloudDownload, stringResource(Res.string.vcs_clone), onClick = onClone)
+            Spacer(Modifier.width(2.dp))
             VcsOverflowMenu(stringResource(Res.string.vcs_menu_more)) {
                 heading(stringResource(Res.string.vcs_menu_repository))
+                item(
+                    stringResource(Res.string.vcs_clone),
+                    CaIcons.cloudDownload,
+                    stringResource(Res.string.vcs_clone),
+                    onClick = onClone,
+                )
                 item(
                     stringResource(Res.string.vcs_history),
                     CaIcons.gitCommit,

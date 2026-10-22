@@ -132,13 +132,23 @@ class AgentHomeRowsTest {
             ),
         )
 
-        // Phone viewport (411 x 890 dp @ 2x) so the agent-first Home renders.
+        var cloneScreenOpened = false
+        var quickClonedUrl: String? = null
+        var quickClonedName: String? = null
+
+        // Phone viewport (411 x 890 dp @ 2x) renders the real ProjectsHomeScreen directly (no onboarding gate).
         val scene = ImageComposeScene(width = 822, height = 1780, density = Density(2f)) {
             CodeAssistTheme(dark = true) {
                 ProjectsHomeScreen(
                     projects = projects,
                     onOpen = {},
                     onNewProject = {},
+                    onCloneRepository = { cloneScreenOpened = true },
+                    onImportProject = {},
+                    onCloneAndOpen = { url, name ->
+                        quickClonedUrl = url
+                        quickClonedName = name
+                    },
                     backend = backend,
                 )
             }
@@ -148,14 +158,21 @@ class AgentHomeRowsTest {
             Snapshot.sendApplyNotifications()
             repeat(5) { frame -> scene.render((frame + 1) * 16_666_667L) }
 
-            val allTextStrings = collectAllSemanticsNodes(scene).flatMap { node ->
+            val allNodes = collectAllSemanticsNodes(scene)
+            val allTextStrings = allNodes.flatMap { node ->
                 node.config.getOrNull(SemanticsProperties.Text).orEmpty()
             }
             val plainStrings = allTextStrings.map { it.text }
 
-            // 1. Real provider & model chip is shown; fake "On-device" chip is NOT shown.
-            assertFalse("On-device" in plainStrings, "Hardcoded 'On-device' chip must not be rendered")
-            assertTrue("Antigravity (Google) · gemini-3.1-pro" in plainStrings, "Real configured provider and model must be rendered")
+            // 1. Onboarding gate ("What should we build?", "Continue", "Import or clone", "All projects") is gone;
+            //    real action buttons + QuickCloneBar are rendered directly on ProjectsHomeScreen.
+            assertFalse("What should we build?" in plainStrings, "Onboarding prompt gate must not be rendered")
+            assertFalse("Import or clone" in plainStrings, "Unstyled 'Import or clone' text must not be rendered")
+            assertFalse("Continue" in plainStrings, "Unstyled 'Continue' section must not be rendered")
+            assertTrue("Clone app" in plainStrings, "Expected 'Clone app' button on ProjectsHomeScreen (present: $plainStrings)")
+            assertTrue("Paste GitHub URL or owner/repo to clone…" in plainStrings, "Expected QuickCloneBar URL input on ProjectsHomeScreen")
+            assertTrue("Paste" in plainStrings, "Expected 'Paste' button in QuickCloneBar")
+            assertTrue("Clone" in plainStrings, "Expected 'Clone' button in QuickCloneBar")
 
             // 2. Most recent project ("SignalAndroid") title has NO shimmer brush, while its inline subtitle DOES have shimmer brushes.
             val recentTitle = allTextStrings.firstOrNull { it.text == "SignalAndroid" }
@@ -168,19 +185,22 @@ class AgentHomeRowsTest {
             assertTrue(recentSubtitle.spanStyles.all { it.item.brush != null }, "Most recent project subtitle (stack, modules, tags) must shimmer")
 
             // 3. Second project ("FastApiService") subtitle has plain colored text (Python gold) and NO shimmer brush.
-            val secondSubtitle = allTextStrings.firstOrNull { it.text == "Python · 1 module · python · asgi" }
-            assertNotNull(secondSubtitle, "Expected second project inline subtitle with stack, modules, and tags")
+            val secondSubtitle = allTextStrings.firstOrNull { it.text.startsWith("Python · 1 module · python · asgi") }
+            assertNotNull(secondSubtitle, "Expected second project inline subtitle with stack, modules, and tags (present: $plainStrings)")
             assertTrue(secondSubtitle.spanStyles.none { it.item.brush != null }, "Non-most-recent project subtitle must NOT shimmer")
             val pythonSpan = secondSubtitle.spanStyles.first().item
             assertEquals(projectStackColor(isPython = true), pythonSpan.color)
             assertNotEquals(Color.Unspecified, pythonSpan.color)
 
             // 4. Third project ("NextDashboard") subtitle has Node.js green stack color.
-            val thirdSubtitle = allTextStrings.firstOrNull { it.text == "Node.js · 2 modules · nodejs · typescript" }
+            val thirdSubtitle = allTextStrings.firstOrNull { it.text.startsWith("Node.js · 2 modules · nodejs · typescript") }
             assertNotNull(thirdSubtitle)
             val nodeSpan = thirdSubtitle.spanStyles.first().item
             assertEquals(projectStackColor(isNode = true), nodeSpan.color)
             assertNull(nodeSpan.brush)
+            assertFalse(cloneScreenOpened)
+            assertNull(quickClonedUrl)
+            assertNull(quickClonedName)
         } finally {
             scene.close()
         }

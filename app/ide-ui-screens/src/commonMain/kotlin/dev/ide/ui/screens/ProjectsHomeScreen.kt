@@ -11,6 +11,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.horizontalScroll
@@ -241,11 +242,7 @@ fun ProjectsHomeScreen(
     // Deleting wipes the project from disk and nothing else in this flow asks first.
     var pendingDelete by remember { mutableStateOf<ProjectInfo?>(null) }
     var sheet by remember { mutableStateOf<HomeSheet?>(null) }
-    // Phone agent-first Home: the prompt hero is primary; "All projects" reveals the existing list.
-    var showAllProjects by remember { mutableStateOf(false) }
-    var agentPrompt by remember { mutableStateOf("") }
-    var newProjectPrompt by remember { mutableStateOf("") }
-    var selectedStack by remember { mutableIntStateOf(0) }
+    val effectiveClone = onCloneRepository ?: onCloneGit
     val now = remember(projects) { nowMillis() }
     val ordered = remember(projects) { projects.sortedByDescending { it.lastOpened } }
     // Rendered icons by project root. Held for the screen rather than per card: a card is recomposed every
@@ -268,8 +265,6 @@ fun ProjectsHomeScreen(
 
     PlatformBackHandler(enabled = sheet != null) { sheet = null }
     PlatformBackHandler(enabled = pendingDelete != null) { pendingDelete = null }
-    // Back from the classic list returns to the agent-first Home rather than leaving the tab.
-    PlatformBackHandler(enabled = showAllProjects) { showAllProjects = false }
 
     BoxWithConstraints(modifier.fillMaxSize()) {
     if (maxWidth >= ProjectsWideBreakpoint) {
@@ -280,9 +275,9 @@ fun ProjectsHomeScreen(
             loadIcon = loadIcon,
             loadIconImage = loadIconImage,
             onOpen = onOpen,
-            onNewProject = { sheet = HomeSheet.NewProject },
+            onNewProject = onNewProject,
             onImportProject = onImportProject,
-            onCloneRepository = onCloneRepository,
+            onCloneRepository = effectiveClone,
             onExportProject = onExportProject,
             onRequestDelete = onDeleteProject?.let { { project: ProjectInfo -> pendingDelete = project } },
             showLegacyRecovery = showLegacyRecovery,
@@ -293,87 +288,6 @@ fun ProjectsHomeScreen(
             onJoinDiscord = onJoinDiscord,
             backend = backend,
             onCloneAndOpen = onCloneAndOpen,
-        )
-    } else if (!showAllProjects) {
-        // Agent-first Home (phone width): prompt hero + Continue, with the classic project list one tap
-        // away via "All projects". New / Start opens the redesigned bottom sheet, which hands off to the
-        // existing create-project gallery.
-        val agentCfg = remember(backend) { backend?.agent?.config() }
-        val activeProvider = remember(agentCfg) {
-            agentCfg?.providers?.firstOrNull { it.id == agentCfg.selectedProvider }
-        }
-        val activeProviderLabel = remember(agentCfg, activeProvider) {
-            when {
-                agentCfg == null || !agentCfg.configured -> "Configure AI"
-                activeProvider != null -> {
-                    val modelId = agentCfg.model.ifBlank { activeProvider.defaultModel }
-                    if (modelId.isNotBlank()) "${activeProvider.displayName} · $modelId" else activeProvider.displayName
-                }
-                else -> "Configure AI"
-            }
-        }
-        val visibleProjects = remember(ordered) { ordered.take(5) }
-        val continueItems = visibleProjects.mapIndexed { idx, p ->
-            val stackLabel = when {
-                p.isSwift -> "Swift & iOS"
-                p.isPython -> "Python"
-                p.isNode -> "Node.js"
-                p.isAndroid -> "Android"
-                p.compatibility -> "Gradle"
-                p.unrecognized -> "Files"
-                else -> "building"
-            }
-            val modulesLabel = if (p.moduleCount == 1) "1 module" else "${p.moduleCount} modules"
-            val avatarImg = projectIconImage(p, icons, loadIcon, loadIconImage, backend)
-            AgentContinueItem(
-                id = p.rootPath,
-                title = p.name,
-                meta = (listOf(stackLabel, modulesLabel) + p.tags).joinToString(" · "),
-                time = "",
-                letter = p.name.firstOrNull()?.uppercase() ?: "?",
-                needsAttention = false,
-                stackLabel = stackLabel,
-                stackColor = projectStackColor(
-                    isAndroid = p.isAndroid,
-                    isNode = p.isNode,
-                    isPython = p.isPython,
-                    isSwift = p.isSwift,
-                    compatibility = p.compatibility,
-                ),
-                modulesLabel = modulesLabel,
-                tags = p.tags,
-                avatar = avatarImg,
-                shimmerSubtitle = idx == 0,
-            )
-        }
-        AgentHomeContent(
-            appName = "building",
-            prompt = agentPrompt,
-            onPromptChange = { agentPrompt = it },
-            onStart = {
-                if (agentPrompt.isNotBlank()) {
-                    // Carry the description into the New-project sheet so Start building keeps it.
-                    newProjectPrompt = agentPrompt
-                }
-                sheet = HomeSheet.NewProject
-            },
-            onOpenAgentSettings = onOpenAgentSettings ?: onOpenHub ?: {},
-            onOpenSettings = onOpenHub,
-            onOpenAccount = { sheet = HomeSheet.Account },
-            onNewProject = { sheet = HomeSheet.NewProject },
-            onImportOrClone = {
-                when {
-                    onCloneGit != null -> onCloneGit()
-                    onImportProject != null -> onImportProject()
-                }
-            },
-            onDeviceLabel = activeProviderLabel,
-            providerConfigured = agentCfg?.configured == true,
-            continueItems = continueItems,
-            allProjectsLabel = "All projects",
-            onOpenItem = { item -> ordered.firstOrNull { it.rootPath == item.id }?.let(onOpen) },
-            onSeeAllProjects = { showAllProjects = true },
-            modifier = Modifier.fillMaxSize(),
         )
     } else
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.TopCenter) {
@@ -413,14 +327,38 @@ fun ProjectsHomeScreen(
                 HomeHeader(
                     onOpenAccount = { sheet = HomeSheet.Account },
                     onOpenHub = onOpenHub,
-                    onBack = { showAllProjects = false },
+                    onBack = null,
                     bell = bell,
                 )
             }
-            if (onImportProject != null) {
-                item("actions") {
-                    HomeActions(
-                        onImportProject = onImportProject,
+            item("actions") {
+                HomeActions(
+                    onNewProject = onNewProject,
+                    onCloneRepository = effectiveClone,
+                    onImportProject = onImportProject,
+                )
+            }
+            if (onCloneAndOpen != null || effectiveClone != null) {
+                item("quickClone") {
+                    QuickCloneBar(
+                        onCloneUrl = { rawUrl ->
+                            val clean = rawUrl.trim()
+                            if (clean.isNotEmpty() && onCloneAndOpen != null) {
+                                val normalizedUrl = if (
+                                    clean.startsWith("http://", ignoreCase = true) ||
+                                    clean.startsWith("https://", ignoreCase = true) ||
+                                    clean.startsWith("git@")
+                                ) {
+                                    clean
+                                } else {
+                                    "https://github.com/${clean.trim('/')}"
+                                }
+                                val repoName = normalizedUrl.trimEnd('/').substringAfterLast('/').removeSuffix(".git").ifBlank { "repo" }
+                                onCloneAndOpen(normalizedUrl, repoName)
+                            } else {
+                                effectiveClone?.invoke()
+                            }
+                        },
                     )
                 }
             }
@@ -463,23 +401,6 @@ fun ProjectsHomeScreen(
     }
 
     when (sheet) {
-        HomeSheet.NewProject -> NewProjectSheet(
-            prompt = newProjectPrompt,
-            onPromptChange = { newProjectPrompt = it },
-            onStartBuilding = {
-                sheet = null
-                // Existing create-project gallery owns the template picker; the prompt rides along in the
-                // sheet state so the user can copy it into the agent once a project is open.
-                onNewProject()
-            },
-            onDismiss = { sheet = null },
-            selectedStack = selectedStack,
-            onSelectStack = { selectedStack = it },
-            onCloneGit = onCloneGit?.let { { sheet = null; it() } },
-            onOpenFolder = onImportProject?.let { { sheet = null; it() } },
-            onImportPackage = onImportPackage?.let { { sheet = null; it() } }
-                ?: onImportProject?.let { { sheet = null; it() } },
-        )
         HomeSheet.Account -> AccountSheet(
             onDismiss = { sheet = null },
             storagePath = storagePath,
@@ -524,7 +445,7 @@ fun ProjectsHomeScreen(
     }
 }
 
-private enum class HomeSheet { Account, NewProject }
+private enum class HomeSheet { Account }
 
 @Composable
 private fun HomeHeader(
@@ -581,7 +502,9 @@ private fun HomeHeader(
  */
 @Composable
 private fun HomeActions(
-    onImportProject: () -> Unit,
+    onNewProject: () -> Unit,
+    onCloneRepository: (() -> Unit)? = null,
+    onImportProject: (() -> Unit)? = null,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 10.dp),
@@ -589,12 +512,116 @@ private fun HomeActions(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         HeaderButton(
-            glyph = CaSymbols.folderOpen,
-            label = stringResource(Res.string.home_import_project),
-            primary = false,
+            glyph = CaSymbols.add,
+            label = stringResource(Res.string.home_new_project),
+            primary = true,
             modifier = Modifier.weight(1f),
-            onClick = onImportProject,
+            onClick = onNewProject,
         )
+        if (onCloneRepository != null) {
+            HeaderButton(
+                glyph = CaSymbols.forkRight,
+                label = stringResource(Res.string.home_clone_repository),
+                primary = false,
+                modifier = Modifier.weight(1f),
+                onClick = onCloneRepository,
+            )
+        }
+        if (onImportProject != null) {
+            HeaderButton(
+                glyph = CaSymbols.folderOpen,
+                label = stringResource(Res.string.home_import_project),
+                primary = false,
+                modifier = Modifier.weight(1f),
+                onClick = onImportProject,
+            )
+        }
+    }
+}
+
+/**
+ * Direct Git/GitHub URL input + Paste + Clone bar right on the Projects Home screen so users can
+ * paste a repository URL and clone immediately in one tap without hunting through menus.
+ */
+@Composable
+private fun QuickCloneBar(
+    onCloneUrl: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = MaterialTheme.colorScheme
+    val clipboard = LocalClipboardManager.current
+    var urlText by rememberSaveable { mutableStateOf("") }
+    val shape = RoundedCornerShape(10.dp)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            Modifier
+                .weight(1f)
+                .height(38.dp)
+                .clip(shape)
+                .background(c.surfaceContainerLow)
+                .border(1.dp, c.outlineVariant, shape)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Symbol(CaSymbols.forkRight, contentDescription = null, size = 16.dp, tint = c.onSurfaceVariant)
+            BasicTextField(
+                value = urlText,
+                onValueChange = { urlText = it },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = c.onSurface),
+                cursorBrush = SolidColor(c.primary),
+                modifier = Modifier.weight(1f),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (urlText.isEmpty()) {
+                            Text(
+                                "Paste GitHub URL or owner/repo to clone…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = c.outline,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        inner()
+                    }
+                },
+            )
+            if (urlText.isNotEmpty()) {
+                IconButtonCa(CaIcons.close, stringResource(Res.string.home_clear_search), { urlText = "" }, iconSize = 14, boxSize = 24)
+            }
+        }
+        OutlinedButton(
+            onClick = {
+                val clip = clipboard.getText()?.text?.trim().orEmpty()
+                if (clip.isNotBlank()) {
+                    urlText = clip
+                }
+            },
+            shape = shape,
+            border = BorderStroke(1.dp, c.outlineVariant),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            modifier = Modifier.height(38.dp),
+        ) {
+            Text("Paste", style = MaterialTheme.typography.labelLarge)
+        }
+        Button(
+            onClick = { onCloneUrl(urlText) },
+            shape = shape,
+            contentPadding = PaddingValues(horizontal = 14.dp),
+            modifier = Modifier.height(38.dp),
+        ) {
+            Symbol(CaSymbols.forkRight, contentDescription = null, size = 16.dp)
+            Spacer(Modifier.width(6.dp))
+            Text("Clone", style = MaterialTheme.typography.labelLarge)
+        }
     }
 }
 
@@ -1349,6 +1376,10 @@ private fun WideProjectsHome(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                HeaderButton(CaSymbols.add, stringResource(Res.string.home_new_project), primary = true, onClick = onNewProject)
+                if (onCloneRepository != null) {
+                    HeaderButton(CaSymbols.forkRight, stringResource(Res.string.home_clone_repository), primary = false, onClick = onCloneRepository)
+                }
                 if (onImportProject != null) {
                     HeaderButton(CaSymbols.folderOpen, stringResource(Res.string.home_import_project), primary = false, onClick = onImportProject)
                 }
@@ -1371,6 +1402,29 @@ private fun WideProjectsHome(
                         size = 40.dp,
                     )
                 }
+            }
+            if (onCloneAndOpen != null || onCloneRepository != null) {
+                QuickCloneBar(
+                    onCloneUrl = { rawUrl ->
+                        val clean = rawUrl.trim()
+                        if (clean.isNotEmpty() && onCloneAndOpen != null) {
+                            val normalizedUrl = if (
+                                clean.startsWith("http://", ignoreCase = true) ||
+                                clean.startsWith("https://", ignoreCase = true) ||
+                                clean.startsWith("git@")
+                            ) {
+                                clean
+                            } else {
+                                "https://github.com/${clean.trim('/')}"
+                            }
+                            val repoName = normalizedUrl.trimEnd('/').substringAfterLast('/').removeSuffix(".git").ifBlank { "repo" }
+                            onCloneAndOpen(normalizedUrl, repoName)
+                        } else {
+                            onCloneRepository?.invoke()
+                        }
+                    },
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
             }
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 8.dp),

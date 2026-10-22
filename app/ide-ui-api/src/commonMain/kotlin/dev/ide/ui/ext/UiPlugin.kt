@@ -99,7 +99,10 @@ object UiPluginHost {
      *  is already filtered to enabled plugins by the engine's `PluginCatalog` — so a disabled plugin never
      *  reaches here. */
     fun register(plugin: UiPlugin) {
-        if (plugins.none { it.id == plugin.id }) plugins.add(plugin)
+        if (plugins.none { it.id == plugin.id }) {
+            plugins.add(plugin)
+            if (loaded) contribute(plugin)
+        }
     }
 
     private val failed = LinkedHashMap<String, Throwable>()

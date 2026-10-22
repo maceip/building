@@ -5,9 +5,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import dev.ide.ui.LeftPanelId
+import dev.ide.ui.backend.UiActionPlaces
 import dev.ide.ui.backend.UiVcsChange
 import dev.ide.ui.backend.VcsService
 import dev.ide.ui.ext.ScreenContribution
+import dev.ide.ui.ext.SimpleUiAction
 import dev.ide.ui.ext.TabDecoration
 import dev.ide.ui.ext.TabDecorationContext
 import dev.ide.ui.ext.TabDecorationContribution
@@ -57,6 +59,18 @@ object VcsUiPlugin : UiPlugin {
         scope.screen(ScreenContribution(VcsService.SCREEN_CLONE, "Clone") { ctx -> CloneScreen(ctx) })
         scope.screen(ScreenContribution(VcsService.SCREEN_STASHES, "Stashes") { ctx -> StashesScreen(ctx) })
         scope.screen(ScreenContribution(VcsService.SCREEN_GITHUB, "GitHub") { ctx -> GitHubScreen(ctx) })
+        scope.action(
+            SimpleUiAction(
+                id = VcsService.SCREEN_CLONE,
+                text = "Clone repository",
+                places = setOf(UiActionPlaces.MORE_MENU, UiActionPlaces.COMMAND_PALETTE, UiActionPlaces.TOOL_STRIPE),
+                description = "Clone from GitHub or paste any Git repository URL",
+                iconId = "git",
+                order = 15,
+            ) { host ->
+                host.navigate(VcsService.SCREEN_CLONE)
+            },
+        )
         contributeTabDecorations(scope)
     }
 

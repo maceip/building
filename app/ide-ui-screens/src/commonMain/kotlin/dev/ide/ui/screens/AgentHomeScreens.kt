@@ -184,48 +184,6 @@ fun AgentHomeContent(
             }
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 6.dp),
-            ) {
-                AgentSectionLabel("Continue")
-                Spacer(Modifier.weight(1f))
-                Text(
-                    "Import or clone",
-                    fontSize = 14.sp,
-                    color = AgentUi.chrome.textMuted,
-                    modifier = Modifier.clickable(onClick = onImportOrClone),
-                )
-            }
-            continueItems.forEach { item ->
-                AgentProjectRow(
-                    title = item.title,
-                    meta = item.meta,
-                    time = item.time,
-                    letter = item.letter,
-                    avatar = item.avatar,
-                    stackLabel = item.stackLabel,
-                    stackColor = item.stackColor,
-                    modulesLabel = item.modulesLabel,
-                    tags = item.tags,
-                    shimmerSubtitle = item.shimmerSubtitle,
-                    selected = item.needsAttention,
-                    statusColor = if (item.needsAttention) AgentUi.chrome.warn else AgentUi.chrome.accent,
-                    onClick = { onOpenItem(item) },
-                )
-            }
-            Text(
-                allProjectsLabel,
-                fontSize = 14.sp,
-                color = AgentUi.chrome.textMuted,
-                modifier = Modifier
-                    .clickable(onClick = onSeeAllProjects)
-                    .padding(12.dp),
-            )
-        }
         Spacer(Modifier.height(12.dp))
     }
 }
