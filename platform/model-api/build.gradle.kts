@@ -24,6 +24,14 @@ plugins {
 }
 
 kotlin {
+    compilerOptions {
+        freeCompilerArgs.addAll(
+            "-Xexpect-actual-classes",
+            "-XXLanguage:+CustomEqualsInValueClasses",
+            "-Xreturn-value-checker=check",
+        )
+    }
+
     jvm {
         compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
     }
