@@ -80,7 +80,7 @@ actual fun BridgeGuiWindow(
     val windowTitle = parsedNode?.props?.get("windowTitle")?.jsonPrimitive?.contentOrNull
         ?: moduleName.ifBlank { mainClass }
 
-    Box(
+    Column(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.surface),
@@ -89,7 +89,7 @@ actual fun BridgeGuiWindow(
         val isDark = when {
             windowBgProp != null -> isDarkHex(windowBgProp)
             rootBgColor != null -> (0.299f * rootBgColor.red + 0.587f * rootBgColor.green + 0.113f * rootBgColor.blue) < 0.45
-            else -> androidx.compose.foundation.isSystemInDarkTheme()
+            else -> false
         }
         val contentBg = windowBgProp?.let(::parseHexColor)
             ?: rootBgColor
@@ -99,7 +99,6 @@ actual fun BridgeGuiWindow(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(contentBg)
-                .statusBarsPadding()
                 .padding(horizontal = 18.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -109,6 +108,14 @@ actual fun BridgeGuiWindow(
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = if (isDark) Color.White else Color.Black,
+            )
+            Text(
+                text = windowTitle,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                color = (if (isDark) Color.White else Color.Black).copy(alpha = 0.72f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
                 repeat(4) { bar ->
@@ -124,51 +131,58 @@ actual fun BridgeGuiWindow(
             }
         }
 
-        CupertinoTheme(
-            colorScheme = if (isDark) darkColorScheme() else lightColorScheme(),
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(contentBg),
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(contentBg)
-                    .padding(top = 32.dp, start = 8.dp, end = 8.dp, bottom = 8.dp),
-                contentAlignment = Alignment.TopCenter,
+            CupertinoTheme(
+                colorScheme = if (isDark) darkColorScheme() else lightColorScheme(),
             ) {
-                if (parsedNode != null) {
-                    Render(parsedNode, isDark = isDark)
-                } else {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(28.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            text = windowTitle.ifBlank { "App" },
-                            style = MaterialTheme.typography.titleMedium,
-                            color = if (isDark) Color.White else Color.Black,
-                        )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(contentBg)
+                        .padding(top = 8.dp, start = 8.dp, end = 8.dp, bottom = 20.dp),
+                    contentAlignment = Alignment.TopCenter,
+                ) {
+                    if (parsedNode != null) {
+                        Render(parsedNode, isDark = isDark)
+                    } else {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                text = windowTitle.ifBlank { "App" },
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (isDark) Color.White else Color.Black,
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 8.dp)
-                .width(120.dp)
-                .height(4.dp)
-                .background(
-                    (if (isDark) Color.White else Color.Black).copy(alpha = 0.35f),
-                    RoundedCornerShape(2.dp),
-                ),
-        )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 8.dp)
+                    .width(120.dp)
+                    .height(4.dp)
+                    .background(
+                        (if (isDark) Color.White else Color.Black).copy(alpha = 0.35f),
+                        RoundedCornerShape(2.dp),
+                    ),
+            )
+        }
     }
 }
 

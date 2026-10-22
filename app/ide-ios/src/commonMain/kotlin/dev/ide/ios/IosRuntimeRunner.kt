@@ -79,6 +79,16 @@ internal object IosRuntimeRunner {
                     ),
                 )
             }
+            if (tasks.none { it.runtime == RuntimeKind.NODE }) {
+                tasks.add(
+                    DiscoveredTask(
+                        option = RunTaskOption("node:workspace", "npm start (Node.js Workspace)", "Node.js"),
+                        runtime = RuntimeKind.NODE,
+                        command = "npm start",
+                        targetFile = packageJsonPath,
+                    ),
+                )
+            }
         }
 
         // Common JS entry points
@@ -112,6 +122,20 @@ internal object IosRuntimeRunner {
                     targetFile = IosFiles.join(root, py),
                 ),
             )
+        }
+        val nestedPyCandidates = listOf("webui/Main.py", "app/main.py", "src/main.py")
+        for (relPy in nestedPyCandidates) {
+            val fullPy = IosFiles.join(root, relPy)
+            if (IosFiles.exists(fullPy)) {
+                tasks.add(
+                    DiscoveredTask(
+                        option = RunTaskOption("python:file:$relPy", "python3 $relPy", "Python"),
+                        runtime = RuntimeKind.PYTHON,
+                        command = "python3 $relPy",
+                        targetFile = fullPy,
+                    ),
+                )
+            }
         }
         if (tasks.none { it.runtime == RuntimeKind.PYTHON } &&
             (IosFiles.exists(IosFiles.join(root, "pyproject.toml")) ||
@@ -187,6 +211,24 @@ internal object IosRuntimeRunner {
                     runtime = RuntimeKind.WEB,
                     command = null,
                     targetFile = IosFiles.join(root, "index.html"),
+                ),
+            )
+        }
+
+        // 6. Markdown / Docs / Prompts workspace fallback (when not a Gradle/Kotlin project)
+        val isGradleOrKotlin = IosFiles.exists(IosFiles.join(root, "build.gradle.kts")) ||
+            IosFiles.exists(IosFiles.join(root, "build.gradle")) ||
+            IosFiles.exists(IosFiles.join(root, "settings.gradle.kts")) ||
+            IosFiles.exists(IosFiles.join(root, "settings.gradle")) ||
+            IosFiles.exists(IosFiles.join(root, ".platform/workspace.json")) ||
+            IosFiles.exists(IosFiles.join(root, "app/src/main/AndroidManifest.xml"))
+        if (tasks.isEmpty() && !isGradleOrKotlin && files.isNotEmpty()) {
+            tasks.add(
+                DiscoveredTask(
+                    option = RunTaskOption("workspace:preview", "Run Workspace Preview", "Workspace"),
+                    runtime = RuntimeKind.WEB,
+                    command = "preview",
+                    targetFile = files.firstOrNull { it.endsWith(".md", ignoreCase = true) }?.let { IosFiles.join(root, it) },
                 ),
             )
         }
@@ -315,18 +357,44 @@ internal object IosRuntimeRunner {
         val bulletItems = mutableListOf<String>()
 
         when (task.runtime) {
+            RuntimeKind.KOTLIN -> {
+                val ktFiles = scannedFiles.filter { it.endsWith(".kt") || it.endsWith(".java") }
+                var loc = 0
+                val funRegex = Regex("""@Composable\s+(?:[A-Za-z_]+\s+)*fun\s+([A-Za-z_]\w*)""")
+                val classRegex = Regex("""class\s+([A-Za-z_]\w*)\s*(?::\s*([A-Za-z_]\w*))?""")
+                for (kf in ktFiles.take(35)) {
+                    val src = IosFiles.readText(kf)
+                    loc += src.count { it == '\n' } + 1
+                    val rel = kf.removePrefix("$root/")
+                    for (m in funRegex.findAll(src)) {
+                        if (bulletItems.size < 6) bulletItems.add("@Composable ${m.groupValues[1]}() · $rel")
+                    }
+                    for (m in classRegex.findAll(src)) {
+                        val cName = m.groupValues[1]
+                        if (bulletItems.size < 6 && (cName.endsWith("Activity") || cName.endsWith("Service") || cName.endsWith("ViewModel") || cName.endsWith("Screen"))) {
+                            bulletItems.add("class $cName · $rel")
+                        }
+                    }
+                }
+                if (bulletItems.isEmpty()) {
+                    bulletItems.addAll(ktFiles.take(5).map { it.removePrefix("$root/") })
+                }
+                subtitle = "Android & Kotlin Runtime · ${ktFiles.size} source files ($loc LOC)"
+                statusLine = "Android App Session Active · Events: $interactions"
+                buttonLabel = "Dispatch Activity Action"
+            }
             RuntimeKind.SWIFT -> {
                 val swiftFiles = scannedFiles.filter { it.endsWith(".swift") }
                 val views = mutableListOf<String>()
                 var loc = 0
-                val structRegex = Regex("""struct\s+([A-Za-z_]\w*)\s*:\s*([^{]+)""")
+                val structRegex = Regex("""(?:struct|class)\s+([A-Za-z_]\w*)\s*:\s*([^{]+)""")
                 for (sf in swiftFiles.take(40)) {
                     val src = IosFiles.readText(sf)
                     loc += src.count { it == '\n' } + 1
                     for (m in structRegex.findAll(src)) {
                         val name = m.groupValues[1]
                         val proto = m.groupValues[2].trim()
-                        if (views.size < 6 && ("View" in proto || "App" in proto)) {
+                        if (views.size < 6 && ("View" in proto || "App" in proto || "Controller" in proto || "Delegate" in proto)) {
                             views.add("$name : $proto (${sf.removePrefix("$root/")})")
                         }
                     }
@@ -339,34 +407,59 @@ internal object IosRuntimeRunner {
                     onChunk(ConsoleChunk("✓ Verified ${swiftFiles.size} Swift source files ($loc LOC)\n", ConsoleChunkKind.OUTPUT))
                     onChunk(ConsoleChunk("✓ Interactive Cupertino ViewNode window active\n", ConsoleChunkKind.OUTPUT))
                 }
-                subtitle = "SwiftUI · ${swiftFiles.size} .swift files ($loc LOC)"
+                subtitle = "Swift & iOS · ${swiftFiles.size} .swift files ($loc LOC)"
                 statusLine = "Cupertino Window Active · Interactions: $interactions"
                 buttonLabel = "Interact with Cupertino Window"
                 bulletItems.addAll(views.ifEmpty { listOf("ContentView : View") })
             }
             RuntimeKind.NODE, RuntimeKind.WEB -> {
-                val pkgText = IosFiles.readText(IosFiles.join(root, "package.json"))
+                val pkgPath = IosFiles.join(root, "package.json")
+                val pkgText = if (IosFiles.exists(pkgPath)) IosFiles.readText(pkgPath) else ""
                 val pkgObj = JsonReader.obj(JsonReader.parseOrNull(pkgText))
                 val scripts = JsonReader.obj(pkgObj?.get("scripts"))?.keys?.toList().orEmpty()
                 val tsJsFiles = scannedFiles.filter {
                     it.endsWith(".ts") || it.endsWith(".tsx") || it.endsWith(".js") || it.endsWith(".jsx") || it.endsWith(".mjs")
                 }
-                var loc = 0
-                for (f in tsJsFiles.take(40)) {
-                    loc += IosFiles.readText(f).count { it == '\n' } + 1
-                }
-                if (emitLogs) {
-                    val jsCheck = "JSON.stringify({ engine: 'JavaScriptCore', project: ${dev.ide.platform.JsonWriter.string(projectName)}, files: ${tsJsFiles.size} })"
-                    runJavaScriptInProcess("console.log('✓ Browser Component Runtime verified: ' + $jsCheck);", "browser-bridge.js", root, onChunk)
-                    onChunk(ConsoleChunk("✓ Browser Component Ready (${tsJsFiles.size} TS/JS files · $loc LOC)\n", ConsoleChunkKind.OUTPUT))
-                }
-                subtitle = "Browser & Node.js Runtime · ${tsJsFiles.size} TS/JS files ($loc LOC)"
-                statusLine = "Browser Component Ready · Events: $interactions"
-                buttonLabel = "Reload Browser Component & Verify Routes"
-                if (scripts.isNotEmpty()) {
-                    bulletItems.addAll(scripts.take(5).map { "npm run $it" })
+                val mdFiles = scannedFiles.filter { it.endsWith(".md", ignoreCase = true) }
+                if (tsJsFiles.isEmpty() && mdFiles.isNotEmpty()) {
+                    var loc = 0
+                    val headingRegex = Regex("""^#{1,3}\s+(.+)$""", RegexOption.MULTILINE)
+                    for (mf in mdFiles.take(15)) {
+                        val src = IosFiles.readText(mf)
+                        loc += src.count { it == '\n' } + 1
+                        for (m in headingRegex.findAll(src)) {
+                            val h = m.groupValues[1].trim()
+                            if (bulletItems.size < 6 && h.isNotBlank()) bulletItems.add(h)
+                        }
+                    }
+                    if (bulletItems.isEmpty()) {
+                        bulletItems.addAll(mdFiles.take(5).map { it.removePrefix("$root/") })
+                    }
+                    if (emitLogs) {
+                        onChunk(ConsoleChunk("Workspace Document & Prompt Preview · $projectName\n", ConsoleChunkKind.OUTPUT))
+                        onChunk(ConsoleChunk("✓ Loaded ${mdFiles.size} Markdown documents ($loc lines)\n", ConsoleChunkKind.OUTPUT))
+                    }
+                    subtitle = "Workspace Preview · ${mdFiles.size} Markdown files ($loc lines)"
+                    statusLine = "Interactive Preview Active · Section #: ${interactions + 1}"
+                    buttonLabel = "Cycle Preview Section"
                 } else {
-                    bulletItems.addAll(tsJsFiles.take(5).map { it.removePrefix("$root/") })
+                    var loc = 0
+                    for (f in tsJsFiles.take(40)) {
+                        loc += IosFiles.readText(f).count { it == '\n' } + 1
+                    }
+                    if (emitLogs) {
+                        val jsCheck = "JSON.stringify({ engine: 'JavaScriptCore', project: ${dev.ide.platform.JsonWriter.string(projectName)}, files: ${tsJsFiles.size} })"
+                        runJavaScriptInProcess("console.log('✓ JavaScriptCore Runtime verified: ' + $jsCheck);", "runtime-check.js", root, onChunk)
+                        onChunk(ConsoleChunk("✓ Node.js / TypeScript Runtime Ready (${tsJsFiles.size} TS/JS files · $loc LOC)\n", ConsoleChunkKind.OUTPUT))
+                    }
+                    subtitle = "Node.js & TypeScript · ${tsJsFiles.size} TS/JS files ($loc LOC)"
+                    statusLine = "Runtime Session Active · Events: $interactions"
+                    buttonLabel = "Execute Workspace Action"
+                    if (scripts.isNotEmpty()) {
+                        bulletItems.addAll(scripts.take(5).map { "npm run $it" })
+                    } else {
+                        bulletItems.addAll(tsJsFiles.take(5).map { it.removePrefix("$root/") })
+                    }
                 }
             }
             RuntimeKind.PYTHON -> {
@@ -411,14 +504,17 @@ internal object IosRuntimeRunner {
             """{"type":"Composable","id":"root/item_$idx","props":{"name":"CupertinoText","text":${esc("• $item")},"style":{"fontSize":13,"color":4280232247}},"modifiers":[],"children":[]}"""
         }.joinToString(",")
 
-        val childrenJson = buildList {
+        val headerCard = buildList {
             add("""{"type":"Composable","id":"root/title","props":{"name":"CupertinoText","text":${esc("$projectName · ${task.option.label}")},"style":{"fontSize":18,"fontWeight":"bold","color":4279310375}},"modifiers":[],"children":[]}""")
             add("""{"type":"Composable","id":"root/subtitle","props":{"name":"CupertinoText","text":${esc(subtitle)},"style":{"fontSize":13,"color":4283127139}},"modifiers":[],"children":[]}""")
             add("""{"type":"Composable","id":"root/status","props":{"name":"CupertinoText","text":${esc(statusLine)},"style":{"fontSize":13,"fontWeight":"semibold","color":4280640491}},"modifiers":[],"children":[]}""")
             add("""{"type":"Composable","id":"root/action_btn","props":{"name":"CupertinoButton","onClick":1,"containerColor":4280640491,"contentColor":4294967295},"modifiers":[{"kind":"frame","args":{"fillWidth":true}}],"children":[{"type":"CupertinoSlot","id":"root/action_btn/slot","props":{"name":"content"},"modifiers":[],"children":[{"type":"Composable","id":"root/action_btn/label","props":{"name":"CupertinoText","text":${esc(buttonLabel)},"style":{"color":4294967295,"fontSize":15,"fontWeight":"semibold"}},"modifiers":[],"children":[]}]}]}""")
-            if (itemNodes.isNotEmpty()) add(itemNodes)
         }.joinToString(",")
 
-        return """{"type":"ScrollView","id":"root","props":{"windowTitle":${esc(projectName)},"windowBackground":"#F2F2F7"},"modifiers":[{"kind":"frame","args":{"fillWidth":true}}],"children":[{"type":"VStack","id":"root/vstack","props":{"spacing":8,"alignment":"leading"},"modifiers":[{"kind":"frame","args":{"fillWidth":true}},{"kind":"padding","args":{"top":10,"bottom":10,"leading":12,"trailing":12}}],"children":[$childrenJson]}]}"""
+        val itemsCard = if (itemNodes.isNotEmpty()) {
+            """,{"type":"Section","id":"root/items_card","props":{"card":true,"spacing":6},"modifiers":[{"kind":"frame","args":{"fillWidth":true}}],"children":[{"type":"Composable","id":"root/items_hdr","props":{"name":"CupertinoText","text":"Discovered Targets & Entry Points","style":{"fontSize":14,"fontWeight":"semibold","color":4279310375}},"modifiers":[],"children":[]},$itemNodes]}"""
+        } else ""
+
+        return """{"type":"ScrollView","id":"root","props":{"windowTitle":${esc(projectName)},"windowBackground":"#F2F2F7"},"modifiers":[{"kind":"frame","args":{"fillWidth":true}}],"children":[{"type":"VStack","id":"root/vstack","props":{"spacing":12,"alignment":"leading"},"modifiers":[{"kind":"frame","args":{"fillWidth":true}},{"kind":"padding","args":{"top":8,"bottom":12,"leading":6,"trailing":6}}],"children":[{"type":"Section","id":"root/header_card","props":{"card":true,"spacing":8},"modifiers":[{"kind":"frame","args":{"fillWidth":true}}],"children":[$headerCard]}$itemsCard]}]}"""
     }
 }

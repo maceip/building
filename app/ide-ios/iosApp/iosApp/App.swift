@@ -12,6 +12,11 @@ final class PhysicalDeviceUiAutomationServer {
     func startIfNeeded(port: UInt16 = 8100) {
         guard !started else { return }
         started = true
+        startIpv4Listener(port: port)
+        startIpv6Listener(port: port)
+    }
+
+    private func startIpv4Listener(port: UInt16) {
         queue.async {
             let fd = socket(AF_INET, SOCK_STREAM, 0)
             guard fd >= 0 else { return }
@@ -29,17 +34,50 @@ final class PhysicalDeviceUiAutomationServer {
                     bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
                 }
             }
-            guard bindResult == 0 else {
-                close(fd)
-                return
-            }
-            guard listen(fd, 16) == 0 else {
+            guard bindResult == 0, listen(fd, 16) == 0 else {
                 close(fd)
                 return
             }
             while true {
                 var clientAddr = sockaddr_in()
                 var clientLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+                let clientFd = withUnsafeMutablePointer(to: &clientAddr) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        accept(fd, $0, &clientLen)
+                    }
+                }
+                if clientFd >= 0 {
+                    self.handleClient(clientFd)
+                }
+            }
+        }
+    }
+
+    private func startIpv6Listener(port: UInt16) {
+        queue.async {
+            let fd = socket(AF_INET6, SOCK_STREAM, 0)
+            guard fd >= 0 else { return }
+            var yes: Int32 = 1
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+
+            var addr = sockaddr_in6()
+            addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+            addr.sin6_family = sa_family_t(AF_INET6)
+            addr.sin6_port = port.bigEndian
+            addr.sin6_addr = in6addr_any
+
+            let bindResult = withUnsafePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size))
+                }
+            }
+            guard bindResult == 0, listen(fd, 16) == 0 else {
+                close(fd)
+                return
+            }
+            while true {
+                var clientAddr = sockaddr_in6()
+                var clientLen = socklen_t(MemoryLayout<sockaddr_in6>.size)
                 let clientFd = withUnsafeMutablePointer(to: &clientAddr) {
                     $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                         accept(fd, $0, &clientLen)
@@ -102,6 +140,20 @@ final class PhysicalDeviceUiAutomationServer {
                 MainViewControllerKt.dispatchFocusedTextInput(text: text)
             }
             responseBody = "{\"ok\":\(ok)}"
+        } else if path == "/run" {
+            let ok = DispatchQueue.main.sync {
+                MainViewControllerKt.triggerRunBuild()
+                return true
+            }
+            responseBody = "{\"ok\":\(ok),\"status\":\"running\"}"
+        } else if path == "/run_pointer" {
+            let x = Float(param("x") ?? "0.5") ?? 0.5
+            let y = Float(param("y") ?? "0.5") ?? 0.5
+            let ok = DispatchQueue.main.sync {
+                MainViewControllerKt.triggerRunPointerTap(x: x, y: y)
+                return true
+            }
+            responseBody = "{\"ok\":\(ok),\"x\":\(x),\"y\":\(y)}"
         }
 
         let bodyData = Data(responseBody.utf8)

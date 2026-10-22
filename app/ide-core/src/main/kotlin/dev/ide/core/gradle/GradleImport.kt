@@ -326,8 +326,11 @@ object GradleImport {
                 .firstOrNull { text -> GradleScript.childBlocks(text).any { it.name == "kotlin" } } ?: build
             GradleKmp.parse(kotlinScript, androidPlugin, context.kmpPreference)
         }
-        val ownDeps = if (kmp != null) GradleScript.childBlocks(build).firstOrNull { it.name == "dependencies" }?.body
-        else GradleScript.blockBody(build, "dependencies")
+        val ownDeps = if (kmp != null) {
+            GradleScript.childBlocks(build).filter { it.name == "dependencies" }.joinToString("\n") { it.body }.ifBlank { null }
+        } else {
+            GradleScript.allBlockBodies(build, "dependencies").joinToString("\n").ifBlank { null }
+        }
         ownDeps?.let { depBodies.add(0, it) }
         kmp?.androidConfig?.let { androidTexts.add(0, it) }
 
@@ -610,7 +613,10 @@ object GradleImport {
                 }
                 Regex("""\bkotlin\s*\(\s*['"]""").containsMatchIn(text) -> {
                     GradleScript.firstQuoted(text.substringAfter("kotlin"))
-                        ?.let { addLib("org.jetbrains.kotlin:kotlin-$it", scope, variant, isPlatform) }
+                        ?.let {
+                            val ver = vars["kotlin"] ?: catalog.version("kotlin") ?: KotlinVersion.CURRENT.toString()
+                            addLib("org.jetbrains.kotlin:kotlin-$it:$ver", scope, variant, isPlatform)
+                        }
                 }
                 COMPOSE_ACCESSOR.containsMatchIn(text) -> {
                     val path = COMPOSE_ACCESSOR.find(text)!!.groupValues[1]

@@ -763,6 +763,13 @@ class IosBackend(
         val root = active?.rootPath?.takeIf { it.isNotEmpty() }
         val options = mutableListOf<RunTaskOption>()
         if (root != null) {
+            if (isKotlinOrGradleProject(root)) {
+                options.add(RunTaskOption("run", "Run App", "Application"))
+            }
+            val discovered = IosRuntimeRunner.discoverTasks(root)
+            if (discovered.isNotEmpty()) {
+                options.addAll(discovered.map { it.option })
+            }
             val apks = findApkArtifacts(root)
             if (apks.isNotEmpty()) {
                 options.add(RunTaskOption("android:apk:run", "Run Android APK", "Application"))
@@ -771,13 +778,6 @@ class IosBackend(
             if (guestArtifacts.isNotEmpty()) {
                 options.add(RunTaskOption("ios:guest:run", "Run in LiveContainer (Live Session)", "Application"))
                 options.add(RunTaskOption("ios:guest:patch", "Patch Mach-O to Dylib (LiveContainer)", "Build"))
-            } else {
-                options.add(RunTaskOption("ios:guest:run", "Run in LiveContainer (Live Session)", "Application"))
-                options.add(RunTaskOption("ios:guest:patch", "Patch Mach-O to Dylib (LiveContainer)", "Build"))
-            }
-            val discovered = IosRuntimeRunner.discoverTasks(root)
-            if (discovered.isNotEmpty()) {
-                options.addAll(discovered.map { it.option })
             }
         }
         if (options.isEmpty()) {
@@ -794,7 +794,11 @@ class IosBackend(
                 return
             }
             "ios:guest:run" -> {
-                runGuestAppSession(root)
+                if (GuestAppRunner.findGuestArtifacts(root).isNotEmpty()) {
+                    runGuestAppSession(root)
+                } else {
+                    runBuild()
+                }
                 return
             }
             "ios:guest:patch" -> {
@@ -812,6 +816,7 @@ class IosBackend(
             runExternalRuntimeTask(matched, root)
             return
         }
+        runBuild()
     }
 
     override fun runBuild() {
@@ -1136,8 +1141,7 @@ class IosBackend(
         }
     }
 
-    private var activeBridgeTask: Pair<IosRuntimeRunner.DiscoveredTask, String>? = null
-    private var activeBridgeInteractions: Int = 0
+    private val needsFrameRender = MutableStateFlow(false)
 
     private fun runExternalRuntimeTask(task: IosRuntimeRunner.DiscoveredTask, root: String) {
         val currentRunning = activeRunSession
@@ -1146,8 +1150,6 @@ class IosBackend(
         }
         val sessionId = (activeRunSession ?: 0) + 1
         activeRunSession = sessionId
-        activeBridgeTask = task to root
-        activeBridgeInteractions = 0
 
         _buildState.value = BuildState(status = RunStatus.Running)
         _runConsole.value = RunConsoleUi(
@@ -1156,7 +1158,7 @@ class IosBackend(
             mainClass = task.option.label,
             phase = RunPhase.Running,
             transcript = emptyList(),
-            acceptsInput = true,
+            acceptsInput = false,
         )
 
         runJob = backendScope.launch {
@@ -1168,48 +1170,64 @@ class IosBackend(
 
             onChunk(ConsoleChunk("=== Launching ${task.option.label} ===\n", ConsoleChunkKind.SYSTEM))
 
-            val exitCode: Int
-
             if (task.runtime == IosRuntimeRunner.RuntimeKind.NODE && task.targetFile != null && !hasNodeExecutable()) {
                 val script = IosFiles.readText(task.targetFile)
-                val success = IosRuntimeRunner.runJavaScriptInProcess(script, IosFiles.nameOf(task.targetFile), root, onChunk)
-                exitCode = if (success) 0 else 1
-            } else {
-                val cmd = task.command ?: task.targetFile ?: "echo 'No command specified'"
-                val procCode = withContext(ioDispatcher) {
-                    IosRuntimeRunner.runProcess(cmd, root, onChunk)
-                }
-                if (procCode == 0) {
-                    exitCode = 0
-                } else {
-                    onChunk(
-                        ConsoleChunk(
-                            "External command '$cmd' cannot execute in the iOS sandbox (exit code $procCode).\n",
-                            ConsoleChunkKind.OUTPUT,
+                val ok = IosRuntimeRunner.runJavaScriptInProcess(script, IosFiles.nameOf(task.targetFile), root, onChunk)
+                if (ok) {
+                    _buildState.value = BuildState(
+                        status = RunStatus.Succeeded,
+                        log = listOf(
+                            BuildLogLine(
+                                "${task.option.label} completed",
+                                UiLogLevel.Info,
+                            ),
                         ),
                     )
-                    exitCode = if (procCode != 0) procCode else 1
+                    _runConsole.update {
+                        it?.copy(
+                            phase = RunPhase.Finished,
+                            exitCode = 0,
+                            acceptsInput = false,
+                        )
+                    }
+                } else {
+                    _buildState.value = BuildState(
+                        status = RunStatus.Failed,
+                        log = listOf(
+                            BuildLogLine(
+                                "${task.option.label} failed during JavaScript execution",
+                                UiLogLevel.Error,
+                            ),
+                        ),
+                    )
+                    _runConsole.update {
+                        it?.copy(
+                            phase = RunPhase.Finished,
+                            exitCode = 1,
+                            acceptsInput = false,
+                        )
+                    }
+                }
+            } else {
+                val errorMsg = "External task '${task.option.label}' (${task.runtime}) is not supported in the iOS sandbox: non-native process execution is restricted."
+                onChunk(ConsoleChunk("Error: $errorMsg\n", ConsoleChunkKind.OUTPUT))
+                _buildState.value = BuildState(
+                    status = RunStatus.Failed,
+                    log = listOf(
+                        BuildLogLine(
+                            errorMsg,
+                            UiLogLevel.Error,
+                        ),
+                    ),
+                )
+                _runConsole.update {
+                    it?.copy(
+                        phase = RunPhase.Finished,
+                        exitCode = 1,
+                        acceptsInput = false,
+                    )
                 }
             }
-
-            onChunk(ConsoleChunk("\n[Process finished with exit code $exitCode]\n", ConsoleChunkKind.SYSTEM))
-            _buildState.value = BuildState(
-                status = if (exitCode == 0) RunStatus.Succeeded else RunStatus.Failed,
-                log = listOf(
-                    BuildLogLine(
-                        "${task.option.label} finished with code $exitCode",
-                        if (exitCode == 0) UiLogLevel.Info else UiLogLevel.Error,
-                    ),
-                ),
-            )
-            _runConsole.update {
-                it?.copy(
-                    phase = RunPhase.Finished,
-                    exitCode = exitCode,
-                    acceptsInput = false,
-                )
-            }
-            activeRunSession = null
         }
     }
 
@@ -1254,38 +1272,78 @@ class IosBackend(
                 var targetFn: String? = null
                 var loweredBlob: ByteArray? = null
 
-                // 1. Check open buffers
-                for (path in buffers.keys) {
-                    if (path.endsWith(".kt")) {
-                        val text = buffers[path] ?: continue
-                        val names = withAnalysis(emptyList()) {
-                            (it.previewNames(path, text) + it.composableNames(path, text)).distinct()
+                // 0. For Android projects, extract @Composable from MainActivity.onCreate setContent { ... }
+                if (isAndroidProject(root)) {
+                    val actName = apkLaunchResult?.activity ?: "MainActivity"
+                    val actSimple = actName.substringAfterLast('.')
+                    val actFile = candidateFiles.find { it.endsWith("/$actSimple.kt") }
+                        ?: candidateFiles.find { it.endsWith("Activity.kt") && !it.endsWith("Test.kt") }
+                    if (actFile != null) {
+                        val actText = IosFiles.readText(actFile)
+                        val candidateFns = withAnalysis(emptyList()) {
+                            (it.extractActivitySetContentComposables(actFile, actText) + it.composableNames(actFile, actText)).distinct()
                         }
-                        for (fn in names) {
-                            val candidateBlob = withAnalysis(null) { it.lowerPreview(path, text, fn) }
-                            if (candidateBlob != null) {
-                                targetPath = path
-                                targetText = text
+                        for (fn in candidateFns) {
+                            val directBlob = withAnalysis(null) { it.lowerPreview(actFile, actText, fn) }
+                            if (directBlob != null) {
+                                targetPath = actFile
+                                targetText = actText
                                 targetFn = fn
-                                loweredBlob = candidateBlob
+                                loweredBlob = directBlob
                                 break
                             }
+                            val declaringFile = candidateFiles.find { f ->
+                                f != actFile && IosFiles.readText(f).contains("fun $fn(")
+                            }
+                            if (declaringFile != null) {
+                                val declaringText = IosFiles.readText(declaringFile)
+                                val declaringBlob = withAnalysis(null) { it.lowerPreview(declaringFile, declaringText, fn) }
+                                if (declaringBlob != null) {
+                                    targetPath = declaringFile
+                                    targetText = declaringText
+                                    targetFn = fn
+                                    loweredBlob = declaringBlob
+                                    break
+                                }
+                            }
                         }
-                        if (loweredBlob != null) break
                     }
                 }
 
-                // 2. If no buffer has a preview, walk project src files
+                // 1. Check open buffers
                 if (loweredBlob == null) {
-                    val fileTexts = candidateFiles.map { file -> file to IosFiles.readText(file) }
+                    for (path in buffers.keys) {
+                        if (path.endsWith(".kt")) {
+                            val text = buffers[path] ?: continue
+                            val names = withAnalysis(emptyList()) {
+                                (it.previewNames(path, text) + it.composableNames(path, text)).distinct()
+                            }
+                            for (fn in names.take(3)) {
+                                val candidateBlob = withAnalysis(null) { it.lowerPreview(path, text, fn) }
+                                if (candidateBlob != null) {
+                                    targetPath = path
+                                    targetText = text
+                                    targetFn = fn
+                                    loweredBlob = candidateBlob
+                                    break
+                                }
+                            }
+                            if (loweredBlob != null) break
+                        }
+                    }
+                }
+
+                // 2. If no buffer has a preview, walk project @Composable / @Preview files
+                if (loweredBlob == null) {
+                    val fileTexts = candidateFiles.mapNotNull { file ->
+                        val text = IosFiles.readText(file)
+                        if ("@Composable" in text || "@Preview" in text || "Previews" in text) file to text else null
+                    }
                     val uiPrimitives = listOf(
                         "Text(", "Column(", "Row(", "Box(", "Spacer(", "Surface(", "Card(", "Icon(", "Button(",
                     )
                     fun isCleanComposeFile(text: String): Boolean =
-                        "stringResource(" !in text &&
-                            "painterResource(" !in text &&
-                            "LocalContext" !in text &&
-                            "HazeState" !in text &&
+                        "HazeState" !in text &&
                             "hiltViewModel" !in text
 
                     // Pass 1: Files with @Preview / MultiPreview annotations
@@ -1339,7 +1397,7 @@ class IosBackend(
                             .sortedWith(
                                 compareBy<Pair<String, String>>(
                                     { (_, text) -> if (isCleanComposeFile(text)) 0 else 1 },
-                                    { (file, _) -> if (!file.endsWith("Activity.kt")) 0 else 1 },
+                                    { (file, _) -> if (file.endsWith("Activity.kt")) 0 else 1 },
                                     { (file, _) ->
                                         val lower = file.lowercase()
                                         if ("/ui/component" in lower || "/ui/design" in lower || "/ui/common" in lower || "/ui/shimmer" in lower || "/ui/" in lower) 0 else 1
@@ -1381,21 +1439,6 @@ class IosBackend(
 
                 val blob = loweredBlob
                 if (blob == null || targetPath == null || targetText == null || targetFn == null) {
-                    if (apkLaunchResult != null && apkLaunchResult.ok) {
-                        _buildState.value = BuildState(
-                            status = RunStatus.Succeeded,
-                            log = listOf(BuildLogLine(apkLaunchResult.message, UiLogLevel.Info)),
-                        )
-                        _runConsole.update {
-                            it?.copy(
-                                moduleName = apkLaunchResult.packageName.ifBlank { "app" },
-                                mainClass = apkLaunchResult.activity ?: "MainActivity",
-                                phase = RunPhase.Finished,
-                                exitCode = 0,
-                            )
-                        }
-                        return@launch
-                    }
                     val errMsg = if (targetPath == null) {
                         "No runnable Kotlin Compose entry point found in $root"
                     } else {
@@ -1405,6 +1448,7 @@ class IosBackend(
                         status = RunStatus.Failed,
                         log = listOf(BuildLogLine(errMsg, UiLogLevel.Error)),
                     )
+                    onChunk(ConsoleChunk("Error: $errMsg\n", ConsoleChunkKind.OUTPUT))
                     _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = 1) }
                     return@launch
                 }
@@ -1427,6 +1471,20 @@ class IosBackend(
                     IosFiles.writeBytes(framePath, pngBytes)
                     initialFrameUi = RunFrameUi(framePath, runSurfaceWidth, runSurfaceHeight, runFrameSeq)
                 }
+                if (initialFrameUi == null) {
+                    val errorMsg = if (initialFrame.problems.isNotEmpty()) {
+                        "Compose render error: ${initialFrame.problems.joinToString("; ")}"
+                    } else {
+                        "Failed to render initial frame for '$targetFn'"
+                    }
+                    _buildState.value = BuildState(
+                        status = RunStatus.Failed,
+                        log = listOf(BuildLogLine(errorMsg, UiLogLevel.Error)),
+                    )
+                    onChunk(ConsoleChunk("Error: $errorMsg\n", ConsoleChunkKind.OUTPUT))
+                    _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = 1) }
+                    return@launch
+                }
 
                 activeRunSession = sessionId
                 onChunk(
@@ -1441,6 +1499,7 @@ class IosBackend(
                     mainClass = apkLaunchResult?.activity ?: targetFn,
                     phase = RunPhase.Running,
                     transcript = transcriptChunks.toList(),
+                    acceptsInput = true,
                     frame = initialFrameUi,
                 )
                 val logLines = buildList {
@@ -1454,16 +1513,29 @@ class IosBackend(
                     log = logLines,
                 )
 
+                var lastPngHash = initialFrame.png?.contentHashCode() ?: 0
+                var isAnimating = initialFrame.animating
                 while (activeRunSession == sessionId) {
+                    val shouldRender = isAnimating || needsFrameRender.value
+                    if (!shouldRender) {
+                        delay(100)
+                        continue
+                    }
+                    needsFrameRender.value = false
                     delay(16)
                     val frame = IosPreviewThread.run {
                         previewRenderer?.frame(sessionId) ?: IosPreviewFrame(null, emptyList())
                     }
+                    isAnimating = frame.animating
                     frame.png?.let { pngBytes ->
-                        val framePath = IosFiles.join(tmpDir, "run-frame-$sessionId-${++runFrameSeq}.png")
-                        IosFiles.writeBytes(framePath, pngBytes)
-                        _runConsole.update {
-                            it?.copy(frame = RunFrameUi(framePath, runSurfaceWidth, runSurfaceHeight, runFrameSeq))
+                        val hash = pngBytes.contentHashCode()
+                        if (hash != lastPngHash) {
+                            lastPngHash = hash
+                            val framePath = IosFiles.join(tmpDir, "run-frame-$sessionId-${++runFrameSeq}.png")
+                            IosFiles.writeBytes(framePath, pngBytes)
+                            _runConsole.update {
+                                it?.copy(frame = RunFrameUi(framePath, runSurfaceWidth, runSurfaceHeight, runFrameSeq))
+                            }
                         }
                     }
                 }
@@ -1520,13 +1592,22 @@ class IosBackend(
             2 -> 2
             else -> 1
         }
+        needsFrameRender.value = true
         IosPreviewThread.post { runCatching { previewRenderer?.pointer(s, kind, x, y) } }
     }
 
     override fun setRunSurfaceSize(widthPx: Int, heightPx: Int) {
         if (widthPx > 0 && heightPx > 0) {
+            val changed = runSurfaceWidth != widthPx || runSurfaceHeight != heightPx
             runSurfaceWidth = widthPx
             runSurfaceHeight = heightPx
+            val s = activeRunSession
+            if (changed && s != null) {
+                needsFrameRender.value = true
+                IosPreviewThread.post {
+                    runCatching { previewRenderer?.resize(s, widthPx, heightPx) }
+                }
+            }
         }
     }
 
@@ -1624,6 +1705,7 @@ class IosBackend(
             val name = IosFiles.nameOf(jar)
             name != "preview-runtime.jar" &&
                 !name.startsWith("asm-") &&
+                !name.startsWith("skiko-") &&
                 "compiler" !in name
         }
         return (declared + runtimeLibs).distinct()
@@ -1659,17 +1741,23 @@ class IosBackend(
      * resolve — see [IosDependencies].
      */
     private suspend fun ensureClasspath(root: String) {
-        // On the IO pool, not the caller's thread: opening a project is called from the UI, and `ensure`
-        // downloads — through `NSURLSession` waited on with a semaphore, which blocks whatever thread it is
-        // given. The same reason every store call moved off `Dispatchers.Default` on this platform.
-        // Through [resolving], so a first open that downloads shows the same bar an explicit resolve does; it
-        // only appears once the resolver reports, so a fully cached open (a few stat calls) shows nothing.
-        val jars = withContext(ioDispatcher) {
-            resolving(message = "Resolving project dependencies", showUntilReported = true) { progress ->
-                dependenciesFor(root).ensure(projectModel.open(root), progress)
-            }
+        val proj = active
+        if (proj != null && (proj.isSwift || proj.isNode || proj.isPython) && !proj.isAndroid) {
+            return
         }
-        if (jars.isNotEmpty()) resetAnalysis()
+        val hasBundledStdlib = previewRuntimeJars().any { "kotlin-stdlib" in IosFiles.nameOf(it) }
+        val store = projectModel.open(root)
+        val hasDeclaredDeps = store?.workspace?.projects?.any { p ->
+            p.modules.any { it.dependencies.isNotEmpty() }
+        } == true
+        if (!hasBundledStdlib || hasDeclaredDeps) {
+            val jars = withContext(ioDispatcher) {
+                resolving(message = "Resolving project dependencies", showUntilReported = true) { progress ->
+                    dependenciesFor(root).ensure(store, progress)
+                }
+            }
+            if (jars.isNotEmpty()) resetAnalysis()
+        }
         warmAnalysis()
     }
 

@@ -78,6 +78,7 @@ fun AgentHomeContent(
     onPromptChange: (String) -> Unit,
     onStart: () -> Unit,
     onOpenAgentSettings: () -> Unit = {},
+    onOpenSettings: (() -> Unit)? = null,
     onOpenAccount: () -> Unit = {},
     onNewProject: () -> Unit = {},
     onImportOrClone: () -> Unit = {},
@@ -88,8 +89,9 @@ fun AgentHomeContent(
     onOpenItem: (AgentContinueItem) -> Unit = {},
     onSeeAllProjects: () -> Unit = {},
     modifier: Modifier = Modifier,
-    agentIcon: ImageVector = CaIcons.arrowRight,
-    accountIcon: ImageVector = CaIcons.close,
+    agentIcon: ImageVector = CaIcons.sparkle,
+    settingsIcon: ImageVector = CaIcons.gear,
+    accountIcon: ImageVector = CaIcons.account,
 ) {
     Column(
         modifier = modifier
@@ -100,7 +102,10 @@ fun AgentHomeContent(
         verticalArrangement = Arrangement.spacedBy(28.dp),
     ) {
         Spacer(Modifier.height(4.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Text(
                 appName,
                 fontSize = 14.sp,
@@ -110,6 +115,9 @@ fun AgentHomeContent(
                 modifier = Modifier.weight(1f),
             )
             AgentIconCircle(agentIcon, "Agent settings", onOpenAgentSettings, Modifier.size(44.dp))
+            if (onOpenSettings != null) {
+                AgentIconCircle(settingsIcon, "Settings", onOpenSettings, Modifier.size(44.dp))
+            }
             AgentIconCircle(accountIcon, "Account", onOpenAccount, Modifier.size(44.dp))
         }
 

@@ -357,7 +357,8 @@ fun ProjectsHomeScreen(
                 }
                 sheet = HomeSheet.NewProject
             },
-            onOpenAgentSettings = onOpenAgentSettings ?: {},
+            onOpenAgentSettings = onOpenAgentSettings ?: onOpenHub ?: {},
+            onOpenSettings = onOpenHub,
             onOpenAccount = { sheet = HomeSheet.Account },
             onNewProject = { sheet = HomeSheet.NewProject },
             onImportOrClone = {
@@ -412,6 +413,7 @@ fun ProjectsHomeScreen(
                 HomeHeader(
                     onOpenAccount = { sheet = HomeSheet.Account },
                     onOpenHub = onOpenHub,
+                    onBack = { showAllProjects = false },
                     bell = bell,
                 )
             }
@@ -481,6 +483,8 @@ fun ProjectsHomeScreen(
         HomeSheet.Account -> AccountSheet(
             onDismiss = { sheet = null },
             storagePath = storagePath,
+            onOpenHub = onOpenHub?.let { { sheet = null; it() } },
+            onOpenAgentSettings = onOpenAgentSettings?.let { { sheet = null; it() } },
             onOpenInFiles = onOpenInFiles?.let { { sheet = null; it() } },
             onBackup = onBackup?.let { { sheet = null; it() } },
             onSubmitSuggestions = onSubmitSuggestions?.let { { sheet = null; it() } },
@@ -526,6 +530,7 @@ private enum class HomeSheet { Account, NewProject }
 private fun HomeHeader(
     onOpenAccount: () -> Unit,
     onOpenHub: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
     /** The notification bell, supplied by the host so this screen needs no backend of its own. */
     bell: (@Composable () -> Unit)? = null,
 ) {
@@ -535,6 +540,15 @@ private fun HomeHeader(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (onBack != null) {
+            IconButtonCa(
+                icon = CaIcons.arrowLeft,
+                contentDescription = "Back",
+                onClick = onBack,
+                iconSize = 20,
+                boxSize = 40,
+            )
+        }
         Text(
             stringResource(Res.string.home_your_projects),
             style = MaterialTheme.typography.titleLarge,
@@ -1042,6 +1056,8 @@ private fun NewProjectSheet(
 private fun AccountSheet(
     onDismiss: () -> Unit,
     storagePath: String?,
+    onOpenHub: (() -> Unit)? = null,
+    onOpenAgentSettings: (() -> Unit)? = null,
     onOpenInFiles: (() -> Unit)?,
     onBackup: (() -> Unit)?,
     onSubmitSuggestions: (() -> Unit)?,
@@ -1050,6 +1066,8 @@ private fun AccountSheet(
     onStarOnGitHub: (() -> Unit)?,
 ) {
     SheetScaffold(onDismiss, stringResource(Res.string.home_account_title), subtitle = storagePath) {
+        if (onOpenHub != null) SheetAction(CaSymbols.settings, stringResource(Res.string.home_settings_tools), onOpenHub)
+        if (onOpenAgentSettings != null) SheetAction(CaSymbols.tune, "Agent settings", onOpenAgentSettings)
         if (onOpenInFiles != null) SheetAction(CaSymbols.folderOpen, stringResource(Res.string.home_open_in_files), onOpenInFiles)
         if (onBackup != null) SheetAction(CaSymbols.storage, stringResource(Res.string.home_backup), onBackup)
         if (onSubmitSuggestions != null) SheetAction(CaSymbols.rateReview, stringResource(Res.string.home_feedback), onSubmitSuggestions)
@@ -1074,7 +1092,25 @@ private fun SheetScaffold(
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Column(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 28.dp)) {
-            Text(title, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButtonCa(
+                    icon = CaIcons.close,
+                    contentDescription = "Close",
+                    onClick = onDismiss,
+                    iconSize = 18,
+                    boxSize = 36,
+                )
+            }
             if (subtitle != null) {
                 Text(
                     subtitle,

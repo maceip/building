@@ -147,13 +147,42 @@ fun dumpLiveUiHierarchyXml(): String {
  */
 @OptIn(ExperimentalComposeUiApi::class)
 fun dispatchScreenTap(xPt: Double, yPt: Double): Boolean {
-    val scene = activeComposeScene ?: return false
     val scale = activeDensityScale.coerceAtLeast(1f)
     val pos = Offset((xPt * scale).toFloat(), (yPt * scale).toFloat())
     lastTappedWindowOffset = pos
-    scene.sendPointerEvent(PointerEventType.Press, pos)
-    scene.sendPointerEvent(PointerEventType.Release, pos)
+    activeComposeScene?.let { scene ->
+        scene.sendPointerEvent(PointerEventType.Press, pos)
+        scene.sendPointerEvent(PointerEventType.Release, pos)
+    }
+    val owner = activeSemanticsOwner
+    if (owner != null) {
+        val clickables = mutableListOf<SemanticsNode>()
+        fun findClickables(node: SemanticsNode) {
+            if (node.boundsInWindow.contains(pos) && node.config.contains(SemanticsActions.OnClick)) {
+                clickables.add(node)
+            }
+            node.children.forEach(::findClickables)
+        }
+        findClickables(owner.unmergedRootSemanticsNode)
+        val innermost = clickables.lastOrNull()
+        if (innermost != null) {
+            val action = innermost.config.getOrNull(SemanticsActions.OnClick)?.action
+            if (action != null) {
+                action.invoke()
+                return true
+            }
+        }
+    }
     return true
+}
+
+fun triggerRunBuild() {
+    host.backend.build.runBuild()
+}
+
+fun triggerRunPointerTap(x: Float, y: Float) {
+    host.backend.sendRunPointer(0, x, y)
+    host.backend.sendRunPointer(1, x, y)
 }
 
 /**

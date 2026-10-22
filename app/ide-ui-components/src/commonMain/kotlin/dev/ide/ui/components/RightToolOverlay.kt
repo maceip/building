@@ -23,13 +23,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -61,6 +64,7 @@ import androidx.compose.ui.unit.lerp
 import dev.ide.ui.IdeUiState
 import dev.ide.ui.ext.ToolWindowAnchor
 import dev.ide.ui.platform.PlatformPredictiveBackHandler
+import dev.ide.ui.platform.hasSystemBack
 import dev.ide.ui.platform.isMobilePlatform
 import dev.ide.ui.platform.rememberIdeHaptics
 import dev.ide.ui.theme.Ca
@@ -136,9 +140,9 @@ fun RightToolOverlay(state: IdeUiState) {
         },
     )
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime)) {
         val density = LocalDensity.current
-        val panelWidth = if (maxWidth < 480.dp) maxWidth else 420.dp
+        val panelWidth = maxWidth
         val openPx = with(density) { panelWidth.toPx() }
         val fullHeightPx = constraints.maxHeight.toFloat().coerceAtLeast(1f)
         val flingPx = with(density) { FlingCommit.toPx() }
@@ -330,7 +334,8 @@ fun RightToolOverlay(state: IdeUiState) {
                                         "Agent on top · code below"
                                     state.rightPanelHalfScreen ->
                                         "Agent Peek · Code Live Above"
-                                    else -> "Swipe Back for ½ Split"
+                                    hasSystemBack -> "Swipe Back for ½ Split"
+                                    else -> "Tap for ½ Split"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,

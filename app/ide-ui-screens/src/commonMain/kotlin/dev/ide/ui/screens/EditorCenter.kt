@@ -89,6 +89,7 @@ internal fun EditorCenter(
     modifier: Modifier,
     /** The top bar's back arrow: asks to close the project. */
     onCloseProject: () -> Unit,
+    onOpenSettings: (() -> Unit)? = null,
     /** Live navigator-open fraction from the compact layout's push drawer (gesture-accurate); null on
      *  layouts without one — the top-bar icon then eases 0↔1 off [IdeUiState.leftOpen] instead. */
     navFraction: (() -> Float)? = null,
@@ -174,6 +175,7 @@ internal fun EditorCenter(
                 indexStatus = indexStatus,
                 onToggleNav = { state.toggleLeftSidebar() },
                 onBack = onCloseProject,
+                onOpenSettings = onOpenSettings,
                 navFraction = navFraction ?: { easedNav },
                 onOpenPalette = { state.paletteOpen = true },
                 runTasks = { state.backend.build.runTasks() },

@@ -363,7 +363,7 @@ internal fun ExpandedLayout(
     Box(Modifier.fillMaxSize()) {
         // The top bar spans the whole window (IntelliJ's main toolbar); the stripes, panes, editor and console
         // all sit below it, laid out here around the editor body EditorCenter hands back.
-        EditorCenter(state, indexStatus, compact = false, Modifier.fillMaxSize(), onCloseProject) { editorBody ->
+        EditorCenter(state, indexStatus, compact = false, Modifier.fillMaxSize(), onCloseProject, onOpenSettings = onOpenHub) { editorBody ->
             Column(Modifier.fillMaxSize()) {
                 // One hairline under the bar, across the stripes too, like IntelliJ's main toolbar border.
                 Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
@@ -430,19 +430,19 @@ internal fun ExpandedLayout(
                         val leftOpen = state.leftOpen
                         val rightOpen = state.selectedRightPanel != null && rightPanels.isNotEmpty()
                         // Docked: each pane keeps its dragged width but never squeezes the editor below MinEditorWidth.
-                        // Floating: a pane may cover most of the editor, never all of it.
+                        // Floating: the Agent right pane spans the full width; left pane covers up to 85%.
                         val rightMax: Dp
                         val leftMax: Dp
                         if (floating) {
-                            rightMax = (maxWidth * 0.85f).coerceAtLeast(MinPaneWidth)
-                            leftMax = rightMax
+                            rightMax = maxWidth.coerceAtLeast(MinPaneWidth)
+                            leftMax = (maxWidth * 0.85f).coerceAtLeast(MinPaneWidth)
                         } else {
                             rightMax = (maxWidth - MinEditorWidth - if (leftOpen) MinPaneWidth else 0.dp).coerceAtLeast(MinPaneWidth)
                             val rightUsed = if (rightOpen) state.rightPaneWidth.dp.coerceIn(MinPaneWidth, rightMax) else 0.dp
                             leftMax = (maxWidth - MinEditorWidth - rightUsed).coerceAtLeast(MinPaneWidth)
                         }
                         val leftW = state.leftPaneWidth.dp.coerceIn(MinPaneWidth, leftMax)
-                        val rightW = state.rightPaneWidth.dp.coerceIn(MinPaneWidth, rightMax)
+                        val rightW = if (floating) maxWidth else state.rightPaneWidth.dp.coerceIn(MinPaneWidth, rightMax)
                         // Drag deltas accumulate onto the stored width, first pulled into range so a width saved in a
                         // larger window starts moving at once instead of after the excess is dragged off.
                         val onResizeLeft: (Dp) -> Unit = { d ->
@@ -722,6 +722,7 @@ internal fun CompactLayout(
                 Column(Modifier.fillMaxSize()) {
                     EditorCenter(
                         state, indexStatus, compact = true, Modifier.weight(1f).fillMaxWidth(), onCloseProject,
+                        onOpenSettings = onOpenHub,
                         navFraction = { navProgress },
                     )
                     // While the keyboard is up: a coding-symbol accessory bar sits directly above it. Off-keyboard,

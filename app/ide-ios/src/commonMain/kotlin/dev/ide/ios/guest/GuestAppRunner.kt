@@ -3,6 +3,7 @@
 package dev.ide.ios.guest
 
 import dev.ide.ios.IosFiles
+import dev.ide.ios.IosZipExtractor
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.toKString
@@ -11,8 +12,6 @@ import platform.posix.RTLD_NOW
 import platform.posix.dlerror
 import platform.posix.dlopen
 import platform.posix.dlsym
-import platform.posix.pclose
-import platform.posix.popen
 import platform.posix.setenv
 
 /**
@@ -175,19 +174,15 @@ object GuestAppRunner {
     }
 
     private fun extractIpaTo(ipaPath: String, destDir: String, emit: (String) -> Unit): String? {
-        val cmd = "unzip -q -o \"$ipaPath\" -d \"$destDir\" 2>&1"
-        val fp = popen(cmd, "r")
-        if (fp != null) {
-            val status = pclose(fp)
-            if (status == 0) {
-                val payload = IosFiles.join(destDir, "Payload")
-                if (IosFiles.isDirectory(payload)) {
-                    val apps = IosFiles.list(payload).filter { it.endsWith(".app") }
-                    if (apps.isNotEmpty()) {
-                        val app = IosFiles.join(payload, apps.first())
-                        emit("[LiveContainer] Extracted ${apps.first()} from IPA archive")
-                        return app
-                    }
+        val bytes = IosFiles.readBytes(ipaPath) ?: return null
+        if (IosZipExtractor.extractZip(bytes, destDir, stripSinglePrefix = false)) {
+            val payload = IosFiles.join(destDir, "Payload")
+            if (IosFiles.isDirectory(payload)) {
+                val apps = IosFiles.list(payload).filter { it.endsWith(".app") }
+                if (apps.isNotEmpty()) {
+                    val app = IosFiles.join(payload, apps.first())
+                    emit("[LiveContainer] Extracted ${apps.first()} from IPA archive")
+                    return app
                 }
             }
         }

@@ -57,11 +57,34 @@ object GuiBridgeRuntime {
         val targetMod = targetModDir.resolve("aarch64-unknown-linux-android.swiftmodule")
 
         val filesRoot = installation.prefix.parent?.parent?.parent
+        val detectedPkg = runCatching {
+            var curr: Path? = installation.prefix
+            var pkg: String? = null
+            while (curr != null) {
+                val name = curr.fileName?.toString()
+                if (name == "ai.building.dev" || name == "dev.ide.android.dev") {
+                    pkg = name
+                    break
+                }
+                curr = curr.parent
+            }
+            pkg
+        }.getOrNull()
+        val pkgNames = listOfNotNull(detectedPkg, "ai.building.dev", "dev.ide.android.dev").distinct()
+        val dynamicCandidates = pkgNames.flatMap { pkg ->
+            listOf(
+                Path.of("/sdcard/Android/data/$pkg/files/codeassist/swiftui-sdk/android-aarch64"),
+                Path.of("/sdcard/Android/data/$pkg/files/codeassist/swiftui-sdk"),
+                Path.of("/sdcard/Android/data/$pkg/files/swiftui-sdk/android-aarch64"),
+                Path.of("/sdcard/Android/data/$pkg/files/swiftui-sdk"),
+                Path.of("/data/user/0/$pkg/files/developer-runtime/swiftui-sdk/android-aarch64"),
+                Path.of("/data/data/$pkg/files/developer-runtime/swiftui-sdk/android-aarch64"),
+            )
+        }
         val backupCandidates = listOfNotNull(
             filesRoot?.resolve("developer-runtime/swiftui-sdk/android-aarch64"),
             filesRoot?.resolve("developer-runtime/swiftui-sdk"),
-            Path.of("/sdcard/Android/data/dev.ide.android.dev/files/codeassist/swiftui-sdk/android-aarch64"),
-            Path.of("/sdcard/Android/data/dev.ide.android.dev/files/codeassist/swiftui-sdk"),
+        ) + dynamicCandidates + listOfNotNull(
             Path.of("/data/local/tmp/swiftui-sdk/android-aarch64"),
             Path.of("/data/local/tmp/swiftui-sdk"),
             Path.of(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk/android-aarch64"),
@@ -143,6 +166,10 @@ object GuiBridgeRuntime {
         "Darwin",
         "Glibc",
         "Android",
+        "AudioToolbox",
+        "AVFoundation",
+        "PhotosUI",
+        "WebKit",
     )
 
     internal val CUPERTINO_BRIDGE_PRELUDE = """
@@ -285,6 +312,165 @@ object GuiBridgeRuntime {
                 self.languageName = languageName
             }
         }
+
+        // UIViewRepresentable shim
+        public protocol UIViewRepresentable: View {
+            associatedtype UIViewType = Any
+            typealias Context = UIViewRepresentableContext<Self>
+            func makeUIView(context: Context) -> UIViewType
+            func updateUIView(_ uiView: UIViewType, context: Context)
+        }
+        public struct UIViewRepresentableContext<T> {
+            public let coordinator: Any? = nil
+            public let environment: EnvironmentValues = EnvironmentValues()
+            public init() {}
+        }
+        public extension UIViewRepresentable {
+            var body: some View { EmptyView() }
+            func makeUIView(context: Context) -> Any { () }
+            func updateUIView(_ uiView: Any, context: Context) {}
+        }
+
+        // ToggleStyle shim
+        public protocol ToggleStyle {
+            associatedtype Body: View
+            typealias Configuration = ToggleStyleConfiguration
+            @ViewBuilder func makeBody(configuration: Configuration) -> Body
+        }
+        public struct ToggleStyleConfiguration {
+            public struct Label: View {
+                public init() {}
+                public var body: some View { EmptyView() }
+            }
+            @Binding public var isOn: Bool
+            public var label: Label
+            public init(isOn: Binding<Bool> = .constant(false), label: Label = Label()) {
+                self._isOn = isOn
+                self.label = label
+            }
+        }
+        public extension ToggleStyle where Body == EmptyView {
+            func makeBody(configuration: Configuration) -> EmptyView { EmptyView() }
+        }
+        public extension View {
+            func toggleStyle<S: ToggleStyle>(_ style: S) -> some View { self }
+        }
+        public struct DefaultToggleStyle: ToggleStyle {
+            public init() {}
+            public func makeBody(configuration: Configuration) -> some View { EmptyView() }
+        }
+        public struct SwitchToggleStyle: ToggleStyle {
+            public init() {}
+            public func makeBody(configuration: Configuration) -> some View { EmptyView() }
+        }
+        public extension ToggleStyle where Self == DefaultToggleStyle {
+            static var `default`: DefaultToggleStyle { DefaultToggleStyle() }
+        }
+        public extension ToggleStyle where Self == SwitchToggleStyle {
+            static var `switch`: SwitchToggleStyle { SwitchToggleStyle() }
+        }
+
+        // 2D geometry, Path, Shape, and Capsule shims
+        public struct CGPoint: Sendable {
+            public var x: Double
+            public var y: Double
+            public init(x: Double = 0, y: Double = 0) { self.x = x; self.y = y }
+        }
+        public struct CGSize: Sendable {
+            public var width: Double
+            public var height: Double
+            public init(width: Double = 0, height: Double = 0) { self.width = width; self.height = height }
+        }
+        public struct CGRect: Sendable {
+            public var origin: CGPoint
+            public var size: CGSize
+            public init(origin: CGPoint = CGPoint(), size: CGSize = CGSize()) { self.origin = origin; self.size = size }
+            public init(x: Double, y: Double, width: Double, height: Double) { self.origin = CGPoint(x: x, y: y); self.size = CGSize(width: width, height: height) }
+            public var width: Double { size.width }
+            public var height: Double { size.height }
+            public var midX: Double { origin.x + size.width / 2 }
+            public var midY: Double { origin.y + size.height / 2 }
+            public var minX: Double { origin.x }
+            public var minY: Double { origin.y }
+            public var maxX: Double { origin.x + size.width }
+            public var maxY: Double { origin.y + size.height }
+        }
+        public struct Path: View, Shape {
+            public init() {}
+            public init(_ callback: (inout Path) -> Void) { var p = Path(); callback(&p); self = p }
+            public mutating func move(to p: CGPoint) {}
+            public mutating func addLine(to p: CGPoint) {}
+            public mutating func addQuadCurve(to p: CGPoint, control: CGPoint) {}
+            public mutating func addCurve(to p: CGPoint, control1: CGPoint, control2: CGPoint) {}
+            public mutating func closeSubpath() {}
+        }
+        public extension Shape {
+            var _shapeKind: String { "rectangle" }
+            var _cornerRadius: Double? { nil }
+            var body: some View { Rectangle() }
+            func fill(_ color: Color) -> some View { Rectangle().fill(color) }
+            func stroke(_ color: Color, lineWidth: Double = 1) -> some View { Rectangle().stroke(color, lineWidth: lineWidth) }
+        }
+        public extension Capsule {
+            init(style: RoundedCornerStyle) { self.init() }
+        }
+
+        // AudioToolbox shims
+        public typealias SystemSoundID = UInt32
+        public func AudioServicesPlaySystemSound(_ inSystemSoundID: SystemSoundID) {}
+        public func AudioServicesPlayAlertSound(_ inSystemSoundID: SystemSoundID) {}
+        public let kSystemSoundID_Vibrate: SystemSoundID = 4095
+
+        // AVFoundation shims
+        public class AVAudioPlayer: @unchecked Sendable {
+            public init() {}
+            public init(data: Data) throws {}
+            public init(contentsOf url: URL) throws {}
+            public func play() -> Bool { true }
+            public func pause() {}
+            public func stop() {}
+            public var numberOfLoops: Int = 0
+            public var volume: Float = 1.0
+        }
+        public class AVPlayer: @unchecked Sendable {
+            public init() {}
+            public init(url: URL) {}
+            public func play() {}
+            public func pause() {}
+        }
+        public struct VideoPlayer<VideoOverlay: View>: View {
+            public var body: some View { EmptyView() }
+            public init(player: Any? = nil, @ViewBuilder videoOverlay: () -> VideoOverlay = { EmptyView() }) {}
+        }
+        public extension VideoPlayer where VideoOverlay == EmptyView {
+            init(player: Any? = nil) { self.init(player: player, videoOverlay: { EmptyView() }) }
+        }
+
+        // PhotosUI shims
+        public struct PhotosPicker<Label: View>: View {
+            public var body: some View { EmptyView() }
+            public init(selection: Any, matching: Any? = nil, photoLibrary: Any? = nil, @ViewBuilder label: () -> Label) {}
+        }
+        public struct PhotosPickerItem: Sendable {
+            public init() {}
+            public func loadTransferable<T>(type: T.Type) async throws -> T? { nil }
+        }
+
+        // WebKit shims
+        public class WKWebView: @unchecked Sendable {
+            public init() {}
+            public init(frame: Any, configuration: Any) {}
+            public func load(_ request: Any) {}
+            public func loadHTMLString(_ string: String, baseURL: URL?) {}
+        }
+        public class WKWebViewConfiguration: @unchecked Sendable {
+            public init() {}
+        }
+        public class WKNavigation: @unchecked Sendable {
+            public init() {}
+        }
+        public protocol WKNavigationDelegate: AnyObject {}
+        public protocol WKUIDelegate: AnyObject {}
     """.trimIndent()
 
     internal fun stripPreviewMacros(text: String): String {
@@ -330,51 +516,133 @@ object GuiBridgeRuntime {
         return out.toString()
     }
 
+    private val BANNED_BRIDGE_DECL_REGEXES = listOf(
+        Regex("""[:]\s*UIView\b(?!Representable)"""),
+        Regex("""[:]\s*NSView\b(?!Representable)"""),
+    )
+
     private val BANNED_BRIDGE_DECL_TOKENS = listOf(
         "NSViewRepresentable",
-        "UIViewRepresentable",
-        ": NSView",
-        ": UIView",
         "CVDisplayLink",
         "Canvas {",
         "SynthesizedCursorGlyphRepresentable",
         "CursorLabCanvas",
-        ": ToggleStyle",
         "CursorToggleStyle",
         "NSApplication",
         "NSWindow",
     )
 
+    private fun containsBannedToken(text: String): Boolean {
+        for (regex in BANNED_BRIDGE_DECL_REGEXES) {
+            if (regex.containsMatchIn(text)) return true
+        }
+        for (token in BANNED_BRIDGE_DECL_TOKENS) {
+            if (text.contains(token)) return true
+        }
+        return false
+    }
+
     internal fun dropUnsupportedDeclarations(text: String): String {
-        if (BANNED_BRIDGE_DECL_TOKENS.none { text.contains(it) }) return text
+        if (!containsBannedToken(text)) return text
         val header = ArrayList<String>()
         val blocks = ArrayList<String>()
         val cur = StringBuilder()
         var depth = 0
         var inBlock = false
+
+        var inLineComment = false
+        var blockCommentDepth = 0
+        var inString = false
+        var inMultilineString = false
+        var stringEscape = false
+
         for (line in text.lineSequence()) {
             val trimmed = line.trim()
-            if (!inBlock && depth == 0 && trimmed.startsWith("import ")) {
+            if (!inBlock && depth == 0 && trimmed.startsWith("import ") && blockCommentDepth == 0 && !inMultilineString) {
                 header.add(line)
                 continue
             }
             cur.append(line).append('\n')
-            for (ch in line) {
-                if (ch == '{') {
-                    depth++
-                    inBlock = true
-                } else if (ch == '}') {
-                    depth--
+            val len = line.length
+            var i = 0
+            inLineComment = false
+            while (i < len) {
+                val c = line[i]
+                val next = if (i + 1 < len) line[i + 1] else null
+                val next2 = if (i + 2 < len) line[i + 2] else null
+
+                if (inLineComment) {
+                    break
+                } else if (blockCommentDepth > 0) {
+                    if (c == '/' && next == '*') {
+                        blockCommentDepth++
+                        i += 2
+                        continue
+                    } else if (c == '*' && next == '/') {
+                        blockCommentDepth--
+                        i += 2
+                        continue
+                    }
+                    i++
+                } else if (inMultilineString) {
+                    if (c == '"' && next == '"' && next2 == '"' && !stringEscape) {
+                        inMultilineString = false
+                        i += 3
+                        continue
+                    }
+                    if (c == '\\' && !stringEscape) stringEscape = true else stringEscape = false
+                    i++
+                } else if (inString) {
+                    if (c == '"' && !stringEscape) {
+                        inString = false
+                        i++
+                        continue
+                    }
+                    if (c == '\\' && !stringEscape) stringEscape = true else stringEscape = false
+                    i++
+                } else {
+                    // Normal Swift code
+                    if (c == '/' && next == '/') {
+                        inLineComment = true
+                        break
+                    } else if (c == '/' && next == '*') {
+                        blockCommentDepth = 1
+                        i += 2
+                        continue
+                    } else if (c == '"' && next == '"' && next2 == '"') {
+                        inMultilineString = true
+                        stringEscape = false
+                        i += 3
+                        continue
+                    } else if (c == '"') {
+                        inString = true
+                        stringEscape = false
+                        i++
+                        continue
+                    } else if (c == '{') {
+                        depth++
+                        inBlock = true
+                    } else if (c == '}') {
+                        depth--
+                    }
+                    i++
                 }
             }
-            if (inBlock && depth <= 0) {
+
+            if (inBlock && depth <= 0 && blockCommentDepth == 0 && !inMultilineString) {
                 val blockStr = cur.toString()
-                if (BANNED_BRIDGE_DECL_TOKENS.none { blockStr.contains(it) }) {
+                if (!containsBannedToken(blockStr)) {
                     blocks.add(blockStr)
                 }
                 cur.setLength(0)
                 depth = 0
                 inBlock = false
+            }
+        }
+        if (cur.isNotEmpty()) {
+            val remaining = cur.toString()
+            if (!containsBannedToken(remaining)) {
+                blocks.add(remaining)
             }
         }
         return (header.joinToString("\n") + "\n" + blocks.joinToString("\n")).trim() + "\n"
@@ -400,7 +668,11 @@ object GuiBridgeRuntime {
         var t = stripPreviewMacros(text)
         t = dropUnsupportedDeclarations(t)
         t = t.replace(Regex("""#if\s+os\(macOS\)"""), "#if false")
-        for (mod in internalModules + listOf("AppKit", "UIKit", "QuartzCore")) {
+        val sanitizedMods = internalModules + listOf(
+            "AppKit", "UIKit", "QuartzCore",
+            "AudioToolbox", "AVFoundation", "PhotosUI", "WebKit"
+        )
+        for (mod in sanitizedMods) {
             t = t.replace(
                 Regex("""(?m)^\s*import\s+${Regex.escape(mod)}\b.*$"""),
                 "// [sanitized import $mod]",
@@ -408,10 +680,6 @@ object GuiBridgeRuntime {
         }
         t = t.replace("private struct ", "struct ")
         t = t.replace("private enum ", "enum ")
-        t = t.replace(
-            Regex("""@main\s*(?=(?:public\s+|internal\s+)?struct\s+\w+\s*:\s*App\b)"""),
-            "// [sanitized @main on App]\n",
-        )
         t = t.replace(
             Regex("""@FocusState\s+(private\s+)?var\s+(\w+)\s*:\s*Bool(?!\s*=)"""),
             "@State $1var $2: Bool = false",
@@ -551,7 +819,36 @@ object GuiBridgeRuntime {
             )
 
             val candidates = mainFiles.map { mainFile ->
-                val targetDir = mainFile.parent ?: projectRoot
+                var targetDir = mainFile.parent ?: projectRoot
+                var curr = mainFile.parent
+                while (curr != null && curr != projectRoot) {
+                    if (Files.exists(curr.resolve("Package.swift")) ||
+                        runCatching { Files.list(curr).use { s -> s.anyMatch { it.fileName.toString().endsWith(".xcodeproj") } } }.getOrDefault(false)) {
+                        targetDir = curr
+                        break
+                    }
+                    val p = curr.parent
+                    if (p != null && p != projectRoot) {
+                        val pName = p.fileName?.toString()?.lowercase()
+                        if (pName in setOf("experiments", "samples", "examples", "apps", "packages", "projects", "subprojects", "demos")) {
+                            targetDir = curr
+                            break
+                        }
+                        val hasCommonSubdirs = runCatching {
+                            Files.list(p).use { stream ->
+                                stream.anyMatch { dir ->
+                                    Files.isDirectory(dir) && dir.fileName?.toString()?.lowercase() in setOf(
+                                        "views", "models", "styles", "viewmodels", "components", "shared", "model", "view"
+                                    )
+                                }
+                            }
+                        }.getOrDefault(false)
+                        if (hasCommonSubdirs) {
+                            targetDir = p
+                        }
+                    }
+                    curr = p
+                }
                 val scopedFiles = iosFiles.filter { it.startsWith(targetDir) }
                 val unsupported = scopedFiles.sumOf { countUnsupportedSwiftImports(fileTexts[it].orEmpty(), internalModules) }
                 val hasSwiftUi = scopedFiles.any { fileTexts[it].orEmpty().contains("import SwiftUI") }
@@ -572,16 +869,35 @@ object GuiBridgeRuntime {
         }
 
         // When no clean @main candidate exists (or in multi-target projects like NetNewsWire where @main is a Widget),
-        // pick the cluster of pure SwiftUI views
+        // pick the cluster of pure SwiftUI views and include all sibling/child directories
         if (pureSwiftUiFiles.isNotEmpty()) {
-            val byDir = pureSwiftUiFiles.groupBy { it.parent }
-            val bestGroup = byDir.values.maxByOrNull { group ->
-                group.count { f ->
+            val byTargetDir = pureSwiftUiFiles.groupBy { f ->
+                var d = f.parent ?: projectRoot
+                val p = d.parent
+                if (p != null && p != projectRoot) {
+                    val hasCommonSubdirs = runCatching {
+                        Files.list(p).use { stream ->
+                            stream.anyMatch { dir ->
+                                Files.isDirectory(dir) && dir.fileName?.toString()?.lowercase() in setOf(
+                                    "views", "models", "styles", "viewmodels", "components", "shared", "model", "view"
+                                )
+                            }
+                        }
+                    }.getOrDefault(false)
+                    if (hasCommonSubdirs) d = p
+                }
+                d
+            }
+            val bestTarget = byTargetDir.maxByOrNull { (_, files) ->
+                files.count { f ->
                     val t = fileTexts[f].orEmpty()
                     t.contains(": View") && (t.contains("About") || t.contains("Content") || t.contains("Main") || t.contains("App"))
-                } * 10 + group.size
+                } * 10 + files.size
+            }?.key
+            if (bestTarget != null) {
+                return iosFiles.filter { it.startsWith(bestTarget) }
             }
-            return bestGroup ?: pureSwiftUiFiles
+            return pureSwiftUiFiles
         }
 
         return iosFiles
@@ -629,25 +945,120 @@ object GuiBridgeRuntime {
             copyAndSanitize(src, dst)
         }
 
-        // Also copy any sibling pure Swift model files in the same directory as the chosen SwiftUI views
-        val targetDirs = swiftUiFiles.mapNotNull { it.parent }.distinct()
-        for (dir in targetDirs) {
-            if (Files.isDirectory(dir)) {
-                Files.list(dir).use { stream ->
+        // Recursively discover and copy all .swift files across subdirectories
+        // (Models/, Views/, Styles/, ViewModels/, Components/) in the target directory tree
+        val targetRoots = swiftUiFiles.mapNotNull { f ->
+            var d = f.parent
+            while (d != null && d != projectRoot && d.parent != null && d.parent != projectRoot) {
+                val pName = d.fileName?.toString()?.lowercase()
+                if (pName in setOf("experiments", "samples", "examples", "apps", "packages", "projects", "subprojects", "demos")) {
+                    break
+                }
+                if (Files.exists(d.resolve("Package.swift")) ||
+                    runCatching { Files.list(d).use { s -> s.anyMatch { it.fileName.toString().endsWith(".xcodeproj") } } }.getOrDefault(false)) {
+                    break
+                }
+                d = d.parent
+            }
+            d ?: f.parent
+        }.distinct().ifEmpty { listOf(projectRoot) }
+
+        for (root in targetRoots) {
+            if (Files.isDirectory(root)) {
+                Files.walk(root).use { stream ->
                     stream.filter { f ->
-                        f.fileName.toString().endsWith(".swift") && f !in swiftUiFiles
-                    }.forEach { sibling ->
-                        val text = runCatching { sibling.readText() }.getOrDefault("")
-                        if (!text.contains("import WebKit") && !text.contains("import XCTest")) {
-                            val rel = runCatching { projectRoot.relativize(sibling) }.getOrDefault(sibling.fileName)
-                            val dst = shadow.resolve(rel.toString())
-                            copyAndSanitize(sibling, dst)
+                        Files.isRegularFile(f) &&
+                            f.fileName.toString().endsWith(".swift") &&
+                            !f.fileName.toString().endsWith("Main.swift")
+                    }.forEach { candidate ->
+                        val relStr = candidate.toString().replace('\\', '/')
+                        val isIgnored = relStr.contains("/.build/") || relStr.contains("/Pods/") ||
+                            relStr.contains("/Tests/") || relStr.contains("/UnitTests/") || relStr.contains("/UITests/") ||
+                            relStr.contains("/Mac/") || relStr.contains("/macOS/") || relStr.contains("/Watch/")
+                        if (!isIgnored) {
+                            val text = runCatching { candidate.readText() }.getOrDefault("")
+                            if (!text.contains("import XCTest") && !text.contains("exit(")) {
+                                val rel = runCatching { projectRoot.relativize(candidate) }.getOrDefault(candidate.fileName)
+                                val dst = shadow.resolve(rel.toString())
+                                if (!Files.exists(dst)) {
+                                    copyAndSanitize(candidate, dst)
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-        val hasBridgeEntry = copied.any { f ->
+
+        // Always write CupertinoBridgePrelude.swift into the shadow workspace so all shims
+        // and extensions (UIViewRepresentable, ToggleStyle, frameworks, etc.) are available
+        shadow.resolve("CupertinoBridgePrelude.swift").writeText(CUPERTINO_BRIDGE_PRELUDE + "\n")
+
+        // Copy .xcassets asset catalogs and image resources into shadow workspace
+        runCatching {
+            Files.walk(projectRoot, 6).use { stream ->
+                stream.filter { p ->
+                    Files.isDirectory(p) && p.fileName.toString().endsWith(".xcassets")
+                }.forEach { xcassetsDir ->
+                    val rel = runCatching { projectRoot.relativize(xcassetsDir) }.getOrDefault(xcassetsDir.fileName)
+                    val shadowXcassets = shadow.resolve(rel.toString())
+                    Files.walk(xcassetsDir).use { assetStream ->
+                        assetStream.forEach { src ->
+                            val subRel = xcassetsDir.relativize(src)
+                            val dst = shadowXcassets.resolve(subRel.toString())
+                            if (Files.isDirectory(src)) {
+                                Files.createDirectories(dst)
+                            } else {
+                                Files.createDirectories(dst.parent)
+                                Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING)
+                            }
+                        }
+                    }
+                    val topAssets = shadow.resolve("Assets.xcassets")
+                    if (!Files.exists(topAssets)) {
+                        Files.walk(xcassetsDir).use { assetStream ->
+                            assetStream.forEach { src ->
+                                val subRel = xcassetsDir.relativize(src)
+                                val dst = topAssets.resolve(subRel.toString())
+                                if (Files.isDirectory(src)) {
+                                    Files.createDirectories(dst)
+                                } else {
+                                    Files.createDirectories(dst.parent)
+                                    Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        runCatching {
+            for (root in targetRoots) {
+                if (Files.isDirectory(root)) {
+                    Files.walk(root, 4).use { stream ->
+                        stream.filter { p ->
+                            Files.isRegularFile(p) && p.fileName.toString().lowercase().let { n ->
+                                n.endsWith(".png") || n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".webp")
+                            } && !p.toString().contains("/.build/")
+                        }.forEach { imgFile ->
+                            val rel = runCatching { projectRoot.relativize(imgFile) }.getOrDefault(imgFile.fileName)
+                            val dst = shadow.resolve(rel.toString())
+                            if (!Files.exists(dst)) {
+                                Files.createDirectories(dst.parent)
+                                Files.copy(imgFile, dst, StandardCopyOption.REPLACE_EXISTING)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        val hasAppMain = copied.any { f ->
+            val text = runCatching { f.readText() }.getOrDefault("")
+            Regex("""@main\s+(?:public\s+|internal\s+)?struct\s+\w+\s*:\s*App\b""").containsMatchIn(text) ||
+                (text.contains("@main") && text.contains(": App"))
+        }
+        val hasBridgeEntry = hasAppMain || copied.any { f ->
             val text = runCatching { f.readText() }.getOrDefault("")
             text.contains("runPreview") || text.contains("ViewHost(")
         }
@@ -656,7 +1067,7 @@ object GuiBridgeRuntime {
             val expr = inferPreviewExpression(text)
             shadow.resolve("CupertinoShadowMain.swift").writeText(
                 """
-                $CUPERTINO_BRIDGE_PRELUDE
+                import SwiftUI
 
                 @main
                 struct CupertinoShadowMain {
@@ -813,11 +1224,14 @@ object GuiBridgeRuntime {
                             srcs.add(tp)
                         }
                     }
+                    val preludeFile = focusedDir.resolve("CupertinoBridgePrelude.swift")
+                    preludeFile.writeText(CUPERTINO_BRIDGE_PRELUDE + "\n")
+                    srcs.add(preludeFile)
                     val expr = inferPreviewExpression(cand.sanitized)
                     val mainFile = focusedDir.resolve("CupertinoShadowMain.swift")
                     mainFile.writeText(
                         """
-                        $CUPERTINO_BRIDGE_PRELUDE
+                        import SwiftUI
 
                         @main
                         struct CupertinoShadowMain {

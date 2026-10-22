@@ -39,6 +39,18 @@ internal object IosZipExtractor {
      * (such as `<repo>-main/` or `<repo>-<sha>/` from GitHub codeload archives).
      */
     fun extractRepositoryZip(zipBytes: ByteArray, targetDir: String): Boolean {
+        if (!extractZip(zipBytes, targetDir, stripSinglePrefix = true)) return false
+        val gitDir = IosFiles.join(targetDir, ".git")
+        IosFiles.mkdirs(gitDir)
+        IosFiles.writeText(IosFiles.join(gitDir, "HEAD"), "ref: refs/heads/main\n")
+        return true
+    }
+
+    /**
+     * Unpacks [zipBytes] into [targetDir].
+     * If [stripSinglePrefix] is true, strips a single shared top-level directory prefix.
+     */
+    fun extractZip(zipBytes: ByteArray, targetDir: String, stripSinglePrefix: Boolean = false): Boolean {
         val end = findEndOfCentralDirectory(zipBytes) ?: return false
         val count = readShort(zipBytes, end + 10)
         if (count <= 0) return false
@@ -80,12 +92,14 @@ internal object IosZipExtractor {
             offset = nameStart + nameLen + extraLen + commentLen
         }
 
-        val firstSegs = entries.mapNotNull { e ->
-            val trimmed = e.name.trimStart('/')
-            val slash = trimmed.indexOf('/')
-            if (slash > 0) trimmed.substring(0, slash + 1) else null
-        }.distinct()
-        val stripPrefix = if (firstSegs.size == 1) firstSegs.first() else ""
+        val stripPrefix = if (stripSinglePrefix) {
+            val firstSegs = entries.mapNotNull { e ->
+                val trimmed = e.name.trimStart('/')
+                val slash = trimmed.indexOf('/')
+                if (slash > 0) trimmed.substring(0, slash + 1) else null
+            }.distinct()
+            if (firstSegs.size == 1) firstSegs.first() else ""
+        } else ""
 
         IosFiles.mkdirs(targetDir)
         var extractedFiles = 0
@@ -124,13 +138,7 @@ internal object IosZipExtractor {
             }
         }
 
-        if (extractedFiles > 0) {
-            val gitDir = IosFiles.join(targetDir, ".git")
-            IosFiles.mkdirs(gitDir)
-            IosFiles.writeText(IosFiles.join(gitDir, "HEAD"), "ref: refs/heads/main\n")
-            return true
-        }
-        return false
+        return extractedFiles > 0
     }
 
     private fun findEndOfCentralDirectory(bytes: ByteArray): Int? {

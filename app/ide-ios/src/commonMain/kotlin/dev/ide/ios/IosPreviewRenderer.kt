@@ -60,6 +60,11 @@ internal class IosPreviewRenderer(private val classPath: List<String>) {
         vm.invokeStatic(ENTRY, "pointer", "(IIFF)V", session, kind, x, y)
     }
 
+    /** Resizes the session's scene to [width]x[height] pixels. */
+    fun resize(session: Int, width: Int, height: Int) {
+        vm.invokeStatic(ENTRY, "resize", "(III)V", session, width, height)
+    }
+
     fun close(session: Int) {
         vm.invokeStatic(ENTRY, "close", "(I)V", session)
     }

@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ProvidableCompositionLocal
+import androidx.compose.runtime.ProvidedValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.InternalComposeUiApi
@@ -12,11 +14,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.SystemTheme
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import dev.ide.interp.PreviewResourceResolver
 import dev.ide.lang.kotlin.interp.PreviewWire
 import dev.ide.lang.kotlin.interp.ResolvedClass
 import dev.ide.lang.kotlin.interp.ResolvedFunction
+import java.lang.reflect.Proxy
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Image
@@ -96,13 +105,75 @@ object VmPreviewEntry {
 
     // ---- live sessions: a preview that stays composed, takes input and animates ----------------------------
 
-    private class Session(val scene: ImageComposeScene, val problems: MutableList<String>) {
+    open class DynamicPreviewResourceResolver : PreviewResourceResolver {
+        private val fieldToId = ConcurrentHashMap<String, Int>()
+        private val idToName = ConcurrentHashMap<Int, String>()
+        private val strings = ConcurrentHashMap<Int, String>()
+        private val stringArrays = ConcurrentHashMap<Int, List<String>>()
+        private val plurals = ConcurrentHashMap<Int, (Int) -> String>()
+        private val colors = ConcurrentHashMap<Int, Any>()
+        private val dimensions = ConcurrentHashMap<Int, Any>()
+        private val painters = ConcurrentHashMap<Int, Any>()
+        private val nextId = AtomicInteger(0x7f040001)
+
+        override fun rClassField(ownerFqn: String, fieldName: String): Int? {
+            val key = "$ownerFqn.$fieldName"
+            return fieldToId.computeIfAbsent(key) {
+                val id = nextId.getAndIncrement()
+                idToName[id] = fieldName
+                id
+            }
+        }
+
+        override fun string(id: Int): String? {
+            return strings[id] ?: idToName[id]?.replace('_', ' ')?.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() } ?: "Resource $id"
+        }
+
+        override fun stringArray(id: Int): List<String>? {
+            return stringArrays[id] ?: listOf("Item 1", "Item 2", "Item 3")
+        }
+
+        override fun plural(id: Int, quantity: Int): String? {
+            val custom = plurals[id]?.invoke(quantity)
+            if (custom != null) return custom
+            val base = idToName[id]?.replace('_', ' ') ?: "item"
+            return "$quantity $base${if (quantity == 1) "" else "s"}"
+        }
+
+        override fun color(id: Int): Any? {
+            return colors[id] ?: Color(0xFF6200EE)
+        }
+
+        override fun dimension(id: Int): Any? {
+            return dimensions[id] ?: Dp(16f)
+        }
+
+        override fun painter(id: Int): Any? {
+            return painters[id] ?: ColorPainter(Color.LightGray)
+        }
+    }
+
+    private class Session(
+        var scene: ImageComposeScene,
+        val problems: MutableList<String>,
+        var width: Int,
+        var height: Int,
+        val density: Float,
+        val fontScale: Float,
+        val dark: Boolean,
+        val background: Long,
+        val renderer: ComposePreviewRenderer,
+        val entry: ResolvedFunction,
+        val program: Map<String, ResolvedFunction>,
+        val classes: List<ResolvedClass>,
+    ) {
         val opened = System.nanoTime()
         var reported = 0
     }
 
-    private val sessions = HashMap<Int, Session>()
-    private var nextSession = 1
+    private val renderLock = Any()
+    private val sessions = ConcurrentHashMap<Int, Session>()
+    private val nextSession = AtomicInteger(1)
 
     /**
      * Composes the preview in [blob] into a scene that stays open, for a host that shows a live preview: it
@@ -112,24 +183,74 @@ object VmPreviewEntry {
     @OptIn(ExperimentalComposeUiApi::class)
     @JvmStatic
     fun open(blob: ByteArray, width: Int, height: Int, density: Float, fontScale: Float, dark: Boolean, background: Long): Int {
+        val clampedWidth = width.coerceIn(1, 4096)
+        val clampedHeight = height.coerceIn(1, 4096)
         val (entry, program, classes) = PreviewWire.decode(blob)
-        val renderer = ComposePreviewRenderer()
+        val resolver = DynamicPreviewResourceResolver()
+        val renderer = ComposePreviewRenderer(resources = resolver)
         val problems = ArrayList<String>()
-        val scene = ImageComposeScene(width, height, Density(density, fontScale)) {
-            Themed(dark) {
-                val content = @Composable {
-                    renderer.Render(
-                        entry, program, classes,
-                        onError = { problems.add(describe(it)) },
-                        onPartialError = { if (it != null) problems.add(describe(it)) },
-                    )
+        val scene = synchronized(renderLock) {
+            ImageComposeScene(clampedWidth, clampedHeight, Density(density, fontScale)) {
+                Themed(dark) {
+                    val content = @Composable {
+                        renderer.Render(
+                            entry, program, classes,
+                            onError = { problems.add(describe(it)) },
+                            onPartialError = { if (it != null) problems.add(describe(it)) },
+                        )
+                    }
+                    if (background != 0L) Box(Modifier.background(Color(background.toInt()))) { content() } else content()
                 }
-                if (background != 0L) Box(Modifier.background(Color(background.toInt()))) { content() } else content()
             }
         }
-        val id = nextSession++
-        sessions[id] = Session(scene, problems)
+        val id = nextSession.getAndIncrement()
+        sessions[id] = Session(
+            scene = scene,
+            problems = problems,
+            width = clampedWidth,
+            height = clampedHeight,
+            density = density,
+            fontScale = fontScale,
+            dark = dark,
+            background = background,
+            renderer = renderer,
+            entry = entry,
+            program = program,
+            classes = classes,
+        )
         return id
+    }
+
+    /**
+     * Resizes the active [id] session to new [width]x[height] pixels, recreating the [ImageComposeScene]
+     * at current display constraints.
+     */
+    @OptIn(ExperimentalComposeUiApi::class)
+    @JvmStatic
+    fun resize(id: Int, width: Int, height: Int) {
+        val session = sessions[id] ?: return
+        val clampedWidth = width.coerceIn(1, 4096)
+        val clampedHeight = height.coerceIn(1, 4096)
+        synchronized(session) {
+            if (session.width == clampedWidth && session.height == clampedHeight) return
+            session.width = clampedWidth
+            session.height = clampedHeight
+            synchronized(renderLock) {
+                try { session.scene.close() } catch (_: Throwable) {}
+                session.scene = ImageComposeScene(clampedWidth, clampedHeight, Density(session.density, session.fontScale)) {
+                    Themed(session.dark) {
+                        val content = @Composable {
+                            session.renderer.Render(
+                                session.entry, session.program, session.classes,
+                                onError = { session.problems.add(describe(it)) },
+                                onPartialError = { if (it != null) session.problems.add(describe(it)) },
+                            )
+                        }
+                        if (session.background != 0L) Box(Modifier.background(Color(session.background.toInt()))) { content() } else content()
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -141,32 +262,58 @@ object VmPreviewEntry {
     @JvmStatic
     fun frame(id: Int): Array<Any?> {
         val session = sessions[id] ?: return arrayOf(null, "no preview session $id", false)
-        val image = session.scene.render(System.nanoTime() - session.opened)
-        val png = image.encodeToData(EncodedImageFormat.PNG)!!.bytes
-        val fresh = session.problems.drop(session.reported).distinct()
-        session.reported = session.problems.size
-        return arrayOf(png, fresh.takeIf { it.isNotEmpty() }?.joinToString("\n"), session.scene.hasInvalidations())
+        synchronized(session) {
+            val image = synchronized(renderLock) {
+                try {
+                    session.scene.render()
+                } catch (t: Throwable) {
+                    try {
+                        session.scene.render()
+                    } catch (t2: Throwable) {
+                        session.problems.add(describe(t2))
+                        return arrayOf(null, t2.message ?: "render failed", false)
+                    }
+                }
+            }
+            val png = image.encodeToData(EncodedImageFormat.PNG)?.bytes
+                ?: return arrayOf(null, "failed to encode PNG", false)
+            val fresh = session.problems.drop(session.reported).distinct()
+            session.reported = session.problems.size
+            return arrayOf(png, fresh.takeIf { it.isNotEmpty() }?.joinToString("\n"), session.scene.hasInvalidations())
+        }
     }
 
     /**
      * Input to the session's scene: [kind] is 0 for a press, 1 for a move, 2 for a release, at ([x], [y]) in
-     * the scene's pixels.
+     * the scene's pixels. Out-of-bounds / negative coordinates are clamped to session bounds.
      */
     @OptIn(ExperimentalComposeUiApi::class)
     @JvmStatic
     fun pointer(id: Int, kind: Int, x: Float, y: Float) {
         val session = sessions[id] ?: return
+        if (x.isNaN() || y.isNaN() || x.isInfinite() || y.isInfinite()) return
+        val clampedX = x.coerceIn(0f, session.width.toFloat().coerceAtLeast(0f))
+        val clampedY = y.coerceIn(0f, session.height.toFloat().coerceAtLeast(0f))
         val type = when (kind) {
             0 -> PointerEventType.Press
             2 -> PointerEventType.Release
             else -> PointerEventType.Move
         }
-        session.scene.sendPointerEvent(type, Offset(x, y), timeMillis = (System.nanoTime() - session.opened) / 1_000_000)
+        synchronized(session) {
+            try {
+                session.scene.sendPointerEvent(type, Offset(clampedX, clampedY), timeMillis = (System.nanoTime() - session.opened) / 1_000_000)
+            } catch (_: Throwable) {}
+        }
     }
 
     @JvmStatic
     fun close(id: Int) {
-        sessions.remove(id)?.scene?.close()
+        val session = sessions.remove(id) ?: return
+        synchronized(session) {
+            synchronized(renderLock) {
+                try { session.scene.close() } catch (_: Throwable) {}
+            }
+        }
     }
 
     private class Frame(val image: Image, val problems: List<String>)
@@ -181,33 +328,74 @@ object VmPreviewEntry {
         dark: Boolean = false,
         background: Long = 0L,
     ): Frame {
+        val clampedWidth = width.coerceIn(1, 4096)
+        val clampedHeight = height.coerceIn(1, 4096)
         val (entry, program, classes) = PreviewWire.decode(blob)
         val renderer = ComposePreviewRenderer()
         val problems = ArrayList<String>()
-        val scene = ImageComposeScene(width, height, Density(density, fontScale)) {
-            Themed(dark) {
-                val content = @Composable {
-                    renderer.Render(
-                        entry, program, classes,
-                        onError = { problems.add(describe(it)) },
-                        onPartialError = { if (it != null) problems.add(describe(it)) },
-                    )
+        synchronized(renderLock) {
+            val scene = ImageComposeScene(clampedWidth, clampedHeight, Density(density, fontScale)) {
+                Themed(dark) {
+                    val content = @Composable {
+                        renderer.Render(
+                            entry, program, classes,
+                            onError = { problems.add(describe(it)) },
+                            onPartialError = { if (it != null) problems.add(describe(it)) },
+                        )
+                    }
+                    if (background != 0L) Box(Modifier.background(Color(background.toInt()))) { content() } else content()
                 }
-                if (background != 0L) Box(Modifier.background(Color(background.toInt()))) { content() } else content()
             }
-        }
-        try {
-            return Frame(scene.render(), problems.distinct())
-        } finally {
-            scene.close()
+            try {
+                return Frame(scene.render(), problems.distinct())
+            } finally {
+                try { scene.close() } catch (_: Throwable) {}
+            }
         }
     }
 
-    /** [content] under the requested system theme, which is what `isSystemInDarkTheme()` reads. */
     @OptIn(InternalComposeUiApi::class)
     @Composable
     private fun Themed(dark: Boolean, content: @Composable () -> Unit) {
-        CompositionLocalProvider(LocalSystemTheme provides if (dark) SystemTheme.Dark else SystemTheme.Light) { content() }
+        val providers = ArrayList<ProvidedValue<*>>()
+        providers.add(LocalSystemTheme provides if (dark) SystemTheme.Dark else SystemTheme.Light)
+        provideLocalContextIfPresent(providers)
+        CompositionLocalProvider(*providers.toTypedArray()) { content() }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun provideLocalContextIfPresent(providers: ArrayList<ProvidedValue<*>>) {
+        try {
+            val localContextClass = Class.forName("androidx.compose.ui.platform.AndroidCompositionLocals_androidKt")
+            val getLocalContextMethod = localContextClass.getMethod("getLocalContext")
+            val localContext = getLocalContextMethod.invoke(null) as? ProvidableCompositionLocal<Any?> ?: return
+
+            val contextClass = Class.forName("android.content.Context")
+            val stubContext = Proxy.newProxyInstance(
+                contextClass.classLoader ?: VmPreviewEntry::class.java.classLoader,
+                arrayOf(contextClass),
+            ) { proxy, method, args ->
+                when (method.name) {
+                    "getApplicationContext" -> proxy
+                    "getPackageName" -> "dev.ide.guest"
+                    "toString" -> "PreviewContext"
+                    "hashCode" -> 42
+                    "equals" -> args?.getOrNull(0) === proxy
+                    else -> when (method.returnType) {
+                        java.lang.Boolean.TYPE -> false
+                        java.lang.Integer.TYPE -> 0
+                        java.lang.Long.TYPE -> 0L
+                        java.lang.Float.TYPE -> 0f
+                        java.lang.Double.TYPE -> 0.0
+                        String::class.java -> ""
+                        else -> null
+                    }
+                }
+            }
+            providers.add(localContext.provides(stubContext))
+        } catch (_: Throwable) {
+            // AndroidCompositionLocals or android.content.Context not linked; safe fallback
+        }
     }
 
     private fun describe(t: Throwable): String = buildString {

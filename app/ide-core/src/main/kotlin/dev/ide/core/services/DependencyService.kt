@@ -784,7 +784,11 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
         sanitizeCoordinate(name).split(":").let {
             when {
                 it.size == 2 && looksLikeVersion(it[1]) -> Coordinate("", it[0], it[1])
-                it.size == 2 -> Coordinate(it[0], it[1], "")
+                it.size == 2 -> Coordinate(
+                    it[0],
+                    it[1],
+                    if (it[0] == "org.jetbrains.kotlin" && it[1].startsWith("kotlin-")) KotlinVersion.CURRENT.toString() else "",
+                )
                 it.size == 3 -> Coordinate(it[0], it[1], it[2])
                 it.size == 4 && it.none(String::isBlank) -> Coordinate(it[0], it[1], it[2], it[3])
                 else -> null

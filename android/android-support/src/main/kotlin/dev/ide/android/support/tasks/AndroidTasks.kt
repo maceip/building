@@ -52,6 +52,7 @@ import java.util.jar.JarEntry
 import java.util.jar.JarOutputStream
 import java.util.stream.Collectors
 import java.util.zip.ZipFile
+import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -375,7 +376,7 @@ internal class GenerateLibraryRTask(
 
     override suspend fun execute(ctx: TaskContext): TaskResult {
         ctx.checkCanceled()
-        val m = if (Files.isRegularFile(manifest)) manifest else synthesizeManifest()
+        val m = ensureManifestHasPackage()
         val compile = aapt2.compile(resDirs, compiledResDir)
         ctx.reportTool("aapt2", compile.result, DiagnosticKind.RESOURCE)
         if (!compile.result.success) return TaskResult.Failed("aapt2 compile (library R) failed")
@@ -394,6 +395,17 @@ internal class GenerateLibraryRTask(
         )
         ctx.reportTool("aapt2", r, DiagnosticKind.RESOURCE)
         return if (r.success) TaskResult.Success else TaskResult.Failed("aapt2 link (library R) failed")
+    }
+
+    private fun ensureManifestHasPackage(): Path {
+        if (!Files.isRegularFile(manifest)) return synthesizeManifest()
+        val raw = runCatching { manifest.readText() }.getOrDefault("")
+        if (Regex("""\bpackage\s*=\s*["']""").containsMatchIn(raw)) return manifest
+        val patched = Regex("""<manifest\b""").replaceFirst(raw, "<manifest package=\"$packageName\"")
+        if (patched == raw) return synthesizeManifest()
+        synthManifest.parent?.let { Files.createDirectories(it) }
+        synthManifest.writeText(patched)
+        return synthManifest
     }
 
     private fun synthesizeManifest(): Path {

@@ -711,7 +711,7 @@ fun AgentTopBar(
     title: String,
     subtitle: String? = null,
     onBack: (() -> Unit)? = null,
-    backIcon: ImageVector? = null,
+    backIcon: ImageVector? = CaIcons.arrowLeft,
     actions: @Composable RowScope.() -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
