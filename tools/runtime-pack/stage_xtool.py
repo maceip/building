@@ -75,6 +75,19 @@ def stage(source, output, xtool_root, lock_path=HERE / "xtool-inputs.lock.json")
             if leaf.startswith(("libswift", "libFoundation", "lib_Foundation", "libTesting", "libXCTest", "lib_Testing")):
                 links["lib/swift-runtime/" + leaf] = name
                 owners["lib/swift-runtime/" + leaf] = "swift-runtime-aarch64"
+    # Stage the precompiled Android aarch64 Cupertino SwiftUI bridge SDK directly into lib/swift/android/.
+    bridge_sdk = Path(os.environ.get("SWIFTUI_BRIDGE_SDK", str(Path.home() / ".building/swiftui-bridge-sdk/android-aarch64")))
+    if (bridge_sdk / "libSwiftUI.a").is_file() and (bridge_sdk / "SwiftUI.swiftmodule/aarch64-unknown-linux-android.swiftmodule").is_file():
+        lib_bytes = (bridge_sdk / "libSwiftUI.a").read_bytes()
+        for dst in ("lib/swift/android/libSwiftUI.a", "lib/swift/android/aarch64/libSwiftUI.a"):
+            files[dst], owners[dst] = lib_bytes, "swiftui-bridge-sdk"
+        for mod in ("SwiftUI", "Combine", "CoreGraphics", "UIKit"):
+            mod_file = bridge_sdk / f"{mod}.swiftmodule/aarch64-unknown-linux-android.swiftmodule"
+            if mod_file.is_file():
+                mod_bytes = mod_file.read_bytes()
+                for target_triple in ("aarch64-unknown-linux-android", "aarch64-unknown-linux-android28"):
+                    dst = f"lib/swift/android/{mod}.swiftmodule/{target_triple}.swiftmodule"
+                    files[dst], owners[dst] = mod_bytes, "swiftui-bridge-sdk"
     paths = base_paths | set(files) | set(links)
     paths |= {str(parent) for path in list(paths) for parent in Path(path).parents if str(parent) != "."}
     for name, target_path in links.items():

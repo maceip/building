@@ -6,8 +6,10 @@ import dev.ide.ui.icons.CaSymbols
 import dev.ide.ui.screens.HomeSidebarItem
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
@@ -262,7 +264,11 @@ private fun AppRoute(
 ) {
     val backend = app.backend
     when (s) {
-        Screen.Projects -> HomeRoute(app, fileActions)
+        Screen.Projects -> if (app.resumingLastProject) {
+            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
+        } else {
+            HomeRoute(app, fileActions)
+        }
 
         Screen.CreateProject -> CreateProjectScreen(
             backend = backend,
@@ -503,7 +509,9 @@ private fun AppRoute(
                         override val fileActions = fileActions
                         override val argument = shownArgument
                         override fun back() = app.navigateBack()
-                        override fun openScreen(id: String) = app.openPluginScreen(id)
+                        override fun openScreen(id: String) {
+                            if (id == "__hub__") app.openHub(Screen.Projects) else app.openPluginScreen(id)
+                        }
                         override fun openFile(path: String, offset: Int) = openInEditor(path, offset)
                     }
                 }

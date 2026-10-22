@@ -1,24 +1,59 @@
 package dev.ide.agent.ui
 
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.ide.ui.backend.AgentService
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.UiAgentPermissionMode
 import dev.ide.ui.ext.ScreenContext
-import dev.ide.ui.screens.AgentSettingsContent
+import dev.ide.ui.icons.CaIcons
+import dev.ide.ui.screens.AgentRadioRow
+import dev.ide.ui.screens.AgentSectionLabel
+import dev.ide.ui.screens.AgentSegmented
+import dev.ide.ui.screens.AgentSurface
+import dev.ide.ui.screens.AgentTopBar
+import dev.ide.ui.theme.AgentUi
 
 /**
- * [AgentSettingsContent] wired to [AgentService]. Safe when the backend reports [AgentService.Unsupported]:
- * controls still render with defaults and writes are no-ops.
+ * Agent configuration screen wired directly to [AgentService]:
+ * - Real provider selection, API keys/tokens, model chips, and custom gateway settings ([ProviderCard]).
+ * - Real reasoning effort selector (`default`, `low`, `medium`, `high`).
+ * - Real permission mode selector (`PLAN_ONLY`, `ASK_EACH`, `AUTO_ACCEPT`) inside a framed card.
+ * - Real IDE settings card navigating to the full Settings & Tools hub.
  */
 @Composable
 fun AgentSettingsScreen(ctx: ScreenContext) {
-    AgentSettingsHost(backend = ctx.backend, onBack = ctx::back, onOpenEditorPrefs = {})
+    AgentSettingsHost(
+        backend = ctx.backend,
+        onBack = ctx::back,
+        onOpenEditorPrefs = { ctx.openScreen("__hub__") },
+    )
 }
 
 @Composable
@@ -26,86 +61,160 @@ fun AgentSettingsHost(
     backend: IdeBackend,
     onBack: () -> Unit = {},
     onOpenEditorPrefs: () -> Unit = {},
-    onDownloadModel: () -> Unit = {},
+    scrollState: ScrollState = rememberScrollState(),
 ) {
     val agent = backend.agent
     var cfg by remember(agent) { mutableStateOf(agent.config()) }
 
-    // 0 = On this phone, 1 = Cloud. Not a backend enum yet — kept locally so the segmented control is
-    // truthful and the rest of the page can prefer offline-safe defaults while on-device is selected.
-    var modeIndex by remember(agent) { mutableIntStateOf(0) }
-    var offlineOnly by remember(agent) { mutableStateOf(modeIndex == 0) }
-    var pauseLowBattery by remember(agent) { mutableStateOf(true) }
+    val effortValues = remember { listOf("default", "low", "medium", "high") }
+    val effortLabels = remember { listOf("Default", "Low", "Medium", "High") }
+    val effortIndex = effortValues.indexOf(cfg.effort.lowercase()).let { if (it >= 0) it else 0 }
 
-    // Map the redesigned radios onto the engine's permission modes. Defaults stay ASK_EACH when the
-    // service is Unsupported (cfg.mode).
-    var permissionIndex by remember(agent) {
-        mutableIntStateOf(
-            when (cfg.mode) {
-                UiAgentPermissionMode.PLAN_ONLY -> 0
-                UiAgentPermissionMode.AUTO_ACCEPT -> 2
-                else -> 1
-            },
-        )
+    val permissionIndex = when (cfg.mode) {
+        UiAgentPermissionMode.PLAN_ONLY -> 0
+        UiAgentPermissionMode.AUTO_ACCEPT -> 2
+        else -> 1
     }
 
-    val providers = cfg.providers
-    val selected = providers.firstOrNull { it.id == cfg.selectedProvider }
-    val localTitle = selected?.displayName?.takeIf { it.isNotBlank() } ?: "On-device agent"
-    val localMeta = when {
-        cfg.model.isNotBlank() -> "${cfg.model} · Active"
-        selected != null -> "${selected.defaultModel} · Active"
-        else -> "No model selected"
-    }
-    val secondary = providers.firstOrNull { it.id != cfg.selectedProvider }
-    val secondaryTitle = secondary?.displayName ?: "Cloud models"
-    val secondaryMeta = secondary?.let {
-        "${it.defaultModel.ifBlank { it.models.firstOrNull()?.id ?: "Ready" }} · Download when you switch to Cloud"
-    } ?: "Available after you pick Cloud"
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(AgentUi.chrome.bg)
+            .verticalScroll(scrollState)
+            .testTag("agent_settings_scroll"),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        AgentTopBar(title = "", onBack = onBack, backIcon = CaIcons.arrowLeft)
+        Column(
+            Modifier.padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(22.dp),
+        ) {
+            Text(
+                "Agent",
+                fontSize = 30.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = AgentUi.chrome.text,
+            )
 
-    AgentSettingsContent(
-        modeIndex = modeIndex,
-        onModeChange = { next ->
-            modeIndex = next
-            // Prefer an offline posture on-device; allow cloud fallback when Cloud is selected.
-            if (next == 0) offlineOnly = true
-            // Best-effort provider flip: pick the first cloud provider when moving to Cloud, and leave
-            // the current one alone when returning to on-device (no local registry entry exists yet).
-            if (next == 1) {
-                val cloud = providers.firstOrNull { it.id != "gateway" && it.id != cfg.selectedProvider }
-                    ?: providers.firstOrNull()
-                if (cloud != null && cloud.id != cfg.selectedProvider) {
-                    agent.selectProvider(cloud.id)
-                    cfg = agent.config()
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                AgentSectionLabel("Provider & API key")
+                cfg.providers.forEach { provider ->
+                    ProviderCard(
+                        provider = provider,
+                        selected = provider.id == cfg.selectedProvider,
+                        activeModel = cfg.model.ifBlank { provider.defaultModel },
+                        gatewayBaseUrl = cfg.gatewayBaseUrl,
+                        gatewayModel = cfg.gatewayModel,
+                        gatewayCaCert = cfg.gatewayCaCert,
+                        onSelect = {
+                            if (provider.id != cfg.selectedProvider) {
+                                agent.selectProvider(provider.id)
+                                cfg = agent.config()
+                            }
+                        },
+                        onSetKey = {
+                            agent.setProviderKey(provider.id, it)
+                            cfg = agent.config()
+                        },
+                        onSetBaseUrl = {
+                            agent.setProviderBaseUrl(provider.id, it)
+                            cfg = agent.config()
+                        },
+                        onPickModel = {
+                            agent.setModel(it)
+                            cfg = agent.config()
+                        },
+                        onSetGateway = { url, model, ca ->
+                            agent.setGateway(url, model, ca)
+                            cfg = agent.config()
+                        },
+                    )
                 }
             }
-        },
-        localModelTitle = localTitle,
-        localModelMeta = localMeta,
-        secondaryModelTitle = secondaryTitle,
-        secondaryModelMeta = secondaryMeta,
-        permissionIndex = permissionIndex,
-        onPermissionChange = { i ->
-            permissionIndex = i
-            agent.setPermissionMode(
-                when (i) {
-                    0 -> UiAgentPermissionMode.PLAN_ONLY
-                    2 -> UiAgentPermissionMode.AUTO_ACCEPT
-                    else -> UiAgentPermissionMode.ASK_EACH
-                },
-            )
-            cfg = agent.config()
-        },
-        offlineOnly = offlineOnly,
-        onOfflineOnlyChange = { offlineOnly = it },
-        pauseLowBattery = pauseLowBattery,
-        onPauseLowBatteryChange = { pauseLowBattery = it },
-        onOpenEditorPrefs = onOpenEditorPrefs,
-        onDownloadModel = {
-            agent.refreshModels()
-            cfg = agent.config()
-            onDownloadModel()
-        },
-        onBack = onBack,
-    )
+
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                AgentSectionLabel("Reasoning effort")
+                AgentSegmented(
+                    options = effortLabels,
+                    selectedIndex = effortIndex,
+                    onSelect = { idx ->
+                        val nextEffort = effortValues.getOrElse(idx) { "default" }
+                        agent.setEffort(nextEffort)
+                        cfg = agent.config()
+                    },
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                AgentSectionLabel("Permissions")
+                AgentSurface(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                    stroke = AgentUi.chrome.hairlineStrong,
+                ) {
+                    val perms = listOf(
+                        "Suggest only — I apply every edit",
+                        "Edit and build — ask before installs",
+                        "Full auto in this project",
+                    )
+                    perms.forEachIndexed { i, label ->
+                        AgentRadioRow(
+                            label = label,
+                            selected = i == permissionIndex,
+                            onSelect = {
+                                agent.setPermissionMode(
+                                    when (i) {
+                                        0 -> UiAgentPermissionMode.PLAN_ONLY
+                                        2 -> UiAgentPermissionMode.AUTO_ACCEPT
+                                        else -> UiAgentPermissionMode.ASK_EACH
+                                    },
+                                )
+                                cfg = agent.config()
+                            },
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                AgentSectionLabel("IDE settings")
+                AgentSurface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("agent_settings_open_ide_prefs")
+                        .clickable(onClick = onOpenEditorPrefs),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                    stroke = AgentUi.chrome.hairlineStrong,
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                "Editor, keymap, code style & tools",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = AgentUi.chrome.text,
+                            )
+                            Text(
+                                "Open full IDE settings",
+                                fontSize = 12.5.sp,
+                                color = AgentUi.chrome.textMuted,
+                            )
+                        }
+                        Icon(
+                            CaIcons.arrowRight,
+                            contentDescription = "Open full IDE settings",
+                            tint = AgentUi.chrome.textMuted,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+        }
+    }
 }

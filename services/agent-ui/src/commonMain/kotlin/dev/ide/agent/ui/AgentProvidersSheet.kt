@@ -153,7 +153,7 @@ private fun providerBaseUrlHint(id: String): String = when (id) {
 }
 
 @Composable
-private fun ProviderCard(
+internal fun ProviderCard(
     provider: UiAgentProvider,
     selected: Boolean,
     activeModel: String,

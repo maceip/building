@@ -13,6 +13,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import dev.ide.ui.editor.preview.decodeImageBytes
 import dev.ide.ui.platform.touchInput
 import dev.ide.ui.platform.PlatformBackHandler
 import dev.ide.ui.generated.resources.home_account
@@ -292,28 +298,53 @@ fun ProjectsHomeScreen(
         // Agent-first Home (phone width): prompt hero + Continue, with the classic project list one tap
         // away via "All projects". New / Start opens the redesigned bottom sheet, which hands off to the
         // existing create-project gallery.
-        val continueItems = remember(ordered, now) {
-            ordered.take(5).map { p ->
-                AgentContinueItem(
-                    id = p.rootPath,
-                    title = p.name,
-                    meta = listOfNotNull(
-                        when {
-                            p.isSwift -> "Swift & iOS"
-                            p.isPython -> "Python"
-                            p.isNode -> "Node.js"
-                            p.isAndroid -> "Android"
-                            p.compatibility -> "Gradle"
-                            p.unrecognized -> "Files"
-                            else -> "building"
-                        },
-                        if (p.moduleCount == 1) "1 module" else "${p.moduleCount} modules",
-                    ).joinToString(" · "),
-                    time = "",
-                    letter = p.name.firstOrNull()?.uppercase() ?: "?",
-                    needsAttention = false,
-                )
+        val agentCfg = remember(backend) { backend?.agent?.config() }
+        val activeProvider = remember(agentCfg) {
+            agentCfg?.providers?.firstOrNull { it.id == agentCfg.selectedProvider }
+        }
+        val activeProviderLabel = remember(agentCfg, activeProvider) {
+            when {
+                agentCfg == null || !agentCfg.configured -> "Configure AI"
+                activeProvider != null -> {
+                    val modelId = agentCfg.model.ifBlank { activeProvider.defaultModel }
+                    if (modelId.isNotBlank()) "${activeProvider.displayName} · $modelId" else activeProvider.displayName
+                }
+                else -> "Configure AI"
             }
+        }
+        val visibleProjects = remember(ordered) { ordered.take(5) }
+        val continueItems = visibleProjects.mapIndexed { idx, p ->
+            val stackLabel = when {
+                p.isSwift -> "Swift & iOS"
+                p.isPython -> "Python"
+                p.isNode -> "Node.js"
+                p.isAndroid -> "Android"
+                p.compatibility -> "Gradle"
+                p.unrecognized -> "Files"
+                else -> "building"
+            }
+            val modulesLabel = if (p.moduleCount == 1) "1 module" else "${p.moduleCount} modules"
+            val avatarImg = projectIconImage(p, icons, loadIcon, loadIconImage, backend)
+            AgentContinueItem(
+                id = p.rootPath,
+                title = p.name,
+                meta = (listOf(stackLabel, modulesLabel) + p.tags).joinToString(" · "),
+                time = "",
+                letter = p.name.firstOrNull()?.uppercase() ?: "?",
+                needsAttention = false,
+                stackLabel = stackLabel,
+                stackColor = projectStackColor(
+                    isAndroid = p.isAndroid,
+                    isNode = p.isNode,
+                    isPython = p.isPython,
+                    isSwift = p.isSwift,
+                    compatibility = p.compatibility,
+                ),
+                modulesLabel = modulesLabel,
+                tags = p.tags,
+                avatar = avatarImg,
+                shimmerSubtitle = idx == 0,
+            )
         }
         AgentHomeContent(
             appName = "building",
@@ -335,7 +366,8 @@ fun ProjectsHomeScreen(
                     onImportProject != null -> onImportProject()
                 }
             },
-            onDeviceLabel = "On-device",
+            onDeviceLabel = activeProviderLabel,
+            providerConfigured = agentCfg?.configured == true,
             continueItems = continueItems,
             allProjectsLabel = "All projects",
             onOpenItem = { item -> ordered.firstOrNull { it.rootPath == item.id }?.let(onOpen) },
@@ -407,7 +439,7 @@ fun ProjectsHomeScreen(
                         project = project,
                         index = i,
                         now = now,
-                        icon = projectIconImage(project, icons, loadIcon, loadIconImage),
+                        icon = projectIconImage(project, icons, loadIcon, loadIconImage, backend),
                         onOpen = { onOpen(project) },
                         onSecondary = onExportProject?.let { export -> { export(project) } }
                             ?: onDeleteProject?.let { del -> { del(project) } },
@@ -652,18 +684,26 @@ private fun projectIconImage(
     cache: ProjectIconCache,
     loadIcon: (suspend (ProjectInfo) -> UiProjectIcon?)?,
     loadImage: (suspend (String) -> ByteArray?)?,
+    backend: dev.ide.ui.backend.IdeBackend? = null,
 ): ImageBitmap? {
-    if (loadIcon == null) return null
+    if (loadIcon == null && (project.ownerAvatarUrl == null || backend == null)) return null
     // Keyed on the cache's generation as well as the project: a refresh empties the cache, and this is what
     // makes a card that never left the screen ask for its icon again instead of sitting blank.
-    LaunchedEffect(project.rootPath, cache.generation, loadIcon) {
+    LaunchedEffect(project.rootPath, project.ownerAvatarUrl, cache.generation, loadIcon, backend) {
         if (cache.isResolved(project.rootPath)) return@LaunchedEffect
         // Recorded even when it is null, so a project with no icon is asked about once rather than on
         // every scroll.
         cache.put(
             project.rootPath,
             runCatching {
-                val resolved = loadIcon(project) ?: return@runCatching null
+                val avatarUrl = project.ownerAvatarUrl
+                if (avatarUrl != null && backend != null) {
+                    val file = runCatching { backend.store.avatarFile(avatarUrl) }.getOrNull()
+                    val bytes = file?.let { runCatching { backend.projects.imageBytes(it) }.getOrNull() }
+                    val decoded = bytes?.let { withContext(Dispatchers.Default) { decodeImageBytes(it) } }
+                    if (decoded != null) return@runCatching decoded
+                }
+                val resolved = loadIcon?.invoke(project) ?: return@runCatching null
                 withContext(Dispatchers.Default) {
                     ProjectIconRaster.toImage(resolved, TILE_ICON_PIXELS) { path -> loadImage?.invoke(path) }
                 }
@@ -734,18 +774,58 @@ private fun LocalProjectCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    listOfNotNull(
-                        moduleLabel(project.moduleCount),
-                        kindLabel(project),
-                        relativeAge(project.lastOpened, now),
-                    ).joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = c.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 1.dp),
+                val stackName = kindLabel(project) ?: when {
+                    project.isSwift -> "Swift & iOS"
+                    project.isPython -> "Python"
+                    project.isNode -> "Node.js"
+                    project.isAndroid -> "Android"
+                    else -> "building"
+                }
+                val stackColor = projectStackColor(
+                    isAndroid = project.isAndroid,
+                    isNode = project.isNode,
+                    isPython = project.isPython,
+                    isSwift = project.isSwift,
+                    compatibility = project.compatibility,
                 )
+                val shimmer = index == 0
+                val stackBrush = if (shimmer) rememberTextShimmerBrush(stackColor) else null
+                val metaBrush = if (shimmer) rememberTextShimmerBrush(c.onSurfaceVariant) else null
+                val tailParts = buildList {
+                    add(moduleLabel(project.moduleCount))
+                    addAll(project.tags.filter { it.isNotBlank() })
+                    relativeAge(project.lastOpened, now)?.let { add(it) }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 1.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(
+                                if (stackBrush != null) SpanStyle(brush = stackBrush, fontWeight = FontWeight.Medium)
+                                else SpanStyle(color = stackColor, fontWeight = FontWeight.Medium),
+                            ) {
+                                append(stackName)
+                            }
+                            if (tailParts.isNotEmpty()) {
+                                withStyle(
+                                    if (metaBrush != null) SpanStyle(brush = metaBrush)
+                                    else SpanStyle(color = c.onSurfaceVariant),
+                                ) {
+                                    append(" · ")
+                                    append(tailParts.joinToString(" · "))
+                                }
+                            }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
             }
             // Everything that is not "open this project" lives behind one control. Tapping the row opens.
             if (onDelete != null || onSecondary != null) {
@@ -1428,9 +1508,8 @@ private fun SortChooser(sort: ProjectSort, onSort: (ProjectSort) -> Unit) {
 }
 
 /**
- * One project in the wide list: icon, name over path, then (when there is room) kind and module count, the
- * last-opened time, and the actions menu. The row highlights on hover and opens on click; the menu shows on
- * hover, while its menu is open, and always on touch, where there is no hover to reveal it.
+ * One project in the wide list: icon, name over horizontally scrolling colored stack + modules + tags,
+ * the last-opened time, and the actions menu.
  */
 @Composable
 private fun DenseProjectRow(
@@ -1447,6 +1526,28 @@ private fun DenseProjectRow(
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     var menuOpen by remember(project.rootPath) { mutableStateOf(false) }
+    val stackName = kindLabel(project) ?: when {
+        project.isSwift -> "Swift & iOS"
+        project.isPython -> "Python"
+        project.isNode -> "Node.js"
+        project.isAndroid -> "Android"
+        else -> "building"
+    }
+    val stackColor = projectStackColor(
+        isAndroid = project.isAndroid,
+        isNode = project.isNode,
+        isPython = project.isPython,
+        isSwift = project.isSwift,
+        compatibility = project.compatibility,
+    )
+    val shimmer = index == 0
+    val stackBrush = if (shimmer) rememberTextShimmerBrush(stackColor) else null
+    val metaBrush = if (shimmer) rememberTextShimmerBrush(c.onSurfaceVariant) else null
+    val tailParts = buildList {
+        add(moduleLabel(project.moduleCount))
+        addAll(project.tags.filter { it.isNotBlank() })
+        add(shortenPath(project.rootPath, maxSegments = 4))
+    }
     Row(
         Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(8.dp))
             .background(if (hovered || menuOpen) c.surfaceContainerHigh else Color.Transparent)
@@ -1471,21 +1572,54 @@ private fun DenseProjectRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            // Shortened from the front, so the project's own folder at the end of the path always shows
-            // (TextOverflow.StartEllipsis is not honoured on every target, so the cut is done here).
-            Text(
-                shortenPath(project.rootPath, maxSegments = 4),
-                style = MaterialTheme.typography.bodySmall,
-                color = c.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = buildAnnotatedString {
+                        withStyle(
+                            if (stackBrush != null) SpanStyle(brush = stackBrush, fontWeight = FontWeight.Medium)
+                            else SpanStyle(color = stackColor, fontWeight = FontWeight.Medium),
+                        ) {
+                            append(stackName)
+                        }
+                        if (tailParts.isNotEmpty()) {
+                            withStyle(
+                                if (metaBrush != null) SpanStyle(brush = metaBrush)
+                                else SpanStyle(color = c.onSurfaceVariant),
+                            ) {
+                                append(" · ")
+                                append(tailParts.joinToString(" · "))
+                            }
+                        }
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
         }
         if (showKind) {
             Text(
-                "${kindLabel(project)} · ${moduleLabel(project.moduleCount)}",
+                text = buildAnnotatedString {
+                    withStyle(
+                        if (stackBrush != null) SpanStyle(brush = stackBrush, fontWeight = FontWeight.Medium)
+                        else SpanStyle(color = stackColor, fontWeight = FontWeight.Medium),
+                    ) {
+                        append(stackName)
+                    }
+                    withStyle(
+                        if (metaBrush != null) SpanStyle(brush = metaBrush)
+                        else SpanStyle(color = c.onSurfaceVariant),
+                    ) {
+                        append(" · ")
+                        append(moduleLabel(project.moduleCount))
+                    }
+                },
                 style = MaterialTheme.typography.bodySmall,
-                color = c.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.width(170.dp),

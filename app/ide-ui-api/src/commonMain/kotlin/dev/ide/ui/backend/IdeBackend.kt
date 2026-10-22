@@ -1260,6 +1260,10 @@ data class ProjectInfo(
     val isNode: Boolean = false,
     val isSwift: Boolean = false,
     val isPython: Boolean = false,
+    /** GitHub repository owner's avatar URL (`https://avatars.githubusercontent.com/<owner>?s=96`), when cloned from GitHub. */
+    val ownerAvatarUrl: String? = null,
+    /** Concise repository/project tags shown inline on the Home project row. */
+    val tags: List<String> = emptyList(),
 )
 
 /** Options chosen in the Export-project screen (see [ProjectService.exportProject]). */

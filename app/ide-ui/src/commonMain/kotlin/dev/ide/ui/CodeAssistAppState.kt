@@ -342,12 +342,25 @@ class CodeAssistAppState(
         backend.settings.preference(REOPEN_LAST_PROJECT_PREF)?.toBooleanStrictOrNull() != false
     private var lastPersistedProject: String = ""
 
+    /**
+     * True while a cold launch is actively reopening [resumeProject] before any project epoch has landed.
+     * Suppresses rendering the Home screen so the app never flashes "What should we build?" for a split
+     * second before jumping into the resumed project.
+     */
+    var resumingLastProject: Boolean by mutableStateOf(
+        reopenLast && resumeProject != null && backend.projects.projectEpoch.value == 0,
+    )
+        private set
+
     init {
         // A successful create/open advances the epoch: land in the editor on the new project.
         scope.launch {
             backend.projects.projectEpoch.collect {
                 epoch = it
-                if (it > 0) screen = Screen.Editor
+                if (it > 0) {
+                    resumingLastProject = false
+                    screen = Screen.Editor
+                }
             }
         }
         // Starting a console run (a `run` task) opens a fresh interactive session: keyed on its id, jump to the
@@ -364,11 +377,15 @@ class CodeAssistAppState(
         // One-shot; opening bumps the epoch, which lands in the editor above and reopens the saved tabs. A
         // deleted/missing project just falls through to the picker.
         scope.launch {
-            val last = resumeProject
-            if (!reopenLast || last == null) return@launch
-            if (backend.projects.projectEpoch.value > 0) return@launch // already in a project
-            val exists = withContext(ioDispatcher) { backend.projects.projects().any { it.rootPath == last } }
-            if (exists) backend.projects.openProject(last)
+            try {
+                val last = resumeProject
+                if (!reopenLast || last == null) return@launch
+                if (backend.projects.projectEpoch.value > 0) return@launch // already in a project
+                val exists = withContext(ioDispatcher) { backend.projects.projects().any { it.rootPath == last } }
+                if (exists) backend.projects.openProject(last)
+            } finally {
+                resumingLastProject = false
+            }
         }
         // Track which project (if any) the user has open, for the resume above. Entering the editor (or its Run
         // screen, which only an open project has) records the project; the picker, where closing a project
