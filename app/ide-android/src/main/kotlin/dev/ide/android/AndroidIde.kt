@@ -192,6 +192,22 @@ object AndroidIde {
             notificationsAllowed = {
                 NotificationManagerCompat.from(appContext).areNotificationsEnabled()
             },
+            // The ZCode agent (vendored upstream bundle in the bundled Node runtime) is the
+            // default Android agent; the Kotlin AgentBackend remains the fallback when the
+            // user selects it in AI settings (settings.ai.engine = "kotlin").
+            agentServiceFactory = { backend ->
+                // Null return keeps the built-in Kotlin AgentBackend (engine = "kotlin").
+                if ((backend.agentEnginePreference() ?: "zcode") == "kotlin") {
+                    null
+                } else {
+                    dev.ide.android.agent.ZCodeAgentService(
+                        appContext,
+                        workspaceRoot = { backend.agentWorkspaceRoot() },
+                        legacyPreference = { key -> backend.agentAiPreference(key) },
+                        mcpPort = { backend.agentMcpPort() },
+                    )
+                }
+            },
         )
         // Process-wide uncaught-exception handler: report app_crash + surface the non-fatal dialog + keep the
         // app alive (the MainActivity main-thread guard handles the UI looper). See IdeServicesBackend.

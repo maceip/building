@@ -249,6 +249,16 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
 
     private fun prefBool(key: String, default: Boolean): Boolean = pref(key)?.toBooleanStrictOrNull() ?: default
 
+    /**
+     * Starts the workspace MCP server for an external agent host (the ZCode agent reaches
+     * the Kotlin-native tools — clone, build, semantic navigation — over MCP). Returns the
+     * bound port, or null when the server could not start.
+     */
+    internal fun ensureMcpServerForHost(): Int? {
+        if (mcpServer == null) mcpServer = startMcpServer()
+        return mcpServer?.port
+    }
+
     /** Binds the MCP-over-HTTP server to the engine workspace; null when startup fails (e.g. port taken). */
     private fun startMcpServer(): HttpMcpServer? = try {
         externalWorkspaceWasExposed = true
