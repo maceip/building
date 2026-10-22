@@ -134,21 +134,43 @@ class Logger internal constructor(
     val source: String? = null,
     val registeredProof: Proof<Fact.RegisteredComponent<Any?>>? = null,
 ) {
+    fun isEnabled(level: LogLevel): Boolean = Log.isEnabled(level)
+
     fun trace(message: String, attributes: Map<String, String> = emptyMap()) =
         Log.dispatch(LogLevel.TRACE, tag, message, null, source, attributes)
+
+    inline fun trace(attributes: Map<String, String> = emptyMap(), message: () -> Any?) {
+        if (isEnabled(LogLevel.TRACE)) trace(Log.safeMessage(message), attributes)
+    }
 
     fun debug(message: String, attributes: Map<String, String> = emptyMap()) =
         Log.dispatch(LogLevel.DEBUG, tag, message, null, source, attributes)
 
+    inline fun debug(attributes: Map<String, String> = emptyMap(), message: () -> Any?) {
+        if (isEnabled(LogLevel.DEBUG)) debug(Log.safeMessage(message), attributes)
+    }
+
     fun info(message: String, attributes: Map<String, String> = emptyMap()) =
         Log.dispatch(LogLevel.INFO, tag, message, null, source, attributes)
+
+    inline fun info(attributes: Map<String, String> = emptyMap(), message: () -> Any?) {
+        if (isEnabled(LogLevel.INFO)) info(Log.safeMessage(message), attributes)
+    }
 
     fun warn(message: String, throwable: Throwable? = null, attributes: Map<String, String> = emptyMap()) =
         Log.dispatch(LogLevel.WARN, tag, message, throwable, source, attributes)
 
+    inline fun warn(throwable: Throwable? = null, attributes: Map<String, String> = emptyMap(), message: () -> Any?) {
+        if (isEnabled(LogLevel.WARN)) warn(Log.safeMessage(message), throwable, attributes)
+    }
+
     /** An unexpected failure. With a [throwable] this also surfaces the host's critical-error dialog. */
     fun error(message: String, throwable: Throwable? = null, attributes: Map<String, String> = emptyMap()) =
         Log.dispatch(LogLevel.ERROR, tag, message, throwable, source, attributes)
+
+    inline fun error(throwable: Throwable? = null, attributes: Map<String, String> = emptyMap(), message: () -> Any?) {
+        if (isEnabled(LogLevel.ERROR)) error(Log.safeMessage(message), throwable, attributes)
+    }
 
     /**
      * Executes [block] inside an instrumented [TraceSpan], automatically propagating `traceId`/`spanId`
@@ -208,6 +230,17 @@ object Log {
 
     /** Records below this level are dropped before reaching any sink. */
     var minLevel: LogLevel = LogLevel.DEBUG
+
+    /** Returns true when [level] is at or above [minLevel]. */
+    fun isEnabled(level: LogLevel): Boolean = level.ordinal >= minLevel.ordinal
+
+    /** Evaluates a lazy log message lambda safely so a throwing diagnostic expression never crashes the caller. */
+    @PublishedApi
+    internal inline fun safeMessage(producer: () -> Any?): String = try {
+        producer().toString()
+    } catch (e: Throwable) {
+        "Log message invocation failed: ${e::class.simpleName}: ${e.message}"
+    }
 
     /**
      * When true, any log or span emitted by a component tag not registered via [registerComponent]
@@ -288,6 +321,35 @@ object Log {
 
     fun removeSpanSink(sink: SpanSink) {
         lock.withLock { spanSinks = spanSinks - sink }
+    }
+
+    /**
+     * Attaches a [SnortLogSink] for both OpenTelemetry logs (`/v1/logs`) and trace spans (`/v1/traces`)
+     * targeting a running `maceip/snort` server, returning the sink handle.
+     */
+    fun connectSnort(
+        endpointBaseUrl: String = "http://127.0.0.1:8788",
+        serviceName: String = "building-ide",
+        hostName: String = "local-device",
+        walFilePath: String? = null,
+        shipImmediately: Boolean = true,
+    ): SnortLogSink {
+        val sink = SnortLogSink(
+            endpointBaseUrl = endpointBaseUrl,
+            serviceName = serviceName,
+            hostName = hostName,
+            walFilePath = walFilePath,
+            shipImmediately = shipImmediately,
+        )
+        addSink(sink)
+        addSpanSink(sink)
+        return sink
+    }
+
+    /** Detaches a previously connected [SnortLogSink]. */
+    fun disconnectSnort(sink: SnortLogSink) {
+        removeSpanSink(sink)
+        removeSink(sink)
     }
 
     /** A snapshot of the most recent records (oldest first), for diagnostics or a report attachment. */

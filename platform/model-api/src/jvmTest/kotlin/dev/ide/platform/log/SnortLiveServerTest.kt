@@ -64,7 +64,12 @@ class SnortLiveServerTest {
                 )
                 component.logger.traceSpan("e2e.selectProvider", mapOf("provider" to "antigravity")) {
                     Log.recordStateMutation("agent.settings.live", "selectedProvider", "antigravity")
-                    component.logger.info("Switched provider to antigravity in live snort test")
+                    component.logger.info { "Switched provider to antigravity in live snort test" }
+                    val klog = io.github.oshai.kotlinlogging.KotlinLogging.logger {}
+                    klog.atInfo {
+                        message = "Vendored kotlin-logging event inside OTel span"
+                        payload = mapOf("facade" to "kotlin-logging", "otel" to "true")
+                    }
                 }
 
                 // Trigger a deliberate dead-UI-action warning so Snort ingests the shitty-code detector event too:
@@ -80,12 +85,35 @@ class SnortLiveServerTest {
             val logsJson = httpGet("$baseUrl/api/logs?limit=20")
             assertTrue(
                 logsJson.contains("Switched provider to antigravity in live snort test") &&
+                    logsJson.contains("Vendored kotlin-logging event inside OTel span") &&
                     logsJson.contains("SHITTY_CODE_NOOP_ACTION") &&
                     logsJson.contains("building-ide-e2e"),
-                "Expected live Snort server to return ingested logs + shitty-code detector warning, got: $logsJson",
+                "Expected live Snort server to return ingested logs + vendored kotlin-logging + shitty-code detector warning, got: $logsJson",
             )
-            assertTrue(sink.shippedLogCount >= 2, "Expected at least 2 logs shipped to live Snort server")
+            assertTrue(sink.shippedLogCount >= 3, "Expected at least 3 logs shipped to live Snort server")
             assertTrue(sink.shippedSpanCount >= 1, "Expected at least 1 trace span shipped to live Snort server")
+
+            // Also ship to the persistent daemon on :8788 if running so the user's live dashboard receives it
+            runCatching {
+                val liveDaemonSink = Log.connectSnort(
+                    endpointBaseUrl = "http://127.0.0.1:8788",
+                    serviceName = "building-ide-live",
+                    hostName = "mac-studio",
+                )
+                try {
+                    val comp = Log.registerComponent("ide.snort.live", "model-api", "Live Snort daemon proof")
+                    val klog = io.github.oshai.kotlinlogging.KotlinLogging.logger("ide.kotlinlogging.live")
+                    comp.logger.traceSpan("snort.live.verification", mapOf("otel" to "true")) {
+                        comp.logger.info { "Lazy-lambda Log.info shipped to live maceip/snort on :8788" }
+                        klog.atInfo {
+                            message = "Vendored kotlin-logging event shipped to live maceip/snort on :8788"
+                            payload = mapOf("vendored" to "io.github.oshai.kotlinlogging", "port" to 8788)
+                        }
+                    }
+                } finally {
+                    Log.disconnectSnort(liveDaemonSink)
+                }
+            }
         } finally {
             process.destroy()
             process.waitFor()

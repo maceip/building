@@ -801,6 +801,7 @@ class IdeServicesBackend(
      * exits — an honest, reported crash rather than a silently-resumed corrupt state.
      */
     fun installCrashReporting() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, t ->
             runCatching { Log.logger("uncaught").warn("Uncaught exception on ${thread.name}", t) } // ring/console only
             runCatching { showError("Application error", t.message ?: t.javaClass.simpleName, stackTraceString(t)) }
@@ -815,6 +816,9 @@ class IdeServicesBackend(
                     )
                 )
                 analytics.flush()
+            }
+            if (previous != null && previous !== Thread.getDefaultUncaughtExceptionHandler()) {
+                runCatching { previous.uncaughtException(thread, t) }
             }
         }
     }

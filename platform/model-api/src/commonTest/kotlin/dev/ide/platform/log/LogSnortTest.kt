@@ -62,6 +62,42 @@ class LogSnortTest {
             error("recoverable crash")
         }
         assertEquals(42, fallbackValue)
+
+        // Verify inline lazy-lambda overloads + safeMessage guard + vendored KotlinLogging facade
+        var evaluatedWhenDisabled = false
+        val previousMin = Log.minLevel
+        try {
+            Log.minLevel = LogLevel.INFO
+            logger.debug {
+                evaluatedWhenDisabled = true
+                "should not evaluate"
+            }
+            assertEquals(false, evaluatedWhenDisabled, "Lazy debug lambda must not evaluate when minLevel is INFO")
+
+            // Throwing lambda must not crash caller
+            logger.info {
+                throw IllegalArgumentException("broken string interpolation")
+            }
+            val safeRecord = Log.recent().lastOrNull()
+            assertNotNull(safeRecord)
+            assertTrue(safeRecord.message.contains("Log message invocation failed: IllegalArgumentException"))
+
+            // Vendored io.github.oshai.kotlinlogging.KotlinLogging routes through Log with OTel span context
+            val klogger = io.github.oshai.kotlinlogging.KotlinLogging.logger("vendored.klogger")
+            logger.traceSpan("kloggerSpan") {
+                klogger.atInfo {
+                    message = "Hello from vendored kotlin-logging"
+                    payload = mapOf("vendored" to true, "stars" to 3113)
+                }
+            }
+            val klogRecord = Log.recent().lastOrNull { it.tag == "vendored.klogger" }
+            assertNotNull(klogRecord)
+            assertEquals("Hello from vendored kotlin-logging", klogRecord.message)
+            assertEquals("true", klogRecord.attributes["vendored"])
+            assertNotNull(klogRecord.traceId, "Vendored KotlinLogging must inherit active OTel traceId")
+        } finally {
+            Log.minLevel = previousMin
+        }
     }
 
     @Test
