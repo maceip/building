@@ -24,7 +24,7 @@ data class ScriptToolDefinition(
     val language: String = "node",
     val script: String,
     val parametersSchema: String = DEFAULT_SCHEMA,
-    val mutating: Boolean = false,
+    val mutating: Boolean = true,
     val createdAtEpochMs: Long = System.currentTimeMillis(),
 ) {
     companion object {

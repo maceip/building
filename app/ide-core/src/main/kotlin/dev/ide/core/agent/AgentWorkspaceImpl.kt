@@ -545,6 +545,15 @@ internal class IdeAgentWorkspace(private val ctx: BackendContext) : AgentWorkspa
             else -> throw IllegalArgumentException("Unsupported script language '$language'. Use 'node', 'python', or 'shell'.")
         }
 
+        val forbiddenPattern = Regex("""(rm\s+-rf\s+/(\s|$)|shared_prefs|/data/data/[^/]+/shared_prefs)""")
+        if (forbiddenPattern.containsMatchIn(code)) {
+            return@background dev.ide.agent.ScriptExecutionResult(
+                exitCode = 126,
+                stdout = "",
+                stderr = "Blocked by workspace sandbox policy: script references restricted system/preferences paths.",
+            )
+        }
+
         val scriptFile = scratchDir.resolve("run-${System.nanoTime()}.$ext")
         scriptFile.writeText(code)
         scriptFile.toFile().setExecutable(true, false)
@@ -556,7 +565,12 @@ internal class IdeAgentWorkspace(private val ctx: BackendContext) : AgentWorkspa
             val command = listOf(interpreter, scriptFile.toString()) + args
             val pb = ProcessBuilder(command)
                 .directory(workDir.toFile())
-            pb.environment().putAll(env)
+            val sensitiveKeys = setOf(
+                "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+                "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GITHUB_TOKEN", "GH_TOKEN",
+            )
+            sensitiveKeys.forEach { pb.environment().remove(it) }
+            pb.environment().putAll(env.filterKeys { it !in sensitiveKeys })
             pb.environment().putIfAbsent("WORKSPACE_ROOT", workDir.toString())
             pb.environment().putIfAbsent("PYTHONUNBUFFERED", "1")
             pb.environment().putIfAbsent("NO_COLOR", "1")

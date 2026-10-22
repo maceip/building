@@ -226,6 +226,40 @@ class CheckpointWorkspace(private val delegate: AgentWorkspace) : AgentWorkspace
         return result
     }
 
+    override suspend fun executeScript(
+        language: String,
+        code: String,
+        args: List<String>,
+        env: Map<String, String>,
+        timeoutMs: Long,
+    ): dev.ide.agent.ScriptExecutionResult {
+        val preSnapshot = LinkedHashMap<String, String?>()
+        val pending = ArrayDeque(listOf("."))
+        val skipDirs = setOf(".git", "node_modules", "build", ".gradle", ".agent")
+        while (pending.isNotEmpty() && preSnapshot.size < MAX_SNAPSHOT_FILES) {
+            val dir = pending.removeFirst()
+            val entries = runCatching { delegate.listDir(dir) }.getOrNull() ?: continue
+            for (e in entries) {
+                if (e.isDirectory) {
+                    if (e.name !in skipDirs) pending += e.path
+                } else if (preSnapshot.size < MAX_SNAPSHOT_FILES) {
+                    preSnapshot[e.path] = readOrNull(e.path)
+                }
+            }
+        }
+        val res = delegate.executeScript(language, code, args, env, timeoutMs)
+        for (touched in res.touchedFiles) {
+            val before = if (touched in preSnapshot) preSnapshot[touched] else null
+            synchronized(this) {
+                val turn = current?.takeIf { touched !in it.seen }?.also { it.seen += touched }
+                val forCall = callId != null && touched !in callBefore
+                turn?.entries?.add(Entry.Content(touched, before))
+                if (forCall) callBefore[touched] = before
+            }
+        }
+        return res
+    }
+
     private companion object {
         const val MAX_SNAPSHOT_FILES = 200
         const val MAX_DIFF_CHARS = 200_000
