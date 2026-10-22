@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.ide.platform.log.Log
 import dev.ide.ui.backend.AgentService
 import dev.ide.ui.backend.IdeBackend
 import dev.ide.ui.backend.UiAgentPermissionMode
@@ -47,12 +48,23 @@ import dev.ide.ui.theme.AgentUi
  * - Real permission mode selector (`PLAN_ONLY`, `ASK_EACH`, `AUTO_ACCEPT`) inside a framed card.
  * - Real IDE settings card navigating to the full Settings & Tools hub.
  */
+private val AgentSettingsComponent = Log.registerComponent(
+    id = "agent.settings",
+    owner = "agent-ui",
+    description = "Agent settings screen (provider, API key, model, effort, permissions, IDE prefs)",
+)
+
 @Composable
 fun AgentSettingsScreen(ctx: ScreenContext) {
     AgentSettingsHost(
         backend = ctx.backend,
         onBack = ctx::back,
-        onOpenEditorPrefs = { ctx.openScreen("__hub__") },
+        onOpenEditorPrefs = {
+            Log.traceUiAction(AgentSettingsComponent.id.value, "OpenIdeSettings") { scope ->
+                scope.recordEffect("openScreen:__hub__")
+                ctx.openScreen("__hub__")
+            }
+        },
     )
 }
 
@@ -108,25 +120,40 @@ fun AgentSettingsHost(
                         gatewayCaCert = cfg.gatewayCaCert,
                         onSelect = {
                             if (provider.id != cfg.selectedProvider) {
-                                agent.selectProvider(provider.id)
+                                Log.traceUiAction(AgentSettingsComponent.id.value, "SelectProvider:${provider.id}") {
+                                    agent.selectProvider(provider.id)
+                                    Log.recordStateMutation(AgentSettingsComponent.id.value, "selectedProvider", provider.id)
+                                    cfg = agent.config()
+                                }
+                            }
+                        },
+                        onSetKey = { keyVal ->
+                            Log.traceUiAction(AgentSettingsComponent.id.value, "SetProviderKey:${provider.id}") {
+                                agent.setProviderKey(provider.id, keyVal)
+                                Log.recordStateMutation(AgentSettingsComponent.id.value, "key.${provider.id}", if (keyVal.isBlank()) "empty" else "set")
                                 cfg = agent.config()
                             }
                         },
-                        onSetKey = {
-                            agent.setProviderKey(provider.id, it)
-                            cfg = agent.config()
+                        onSetBaseUrl = { urlVal ->
+                            Log.traceUiAction(AgentSettingsComponent.id.value, "SetProviderBaseUrl:${provider.id}") {
+                                agent.setProviderBaseUrl(provider.id, urlVal)
+                                Log.recordStateMutation(AgentSettingsComponent.id.value, "baseUrl.${provider.id}", urlVal)
+                                cfg = agent.config()
+                            }
                         },
-                        onSetBaseUrl = {
-                            agent.setProviderBaseUrl(provider.id, it)
-                            cfg = agent.config()
-                        },
-                        onPickModel = {
-                            agent.setModel(it)
-                            cfg = agent.config()
+                        onPickModel = { modelVal ->
+                            Log.traceUiAction(AgentSettingsComponent.id.value, "PickModel:$modelVal") {
+                                agent.setModel(modelVal)
+                                Log.recordStateMutation(AgentSettingsComponent.id.value, "model", modelVal)
+                                cfg = agent.config()
+                            }
                         },
                         onSetGateway = { url, model, ca ->
-                            agent.setGateway(url, model, ca)
-                            cfg = agent.config()
+                            Log.traceUiAction(AgentSettingsComponent.id.value, "SetGateway") {
+                                agent.setGateway(url, model, ca)
+                                Log.recordStateMutation(AgentSettingsComponent.id.value, "gateway", "$url|$model")
+                                cfg = agent.config()
+                            }
                         },
                     )
                 }
@@ -139,8 +166,11 @@ fun AgentSettingsHost(
                     selectedIndex = effortIndex,
                     onSelect = { idx ->
                         val nextEffort = effortValues.getOrElse(idx) { "default" }
-                        agent.setEffort(nextEffort)
-                        cfg = agent.config()
+                        Log.traceUiAction(AgentSettingsComponent.id.value, "SetEffort:$nextEffort") {
+                            agent.setEffort(nextEffort)
+                            Log.recordStateMutation(AgentSettingsComponent.id.value, "effort", nextEffort)
+                            cfg = agent.config()
+                        }
                     },
                 )
             }
@@ -162,14 +192,16 @@ fun AgentSettingsHost(
                             label = label,
                             selected = i == permissionIndex,
                             onSelect = {
-                                agent.setPermissionMode(
-                                    when (i) {
-                                        0 -> UiAgentPermissionMode.PLAN_ONLY
-                                        2 -> UiAgentPermissionMode.AUTO_ACCEPT
-                                        else -> UiAgentPermissionMode.ASK_EACH
-                                    },
-                                )
-                                cfg = agent.config()
+                                val nextMode = when (i) {
+                                    0 -> UiAgentPermissionMode.PLAN_ONLY
+                                    2 -> UiAgentPermissionMode.AUTO_ACCEPT
+                                    else -> UiAgentPermissionMode.ASK_EACH
+                                }
+                                Log.traceUiAction(AgentSettingsComponent.id.value, "SetPermissionMode:$nextMode") {
+                                    agent.setPermissionMode(nextMode)
+                                    Log.recordStateMutation(AgentSettingsComponent.id.value, "permissionMode", nextMode.name)
+                                    cfg = agent.config()
+                                }
                             },
                         )
                     }
