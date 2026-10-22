@@ -70,7 +70,9 @@ dependencies {
     previewRuntime(project(":interp-compose"))
     previewRuntime(compose.ui)
     previewRuntime(compose.foundation)
+    previewRuntime(compose.material)
     previewRuntime(compose.material3)
+    previewRuntime("org.jetbrains.compose.material:material-icons-core:1.7.3")
 }
 
 // The preview runtime the app bundle carries: this IDE's own interpreter, as JVM classes for the VM. One jar of
@@ -113,7 +115,7 @@ val previewRuntimeLibraries = previewRuntime.incoming.artifactView {
 
 // Called from the Xcode build phase, like `syncComposeResourcesForIos`: copies the runtime into the app bundle,
 // where IosPreviewRuntime finds it.
-val syncPreviewRuntimeForIos by tasks.registering(Copy::class) {
+val syncPreviewRuntimeForIos by tasks.registering(Sync::class) {
     from(previewRuntimeJar)
     from(previewRuntimeLibraries)
     val products = System.getenv("BUILT_PRODUCTS_DIR")

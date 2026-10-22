@@ -288,4 +288,139 @@ class VmPreviewE2ETest {
             VmPreviewEntry.close(sid)
         }
     }
+
+    @Test
+    fun tier4_kotlinAndroidTemplateFactorialRendersInkedPixels() {
+        val factorialSource = """
+            package com.ncorti.kotlin.template.app.ui.components
+
+            import androidx.compose.animation.AnimatedVisibility
+            import androidx.compose.animation.ExperimentalAnimationApi
+            import androidx.compose.foundation.layout.Arrangement
+            import androidx.compose.foundation.layout.Column
+            import androidx.compose.foundation.layout.fillMaxWidth
+            import androidx.compose.foundation.layout.padding
+            import androidx.compose.foundation.text.KeyboardOptions
+            import androidx.compose.material.Button
+            import androidx.compose.material.MaterialTheme
+            import androidx.compose.material.Text
+            import androidx.compose.material.TextField
+            import androidx.compose.runtime.Composable
+            import androidx.compose.runtime.getValue
+            import androidx.compose.runtime.mutableStateOf
+            import androidx.compose.runtime.remember
+            import androidx.compose.runtime.rememberCoroutineScope
+            import androidx.compose.runtime.setValue
+            import androidx.compose.ui.Alignment
+            import androidx.compose.ui.Modifier
+            import androidx.compose.ui.platform.testTag
+            import androidx.compose.ui.text.input.KeyboardType
+            import androidx.compose.ui.unit.dp
+            import androidx.compose.ui.unit.sp
+            import kotlinx.coroutines.launch
+
+            object FactorialCalculator {
+                fun computeFactorial(input: Long): Long = if (input <= 1L) 1L else input * computeFactorial(input - 1L)
+            }
+
+            @Composable
+            fun Factorial(modifier: Modifier = Modifier) {
+                var textFieldState by remember { mutableStateOf("") }
+                var factorialResult by remember { mutableStateOf<Long?>(null) }
+                var showFactorialError by remember { mutableStateOf(false) }
+                val scope = rememberCoroutineScope()
+                Column(
+                    modifier = modifier,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "This is just a template",
+                        style = MaterialTheme.typography.h6
+                    )
+                    Text(
+                        text = "You can compute a factorial using the library-kotlin module.",
+                        style = MaterialTheme.typography.body1
+                    )
+                    TextField(
+                        value = textFieldState,
+                        label = { Text(text = "Insert a number to compute the factorial") },
+                        onValueChange = {
+                            textFieldState = it
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("Input"),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                    )
+                    if (showFactorialError) {
+                        Text(
+                            text = "Valid range is 0-20",
+                            style = MaterialTheme.typography.caption,
+                            modifier = Modifier.testTag("ErrorMsg")
+                        )
+                    }
+                    AnimatedVisibility(
+                        visible = factorialResult != null,
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .align(alignment = Alignment.End)
+                    ) {
+                        Text(
+                            text = "${'$'}factorialResult",
+                            style = MaterialTheme.typography.subtitle1.copy(fontSize = 24.sp),
+                            modifier = Modifier.testTag("FactorialResult")
+                        )
+                    }
+                    Button(
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .align(alignment = Alignment.End),
+                        onClick = {
+                            scope.launch {
+                                try {
+                                    factorialResult =
+                                        FactorialCalculator.computeFactorial(textFieldState.toLong())
+                                    showFactorialError = false
+                                } catch (ex: IllegalStateException) {
+                                    showFactorialError = true
+                                }
+                            }
+                        },
+                        content = { Text(text = "COMPUTE") }
+                    )
+                }
+            }
+
+            @Composable
+            fun FactorialPreview() {
+                MaterialTheme {
+                    Factorial()
+                }
+            }
+        """.trimIndent()
+
+        val blob = compileBlob(factorialSource, "FactorialPreview/0")
+        val summary = VmPreviewEntry.renderSummary(blob, 360, 640, 2.0f)
+        println("FACTORIAL SUMMARY: $summary")
+        val inkedCount = Regex("""inked=(\d+)""").find(summary)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        assertTrue(inkedCount > 500, "FactorialPreview must render > 500 inked pixels, got: $summary")
+
+        // Also verify inside :jvm-vm (exact iOS execution path via IosPreviewRenderer)
+        val vm = dev.ide.vm.Vm(
+            dev.ide.vm.ClassPath(System.getProperty("java.class.path").split(java.io.File.pathSeparator).filterNot { "kotlin-reflect" in java.io.File(it).name }),
+            bindings = dev.ide.vm.ReflectiveNativeBindings(
+                loader = javaClass.classLoader,
+                prepare = {
+                    val library = Class.forName("org.jetbrains.skiko.Library")
+                    library.getMethod("load").invoke(library.getField("INSTANCE").get(null))
+                },
+            ),
+            systemProperties = mapOf("os.name" to "Mac OS X", "os.arch" to "aarch64"),
+        )
+        val owner = "dev/ide/interp/compose/VmPreviewEntry"
+        val vmSummary = vm.invokeStatic(owner, "renderSummary", "([BIIF)Ljava/lang/String;", blob, 360, 640, 2.0f) as String
+        println("FACTORIAL VM SUMMARY: $vmSummary")
+        val vmInked = Regex("""inked=(\d+)""").find(vmSummary)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        assertTrue(vmInked > 500, "In-VM FactorialPreview must render > 500 inked pixels, got: $vmSummary")
+    }
 }

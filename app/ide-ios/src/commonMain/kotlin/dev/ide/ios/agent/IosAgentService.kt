@@ -84,14 +84,24 @@ class IosAgentService(
     private val geminiModels = listOf(
         UiAgentModel("gemini-2.5-flash", "Gemini 2.5 Flash"),
         UiAgentModel("gemini-2.5-pro", "Gemini 2.5 Pro"),
+        UiAgentModel("gemini-2.0-flash", "Gemini 2.0 Flash"),
     )
 
     private val openaiModels = listOf(
+        UiAgentModel("gpt-5", "GPT-5"),
+        UiAgentModel("gpt-5-mini", "GPT-5 mini"),
+        UiAgentModel("o3", "o3"),
+        UiAgentModel("o4-mini", "o4-mini"),
+        UiAgentModel("gpt-4.1", "GPT-4.1"),
+        UiAgentModel("gpt-4.1-mini", "GPT-4.1 mini"),
         UiAgentModel("gpt-4o", "GPT-4o"),
         UiAgentModel("gpt-4o-mini", "GPT-4o Mini"),
     )
 
     private val anthropicModels = listOf(
+        UiAgentModel("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+        UiAgentModel("claude-opus-4-7", "Claude Opus 4.7"),
+        UiAgentModel("claude-3-7-sonnet-latest", "Claude 3.7 Sonnet"),
         UiAgentModel("claude-3-5-sonnet-latest", "Claude 3.5 Sonnet"),
         UiAgentModel("claude-3-5-haiku-latest", "Claude 3.5 Haiku"),
     )
@@ -115,8 +125,8 @@ class IosAgentService(
 
         val providers = listOf(
             UiAgentProvider("gemini", "Google Gemini", geminiModels, "gemini-2.5-flash", geminiKey),
-            UiAgentProvider("openai", "OpenAI", openaiModels, "gpt-4o", openaiKey),
-            UiAgentProvider("anthropic", "Anthropic", anthropicModels, "claude-3-5-sonnet-latest", anthropicKey),
+            UiAgentProvider("openai", "OpenAI", openaiModels, "gpt-5", openaiKey),
+            UiAgentProvider("anthropic", "Anthropic", anthropicModels, "claude-sonnet-4-6", anthropicKey),
             UiAgentProvider("gateway", "Custom Gateway", gatewayModels, gatewayModel, "", gatewayBase),
         )
 
@@ -373,8 +383,8 @@ class IosAgentService(
 
     private fun defaultModelFor(provider: String): String = when (provider) {
         "gemini" -> "gemini-2.5-flash"
-        "openai" -> "gpt-4o"
-        "anthropic" -> "claude-3-5-sonnet-latest"
+        "openai" -> "gpt-5"
+        "anthropic" -> "claude-sonnet-4-6"
         else -> "custom-model"
     }
 
@@ -386,6 +396,40 @@ class IosAgentService(
             segments = listOf(UiAgentSegment.Text(text)),
         )
         _chatState.update { it.copy(messages = it.messages + msg) }
+    }
+
+    private fun searchGitHubReposLive(rawQuery: String): Pair<String, List<String>> {
+        val cleaned = rawQuery
+            .replace(Regex("""(?i)\b(please|can you|could you|search|find|on github|github|for|and|clone|run|build|a|an|the|repo|repository|repositories|app|project)\b"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+            .ifBlank { rawQuery.trim() }
+        val encoded = cleaned.replace(" ", "+")
+        val url = "https://api.github.com/search/repositories?q=$encoded&sort=stars&order=desc&per_page=5"
+        val res = IosHttpClient.get(
+            url = url,
+            headers = mapOf(
+                "Accept" to "application/vnd.github+json",
+                "User-Agent" to "CodeAssist-iOS",
+            ),
+        )
+        if (!res.isSuccessful || res.body.isBlank()) return "" to emptyList()
+        val rootObj = JsonReader.obj(JsonReader.parseOrNull(res.body)) ?: return "" to emptyList()
+        val items = JsonReader.arr(rootObj["items"])
+        val urls = mutableListOf<String>()
+        val summary = buildString {
+            for (item in items.take(5)) {
+                val obj = JsonReader.obj(item) ?: continue
+                val fullName = JsonReader.str(obj, "full_name") ?: continue
+                val htmlUrl = JsonReader.str(obj, "html_url") ?: "https://github.com/$fullName"
+                val desc = JsonReader.str(obj, "description").orEmpty()
+                val stars = JsonReader.int(obj, "stargazers_count", 0)
+                val lang = JsonReader.str(obj, "language").orEmpty()
+                urls.add(htmlUrl)
+                appendLine("- $fullName ($htmlUrl) [★$stars, $lang]: $desc")
+            }
+        }.trim()
+        return summary to urls
     }
 
     /**
@@ -411,18 +455,45 @@ class IosAgentService(
             return@withContext
         }
 
+        val preToolCalls = mutableListOf<UiAgentToolCall>()
+        val ghUrlRegex = Regex("""https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+""")
+        val wantsRepoSearch = !ghUrlRegex.containsMatchIn(query) && (
+            query.contains("github", ignoreCase = true) ||
+                query.contains("search", ignoreCase = true) ||
+                query.contains("find", ignoreCase = true) ||
+                query.contains("clone", ignoreCase = true)
+            )
+        var githubSearchContext = ""
+        if (wantsRepoSearch) {
+            val (summary, urls) = searchGitHubReposLive(query)
+            if (summary.isNotBlank()) {
+                githubSearchContext = "\nLive GitHub Search Results for user query:\n$summary\n"
+                preToolCalls.add(
+                    UiAgentToolCall(
+                        id = "call-gh-search-${++messageIdCounter}",
+                        title = "search_github",
+                        status = UiAgentToolStatus.OK,
+                        detail = "Found ${urls.size} matching GitHub repositories",
+                    ),
+                )
+            }
+        }
+
         val root = backend.project.rootPath
         val projectFiles = if (root.isNotBlank()) IosFiles.list(root).filterNot { it.startsWith(".") }.take(15) else emptyList()
         val systemPrompt = """
-        You are CodeAssist, an expert agentic AI coding assistant on iOS.
+        You are CodeAssist, an expert agentic AI coding assistant on iOS with live GitHub search, web search, repository cloning, file editing, and on-device project build/run capabilities.
         Active project: ${backend.project.name}
         Root path: $root
         Top files: ${projectFiles.joinToString(", ")}
-        Available tools you can invoke by including their marker in your response:
+        $githubSearchContext
+        You HAVE live access to GitHub search, web search, cloning, and building via these tool markers (include the exact marker in your response to execute the tool):
+        - `tool:search_github(query)` — searches GitHub repositories via the live GitHub REST API.
         - `tool:clone_repository(https://github.com/owner/repo)` — clones a GitHub repository and opens it in the IDE.
         - `tool:run_project` — builds and runs the active project in the Run screen.
         - `tool:list_files` — lists files in the workspace.
-        Always provide accurate code solutions adhering to clean architectural patterns.
+        - `tool:read_file(relative/path)` — reads a file in the workspace.
+        Never claim you cannot browse or search GitHub repositories; use the live GitHub search results above or emit `tool:search_github(query)` and `tool:clone_repository(url)`.
         """.trimIndent()
 
         val responseResult = when (provider) {
@@ -435,7 +506,7 @@ class IosAgentService(
 
         val text = responseResult.text
         val usage = responseResult.usage
-        val toolCalls = checkAndExecuteToolCalls(query, text, root)
+        val toolCalls = preToolCalls + checkAndExecuteToolCalls(query, text, root)
 
         _chatState.update { state ->
             val msgs = state.messages.map { m ->
@@ -501,41 +572,49 @@ class IosAgentService(
 
     private fun callOpenAi(apiKey: String, model: String, systemPrompt: String, query: String): LlmResult {
         val url = "https://api.openai.com/v1/chat/completions"
-        val payload = """
-        {
-          "model": "$model",
-          "messages": [
-            { "role": "system", "content": ${JsonWriter.string(systemPrompt)} },
-            { "role": "user", "content": ${JsonWriter.string(query)} }
-          ]
+        val candidateModels = listOf(model, "gpt-4.1", "gpt-4o").distinct()
+        var lastErr = ""
+        for (candidateModel in candidateModels) {
+            val payload = """
+            {
+              "model": "$candidateModel",
+              "messages": [
+                { "role": "system", "content": ${JsonWriter.string(systemPrompt)} },
+                { "role": "user", "content": ${JsonWriter.string(query)} }
+              ]
+            }
+            """.trimIndent()
+
+            val response = IosHttpClient.post(
+                url = url,
+                headers = mapOf(
+                    "Content-Type" to "application/json",
+                    "Authorization" to "Bearer $apiKey",
+                ),
+                body = payload,
+            )
+
+            if (!response.isSuccessful) {
+                lastErr = "OpenAI API error (${response.statusCode}): ${response.body.ifBlank { response.error ?: "Network request failed" }}"
+                if (response.statusCode == 404 || response.body.contains("model_not_found") || response.body.contains("does not exist")) {
+                    continue
+                }
+                return LlmResult(lastErr, null)
+            }
+
+            val root = JsonReader.parseOrNull(response.body) ?: return LlmResult("Failed to parse OpenAI JSON response", null)
+            val choices = JsonReader.arr(JsonReader.obj(root)?.get("choices"))
+            val firstChoice = JsonReader.obj(choices.firstOrNull())
+            val message = JsonReader.obj(firstChoice?.get("message"))
+            val text = JsonReader.str(message, "content") ?: ""
+
+            val usageObj = JsonReader.obj(JsonReader.obj(root)?.get("usage"))
+            val promptTokens = JsonReader.int(usageObj, "prompt_tokens", 0)
+            val completionTokens = JsonReader.int(usageObj, "completion_tokens", 0)
+
+            return LlmResult(text, UiAgentUsage(input = promptTokens, output = completionTokens))
         }
-        """.trimIndent()
-
-        val response = IosHttpClient.post(
-            url = url,
-            headers = mapOf(
-                "Content-Type" to "application/json",
-                "Authorization" to "Bearer $apiKey",
-            ),
-            body = payload,
-        )
-
-        if (!response.isSuccessful) {
-            val err = "OpenAI API error (${response.statusCode}): ${response.body.ifBlank { response.error ?: "Network request failed" }}"
-            return LlmResult(err, null)
-        }
-
-        val root = JsonReader.parseOrNull(response.body) ?: return LlmResult("Failed to parse OpenAI JSON response", null)
-        val choices = JsonReader.arr(JsonReader.obj(root)?.get("choices"))
-        val firstChoice = JsonReader.obj(choices.firstOrNull())
-        val message = JsonReader.obj(firstChoice?.get("message"))
-        val text = JsonReader.str(message, "content") ?: ""
-
-        val usageObj = JsonReader.obj(JsonReader.obj(root)?.get("usage"))
-        val promptTokens = JsonReader.int(usageObj, "prompt_tokens", 0)
-        val completionTokens = JsonReader.int(usageObj, "completion_tokens", 0)
-
-        return LlmResult(text, UiAgentUsage(input = promptTokens, output = completionTokens))
+        return LlmResult(lastErr.ifBlank { "OpenAI request failed" }, null)
     }
 
     private fun callAnthropic(apiKey: String, model: String, systemPrompt: String, query: String): LlmResult {

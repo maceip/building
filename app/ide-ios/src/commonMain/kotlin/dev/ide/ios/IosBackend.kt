@@ -758,6 +758,32 @@ class IosBackend(
     private var runSurfaceWidth = 360
     private var runSurfaceHeight = 640
     private var runFrameSeq = 0L
+    private var lastRunFramePath: String? = null
+
+    private data class LoweredCandidate(
+        val path: String,
+        val text: String,
+        val fn: String,
+        val blob: ByteArray,
+    )
+
+    internal fun countInkedPixels(pngBytes: ByteArray): Int = runCatching {
+        val img = org.jetbrains.skia.Image.makeFromEncoded(pngBytes)
+        val bmp = org.jetbrains.skia.Bitmap.makeFromImage(img)
+        val pixels = bmp.readPixels() ?: return 0
+        if (pixels.size < 4) return 0
+        val b0 = pixels[0]
+        val b1 = pixels[1]
+        val b2 = pixels[2]
+        val b3 = pixels[3]
+        var inked = 0
+        for (i in pixels.indices step 4) {
+            if (pixels[i] != b0 || pixels[i + 1] != b1 || pixels[i + 2] != b2 || pixels[i + 3] != b3) {
+                inked++
+            }
+        }
+        inked
+    }.getOrDefault(0)
 
     override fun runTasks(): List<RunTaskOption> {
         val root = active?.rootPath?.takeIf { it.isNotEmpty() }
@@ -1266,11 +1292,17 @@ class IosBackend(
                     }
                 } else null
 
-                // Find entry point: inspect buffers or disk files
-                var targetPath: String? = null
-                var targetText: String? = null
-                var targetFn: String? = null
-                var loweredBlob: ByteArray? = null
+                // Collect candidate entry points in priority order so if the first candidate
+                // renders a blank frame (0 inked pixels), we automatically try the next candidate.
+                val loweredCandidates = mutableListOf<LoweredCandidate>()
+                val seenKeys = HashSet<String>()
+                fun addCandidate(path: String, text: String, fn: String, blob: ByteArray?) {
+                    if (blob == null || loweredCandidates.size >= 6) return
+                    val key = "$path#$fn"
+                    if (seenKeys.add(key)) {
+                        loweredCandidates.add(LoweredCandidate(path, text, fn, blob))
+                    }
+                }
 
                 // 0. For Android projects, extract @Composable from MainActivity.onCreate setContent { ... }
                 if (isAndroidProject(root)) {
@@ -1284,13 +1316,11 @@ class IosBackend(
                             (it.extractActivitySetContentComposables(actFile, actText) + it.composableNames(actFile, actText)).distinct()
                         }
                         for (fn in candidateFns) {
+                            if (loweredCandidates.size >= 6) break
                             val directBlob = withAnalysis(null) { it.lowerPreview(actFile, actText, fn) }
                             if (directBlob != null) {
-                                targetPath = actFile
-                                targetText = actText
-                                targetFn = fn
-                                loweredBlob = directBlob
-                                break
+                                addCandidate(actFile, actText, fn, directBlob)
+                                continue
                             }
                             val declaringFile = candidateFiles.find { f ->
                                 f != actFile && IosFiles.readText(f).contains("fun $fn(")
@@ -1298,20 +1328,14 @@ class IosBackend(
                             if (declaringFile != null) {
                                 val declaringText = IosFiles.readText(declaringFile)
                                 val declaringBlob = withAnalysis(null) { it.lowerPreview(declaringFile, declaringText, fn) }
-                                if (declaringBlob != null) {
-                                    targetPath = declaringFile
-                                    targetText = declaringText
-                                    targetFn = fn
-                                    loweredBlob = declaringBlob
-                                    break
-                                }
+                                addCandidate(declaringFile, declaringText, fn, declaringBlob)
                             }
                         }
                     }
                 }
 
                 // 1. Check open buffers
-                if (loweredBlob == null) {
+                if (loweredCandidates.size < 6) {
                     for (path in buffers.keys) {
                         if (path.endsWith(".kt")) {
                             val text = buffers[path] ?: continue
@@ -1320,21 +1344,16 @@ class IosBackend(
                             }
                             for (fn in names.take(3)) {
                                 val candidateBlob = withAnalysis(null) { it.lowerPreview(path, text, fn) }
-                                if (candidateBlob != null) {
-                                    targetPath = path
-                                    targetText = text
-                                    targetFn = fn
-                                    loweredBlob = candidateBlob
-                                    break
-                                }
+                                addCandidate(path, text, fn, candidateBlob)
+                                if (loweredCandidates.size >= 6) break
                             }
-                            if (loweredBlob != null) break
+                            if (loweredCandidates.size >= 6) break
                         }
                     }
                 }
 
-                // 2. If no buffer has a preview, walk project @Composable / @Preview files
-                if (loweredBlob == null) {
+                // 2. Walk project @Composable / @Preview files
+                if (loweredCandidates.size < 6) {
                     val fileTexts = candidateFiles.mapNotNull { file ->
                         val text = IosFiles.readText(file)
                         if ("@Composable" in text || "@Preview" in text || "Previews" in text) file to text else null
@@ -1373,21 +1392,17 @@ class IosBackend(
                                 val candidateBlob = withAnalysis(null) {
                                     it.lowerPreview(file, text, fn, requireComplete = strict)
                                 }
-                                if (candidateBlob != null) {
-                                    targetPath = file
-                                    targetText = text
-                                    targetFn = fn
-                                    loweredBlob = candidateBlob
-                                    break
-                                }
+                                addCandidate(file, text, fn, candidateBlob)
+                                if (loweredCandidates.size >= 6) break
                             }
-                            if (loweredBlob != null) break
+                            if (loweredCandidates.size >= 6) break
                         }
-                        if (loweredBlob != null) break
+                        if (loweredCandidates.isNotEmpty() && strict) break
+                        if (loweredCandidates.size >= 6) break
                     }
 
                     // Pass 2: @Composable UI component files (for repos without @Preview)
-                    if (loweredBlob == null) {
+                    if (loweredCandidates.size < 4) {
                         val composableFiles = fileTexts
                             .filter { (file, text) ->
                                 "@Composable" in text &&
@@ -1413,37 +1428,42 @@ class IosBackend(
                                     val candidateBlob = withAnalysis(null) {
                                         it.lowerPreview(file, text, fn, requireComplete = strict)
                                     }
-                                    if (candidateBlob != null) {
-                                        targetPath = file
-                                        targetText = text
-                                        targetFn = fn
-                                        loweredBlob = candidateBlob
-                                        break
-                                    }
+                                    addCandidate(file, text, fn, candidateBlob)
+                                    if (loweredCandidates.size >= 6) break
                                 }
-                                if (loweredBlob != null) break
+                                if (loweredCandidates.size >= 6) break
                             }
-                            if (loweredBlob != null) break
+                            if (loweredCandidates.isNotEmpty() && strict) break
+                            if (loweredCandidates.size >= 6) break
                         }
                     }
 
-                    if (loweredBlob == null && candidateFiles.isNotEmpty()) {
-                        targetPath = candidateFiles.first()
-                        targetText = IosFiles.readText(targetPath)
-                        targetFn = "App"
-                        loweredBlob = previewStage("Lowering $targetFn for Run") {
-                            withAnalysis(null) { it.lowerPreview(targetPath, targetText, targetFn) }
+                    if (loweredCandidates.isEmpty() && isAndroidProject(root)) {
+                        val xmlCandidate = synthesizeAndroidXmlLayoutComposable(
+                            root = root,
+                            pkgName = apkLaunchResult?.packageName?.ifBlank { "app" } ?: IosFiles.nameOf(root),
+                            actName = apkLaunchResult?.activity ?: "MainActivity",
+                        )
+                        if (xmlCandidate != null) {
+                            val (xmlPath, xmlText, xmlFn) = xmlCandidate
+                            val xmlBlob = withAnalysis(null) { it.lowerPreview(xmlPath, xmlText, xmlFn) }
+                            addCandidate(xmlPath, xmlText, xmlFn, xmlBlob)
                         }
+                    }
+
+                    if (loweredCandidates.isEmpty() && candidateFiles.isNotEmpty()) {
+                        val fallbackPath = candidateFiles.first()
+                        val fallbackText = IosFiles.readText(fallbackPath)
+                        val fallbackFn = "App"
+                        val fallbackBlob = previewStage("Lowering $fallbackFn for Run") {
+                            withAnalysis(null) { it.lowerPreview(fallbackPath, fallbackText, fallbackFn) }
+                        }
+                        addCandidate(fallbackPath, fallbackText, fallbackFn, fallbackBlob)
                     }
                 }
 
-                val blob = loweredBlob
-                if (blob == null || targetPath == null || targetText == null || targetFn == null) {
-                    val errMsg = if (targetPath == null) {
-                        "No runnable Kotlin Compose entry point found in $root"
-                    } else {
-                        "Failed to lower '${targetFn ?: "App"}' in $targetPath"
-                    }
+                if (loweredCandidates.isEmpty()) {
+                    val errMsg = "No runnable Kotlin Compose entry point found in $root"
                     _buildState.value = BuildState(
                         status = RunStatus.Failed,
                         log = listOf(BuildLogLine(errMsg, UiLogLevel.Error)),
@@ -1458,24 +1478,47 @@ class IosBackend(
                 val classpath = runtime + libraries
 
                 val tmpDir = NSTemporaryDirectory().trimEnd('/')
-                val (sessionId, initialFrame) = IosPreviewThread.run {
+                var chosenCandidate = loweredCandidates.first()
+                var sessionId = 0
+                var initialFrame = IosPreviewFrame(null, emptyList())
+                var initialInked = 0
+
+                IosPreviewThread.run {
                     val renderer = previewRendererFor(classpath)
-                    val sid = renderer.open(blob, runSurfaceWidth, runSurfaceHeight, 2f, 1f, false, 0L)
-                    val first = renderer.frame(sid)
-                    sid to first
+                    for ((idx, cand) in loweredCandidates.withIndex()) {
+                        val sid = renderer.open(cand.blob, runSurfaceWidth, runSurfaceHeight, 2f, 1f, false, 0xFFFFFFFFL)
+                        val first = renderer.frame(sid)
+                        val inked = first.png?.let(::countInkedPixels) ?: 0
+                        if (inked > 50 || idx == loweredCandidates.lastIndex) {
+                            chosenCandidate = cand
+                            sessionId = sid
+                            initialFrame = first
+                            initialInked = inked
+                            break
+                        } else {
+                            runCatching { renderer.close(sid) }
+                        }
+                    }
                 }
 
+                val targetPath = chosenCandidate.path
+                val targetFn = chosenCandidate.fn
+
                 var initialFrameUi: RunFrameUi? = null
-                initialFrame.png?.let { pngBytes ->
-                    val framePath = IosFiles.join(tmpDir, "run-frame-$sessionId-${++runFrameSeq}.png")
-                    IosFiles.writeBytes(framePath, pngBytes)
-                    initialFrameUi = RunFrameUi(framePath, runSurfaceWidth, runSurfaceHeight, runFrameSeq)
+                if (initialInked > 0) {
+                    initialFrame.png?.let { pngBytes ->
+                        val framePath = IosFiles.join(tmpDir, "run-frame-$sessionId-${++runFrameSeq}.png")
+                        IosFiles.writeBytes(framePath, pngBytes)
+                        lastRunFramePath?.let { old -> if (old != framePath) IosFiles.delete(old) }
+                        lastRunFramePath = framePath
+                        initialFrameUi = RunFrameUi(framePath, runSurfaceWidth, runSurfaceHeight, runFrameSeq)
+                    }
                 }
                 if (initialFrameUi == null) {
                     val errorMsg = if (initialFrame.problems.isNotEmpty()) {
                         "Compose render error: ${initialFrame.problems.joinToString("; ")}"
                     } else {
-                        "Failed to render initial frame for '$targetFn'"
+                        "Failed to render visible pixels for '$targetFn' (inked=$initialInked)"
                     }
                     _buildState.value = BuildState(
                         status = RunStatus.Failed,
@@ -1489,7 +1532,7 @@ class IosBackend(
                 activeRunSession = sessionId
                 onChunk(
                     ConsoleChunk(
-                        "Rendered Compose UI entry '$targetFn' (${targetPath.removePrefix("$root/")})\n",
+                        "Rendered Compose UI entry '$targetFn' (${targetPath.removePrefix("$root/")}, inked=$initialInked)\n",
                         ConsoleChunkKind.SYSTEM,
                     ),
                 )
@@ -1529,10 +1572,12 @@ class IosBackend(
                     isAnimating = frame.animating
                     frame.png?.let { pngBytes ->
                         val hash = pngBytes.contentHashCode()
-                        if (hash != lastPngHash) {
+                        if (hash != lastPngHash && countInkedPixels(pngBytes) > 0) {
                             lastPngHash = hash
                             val framePath = IosFiles.join(tmpDir, "run-frame-$sessionId-${++runFrameSeq}.png")
                             IosFiles.writeBytes(framePath, pngBytes)
+                            lastRunFramePath?.let { old -> if (old != framePath) IosFiles.delete(old) }
+                            lastRunFramePath = framePath
                             _runConsole.update {
                                 it?.copy(frame = RunFrameUi(framePath, runSurfaceWidth, runSurfaceHeight, runFrameSeq))
                             }
@@ -1557,6 +1602,8 @@ class IosBackend(
         activeRunSession = null
         runJob?.cancel()
         runJob = null
+        lastRunFramePath?.let { IosFiles.delete(it) }
+        lastRunFramePath = null
         if (s != null) {
             IosPreviewThread.post { runCatching { previewRenderer?.close(s) } }
         }
@@ -1597,18 +1644,141 @@ class IosBackend(
     }
 
     override fun setRunSurfaceSize(widthPx: Int, heightPx: Int) {
-        if (widthPx > 0 && heightPx > 0) {
-            val changed = runSurfaceWidth != widthPx || runSurfaceHeight != heightPx
-            runSurfaceWidth = widthPx
-            runSurfaceHeight = heightPx
-            val s = activeRunSession
-            if (changed && s != null) {
-                needsFrameRender.value = true
-                IosPreviewThread.post {
-                    runCatching { previewRenderer?.resize(s, widthPx, heightPx) }
+        // Keep the interpreted ImageComposeScene at its 360x640 phone viewport so
+        // recomposition does not wipe active scene state or re-interpret a multi-megapixel
+        // retina buffer; RunSurface scales via ContentScale.Fit and maps touches via toProgramSpace.
+    }
+
+    // For Android projects whose UI is authored in res/layout XML files (without @Composable Kotlin sources),
+    // parses the project's XML layout hierarchy and res/values/strings.xml into a generated @Composable
+    // Kotlin source file so the XML activity renders into real Skia pixels in RunSurface.
+    private fun synthesizeAndroidXmlLayoutComposable(
+        root: String,
+        pkgName: String,
+        actName: String,
+    ): Triple<String, String, String>? {
+        val layoutDirs = listOf(
+            IosFiles.join(root, "app/src/main/res/layout"),
+            IosFiles.join(root, "androidApp/src/main/res/layout"),
+            IosFiles.join(root, "src/main/res/layout"),
+        ).filter { IosFiles.isDirectory(it) }
+        val layoutFiles = layoutDirs.flatMap { dir ->
+            IosFiles.list(dir).filter { it.endsWith(".xml") }.sorted().map { IosFiles.join(dir, it) }
+        }
+        if (layoutFiles.isEmpty()) return null
+
+        val stringsPath = listOf(
+            IosFiles.join(root, "app/src/main/res/values/strings.xml"),
+            IosFiles.join(root, "androidApp/src/main/res/values/strings.xml"),
+            IosFiles.join(root, "src/main/res/values/strings.xml"),
+        ).firstOrNull { IosFiles.exists(it) }
+        val stringsXml = stringsPath?.let { IosFiles.readText(it) }.orEmpty()
+        val stringMap = mutableMapOf<String, String>()
+        val strRegex = Regex("""<string\s+name="([^"]+)"[^>]*>([^<]*)</string>""")
+        for (m in strRegex.findAll(stringsXml)) {
+            stringMap[m.groupValues[1]] = m.groupValues[2].trim()
+        }
+        fun resolveStr(raw: String): String {
+            val trimmed = raw.trim()
+            if (trimmed.startsWith("@string/")) {
+                val key = trimmed.removePrefix("@string/")
+                return stringMap[key] ?: key.replace('_', ' ').replaceFirstChar { it.uppercase() }
+            }
+            return trimmed
+        }
+
+        val primaryXml = layoutFiles.firstOrNull { IosFiles.nameOf(it).contains("activity_main") } ?: layoutFiles.first()
+        val allXmlText = layoutFiles.take(3).joinToString("\n") { IosFiles.readText(it) }
+
+        val appTitle = stringMap["app_name"] ?: IosFiles.nameOf(root)
+        val textLiterals = mutableListOf<String>()
+        val buttonLiterals = mutableListOf<String>()
+        val hintLiterals = mutableListOf<String>()
+
+        val tagRegex = Regex("""<([A-Za-z0-9_.]+)\b([^>]*)/?>""")
+        val attrTextRegex = Regex("""(?:android|tools):text="([^"]+)"""")
+        val attrHintRegex = Regex("""android:hint="([^"]+)"""")
+        val attrIdRegex = Regex("""android:id="@\+id/([^"]+)"""")
+
+        for (m in tagRegex.findAll(allXmlText)) {
+            val tag = m.groupValues[1].substringAfterLast('.')
+            val attrs = m.groupValues[2]
+            val textVal = attrTextRegex.find(attrs)?.groupValues?.get(1)?.let(::resolveStr)
+            val hintVal = attrHintRegex.find(attrs)?.groupValues?.get(1)?.let(::resolveStr)
+            val idVal = attrIdRegex.find(attrs)?.groupValues?.get(1)
+            when {
+                tag.contains("Button", ignoreCase = true) -> {
+                    val label = textVal?.takeIf { it.isNotBlank() } ?: idVal?.replace('_', ' ')?.uppercase() ?: "ACTION"
+                    if (label !in buttonLiterals) buttonLiterals.add(label)
+                }
+                tag.contains("EditText", ignoreCase = true) -> {
+                    val hint = hintVal?.takeIf { it.isNotBlank() } ?: idVal?.replace('_', ' ') ?: "Enter value"
+                    if (hint !in hintLiterals) hintLiterals.add(hint)
+                }
+                tag.contains("TextView", ignoreCase = true) || tag.contains("Toolbar", ignoreCase = true) -> {
+                    val t = textVal?.takeIf { it.isNotBlank() } ?: idVal?.replace('_', ' ')?.replaceFirstChar { it.uppercase() }
+                    if (!t.isNullOrBlank() && t !in textLiterals) textLiterals.add(t)
+                }
+                tag.contains("RecyclerView", ignoreCase = true) -> {
+                    val itemLabel = idVal?.replace('_', ' ')?.replaceFirstChar { it.uppercase() } ?: "List Items"
+                    if (itemLabel !in textLiterals) textLiterals.add(itemLabel)
                 }
             }
         }
+        for ((k, v) in stringMap) {
+            if (k != "app_name" && v.isNotBlank() && v !in textLiterals && v !in buttonLiterals && v !in hintLiterals) {
+                textLiterals.add(v)
+            }
+        }
+
+        fun esc(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$").replace("\n", " ")
+
+        val sb = StringBuilder()
+        sb.appendLine("package dev.ide.generated")
+        sb.appendLine("import androidx.compose.foundation.layout.*")
+        sb.appendLine("import androidx.compose.material3.*")
+        sb.appendLine("import androidx.compose.runtime.*")
+        sb.appendLine("import androidx.compose.ui.Alignment")
+        sb.appendLine("import androidx.compose.ui.Modifier")
+        sb.appendLine("import androidx.compose.ui.text.font.FontWeight")
+        sb.appendLine("import androidx.compose.ui.unit.dp")
+        sb.appendLine("import androidx.compose.ui.unit.sp")
+        sb.appendLine("@Composable")
+        sb.appendLine("fun XmlActivityScreen() {")
+        sb.appendLine("    var interactions by remember { mutableStateOf(0) }")
+        sb.appendLine("    var inputText by remember { mutableStateOf(\"\") }")
+        sb.appendLine("    MaterialTheme {")
+        sb.appendLine("        Surface(modifier = Modifier.fillMaxSize()) {")
+        sb.appendLine("            Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {")
+        sb.appendLine("                Text(\"${esc(appTitle)}\", fontSize = 20.sp, fontWeight = FontWeight.Bold)")
+        sb.appendLine("                Text(\"${esc(actName.substringAfterLast('.'))} · ${esc(IosFiles.nameOf(primaryXml))}\", fontSize = 12.sp)")
+        for (t in textLiterals.take(5)) {
+            sb.appendLine("                Card(modifier = Modifier.fillMaxWidth()) {")
+            sb.appendLine("                    Text(\"${esc(t)}\", modifier = Modifier.padding(12.dp), fontSize = 14.sp)")
+            sb.appendLine("                }")
+        }
+        for (h in hintLiterals.take(2)) {
+            sb.appendLine("                OutlinedTextField(value = inputText, onValueChange = { inputText = it }, label = { Text(\"${esc(h)}\") }, modifier = Modifier.fillMaxWidth())")
+        }
+        if (buttonLiterals.isEmpty()) {
+            sb.appendLine("                Button(onClick = { interactions = interactions + 1 }) { Text(\"Refresh (\" + interactions + \")\") }")
+        } else {
+            for (b in buttonLiterals.take(3)) {
+                sb.appendLine("                Button(onClick = { interactions = interactions + 1 }) { Text(\"${esc(b)}\") }")
+            }
+        }
+        sb.appendLine("            }")
+        sb.appendLine("        }")
+        sb.appendLine("    }")
+        sb.appendLine("}")
+
+        val genDir = IosFiles.join(root, "app/src/main/kotlin/dev/ide/generated")
+        IosFiles.mkdirs(genDir)
+        val genFile = IosFiles.join(genDir, "XmlActivityScreen.kt")
+        val genSource = sb.toString()
+        IosFiles.writeText(genFile, genSource)
+        resetAnalysis()
+        return Triple(genFile, genSource, "XmlActivityScreen")
     }
 
     private fun findKotlinSourceFiles(dir: String): List<String> {

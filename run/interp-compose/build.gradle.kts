@@ -70,7 +70,9 @@ kotlin {
             dependencies {
                 implementation(kotlin("test"))
                 implementation(compose.runtime)
+                implementation(compose.material)
                 implementation(compose.material3) // verify mangled-name composable detection against real Material3
+                implementation("org.jetbrains.compose.material:material-icons-core:1.7.3")
                 // The Skiko native runtime (per-OS). Constructing a real Compose `LayoutNode` runs
                 // `InnerNodeCoordinator`'s static `Paint()` → `SkiaBackedPaint`, which loads the Skiko native lib
                 // — so the milestone-A phase-B node-tree spikes (which emit real `LayoutNode`s through the

@@ -31,6 +31,8 @@ class IosAndroidCrossRunTest {
     )
 
     private val repos = listOf(
+        AndroidRepoTarget("kotlin-android-template", "https://github.com/cortinico/kotlin-android-template"),
+        AndroidRepoTarget("Sandwich", "https://github.com/skydoves/Sandwich"),
         AndroidRepoTarget("BitChord", "https://github.com/kushagrasinghx/BitChord"),
         AndroidRepoTarget("android-airplay-server", "https://github.com/jqssun/android-airplay-server"),
         AndroidRepoTarget("rikkahub", "https://github.com/rikkahub/rikkahub"),
@@ -100,6 +102,11 @@ class IosAndroidCrossRunTest {
                 assertTrue(frameBytes.size > 100, "Expected non-empty PNG frame for ${repo.dirName}")
                 assertEquals(0x89.toByte(), frameBytes[0], "Expected valid PNG magic byte 0")
                 assertEquals(0x50.toByte(), frameBytes[1], "Expected valid PNG magic byte 1 ('P')")
+                val inkedPixels = backend.countInkedPixels(frameBytes)
+                assertTrue(
+                    inkedPixels > 50,
+                    "Expected > 50 visible inked pixels in rendered RunSurface frame for ${repo.dirName}, got $inkedPixels",
+                )
 
                 val transcriptText = console.transcript.joinToString("") { it.text }
                 assertTrue(

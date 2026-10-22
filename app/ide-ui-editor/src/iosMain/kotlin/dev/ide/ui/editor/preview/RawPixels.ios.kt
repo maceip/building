@@ -25,7 +25,9 @@ actual fun imageFromRgba(pixels: ByteArray, width: Int, height: Int): ImageBitma
 }.getOrNull()
 
 /**
- * Reads a frame produced by an interpreted program or runner on iOS and deletes the file.
+ * Reads a frame produced by an interpreted program or runner on iOS.
+ * Does not delete the file on read so that Compose recompositions or repeated reads of the active
+ * frame never fail with a missing file; the producer cleans up superseded frames.
  */
 actual fun readRunFrame(path: String): ByteArray? = runCatching {
     val data = NSData.dataWithContentsOfFile(path) ?: return null
@@ -35,6 +37,5 @@ actual fun readRunFrame(path: String): ByteArray? = runCatching {
     bytes.usePinned { pinned ->
         platform.posix.memcpy(pinned.addressOf(0), data.bytes, data.length)
     }
-    NSFileManager.defaultManager.removeItemAtPath(path, null)
     bytes
 }.getOrNull()
