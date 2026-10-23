@@ -50,24 +50,24 @@ class Tier4RealWorldScenarioTest(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"Tier 4 Swift Cupertino real-world tests failed:\n{res.stdout}\n{res.stderr}")
 
     def test_zero_fabrication_audit(self):
-        """Tier 4: Assert zero PRoot and zero Termux RUN_COMMAND dependencies in production source."""
-        proot_grep = subprocess.run(
-            ["grep", "-rnI", "--exclude-dir=build", "--exclude-dir=.gradle", "ProotCommandBuilder", "app/", "android/", "run/"],
-            cwd=REPO_ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        self.assertEqual(proot_grep.stdout.strip(), "", "Found illegal ProotCommandBuilder reference in source code")
+        """Tier 4: Assert zero PRoot and zero external-Termux-app dependencies in production source.
 
-        termux_grep = subprocess.run(
-            ["grep", "-rnI", "--exclude-dir=build", "--exclude-dir=.gradle", "com.termux.RUN_COMMAND", "app/", "android/", "run/"],
+        Scope: all production source trees (app/, android/, run/, services/, platform/,
+        lang/), excluding build outputs and vendored libraries (app/ide-android/vendor/
+        contains the termux-terminal emulator library, which is bundled code, not a
+        dependency on the external Termux app). Patterns cover the builder, the native
+        proot binaries/loaders, and the RUN_COMMAND intent contract.
+        """
+        patterns = "ProotCommandBuilder|libproot|proot_loader|proot_exec|RUN_COMMAND"
+        grep = subprocess.run(
+            ["grep", "-rnI", "--exclude-dir=build", "--exclude-dir=.gradle", "--exclude-dir=vendor",
+             "-E", patterns, "app/", "android/", "run/", "services/", "platform/", "lang/"],
             cwd=REPO_ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
-        self.assertEqual(termux_grep.stdout.strip(), "", "Found illegal Termux RUN_COMMAND reference in source code")
+        self.assertEqual(grep.stdout.strip(), "", f"Found illegal PRoot/Termux-app reference in source code:\n{grep.stdout}")
 
 if __name__ == "__main__":
     unittest.main()
