@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -295,23 +296,38 @@ fun NewProjectSheetContent(
                 )
             }
         }
-        Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             AgentSectionLabel("Or bring existing code")
+            // Real tappable rows (surface + chevron) — never bare text pretending to be a control.
             listOf(
                 Triple("Clone a Git repo", onCloneGit, CaIcons.arrowRight),
                 Triple("Open a folder on this phone", onOpenFolder, CaIcons.arrowRight),
                 Triple("Import a .caproj package", onImportPackage, CaIcons.arrowRight),
-            ).forEach { (label, onClick, _) ->
+            ).forEach { (label, onClick, chevron) ->
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp)
+                        .height(52.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(AgentUi.chrome.bg)
+                        .border(1.dp, AgentUi.chrome.hairline, RoundedCornerShape(12.dp))
                         .clickable(onClick = onClick)
-                        .padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        .padding(horizontal = 14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(label, fontSize = 15.sp, color = AgentUi.chrome.text)
+                    Text(
+                        label,
+                        fontSize = 15.sp,
+                        color = AgentUi.chrome.text,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        chevron,
+                        contentDescription = null,
+                        tint = AgentUi.chrome.textMuted,
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
             }
         }
