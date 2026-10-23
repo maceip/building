@@ -400,17 +400,6 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
     @Volatile
     private var currentRunIo: RunProgramIo? = null
 
-    @Volatile
-    private var activeAndroidPreviewRoot: Path? = null
-
-    @Volatile
-    private var activeAndroidPreviewModule: String = ""
-
-    @Volatile
-    private var activeAndroidPreviewPkg: String = ""
-
-    private val activeAndroidPreviewInteractions = java.util.concurrent.atomic.AtomicInteger(0)
-
     /** Set while a WINDOWED program is running: the way input on its frame reaches it. */
     private var currentRunWindow: RunWindow? = null
 
@@ -437,20 +426,6 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
 
     /** Feed a line of input to the running program (newline appended) and echo it into the transcript. */
     fun sendRunInput(text: String) {
-        val previewRoot = activeAndroidPreviewRoot
-        if (previewRoot != null && _runConsole.value != null) {
-            val count = activeAndroidPreviewInteractions.incrementAndGet()
-            val frameJson = dev.ide.core.runtime.GuiBridgeRuntime.buildAndroidAppPreviewJson(
-                previewRoot,
-                activeAndroidPreviewModule,
-                activeAndroidPreviewPkg,
-                count,
-                "UI Event #$count",
-            )
-            _runConsole.update { rc ->
-                rc?.copy(frame = RunFrameUi(frameJson, -1, -1, count.toLong() + 1L))
-            }
-        }
         val io = currentRunIo ?: return
         if (_runConsole.value?.acceptsInput != true) return
         io.input.feed(text + "\n")
@@ -865,25 +840,6 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                 return
             }
         }
-        if (ctx.dependencies.depsState.value.resolving || ctx.dependencies.reconcileInFlight) {
-            _buildState.value = BuildState(
-                RunStatus.Running,
-                "",
-                listOf(BuildStepUi("resolveDependencies", StepStatus.Running)),
-                listOf(logLine("Waiting for project dependencies to finish resolving…")),
-                elapsedMs = 0,
-            )
-            buildJob = buildScope.launch {
-                var waitedMs = 0L
-                while ((ctx.dependencies.depsState.value.resolving || ctx.dependencies.reconcileInFlight) && waitedMs < 15_000L) {
-                    delay(100)
-                    waitedMs += 100L
-                }
-                _buildState.value = BuildState(RunStatus.Idle, "", emptyList(), emptyList(), elapsedMs = 0)
-                sourceStart { runTaskRetained(id) }
-            }
-            return
-        }
         ctx.flushOpenDocuments() // save unsaved editor buffers so the compiler sees the latest source
         runCatching { ctx.ensureKotlinStdlib() } // a newly-added .kt module needs the stdlib dep before it builds/runs
         // Graph construction + topological ordering run synchronously here; a misconfiguration (cyclic deps,
@@ -1170,32 +1126,18 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                         ?: return fail("No module '${parts[0]}'.")
                     val variant = parts.getOrNull(1) ?: ctx.activeVariant(module)
                     if (delegateToGradle(module, BuildGoal.ASSEMBLE, variant, runAfterBuild = true)) return
-                    val facet = module.facets.get(AndroidFacet.KEY)
-                        ?: return fail("No Android package for '${parts[0]}'.")
-                    val launchPkg = AndroidVariants.select(module, variant)
-                        ?.let { AndroidVariants.applicationId(facet, it) } ?: facet.namespace
-                    val sessionId = runConsoleSeq.incrementAndGet()
-                    val io = RunProgramIo(sessionId, module.name, launchPkg)
-                    currentRunIo = io
-                    _runConsole.value = RunConsoleUi(sessionId, module.name, launchPkg)
-                    activeAndroidPreviewRoot = ctx.workspaceRoot
-                    activeAndroidPreviewModule = module.name
-                    activeAndroidPreviewPkg = launchPkg
-                    activeAndroidPreviewInteractions.set(0)
-
-                    if (hasExternalAndroidBuildChain(ctx.workspaceRoot, module) || unresolvedBlocker(module) != null) {
-                        val previewGraph = createAndroidGuiPreviewGraph(ctx.workspaceRoot, module.name, launchPkg, io)
-                        launch(
-                            module.name,
-                            previewGraph,
-                            "> Run $variant · ${module.name}",
-                            onComplete = ::finalizeRunConsole,
-                        )
-                        return
-                    }
+                    unresolvedBlocker(module)?.let { return fail(it) }
                     val installer =
                         ctx.apkInstaller ?: return fail("APK install is only available on device.")
                     val android = androidBuild ?: return fail("Android SDK not found.")
+                    val facet = module.facets.get(AndroidFacet.KEY)
+                        ?: return fail("No Android package for '${parts[0]}'.")
+                    // Install + launch by the app's EFFECTIVE applicationId (namespace + flavor/build-type
+                    // suffixes), not the bare namespace — that's what the installed app is + reports at runtime.
+                    // App-log capture isn't started here: it's configured on project open (over all the project's
+                    // app IDs), so logs are captured whether the app is launched from here OR the device launcher.
+                    val launchPkg = AndroidVariants.select(module, variant)
+                        ?.let { AndroidVariants.applicationId(facet, it) } ?: facet.namespace
                     val project = ctx.projectOf(module)
                         ?: return fail("Internal error: no project for module '${module.name}'.")
                     val graph = android.createBuildGraph(
@@ -1206,23 +1148,20 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                         buildContext(),
                     )
                     val apk = AndroidBuildSystem.signedApkPath(module, variant)
+                    // A plugin module installs like any app, but what happens next is different: the IDE
+                    // reads installed plugins once at startup, so the newly installed code is not live until
+                    // the next launch. Say so at the point the user is looking, rather than leaving them to
+                    // wonder why nothing changed.
                     val isPlugin = PluginProject.isPluginModule(module)
                     val label = if (isPlugin) "Install plugin" else "Run"
+                    // On a successful build, install + launch (the OS shows its own install-confirmation).
                     launch(
                         module.name,
                         graph,
                         "> $label $variant · ${module.name}",
-                        firstBuildDexBanner(module),
-                        onComplete = ::finalizeRunConsole,
-                        fallbackOnFailure = { log ->
-                            emitAndroidGuiPreview(ctx.workspaceRoot, module.name, launchPkg, io, "Interactive Compose/View Preview", log)
-                            true
-                        },
+                        firstBuildDexBanner(module)
                     ) { log ->
-                        emitAndroidGuiPreview(ctx.workspaceRoot, module.name, launchPkg, io, "Built & Signed APK (${apk.fileName})", log)
-                        if (installer.choosesTarget || isPlugin) {
-                            installer.installAndLaunch(apk, launchPkg, target, log)
-                        }
+                        installer.installAndLaunch(apk, launchPkg, target, log)
                         if (isPlugin) {
                             log("")
                             log("Installed as a plugin. Plugins load at startup, so this build is not live")
@@ -1431,7 +1370,6 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
         header: String,
         banner: String? = null,
         onComplete: ((succeeded: Boolean) -> Unit)? = null,
-        fallbackOnFailure: (suspend (log: (String) -> Unit) -> Boolean)? = null,
         onSuccess: (suspend (log: (String) -> Unit) -> Unit)? = null,
     ) {
         // A build the user asked for outranks the background dex warm: stop it so the two aren't competing for the
@@ -1455,17 +1393,9 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
         // against the project-open peak — the comparison that justifies (or not) a separate build process.
         val peak = PeakHeap().also { it.record() }
         memLog.info("build '$header' start: ${MemSample.now().fmt()}")
-        val deferredErrorDiagnostics = java.util.concurrent.CopyOnWriteArrayList<BuildDiagnosticUi>()
         val ctx = SimpleTaskContext(
             onLog = { e -> _buildState.update { it.copy(log = it.log + e.toUi()) } },
-            onDiagnostic = { d ->
-                val uiDiag = d.toUi()
-                if (fallbackOnFailure != null && uiDiag.severity == UiSeverity.Error) {
-                    deferredErrorDiagnostics.add(uiDiag)
-                } else {
-                    _buildState.update { it.copy(diagnostics = it.diagnostics + uiDiag) }
-                }
-            },
+            onDiagnostic = { d -> _buildState.update { it.copy(diagnostics = it.diagnostics + d.toUi()) } },
             onStep = { name, status ->
                 val mapped = mapGradleStep(status)
                 _buildState.update { st ->
@@ -1552,7 +1482,6 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
             }
             Guards.broker = null
             _permissionRequest.value = null
-            var recoveredByFallback = false
             if (outcome?.succeeded == true && onSuccess != null) {
                 runCatching {
                     onSuccess { line ->
@@ -1571,25 +1500,8 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
                         )
                     )
                 }
-            } else if (outcome?.succeeded != true && fallbackOnFailure != null) {
-                recoveredByFallback = runCatching {
-                    fallbackOnFailure { line ->
-                        _buildState.update { st ->
-                            st.copy(log = st.log + logLine(line))
-                        }
-                    }
-                }.getOrDefault(false)
-                if (recoveredByFallback) {
-                    _buildState.update { st ->
-                        st.copy(steps = st.steps.map { it.copy(status = StepStatus.Done) })
-                    }
-                } else if (deferredErrorDiagnostics.isNotEmpty()) {
-                    _buildState.update { st ->
-                        st.copy(diagnostics = st.diagnostics + deferredErrorDiagnostics)
-                    }
-                }
             }
-            val succeeded = outcome?.succeeded == true || recoveredByFallback
+            val succeeded = outcome?.succeeded == true
             val elapsed = System.currentTimeMillis() - start
             // The line that tells the user how it went, in the shape every build tool closes with. Without
             // it a finished build just stops producing output and the verdict lives only in the header pill.
@@ -1821,101 +1733,6 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
         TaskStatus.NoSource -> StepStatus.NoSource
         TaskStatus.Failed -> StepStatus.Failed
         TaskStatus.Blocked -> StepStatus.Skipped
-    }
-
-    private fun hasExternalAndroidBuildChain(root: Path, module: Module): Boolean {
-        val modDir = Paths.get(module.dir.path)
-        if (Files.exists(root.resolve("WORKSPACE")) || Files.exists(root.resolve("WORKSPACE.bazel")) || Files.exists(root.resolve("MODULE.bazel"))) return true
-        if (Files.exists(root.resolve("go.mod")) || Files.exists(root.resolve("download.gradle"))) return true
-        if (Files.isDirectory(root.resolve("build-logic")) || Files.isDirectory(root.resolve("core/datastore-proto"))) return true
-        if (Files.isDirectory(modDir.resolve("src/main/proto")) || Files.isDirectory(modDir.resolve("src/main/cpp")) || Files.isDirectory(modDir.resolve("src/main/aidl"))) return true
-        val closureLibs = runCatching {
-            ctx.moduleBuildClosure(module).sumOf { m ->
-                m.dependencies.count { it is LibraryDependency }
-            }
-        }.getOrDefault(0)
-        return closureLibs > 40
-    }
-
-    private fun createAndroidGuiPreviewGraph(
-        projectRoot: Path,
-        moduleName: String,
-        packageName: String,
-        io: RunProgramIo,
-    ): TaskGraph {
-        val parseName = dev.ide.build.TaskName(":$moduleName:parseManifestAndResources")
-        val compileName = dev.ide.build.TaskName(":$moduleName:compileComposePreview")
-        val runName = dev.ide.build.TaskName(":$moduleName:launchInteractiveWindow")
-        return dev.ide.build.engine.DefaultTaskContainer().apply {
-            register(parseName) {
-                object : dev.ide.build.Task, dev.ide.build.AlwaysRun {
-                    override val name = parseName
-                    override val inputs = dev.ide.build.TaskInputsImpl()
-                    override val outputs = dev.ide.build.TaskOutputsImpl()
-                    override suspend fun execute(ctx: dev.ide.build.TaskContext): dev.ide.build.TaskResult {
-                        ctx.buildLog.log(BuildLogEntry("> Task :$moduleName:parseManifestAndResources ($packageName)", BuildLogLevel.INFO))
-                        return dev.ide.build.TaskResult.Success
-                    }
-                }
-            }
-            register(compileName) {
-                object : dev.ide.build.Task, dev.ide.build.AlwaysRun {
-                    override val name = compileName
-                    override val dependsOn = listOf(parseName)
-                    override val inputs = dev.ide.build.TaskInputsImpl()
-                    override val outputs = dev.ide.build.TaskOutputsImpl()
-                    override suspend fun execute(ctx: dev.ide.build.TaskContext): dev.ide.build.TaskResult {
-                        ctx.buildLog.log(BuildLogEntry("> Task :$moduleName:compileComposePreview", BuildLogLevel.INFO))
-                        return dev.ide.build.TaskResult.Success
-                    }
-                }
-            }
-            register(runName) {
-                object : dev.ide.build.Task, dev.ide.build.AlwaysRun {
-                    override val name = runName
-                    override val dependsOn = listOf(compileName)
-                    override val inputs = dev.ide.build.TaskInputsImpl()
-                    override val outputs = dev.ide.build.TaskOutputsImpl()
-                    override suspend fun execute(ctx: dev.ide.build.TaskContext): dev.ide.build.TaskResult {
-                        emitAndroidGuiPreview(
-                            projectRoot,
-                            moduleName,
-                            packageName,
-                            io,
-                            "Live Android GUI ($packageName)",
-                        ) { line -> ctx.buildLog.log(BuildLogEntry(line, BuildLogLevel.INFO)) }
-                        return dev.ide.build.TaskResult.Success
-                    }
-                }
-            }
-        }.build()
-    }
-
-    private fun emitAndroidGuiPreview(
-        projectRoot: Path,
-        moduleName: String,
-        packageName: String,
-        io: RunProgramIo,
-        statusLabel: String,
-        log: (String) -> Unit,
-    ) {
-        activeAndroidPreviewRoot = projectRoot
-        activeAndroidPreviewModule = moduleName
-        activeAndroidPreviewPkg = packageName
-        activeAndroidPreviewInteractions.set(0)
-        io.started()
-        val frameJson = dev.ide.core.runtime.GuiBridgeRuntime.buildAndroidAppPreviewJson(
-            projectRoot,
-            moduleName,
-            packageName,
-            0,
-            statusLabel,
-        )
-        io.frame(frameJson, -1, -1, 1L)
-        val msg = "✓ GUI Bridge connected — live interactive window active in Run view ($packageName)"
-        log(msg)
-        io.stdout("$msg\n")
-        io.exited(0)
     }
 
     /** A build-blocking message when [module] (or a module it depends on) has unresolved declared dependencies,

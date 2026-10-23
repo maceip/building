@@ -131,8 +131,6 @@ class DesktopRuntimeHost(
             putAll(System.getenv())
             put("NO_COLOR", "1")
             put("PYTHONUNBUFFERED", "1")
-            put("CI", "true")
-            put("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
         }
         RuntimeInstallation(
             packId = "host-system",
@@ -389,14 +387,19 @@ class SwiftBuildSystem : BuildSystem {
                 buildCtx = buildCtx,
                 shadowRoot = shadowRoot,
                 onPackageIpa = {
-                    packageFallbackIpa(bgRoot, scratchDir, bgCtx)
+                    // Real export from the original tree (xtool, no shim). Only this IPA is the deliverable.
+                    if (bgXtool != null && hasDarwinSdk(bgEnv)) {
+                        runIpaBuild(bgHost, bgInstall, bgXtool, bgSwift, bgRoot, scratchDir, bgFlags, bgScratch, bgEnv, bgCtx)
+                    } else {
+                        packageFallbackIpa(bgRoot, scratchDir, bgCtx)
+                    }
                 },
             )
             return bridgeResult
         }
 
         return when {
-            specId == TASK_IPA -> runIpaBuild(host, installation, xtoolBin, swiftBin, swiftcBin, projectRoot, scratchDir, androidFlags, scratchFlags, env, ctx, buildCtx, projectName)
+            specId == TASK_IPA -> runIpaBuild(host, installation, xtoolBin, swiftBin, projectRoot, scratchDir, androidFlags, scratchFlags, env, ctx)
             specId == TASK_BUILD -> {
                 if (swiftBin == null) {
                     val msg = "Swift compiler binary not found in runtime prefix (${installation.prefix})"
@@ -495,7 +498,7 @@ class SwiftBuildSystem : BuildSystem {
                     return compileAndRunSwiftSourcesDirectly(host, installation, swiftcBin, swiftFiles, projectRoot, scratchDir, env, ctx, buildCtx, projectName)
                 }
                 if (isIos && specId == TASK_IPA) {
-                    return runIpaBuild(host, installation, xtoolBin, swiftBin, swiftcBin, projectRoot, scratchDir, androidFlags, scratchFlags, env, ctx, buildCtx, projectName)
+                    return runIpaBuild(host, installation, xtoolBin, swiftBin, projectRoot, scratchDir, androidFlags, scratchFlags, env, ctx)
                 }
                 val allTargets = extractAllSwiftTargets(projectRoot)
                 val buildCmd = buildList {
@@ -707,22 +710,18 @@ class SwiftBuildSystem : BuildSystem {
         installation: RuntimeInstallation,
         xtoolBin: Path?,
         swiftBin: Path?,
-        swiftcBin: Path? = null,
         projectRoot: Path,
         scratchDir: Path?,
         androidFlags: List<String>,
         scratchFlags: List<String>,
         env: Map<String, String>,
         ctx: TaskContext,
-        buildCtx: BuildContext? = null,
-        projectName: String = "",
     ): TaskResult {
         if (xtoolBin == null && swiftBin == null) {
             val msg = "Neither xtool nor swift is available in runtime prefix (${installation.prefix})"
             ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.ERROR))
             return TaskResult.Failed(msg)
         }
-        val pkgName = extractSwiftPackageName(projectRoot)
 
         // First check if a Darwin SDK is staged on device and install it into xtool if needed.
         if (xtoolBin != null) {
@@ -739,34 +738,19 @@ class SwiftBuildSystem : BuildSystem {
                 }
                 if (code == 0) {
                     persistIosSwiftModuleCacheIfNeeded(installation, projectRoot)
-                    val ipa = findBuiltIpa(projectRoot) ?: packageFallbackIpa(projectRoot, scratchDir, ctx)
+                    val ipa = findBuiltIpa(projectRoot)
                     if (ipa != null) {
-                        val msg = "✓ Built iOS application archive: ${projectRoot.relativize(ipa)} (${Files.size(ipa)} bytes)"
-                        ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.INFO))
-                        if (buildCtx != null) {
-                            emitConsoleToProgramIo(buildCtx, projectName.ifEmpty { pkgName }, ipa.fileName.toString(), lines + msg)
-                        }
+                        ctx.buildLog.log(
+                            BuildLogEntry(
+                                "✓ Built iOS application archive: ${projectRoot.relativize(ipa)} (${Files.size(ipa)} bytes)",
+                                BuildLogLevel.INFO,
+                            ),
+                        )
                     }
                     ctx.reportStep(":swift:xtoolPackageIpa", "succeeded")
                     return TaskResult.Success
                 }
 
-                ctx.buildLog.log(
-                    BuildLogEntry(
-                        "xtool native Darwin build exited ($code); packaging iOS archive via Cupertino ARM64 toolchain fallback...",
-                        BuildLogLevel.INFO,
-                    ),
-                )
-                val fallbackIpa = packageFallbackIpa(projectRoot, scratchDir, ctx)
-                if (fallbackIpa != null && Files.isRegularFile(fallbackIpa)) {
-                    val msg = "✓ Packaged iOS application archive: ${projectRoot.relativize(fallbackIpa)} (${Files.size(fallbackIpa)} bytes)"
-                    ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.INFO))
-                    if (buildCtx != null) {
-                        emitConsoleToProgramIo(buildCtx, projectName.ifEmpty { pkgName }, fallbackIpa.fileName.toString(), listOf(msg))
-                    }
-                    ctx.reportStep(":swift:xtoolPackageIpa", "succeeded")
-                    return TaskResult.Success
-                }
                 ctx.reportToolDiagnostics("swiftc", lines)
                 ctx.reportStep(":swift:xtoolPackageIpa", "failed")
                 return TaskResult.Failed("xtool dev build --ipa exited with code $code")
@@ -802,26 +786,11 @@ class SwiftBuildSystem : BuildSystem {
             "swiftc",
             ":swift:compileNative",
             ctx,
-            reportDiagnosticsOnFailure = false,
         )
         if (compileRes is TaskResult.Success) {
-            val ipa = packageFallbackIpa(projectRoot, scratchDir, ctx)
-            if (ipa != null && buildCtx != null) {
-                val msg = "✓ Packaged iOS application archive: ${projectRoot.relativize(ipa)} (${Files.size(ipa)} bytes)"
-                emitConsoleToProgramIo(buildCtx, projectName.ifEmpty { pkgName }, ipa.fileName.toString(), listOf(msg))
-            }
-            return compileRes
+            packageFallbackIpa(projectRoot, scratchDir, ctx)
         }
-        val ipa = packageFallbackIpa(projectRoot, scratchDir, ctx)
-        return if (ipa != null && Files.isRegularFile(ipa)) {
-            if (buildCtx != null) {
-                val msg = "✓ Packaged iOS application archive: ${projectRoot.relativize(ipa)} (${Files.size(ipa)} bytes)"
-                emitConsoleToProgramIo(buildCtx, projectName.ifEmpty { pkgName }, ipa.fileName.toString(), listOf(msg))
-            }
-            TaskResult.Success
-        } else {
-            compileRes
-        }
+        return compileRes
     }
 
     private fun seedIosSwiftModuleCacheIfNeeded(installation: RuntimeInstallation, projectRoot: Path) {
@@ -1208,10 +1177,8 @@ class SwiftBuildSystem : BuildSystem {
                     Files.walk(targetDir, 5).use { stream ->
                         stream.filter { f ->
                             val n = f.fileName.toString()
-                            (n.endsWith(".m") || n.endsWith(".c") || n.endsWith(".cpp") || n.endsWith(".mm") || n.endsWith(".h") ||
-                                n.endsWith(".storyboard") || n.endsWith(".xib") || n.endsWith(".sks") || n == "Info.plist" ||
-                                n.endsWith(".entitlements") || n.endsWith(".xcprivacy") || n.endsWith(".lproj")) &&
-                                (Files.isRegularFile(f) || n.endsWith(".lproj"))
+                            (n.endsWith(".m") || n.endsWith(".c") || n.endsWith(".cpp") || n.endsWith(".mm") || n.endsWith(".h")) &&
+                                Files.isRegularFile(f)
                         }.map { targetDir.relativize(it).toString().replace('\\', '/') }.toList()
                     }
                 } else emptyList()
@@ -1230,8 +1197,7 @@ class SwiftBuildSystem : BuildSystem {
                     import PackageDescription
 
                     let package = Package(
-                        name: "$sanitizedName",
-                        defaultLocalization: "en",$platformsBlock
+                        name: "$sanitizedName",$platformsBlock
                         products: [
                             $productDecl,
                         ],
@@ -1244,18 +1210,6 @@ class SwiftBuildSystem : BuildSystem {
                 """.trimIndent() + "\n"
                 packageSwift.writeText(generated)
                 log("Auto-generated Package.swift for '$sanitizedName' (source path: $sourceDirRel)")
-            } else {
-                // Ensure existing Package.swift has defaultLocalization if localized resources (.lproj) exist in repo
-                val rawPkg = runCatching { packageSwift.readText() }.getOrDefault("")
-                if (!rawPkg.contains("defaultLocalization") && rawPkg.contains("Package(")) {
-                    val patchedPkg = Regex("""(name\s*:\s*"[^"]+"\s*,)""").replaceFirst(
-                        rawPkg,
-                        "$1\n    defaultLocalization: \"en\",",
-                    )
-                    if (patchedPkg != rawPkg) {
-                        runCatching { packageSwift.writeText(patchedPkg) }
-                    }
-                }
             }
 
             val xtoolYml = root.resolve("xtool.yml")
@@ -1470,7 +1424,6 @@ class PythonBuildSystem : BuildSystem {
                                 "python",
                                 ":python:compileBytecode",
                                 ctx,
-                                reportDiagnosticsOnFailure = false,
                             )
                             val scriptArgs = if (scriptPath.fileName?.toString() == "setup.py") {
                                 listOf(pythonBin.toString(), "-u", scriptPath.toString(), "--name", "--version")
@@ -1487,37 +1440,14 @@ class PythonBuildSystem : BuildSystem {
                                 taskName.value,
                                 ctx,
                                 capturedLines = firstLines,
-                                reportDiagnosticsOnFailure = false,
-                                timeoutMs = 10_000L,
                             )
-                            if (firstRes is TaskResult.Success && firstLines.isNotEmpty()) {
-                                emitConsoleToProgramIo(buildCtx, project.name, "python3 -u $rel", firstLines)
+                            if (firstRes is TaskResult.Success) {
+                                if (firstLines.isNotEmpty()) {
+                                    emitConsoleToProgramIo(buildCtx, project.name, "python3 -u $rel", firstLines)
+                                }
                                 return firstRes
                             }
-                            if (firstRes is TaskResult.Failed) {
-                                // Many CLI entrypoints (argparse / click) exit non-zero when invoked with no args;
-                                // re-run with --help and run unit tests if present.
-                                val helpLines = ArrayList<String>()
-                                val helpRes = runToolCommand(
-                                    host,
-                                    listOf(pythonBin.toString(), "-u", scriptPath.toString(), "--help"),
-                                    root,
-                                    pyEnv,
-                                    "python",
-                                    "${taskName.value}_help",
-                                    ctx,
-                                    capturedLines = helpLines,
-                                    reportDiagnosticsOnFailure = false,
-                                    timeoutMs = 8_000L,
-                                )
-                                if (helpRes is TaskResult.Success) {
-                                    emitConsoleToProgramIo(buildCtx, project.name, "python3 -u $rel --help", helpLines)
-                                    return TaskResult.Success
-                                }
-                            }
-                            // For library modules (which exit 0 silently when imported as __main__, like micrograd/engine.py)
-                            // or scripts requiring external ML/GPU packages, run an interactive AST + runtime verification pass.
-                            return runPythonWorkspaceVerification(host, pythonBin, root, pyEnv, ctx, buildCtx, project.name)
+                            return firstRes
                         }
                         val cmd = when {
                             specId == TASK_TEST -> listOf(pythonBin.toString(), "-u", "-m", "unittest", "discover")
@@ -1529,66 +1459,6 @@ class PythonBuildSystem : BuildSystem {
                 }
             }
         }.build()
-    }
-
-    private suspend fun runPythonWorkspaceVerification(
-        host: RuntimeHost,
-        pythonBin: Path,
-        root: Path,
-        env: Map<String, String>,
-        ctx: TaskContext,
-        buildCtx: BuildContext? = null,
-        projectName: String = root.fileName?.toString() ?: "python",
-    ): TaskResult {
-        val verifyScript = """
-            import ast, os, sys
-            print(f"Python {sys.version.split()[0]} Runtime · Workspace: {os.path.basename(os.getcwd())}")
-            try:
-                from micrograd.engine import Value
-                from micrograd.nn import MLP
-                x = [Value(2.0), Value(-3.0), Value(1.5)]
-                net = MLP(3, [4, 4, 1])
-                out = net(x)
-                out.backward()
-                print(f"✓ Executed micrograd MLP(3, [4, 4, 1]) forward/backward pass -> out={out.data:.4f}, grad(x0)={x[0].grad:.4f}")
-            except Exception:
-                pass
-            py_files, classes, funcs, lines = 0, 0, 0, 0
-            for dirpath, dirnames, filenames in os.walk("."):
-                dirnames[:] = [d for d in dirnames if d not in {".git", ".platform", "__pycache__", "node_modules", ".venv", "venv"}]
-                if py_files >= 200:
-                    break
-                for f in sorted(filenames):
-                    if f.endswith(".py"):
-                        py_files += 1
-                        if py_files <= 50:
-                            p = os.path.join(dirpath, f)
-                            try:
-                                src = open(p, "r", encoding="utf-8", errors="ignore").read()
-                                lines += len(src.splitlines())
-                                tree = ast.parse(src, filename=p)
-                                classes += sum(isinstance(n, ast.ClassDef) for n in ast.walk(tree))
-                                funcs += sum(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) for n in ast.walk(tree))
-                            except Exception:
-                                pass
-            print(f"✓ Verified {py_files} Python modules ({lines} LOC · {classes} classes · {funcs} functions)")
-        """.trimIndent()
-        val captured = ArrayList<String>()
-        val res = runToolCommand(
-            host,
-            listOf(pythonBin.toString(), "-u", "-c", verifyScript),
-            root,
-            env,
-            "python",
-            ":python:verifyWorkspace",
-            ctx,
-            capturedLines = captured,
-            displayCommand = "python3 -u -m workspace.verify",
-        )
-        if (captured.isNotEmpty()) {
-            emitConsoleToProgramIo(buildCtx, projectName, "python3 -u -m workspace.verify", captured)
-        }
-        return res
     }
 
     companion object {
@@ -1791,10 +1661,6 @@ class NodeBuildSystem : BuildSystem {
                         if (specId.startsWith("node:file:")) {
                             val rel = specId.removePrefix("node:file:")
                             val scriptPath = root.resolve(rel)
-                            val isTypeScript = rel.endsWith(".ts") || rel.endsWith(".tsx") || rel.endsWith(".mts") || rel.endsWith(".cts")
-                            if (isTypeScript) {
-                                return runNodeWorkspaceVerification(host, nodeBin, root, installation.environment, ctx, buildCtx, project.name)
-                            }
                             val pkgRoot = scriptPath.parent?.takeIf { Files.isRegularFile(it.resolve("package.json")) }
                             if (pkgRoot != null && pkgRoot != root && npmCli != null && needsNpmInstall(pkgRoot)) {
                                 val installArgs = listOf("install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund")
@@ -1806,7 +1672,6 @@ class NodeBuildSystem : BuildSystem {
                                     "npm",
                                     ":node:npmInstallPackage",
                                     ctx,
-                                    reportDiagnosticsOnFailure = false,
                                 )
                             }
                             // First run syntax/module check (`node --check`)
@@ -1818,7 +1683,6 @@ class NodeBuildSystem : BuildSystem {
                                 "node",
                                 ":node:checkSyntax",
                                 ctx,
-                                reportDiagnosticsOnFailure = false,
                             )
                             val captured = ArrayList<String>()
                             val runRes = runToolCommand(
@@ -1830,44 +1694,11 @@ class NodeBuildSystem : BuildSystem {
                                 taskName.value,
                                 ctx,
                                 capturedLines = captured,
-                                reportDiagnosticsOnFailure = false,
-                                timeoutMs = 8_000L,
                             )
                             if (runRes is TaskResult.Success && captured.isNotEmpty()) {
                                 emitConsoleToProgramIo(buildCtx, project.name, "node $rel", captured)
-                                return runRes
                             }
-                            val missingModule = captured.any { it.contains("MODULE_NOT_FOUND") || it.contains("ERR_MODULE_NOT_FOUND") }
-                            if (runRes is TaskResult.Failed && !missingModule) {
-                                val helpLines = ArrayList<String>()
-                                val helpRes = runToolCommand(
-                                    host,
-                                    listOf(nodeBin.toString(), scriptPath.toString(), "--help"),
-                                    root,
-                                    installation.environment,
-                                    "node",
-                                    "${taskName.value}_help",
-                                    ctx,
-                                    capturedLines = helpLines,
-                                    reportDiagnosticsOnFailure = false,
-                                    timeoutMs = 6_000L,
-                                )
-                                if (helpRes is TaskResult.Success) {
-                                    emitConsoleToProgramIo(buildCtx, project.name, "node $rel --help", helpLines)
-                                    return helpRes
-                                }
-                            }
-                            return runNodeWorkspaceVerification(host, nodeBin, root, installation.environment, ctx, buildCtx, project.name)
-                        }
-
-                        if (specId.startsWith("node:npm:") && !Files.isDirectory(root.resolve("node_modules"))) {
-                            val script = specId.removePrefix("node:npm:")
-                            val scriptBody = readPackageScripts(root)[script].orEmpty()
-                            val requiresWorkspaceModules = Regex("""\b(pnpm|yarn|bun|turbo|nx|lerna|vite|next|nuxt|astro|remix|webpack|rollup|tsx|ts-node|concurrently|cross-env|electron|vitest|jest|playwright|shx|rimraf|tsc)\b""")
-                                .containsMatchIn(scriptBody)
-                            if (requiresWorkspaceModules) {
-                                return runNodeWorkspaceVerification(host, nodeBin, root, installation.environment, ctx, buildCtx, project.name)
-                            }
+                            return runRes
                         }
 
                         val cmd = when {
@@ -1883,21 +1714,7 @@ class NodeBuildSystem : BuildSystem {
                             else -> listOf(nodeBin.toString(), root.resolve("index.js").toString())
                         }
                         val captured = ArrayList<String>()
-                        val res = runToolCommand(
-                            host,
-                            cmd,
-                            root,
-                            installation.environment,
-                            "node",
-                            taskName.value,
-                            ctx,
-                            capturedLines = captured,
-                            reportDiagnosticsOnFailure = !specId.startsWith("node:npm:"),
-                            timeoutMs = if (specId.startsWith("node:npm:")) 10_000L else null,
-                        )
-                        if (res is TaskResult.Failed && specId.startsWith("node:npm:")) {
-                            return runNodeWorkspaceVerification(host, nodeBin, root, installation.environment, ctx, buildCtx, project.name)
-                        }
+                        val res = runToolCommand(host, cmd, root, installation.environment, "node", taskName.value, ctx, capturedLines = captured)
                         if (captured.isNotEmpty()) {
                             emitConsoleToProgramIo(buildCtx, project.name, specId, captured)
                         }
@@ -1906,75 +1723,6 @@ class NodeBuildSystem : BuildSystem {
                 }
             }
         }.build()
-    }
-
-    private suspend fun runNodeWorkspaceVerification(
-        host: RuntimeHost,
-        nodeBin: Path,
-        root: Path,
-        env: Map<String, String>,
-        ctx: TaskContext,
-        buildCtx: BuildContext? = null,
-        projectName: String = root.fileName?.toString() ?: "node",
-    ): TaskResult {
-        val verifyScript = """
-            const fs = require('fs');
-            const path = require('path');
-            let pkg = {};
-            try { pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')); } catch {}
-            const name = pkg.name || path.basename(process.cwd());
-            const ver = pkg.version ? 'v' + pkg.version : '';
-            console.log(`Node.js ${'$'}{process.version} Runtime · Package: ${'$'}{name} ${'$'}{ver}`.trim());
-            const candidates = [
-              pkg.main,
-              typeof pkg.exports === 'string' ? pkg.exports : null,
-              'index.js',
-              'src/index.js',
-              `packages/${'$'}{name}/index.js`,
-            ].filter(Boolean);
-            for (const mainRel of candidates) {
-              try {
-                const target = path.resolve(process.cwd(), mainRel);
-                if (fs.existsSync(target) && !mainRel.endsWith('.mjs')) {
-                  const mod = require(target);
-                  const keys = typeof mod === 'function' ? ['[Function: ' + (mod.name || name) + ']', ...Object.keys(mod)] : Object.keys(mod || {});
-                  console.log(`✓ Loaded module '${'$'}{mainRel}' -> exports: ${'$'}{keys.slice(0, 8).join(', ') || '(default)'}`);
-                  break;
-                }
-              } catch {}
-            }
-            let files = 0, loc = 0;
-            function walk(d, depth) {
-              if (depth > 3) return;
-              for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
-                if (['node_modules', '.git', '.platform', 'dist', 'build'].includes(entry.name)) continue;
-                const full = path.join(d, entry.name);
-                if (entry.isDirectory()) walk(full, depth + 1);
-                else if (/\.(c?m?[jt]sx?)${'$'}/.test(entry.name)) {
-                  files++;
-                  try { loc += fs.readFileSync(full, 'utf8').split('\n').length; } catch {}
-                }
-              }
-            }
-            walk('.', 0);
-            console.log(`✓ Verified ${'$'}{files} JavaScript/TypeScript source files (${'$'}{loc} LOC)`);
-        """.trimIndent()
-        val captured = ArrayList<String>()
-        val res = runToolCommand(
-            host,
-            listOf(nodeBin.toString(), "-e", verifyScript),
-            root,
-            env,
-            "node",
-            ":node:verifyWorkspace",
-            ctx,
-            capturedLines = captured,
-            displayCommand = "node --check-workspace",
-        )
-        if (captured.isNotEmpty()) {
-            emitConsoleToProgramIo(buildCtx, projectName, "node --check-workspace", captured)
-        }
-        return res
     }
 
     private fun buildNpmCommand(nodeBin: Path, npmCli: Path, root: Path, args: List<String>): List<String> =
@@ -2105,8 +1853,6 @@ private suspend fun runToolCommand(
     ctx: TaskContext,
     capturedLines: MutableList<String>? = null,
     displayCommand: String? = null,
-    reportDiagnosticsOnFailure: Boolean = true,
-    timeoutMs: Long? = null,
 ): TaskResult {
     ctx.reportStep(stepName, "started")
     val displayCmd = displayCommand ?: command.mapIndexed { idx, arg ->
@@ -2116,7 +1862,7 @@ private suspend fun runToolCommand(
 
     val outputLines = ArrayList<String>()
     val exitCode = try {
-        execStreaming(host, command, workingDir, env, ctx, timeoutMs = timeoutMs) { line ->
+        execStreaming(host, command, workingDir, env, ctx) { line ->
             outputLines += line
             capturedLines?.add(line)
         }
@@ -2130,9 +1876,7 @@ private suspend fun runToolCommand(
         return TaskResult.Failed(msg, e)
     }
 
-    if (exitCode == 0 || reportDiagnosticsOnFailure) {
-        ctx.reportToolDiagnostics(toolSource, outputLines)
-    }
+    ctx.reportToolDiagnostics(toolSource, outputLines)
     return if (exitCode == 0) {
         ctx.reportStep(stepName, "succeeded")
         TaskResult.Success
@@ -2148,7 +1892,6 @@ private suspend fun execStreaming(
     workingDir: Path,
     env: Map<String, String>,
     ctx: TaskContext,
-    timeoutMs: Long? = null,
     onLine: (String) -> Unit = {},
 ): Int = coroutineScope {
     val child = host.start(command, workingDir, env)
@@ -2167,11 +1910,7 @@ private suspend fun execStreaming(
     }
     try {
         runCatching { child.stdin.close() }
-        val exitCode = if (timeoutMs != null) {
-            withTimeoutOrNull(timeoutMs) { child.awaitExit() } ?: -124
-        } else {
-            child.awaitExit()
-        }
+        val exitCode = child.awaitExit()
         withContext(NonCancellable) { child.terminate() }
         withTimeoutOrNull(2_000) {
             stdoutJob.join()

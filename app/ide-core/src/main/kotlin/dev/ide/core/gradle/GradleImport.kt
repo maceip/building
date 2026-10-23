@@ -46,38 +46,20 @@ object GradleImport {
     /** `projects.feature.home`, Gradle's type-safe project accessors. */
     private val PROJECTS_ACCESSOR = Regex("""(?<![\w.])projects\.([\w.]+)""")
     private val BUILD_FILES = listOf("build.gradle", "build.gradle.kts")
-    private val CATALOG_FILES = listOf("gradle/libs.versions.toml", "libs.versions.toml", "gradle/lib.toml", "gradle/dependencies.toml")
+    private val CATALOG_FILES = listOf("gradle/libs.versions.toml", "libs.versions.toml")
 
     /** Restated when [revertToGradle] puts the build files back and the project re-enters compatibility mode. */
     private const val RESTORED_SUMMARY =
         "Restored the Gradle build files. The project is read from them again, statically rather than by " +
             "running Gradle."
 
-    /** True when [root] looks like a Gradle project (has a settings or build script, including under `android/`, or a Bazel Android manifest). */
+    /** True when [root] looks like a Gradle project (has a settings or build script). */
     fun isGradleProject(root: Path): Boolean =
-        Files.isDirectory(root) && (
-            (SETTINGS_FILES + BUILD_FILES).any { Files.exists(root.resolve(it)) || Files.exists(root.resolve("android").resolve(it)) } ||
-                findBazelAndroidManifest(root) != null
-            )
+        Files.isDirectory(root) && (SETTINGS_FILES + BUILD_FILES).any { Files.exists(root.resolve(it)) }
 
     /** The root-level Gradle files that identify the project: its settings script, build script, and catalog. */
     fun buildFiles(root: Path): List<Path> =
-        (
-            (SETTINGS_FILES + BUILD_FILES + CATALOG_FILES).flatMap { listOf(root.resolve(it), root.resolve("android").resolve(it)) } +
-                listOf(root.resolve("WORKSPACE"), root.resolve("WORKSPACE.bazel"), root.resolve("MODULE.bazel"))
-            ).filter { Files.exists(it) }
-
-    private fun findBazelAndroidManifest(root: Path): Path? {
-        if (!Files.exists(root.resolve("WORKSPACE")) && !Files.exists(root.resolve("WORKSPACE.bazel")) && !Files.exists(root.resolve("MODULE.bazel"))) return null
-        val srcDir = root.resolve("src")
-        if (!Files.isDirectory(srcDir)) return null
-        return runCatching {
-            Files.walk(srcDir, 6).use { s ->
-                s.filter { Files.isRegularFile(it) && it.fileName?.toString() == "AndroidManifest.xml" }
-                    .findFirst().orElse(null)
-            }
-        }.getOrNull()
-    }
+        (SETTINGS_FILES + BUILD_FILES + CATALOG_FILES).map { root.resolve(it) }.filter { Files.exists(it) }
 
     // --- model ---
 
@@ -212,58 +194,13 @@ object GradleImport {
     fun parse(root: Path): ProjectSpec? {
         if (!isGradleProject(root)) return null
         val notes = ArrayList<String>()
-        val hasRootGradle = (SETTINGS_FILES + BUILD_FILES).any { Files.exists(root.resolve(it)) }
-        val hasAndroidSubGradle = (SETTINGS_FILES + BUILD_FILES).any { Files.exists(root.resolve("android").resolve(it)) }
-        if (!hasRootGradle && !hasAndroidSubGradle) {
-            val bazelManifest = findBazelAndroidManifest(root) ?: return null
-            val name = root.fileName?.toString() ?: "project"
-            val relManifest = root.relativize(bazelManifest).toString().replace('\\', '/')
-            val pkg = manifestPackage(bazelManifest) ?: "com.google.android.as.oss"
-            notes.add("Imported Bazel Android workspace ($relManifest).")
-            return ProjectSpec(
-                name = name,
-                modules = listOf(
-                    ModuleSpec(
-                        name = "app",
-                        dirRel = ".",
-                        kind = Kind.ANDROID_APP,
-                        namespace = pkg,
-                        compileSdk = 36,
-                        minSdk = 26,
-                        targetSdk = 36,
-                        versionCode = 1,
-                        versionName = "1.0",
-                        manifestPlaceholders = emptyMap(),
-                        isKotlin = true,
-                        isCompose = true,
-                        viewBinding = false,
-                        parcelize = false,
-                        serialization = false,
-                        kspProcessors = emptySet(),
-                        mavenDeps = emptyList(),
-                        moduleDeps = emptyList(),
-                        platformDeps = emptyList(),
-                        flavorDimensions = emptyList(),
-                        buildTypes = emptyList(),
-                        productFlavors = emptyList(),
-                        manifest = relManifest,
-                    ),
-                ),
-                report = SyncReport(notes),
-            )
-        }
-        val effectiveConfigRoot = if (hasRootGradle) root else root.resolve("android")
-        val settings = SETTINGS_FILES.firstNotNullOfOrNull { readStripped(effectiveConfigRoot.resolve(it)) }
+        val settings = SETTINGS_FILES.firstNotNullOfOrNull { readStripped(root.resolve(it)) }
         val name = parseRootName(settings) ?: root.fileName?.toString() ?: "project"
 
-        val customCatalogPaths = settings?.let { s ->
-            Regex("""from\s*\(\s*files\s*\(\s*['"]([^'"]+\.toml)['"]\s*\)\s*\)""").findAll(s).map { it.groupValues[1] }.toList()
-        }.orEmpty()
-        val catalog = (customCatalogPaths + CATALOG_FILES).firstNotNullOfOrNull {
-            readOrNull(root.resolve(it)) ?: readOrNull(effectiveConfigRoot.resolve(it))
-        }?.let { runCatching { GradleVersionCatalog.parse(it) }.getOrNull() } ?: GradleVersionCatalog.EMPTY
-        val rootBuild = BUILD_FILES.firstNotNullOfOrNull { readStripped(effectiveConfigRoot.resolve(it)) } ?: ""
-        val rootVars = resolveVars(readProperties(root) + readProperties(effectiveConfigRoot) + collectVars(rootBuild))
+        val catalog = CATALOG_FILES.firstNotNullOfOrNull { readOrNull(root.resolve(it)) }
+            ?.let { runCatching { GradleVersionCatalog.parse(it) }.getOrNull() } ?: GradleVersionCatalog.EMPTY
+        val rootBuild = BUILD_FILES.firstNotNullOfOrNull { readStripped(root.resolve(it)) } ?: ""
+        val rootVars = resolveVars(readProperties(root) + collectVars(rootBuild))
         val conventions = buildConventionIndex(root)
 
         val paths = parseIncludes(settings).ifEmpty { discoverModuleDirs(root) }
@@ -404,11 +341,8 @@ object GradleImport {
         val hasAndroidBlock = androidTexts.isNotEmpty()
 
         var kind = when {
-            "com.android.application" in plugins || "com.android.application" in build ||
-                plugins.any { it.endsWith(".android.application") || it.endsWith("androidApplication") } ||
-                Regex("""\bapplicationId\s*=""").containsMatchIn(androidTexts.joinToString("\n")) -> Kind.ANDROID_APP
-            "com.android.library" in plugins || "com.android.library" in build ||
-                plugins.any { it.endsWith(".android.library") || it.endsWith("androidLibrary") } -> Kind.ANDROID_LIB
+            "com.android.application" in plugins || "com.android.application" in build -> Kind.ANDROID_APP
+            "com.android.library" in plugins || "com.android.library" in build -> Kind.ANDROID_LIB
             KMP_ANDROID_LIBRARY_PLUGIN in plugins || KMP_ANDROID_LIBRARY_PLUGIN in build -> Kind.ANDROID_LIB
             else -> Kind.JAVA
         }

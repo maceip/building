@@ -177,9 +177,6 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
     private var pendingDeps: List<dev.ide.model.template.TemplateDependency> = emptyList()
     private val pendingStarted = java.util.concurrent.atomic.AtomicBoolean(false)
     private val reconcileStarted = java.util.concurrent.atomic.AtomicBoolean(false)
-    @Volatile
-    var reconcileInFlight: Boolean = false
-        private set
 
     /** Fingerprint marker recording the declared-dependency set last fully reconciled — so reconciliation
      *  runs once per dep-set change, not on every open. */
@@ -384,7 +381,6 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
         }
         depsLog.info("reconcile: ${mods.size} module(s) with Maven deps → resolving")
 
-        reconcileInFlight = true
         depsScope.launch {
             // The reconcile is a background heal. It does NOT pre-show the resolve bar: a re-walk that's fully
             // served from the disk cache (the common reopen case) should be invisible. [reconcileProgress]
@@ -419,7 +415,6 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
                 // failure leaves the marker absent, so the next open retries — preserving offline auto-recovery.
                 if (allComplete || !anyRetriable) markReconciled(fingerprint)
             } finally {
-                reconcileInFlight = false
                 // Clear the resolving flag and refresh the project error state from what's now on disk
                 // (reasons stamped during the resolves), so any genuinely-unresolved dep keeps its banner.
                 _depsState.update {

@@ -325,6 +325,7 @@ internal fun CloneScreen(ctx: ScreenContext) {
             }
 
             if (openWhenDone) {
+                delay(500)
                 ctx.backend.projects.openProject(path)
             } else if (result.projectKind == UiProjectFolderKind.UNKNOWN) {
                 unrecognized = ClonedFolder(cleanName, path)

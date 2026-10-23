@@ -192,12 +192,12 @@ object AndroidIde {
             notificationsAllowed = {
                 NotificationManagerCompat.from(appContext).areNotificationsEnabled()
             },
-            // The ZCode agent (vendored upstream bundle in the bundled Node runtime) is the
-            // default Android agent; the Kotlin AgentBackend remains the fallback when the
-            // user selects it in AI settings (settings.ai.engine = "kotlin").
+            // The built-in Kotlin AgentBackend (supporting Anthropic, OpenAI, Gemini, OpenRouter, etc.)
+            // is the default Android agent; ZCodeAgentService is used when explicitly selected
+            // in AI settings (settings.ai.engine = "zcode").
             agentServiceFactory = { backend ->
                 // Null return keeps the built-in Kotlin AgentBackend (engine = "kotlin").
-                if ((backend.agentEnginePreference() ?: "zcode") == "kotlin") {
+                if ((backend.agentEnginePreference() ?: "kotlin") == "kotlin") {
                     null
                 } else {
                     dev.ide.android.agent.ZCodeAgentService(
