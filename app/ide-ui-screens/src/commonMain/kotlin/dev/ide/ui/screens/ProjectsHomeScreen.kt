@@ -275,7 +275,7 @@ fun ProjectsHomeScreen(
             loadIcon = loadIcon,
             loadIconImage = loadIconImage,
             onOpen = onOpen,
-            onNewProject = onNewProject,
+            onNewProject = { sheet = HomeSheet.NewProject },
             onImportProject = onImportProject,
             onCloneRepository = effectiveClone,
             onExportProject = onExportProject,
@@ -333,7 +333,8 @@ fun ProjectsHomeScreen(
             }
             item("actions") {
                 HomeActions(
-                    onNewProject = onNewProject,
+                    // New Project opens the sheet (prompt + clone URL + import), not the bare gallery.
+                    onNewProject = { sheet = HomeSheet.NewProject },
                     onCloneRepository = effectiveClone,
                     onImportProject = onImportProject,
                 )
@@ -398,6 +399,21 @@ fun ProjectsHomeScreen(
             onSponsor = onSponsor?.let { { sheet = null; it() } },
             onStarOnGitHub = onStarOnGitHub?.let { { sheet = null; it() } },
         )
+        HomeSheet.NewProject -> NewProjectSheet(
+            prompt = "",
+            onPromptChange = {},
+            onStartBuilding = {
+                sheet = null
+                onNewProject()
+            },
+            onDismiss = { sheet = null },
+            onCloneUrl = { url ->
+                sheet = null
+                dispatchQuickCloneUrl(url, onCloneAndOpen, effectiveClone)
+            },
+            onOpenFolder = onImportProject?.let { { sheet = null; it() } },
+            onImportPackage = onImportPackage?.let { { sheet = null; it() } },
+        )
         null -> Unit
     }
 
@@ -430,7 +446,7 @@ fun ProjectsHomeScreen(
     }
 }
 
-private enum class HomeSheet { Account }
+private enum class HomeSheet { Account, NewProject }
 
 @Composable
 private fun HomeHeader(
@@ -1067,6 +1083,7 @@ private fun NewProjectSheet(
     selectedStack: Int = 0,
     onSelectStack: (Int) -> Unit = {},
     onCloneGit: (() -> Unit)? = null,
+    onCloneUrl: (String) -> Unit = {},
     onOpenFolder: (() -> Unit)? = null,
     onImportPackage: (() -> Unit)? = null,
 ) {
@@ -1084,7 +1101,7 @@ private fun NewProjectSheet(
             onClose = onDismiss,
             selectedStack = selectedStack,
             onSelectStack = onSelectStack,
-            onCloneGit = onCloneGit ?: {},
+            onCloneUrl = { url -> onCloneUrl(url) },
             onOpenFolder = onOpenFolder ?: {},
             onImportPackage = onImportPackage ?: {},
             modifier = Modifier.fillMaxWidth(),
