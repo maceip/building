@@ -1,2 +1,0 @@
-android-aarch64/**/*.a filter=lfs diff=lfs merge=lfs -text
-android-aarch64/**/*.swiftmodule filter=lfs diff=lfs merge=lfs -text

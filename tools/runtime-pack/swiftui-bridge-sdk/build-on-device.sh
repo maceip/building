@@ -14,9 +14,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SOURCES="$HERE/sources"
 OUT="$HERE/android-aarch64"
 PKG=ai.building.dev
-REMOTE_SRC=/data/user/0/$PKG/files/bridge-build/src
+# Sources are staged where `shell` can write (adb push) and `run-as` can read.
+DEV_SRC=/data/local/tmp/bridge-src
 REMOTE_WORK=/data/user/0/$PKG/files/bridge-build
-REMOTE_ART=/data/local/tmp/bridge-artifacts
 
 command -v adb >/dev/null 2>&1 || { echo "ERROR: adb not found on PATH" >&2; exit 1; }
 DEV="$(adb devices -l 2>/dev/null | awk 'NR>1 && $2=="device"{print $1; exit}')"
@@ -25,12 +25,17 @@ echo "Device: $DEV"
 
 [ -d "$SOURCES" ] || { echo "ERROR: $SOURCES missing" >&2; exit 1; }
 
-# 1. push bridge sources to an app-writable location
+# 1. push bridge sources to a shell-writable, run-as-readable location
 echo "Pushing bridge sources..."
-adb shell run-as "$PKG" mkdir -p "$REMOTE_SRC" >/dev/null 2>&1 || true
+# Repair perms first: a prior run can leave the dir without execute, which blocks
+# traversal for rm/push. chmod 755 the dir (owner only needs x on the parent).
+adb shell chmod -R 755 "$DEV_SRC" >/dev/null 2>&1 || true
+adb shell rm -rf "$DEV_SRC" >/dev/null 2>&1 || true
+adb shell mkdir -p "$DEV_SRC" >/dev/null 2>&1 || true
 for f in "$SOURCES"/*.swift; do
-  adb push "$f" "$REMOTE_SRC/" >/dev/null 2>&1
+  adb push "$f" "$DEV_SRC/" >/dev/null 2>&1
 done
+adb shell chmod -R 755 "$DEV_SRC" >/dev/null 2>&1 || true
 
 # 2. write the remote build+install script
 REMOTE_SCRIPT=/data/local/tmp/bridge_remote.sh
@@ -44,24 +49,29 @@ FB=/data/user/0/ai.building.dev/files
 export PREFIX=$PU
 export LD_LIBRARY_PATH=$PU/lib:$PU/lib/aarch64-linux-android:$PU/lib/swift-runtime:$PU/lib/swift/host:$PU/lib/swift/host/compiler:$PU/lib/xtool
 export SOURCEKIT_TOOLCHAIN_PATH=$PU SDKROOT=$PU TMPDIR=$P/../tmp
-SRC=$FB/bridge-build/src
+SRC=/data/local/tmp/bridge-src
 WORK=$FB/bridge-build
-ART=/data/local/tmp/bridge-artifacts
-mkdir -p "$WORK" "$ART"
+rm -rf "$WORK"
+mkdir -p "$WORK"
 cd "$WORK"
 
 echo "=== compiling SwiftUI module (device swiftc) ==="
-"$PU/bin/swiftc" -emit-object -emit-module -module-name SwiftUI -target aarch64-unknown-linux-android28 \
+mkdir -p "$WORK/SwiftUI.swiftmodule"
+"$PU/bin/swiftc" -emit-object -emit-module -emit-module-path "$WORK/SwiftUI.swiftmodule/aarch64-unknown-linux-android28.swiftmodule" -module-name SwiftUI -target aarch64-unknown-linux-android28 \
   -sdk "$PU" -Xcc -isystem -Xcc "$PU/include/aarch64-linux-android" -parse-as-library \
   -module-cache-path "$WORK/mc" "$SRC"/*.swift
 "$PU/bin/aarch64-linux-android-ar" rcs libSwiftUI.a *.o
+# Mirror both triples (some toolchain lookups use the plain triple).
+cp "$WORK/SwiftUI.swiftmodule/aarch64-unknown-linux-android28.swiftmodule" "$WORK/SwiftUI.swiftmodule/aarch64-unknown-linux-android.swiftmodule"
 
 echo "=== generating CoreGraphics/UIKit/Combine re-export stubs ==="
 for m in CoreGraphics UIKit Combine; do
+  mkdir -p "$WORK/$m.swiftmodule"
   printf '@_exported import SwiftUI\n' > "$m.swift"
-  "$PU/bin/swiftc" -emit-module -module-name "$m" -target aarch64-unknown-linux-android28 \
+  "$PU/bin/swiftc" -emit-module -emit-module-path "$WORK/$m.swiftmodule/aarch64-unknown-linux-android28.swiftmodule" -module-name "$m" -target aarch64-unknown-linux-android28 \
     -sdk "$PU" -Xcc -isystem -Xcc "$PU/include/aarch64-linux-android" -parse-as-library \
     -module-cache-path "$WORK/mc_$m" "$m.swift"
+  cp "$WORK/$m.swiftmodule/aarch64-unknown-linux-android28.swiftmodule" "$WORK/$m.swiftmodule/aarch64-unknown-linux-android.swiftmodule"
 done
 
 echo "=== installing into live runtime pack ==="
@@ -90,19 +100,7 @@ for m in CoreGraphics UIKit Combine; do
   cp "$m.swiftmodule/aarch64-unknown-linux-android.swiftmodule" "$CACHE/$m.swiftmodule/aarch64-unknown-linux-android28.swiftmodule"
 done
 echo "6.4.1" > "$CACHE/VERSION"
-
-echo "=== staging artifacts for pull ==="
-mkdir -p "$ART/SwiftUI.swiftmodule" "$ART/CoreGraphics.swiftmodule" "$ART/UIKit.swiftmodule" "$ART/Combine.swiftmodule"
-cp libSwiftUI.a "$ART/"
-cp SwiftUI.swiftmodule/aarch64-unknown-linux-android.swiftmodule "$ART/SwiftUI.swiftmodule/"
-cp SwiftUI.swiftmodule/aarch64-unknown-linux-android.swiftmodule "$ART/SwiftUI.swiftmodule/aarch64-unknown-linux-android28.swiftmodule"
-for m in CoreGraphics UIKit Combine; do
-  cp "$m.swiftmodule/aarch64-unknown-linux-android.swiftmodule" "$ART/$m.swiftmodule/"
-  cp "$m.swiftmodule/aarch64-unknown-linux-android.swiftmodule" "$ART/$m.swiftmodule/aarch64-unknown-linux-android28.swiftmodule"
-done
-echo "6.4.1" > "$ART/VERSION"
-chmod -R 644 "$ART"
-echo "BUILD_OK"
+echo "INSTALL_OK"
 REMOTE_EOF
 
 adb push /tmp/bridge_remote.sh "$REMOTE_SCRIPT" >/dev/null 2>&1
@@ -110,9 +108,23 @@ adb shell chmod 644 "$REMOTE_SCRIPT" >/dev/null 2>&1
 echo "Running on-device build + install..."
 adb shell run-as "$PKG" sh "$REMOTE_SCRIPT" 2>&1
 
-# 3. pull built artifacts back to the Mac
+# 3. pull built artifacts back to the Mac via exec-out (run-as streams app-private
+#    files to stdout; avoids the directory-traversal denial of `adb pull`).
 echo "Pulling built artifacts to $OUT ..."
 rm -rf "$OUT"
-adb pull "$REMOTE_ART" "$OUT" >/dev/null 2>&1
+mkdir -p "$OUT/SwiftUI.swiftmodule" "$OUT/CoreGraphics.swiftmodule" "$OUT/UIKit.swiftmodule" "$OUT/Combine.swiftmodule"
+PACK_ID=$(adb shell run-as "$PKG" ls /data/user/0/ai.building.dev/files/dr/p 2>/dev/null | head -1 | tr -d '\r')
+PU=/data/user/0/ai.building.dev/files/dr/p/$PACK_ID/usr
+pull() { # pull <app-path> <local-path>
+  adb exec-out run-as "$PKG" cat "$1" > "$2"
+}
+pull "$PU/lib/swift/android/libSwiftUI.a" "$OUT/libSwiftUI.a"
+pull "$PU/lib/swift/android/SwiftUI.swiftmodule/aarch64-unknown-linux-android.swiftmodule" "$OUT/SwiftUI.swiftmodule/aarch64-unknown-linux-android.swiftmodule"
+pull "$PU/lib/swift/android/SwiftUI.swiftmodule/aarch64-unknown-linux-android28.swiftmodule" "$OUT/SwiftUI.swiftmodule/aarch64-unknown-linux-android28.swiftmodule"
+for m in CoreGraphics UIKit Combine; do
+  pull "$PU/lib/swift/android/$m.swiftmodule/aarch64-unknown-linux-android.swiftmodule" "$OUT/$m.swiftmodule/aarch64-unknown-linux-android.swiftmodule"
+  pull "$PU/lib/swift/android/$m.swiftmodule/aarch64-unknown-linux-android28.swiftmodule" "$OUT/$m.swiftmodule/aarch64-unknown-linux-android28.swiftmodule"
+done
+cp "$HERE/VERSION" "$OUT/VERSION"
 echo "Done. Artifacts in: $OUT"
-ls -R "$OUT" 2>/dev/null | head -40
+find "$OUT" -type f -exec ls -la {} \; 2>/dev/null | awk '{print $5, $9}'
