@@ -779,6 +779,31 @@ object GuiBridgeRuntime {
     }
 
     /**
+     * Source files that a focused Cupertino preview must compile together with its candidate.
+     *
+     * The previous behaviour compiled only the single candidate file, which dropped every other
+     * declaration in the app target; a candidate that referenced a type declared elsewhere then
+     * failed with `cannot find type 'X' in scope` (e.g. a preview referencing a `ButtonType` enum
+     * declared in a sibling `Models/` file). Here we collect every repo source that has no
+     * unsupported imports, excluding the real `@main` app entry (the shadow main supplies its own)
+     * and build/test directories, so transitive module dependencies resolve.
+     */
+    internal fun focusedCompanionSources(
+        projectRoot: Path,
+        internalModules: Set<String>,
+    ): List<Path> {
+        return SwiftBuildSystem.findSwiftSourceFiles(projectRoot).filterNot { f ->
+            val s = f.toString().replace('\\', '/')
+            s.contains("/.build/") || s.contains("/Pods/") ||
+                s.contains("/Tests/") || s.contains("/UITests/") || s.contains("/UnitTests/")
+        }.filter { f ->
+            val raw = runCatching { f.readText() }.getOrDefault("")
+            countUnsupportedSwiftImports(raw, internalModules) == 0 &&
+                !Regex("""@main|struct\s+\w+\s*:\s*App\b""").containsMatchIn(raw)
+        }
+    }
+
+    /**
      * When a repository contains multiple app targets or subprojects (for example,
      * `takenori-kabeya/SwiftUIStateManagementBook-Counter` which has both `SimpleCounterSwiftUI/`
      * and `SimpleCounterTCA/`), selects the single runnable SwiftUI target directory that has no
@@ -1181,7 +1206,6 @@ object GuiBridgeRuntime {
                     s.contains("/.build/") || s.contains("/Pods/") ||
                         s.contains("/Tests/") || s.contains("/UITests/") || s.contains("/UnitTests/")
                 }
-                val themeHelpers = repoSwiftFiles.filter { it.fileName.toString() == "Color+Theme.swift" }
                 data class FocusedCandidate(val score: Int, val file: Path, val sanitized: String)
                 val focusedCandidates = repoSwiftFiles.mapNotNull { p ->
                     val raw = runCatching { p.readText() }.getOrDefault("")
@@ -1206,6 +1230,13 @@ object GuiBridgeRuntime {
                 }.sortedByDescending { it.score }
 
                 val focusedDir = outDir.parent?.resolve("focused") ?: compileRoot.resolve("focused")
+                // A focused preview must compile the candidate together with the rest of its module.
+                // Building only the single candidate file (the previous behaviour) dropped the other
+                // source files in the app target, so the candidate's references to types declared
+                // elsewhere failed with "cannot find type 'X' in scope". Compile every repo source
+                // that has no unsupported imports and is not the real @main app entry (the shadow main
+                // supplies its own @main), so transitive module dependencies resolve.
+                val safeCompanions = focusedCompanionSources(projectRoot, internalModules)
                 for (cand in focusedCandidates.take(8)) {
                     if (Files.isDirectory(focusedDir)) {
                         Files.walk(focusedDir).use { stream ->
@@ -1214,15 +1245,13 @@ object GuiBridgeRuntime {
                     }
                     Files.createDirectories(focusedDir)
                     val srcs = ArrayList<Path>()
-                    val targetFile = focusedDir.resolve(cand.file.fileName.toString())
-                    targetFile.writeText(cand.sanitized)
-                    srcs.add(targetFile)
-                    for (th in themeHelpers) {
-                        if (th.parent == cand.file.parent) {
-                            val tp = focusedDir.resolve(th.fileName.toString())
-                            tp.writeText(sanitizeSwiftUiSource(runCatching { th.readText() }.getOrDefault(""), internalModules))
-                            srcs.add(tp)
-                        }
+                    val written = HashSet<String>()
+                    for (comp in safeCompanions) {
+                        val name = comp.fileName.toString()
+                        if (!written.add(name)) continue
+                        val target = focusedDir.resolve(name)
+                        target.writeText(sanitizeSwiftUiSource(runCatching { comp.readText() }.getOrDefault(""), internalModules))
+                        srcs.add(target)
                     }
                     val preludeFile = focusedDir.resolve("CupertinoBridgePrelude.swift")
                     preludeFile.writeText(CUPERTINO_BRIDGE_PRELUDE + "\n")
