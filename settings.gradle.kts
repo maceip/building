@@ -144,10 +144,10 @@ include(
     ":bench-support", // test-only: shared regression/benchmark harness (consumed via testImplementation)
     ":test-support",  // test-only: shared fixtures/infrastructure (temp dirs, stubs, jars, contexts) — auto-wired
 
-    // EXPERIMENTAL, and depended on by nothing. A portable Kotlin lexer/parser that mirrors the
-    // compiler's own token + element vocabulary and PSI shape, so the editor backend could one day parse
-    // without the JVM-only compiler. It stays out of every other module's dependency list until its
-    // differential suites (ours vs. the real compiler, over this repo's sources) are green.
+    // EXPERIMENTAL. A portable Kotlin lexer/parser that mirrors the compiler's own token + element
+    // vocabulary and PSI shape, so the editor backend could one day parse without the JVM-only compiler.
+    // (:ide-ios already leans on its PSI for on-device analysis; the rest of the framework stays off it
+    // until its differential suites — ours vs. the real compiler, over this repo's sources — are green.)
     ":kotlin-syntax",
     // And the question those two exist to answer: does :lang-kotlin-index actually port? A portable
     // rewrite of its bytecode-to-symbol layer on top of :kotlin-classfile, diffed symbol for symbol
