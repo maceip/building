@@ -7,6 +7,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.unit.Density
 import androidx.compose.runtime.CompositionLocalProvider
 import dev.ide.ui.StubBackend
@@ -52,6 +56,73 @@ class ProjectsHomeScreenSnapshot {
 
     @Test
     fun renderEmpty() = snapshot("home-empty.png", emptyList(), dark = true)
+
+    /**
+     * The clone field mid-transition: tapped, so it is expanding into the full row while Create and
+     * Open fade to black, then the settled state once the 280 ms tween has run out.
+     *
+     * `render` takes an absolute frame timestamp, so the clock keeps running forward from the settle-in
+     * loop; restarting it mid-test stalls every animation in the scene.
+     */
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Test
+    fun renderCloneFieldExpanded() {
+        val scene = ImageComposeScene(width = WIDTH, height = HEIGHT, density = Density(2f)) {
+            CodeAssistTheme(dark = true) {
+                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                    ProjectsHomeScreen(
+                        projects = projects,
+                        onOpen = {},
+                        onNewProject = {},
+                        onCloneRepository = {},
+                        onImportProject = {},
+                    )
+                }
+            }
+        }
+        try {
+            scene.render()
+            var now = 0L
+            for (frame in 1..30) {
+                now = frame * 50_000_000L
+                scene.render(now)
+            }
+            // Tap the collapsed clone field: the clickable row that owns the "clone" hint text.
+            val root = scene.semanticsOwners.first().unmergedRootSemanticsNode
+            fun walk(node: SemanticsNode): List<SemanticsNode> =
+                listOf(node) + node.children.flatMap { walk(it) }
+            val field = walk(root).first { node ->
+                node.config.getOrNull(SemanticsActions.OnClick) != null &&
+                    walk(node).any {
+                        it.config.getOrNull(SemanticsProperties.Text).orEmpty()
+                            .any { t -> t.text == "clone" }
+                    }
+            }
+            field.config[SemanticsActions.OnClick].action?.invoke()
+            // One frame applies the click; the next few let the tween run ~150 ms in, which is where
+            // the mid-transition capture lands (the field visibly widened, the sides part-way to black).
+            now += 50_000_000L
+            scene.render(now)
+            repeat(3) {
+                now += 50_000_000L
+                scene.render(now)
+            }
+            now += 40_000_000L
+            val mid = scene.render(now).encodeToData(EncodedImageFormat.PNG)!!.bytes
+            File("$OUT_DIR/home-clone-expanding.png").apply { parentFile?.mkdirs() }.writeBytes(mid)
+            // Then well past the tween, for the settled expanded state.
+            for (frame in 1..40) {
+                now += 50_000_000L
+                scene.render(now)
+            }
+            now += 6_000_000_000L
+            val png = scene.render(now).encodeToData(EncodedImageFormat.PNG)!!.bytes
+            File("$OUT_DIR/home-clone-expanded.png").apply { parentFile?.mkdirs() }.writeBytes(png)
+            println("wrote snapshots: $OUT_DIR/home-clone-expanding.png (${mid.size} bytes), home-clone-expanded.png (${png.size} bytes)")
+        } finally {
+            scene.close()
+        }
+    }
 
     /** A desktop window (sidebar + dense list) and a tablet in portrait (bottom bar + dense list). */
     @Test

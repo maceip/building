@@ -574,6 +574,7 @@
     <string name="home_clone_repository">استنساخ من Git</string>
     <string name="home_action_create">إنشاء</string>
     <string name="home_action_clone">استنساخ</string>
+    <string name="home_clone_hint">استنساخ</string>
     <string name="home_action_open">فتح</string>
     <string name="home_from_store">ابدأ من قالب في المتجر</string>
     <string name="home_seg_projects">المشاريع</string>

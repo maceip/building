@@ -529,6 +529,7 @@ We never collect your code, file or project names, which features you use, or an
     <string name="home_clone_repository">Clone app</string>
     <string name="home_action_create">Create</string>
     <string name="home_action_clone">Clone</string>
+    <string name="home_clone_hint">clone</string>
     <string name="home_action_open">Open</string>
     <string name="home_from_store">Start from a store template</string>
     <string name="home_seg_projects">Projects</string>

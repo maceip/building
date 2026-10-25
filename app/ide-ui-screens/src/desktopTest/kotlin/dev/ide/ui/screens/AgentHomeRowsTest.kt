@@ -162,16 +162,17 @@ class AgentHomeRowsTest {
             val plainStrings = allTextStrings.map { it.text }
 
             // 1. Onboarding gate ("What should we build?", "Continue", "Import or clone", "All projects") is gone;
-            //    real action buttons + QuickCloneBar are rendered directly on ProjectsHomeScreen.
+            //    the real action buttons + the clone field render directly on ProjectsHomeScreen.
             assertFalse("What should we build?" in plainStrings, "Onboarding prompt gate must not be rendered")
             assertFalse("Import or clone" in plainStrings, "Unstyled 'Import or clone' text must not be rendered")
             assertFalse("Continue" in plainStrings, "Unstyled 'Continue' section must not be rendered")
             assertTrue("Create" in plainStrings, "Expected 'Create' action button on ProjectsHomeScreen (present: $plainStrings)")
             assertTrue("Open" in plainStrings, "Expected 'Open' action button on ProjectsHomeScreen (present: $plainStrings)")
-            // "Clone" twice: the action row's clone button and the QuickCloneBar's, which is docked at the foot.
-            assertEquals(2, plainStrings.count { it == "Clone" }, "Expected the action-row Clone button and the QuickCloneBar Clone button (present: $plainStrings)")
-            assertTrue("Paste GitHub URL or owner/repo to clone…" in plainStrings, "Expected QuickCloneBar URL input on ProjectsHomeScreen")
-            assertTrue("Paste" in plainStrings, "Expected 'Paste' button in QuickCloneBar")
+            // The clone slot is the action row's field, reading "clone" until focused; the old docked
+            // bar with its Paste button and URL placeholder is gone.
+            assertTrue("clone" in plainStrings, "Expected the collapsed clone field hint on ProjectsHomeScreen (present: $plainStrings)")
+            assertFalse("Paste GitHub URL or owner/repo to clone…" in plainStrings, "The docked clone bar must not be rendered")
+            assertFalse("Paste" in plainStrings, "The docked clone bar's Paste button must not be rendered")
 
             // 2. Most recent project ("SignalAndroid") title has NO shimmer brush, while its inline subtitle DOES have shimmer brushes.
             val recentTitle = allTextStrings.firstOrNull { it.text == "SignalAndroid" }

@@ -524,6 +524,7 @@
     <string name="home_clone_repository">从 Git 克隆</string>
     <string name="home_action_create">创建</string>
     <string name="home_action_clone">克隆</string>
+    <string name="home_clone_hint">克隆</string>
     <string name="home_action_open">打开</string>
     <string name="home_from_store">从商店模板开始</string>
     <string name="home_seg_projects">项目</string>

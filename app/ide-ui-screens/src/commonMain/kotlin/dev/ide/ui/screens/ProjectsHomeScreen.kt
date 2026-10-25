@@ -1,11 +1,17 @@
 package dev.ide.ui.screens
 
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.draw.alpha
@@ -77,7 +83,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.backend.ProjectInfo
 import androidx.compose.ui.graphics.ImageBitmap
@@ -103,6 +116,7 @@ import dev.ide.ui.generated.resources.home_account_title
 import dev.ide.ui.generated.resources.home_action_clone
 import dev.ide.ui.generated.resources.home_action_create
 import dev.ide.ui.generated.resources.home_action_open
+import dev.ide.ui.generated.resources.home_clone_hint
 import dev.ide.ui.generated.resources.home_backup
 import dev.ide.ui.generated.resources.home_clone_repository
 import dev.ide.ui.generated.resources.home_delete
@@ -299,9 +313,9 @@ fun ProjectsHomeScreen(
             onCloneAndOpen = onCloneAndOpen,
         )
     } else
-    // The phone home is one screen: the project list takes the space, and the import/clone bar is docked
-    // at the foot rather than sitting between the action row and the list (where it pushed the first
-    // project off-screen and read as a second, competing set of buttons).
+    // The phone home is one screen: the project list takes the space. Cloning lives in the action
+    // row's clone field (see [HomeActions]) rather than a second, competing bar between the header
+    // and the list.
     Column(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -353,6 +367,9 @@ fun ProjectsHomeScreen(
                     onNewProject = { sheet = HomeSheet.NewProject },
                     onCloneRepository = effectiveClone,
                     onImportProject = onImportProject,
+                    onQuickClone = { rawUrl ->
+                        dispatchQuickCloneUrl(rawUrl, onCloneAndOpen, effectiveClone)
+                    },
                 )
             }
             item("segments") {
@@ -389,16 +406,6 @@ fun ProjectsHomeScreen(
                 item("empty") { EmptyList() }
             }
         }
-      }
-      if (onCloneAndOpen != null || effectiveClone != null) {
-          // Docked at the foot: the import/clone affordance stays reachable without spending a row between
-          // the actions and the list. Capped at the list's width so it lines up with the content above it.
-          QuickCloneBar(
-              onCloneUrl = { rawUrl ->
-                  dispatchQuickCloneUrl(rawUrl, onCloneAndOpen, effectiveClone)
-              },
-              modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(bottom = 10.dp),
-          )
       }
     }
     }
@@ -526,38 +533,75 @@ private fun HomeHeader(
 }
 
 /**
- * Primary project creation actions: New Project alongside direct 1-tap Clone (Git / GitHub) and Import
- * affordances so users never have to hunt inside a hidden overflow menu to clone from GitHub.
+ * The action row: **Create**, the clone field, **Open**.
  *
- * Compact labels on purpose: at three equal weights on a phone the full names ("Create new app",
- * "Clone app", "Open folder") all ellipsized — every button read as "+ Create …". The glyph plus one
- * word carries the same meaning; the full names live in the destinations these open.
+ * The clone slot is a box reading "clone" that grows into a full-row URL field on tap or focus while
+ * Create and Open fade to black and shrink away; submitting (Done, or the trailing fork glyph)
+ * collapses it and brings them back. This merges the old clone button and the docked clone bar into
+ * one affordance — the two offered the same thing twice, and the bar cost a row of vertical space
+ * between the header and the first project.
+ *
+ * Compact labels on the side buttons on purpose: at three equal weights on a phone the full names
+ * ("Create new app", "Clone app", "Open folder") all ellipsized — every button read as "+ Create …".
+ * The glyph plus one word carries the same meaning; the full names live in the destinations these
+ * open.
  */
 @Composable
 private fun HomeActions(
     onNewProject: () -> Unit,
     onCloneRepository: (() -> Unit)? = null,
     onImportProject: (() -> Unit)? = null,
+    onQuickClone: ((String) -> Unit)? = null,
 ) {
+    val c = MaterialTheme.colorScheme
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    var url by rememberSaveable { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
+    // One flag drives both halves of the transition: the side buttons shrink out and darken to black
+    // while the clone field takes the row. The gap closes too, so the expanded field is truly full width.
+    // The side weight floors just above zero: RowScope.weight throws on exactly 0, which the animation
+    // would hit the instant it finishes.
+    val sideWeight by animateFloatAsState(if (expanded) 0.0001f else 1f, animationSpec = tween(280))
+    val fade by animateFloatAsState(if (expanded) 1f else 0f, animationSpec = tween(280))
+    val gap by animateDpAsState(if (expanded) 0.dp else 8.dp, animationSpec = tween(280))
+
+    // Phone back collapses the field instead of leaving the screen: the row is mid-interaction.
+    PlatformBackHandler(enabled = expanded) {
+        expanded = false
+        url = ""
+    }
+
+    fun submitClone() {
+        // Blank input falls back to the full clone screen — the same contract the docked bar had.
+        if (url.isNotBlank()) onQuickClone?.invoke(url) else onCloneRepository?.invoke()
+        url = ""
+        expanded = false
+        focusManager.clearFocus()
+    }
+
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(gap),
     ) {
         HeaderButton(
             glyph = CaSymbols.add,
             label = stringResource(Res.string.home_action_create),
             primary = true,
-            modifier = Modifier.weight(1f),
-            onClick = onNewProject,
+            modifier = Modifier.weight(sideWeight),
+            // Faded buttons are also inert: a black Create is not a target.
+            onClick = { if (!expanded) onNewProject() },
+            containerColor = lerp(c.primary, Color.Black, fade),
+            contentColor = lerp(c.onPrimary, Color.Black, fade),
         )
-        if (onCloneRepository != null) {
-            HeaderButton(
-                glyph = CaSymbols.forkRight,
-                label = stringResource(Res.string.home_action_clone),
-                primary = false,
+        if (onCloneRepository != null || onQuickClone != null) {
+            HomeCloneField(
+                expanded = expanded,
+                url = url,
+                onUrlChange = { url = it },
+                onExpand = { expanded = true },
+                onSubmit = { submitClone() },
                 modifier = Modifier.weight(1f),
-                onClick = onCloneRepository,
             )
         }
         if (onImportProject != null) {
@@ -565,8 +609,91 @@ private fun HomeActions(
                 glyph = CaSymbols.folderOpen,
                 label = stringResource(Res.string.home_action_open),
                 primary = false,
-                modifier = Modifier.weight(1f),
-                onClick = onImportProject,
+                modifier = Modifier.weight(sideWeight),
+                onClick = { if (!expanded) onImportProject() },
+                containerColor = lerp(Color.Transparent, Color.Black, fade),
+                contentColor = lerp(c.onSurface, Color.Black, fade),
+            )
+        }
+    }
+}
+
+/**
+ * The clone affordance: a box reading "clone" until it is tapped or focused, then a full-row URL field.
+ *
+ * Collapsed it presents like the button it replaced (fork glyph + label in a raised, outlined box);
+ * expanding autofocuses the field, tints the border, and moves the fork glyph inside as the submit
+ * button — so a URL can be sent with the keyboard's Done action or a tap on the glyph.
+ */
+@Composable
+internal fun HomeCloneField(
+    expanded: Boolean,
+    url: String,
+    onUrlChange: (String) -> Unit,
+    onExpand: () -> Unit,
+    onSubmit: () -> Unit,
+    modifier: Modifier = Modifier,
+    focusRequester: FocusRequester = remember { FocusRequester() },
+) {
+    val c = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(8.dp)
+    val hint = stringResource(Res.string.home_clone_hint)
+    LaunchedEffect(expanded) {
+        if (expanded) focusRequester.requestFocus()
+    }
+    Row(
+        modifier
+            .height(36.dp)
+            .shadow(4.dp, shape)
+            .clip(shape)
+            .background(c.surfaceContainerLow)
+            .border(1.dp, if (expanded) c.primary else c.outlineVariant, shape)
+            // Only collapsed: once expanded the taps inside belong to the text field.
+            .clickable(enabled = !expanded) { onExpand() }
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (expanded) {
+            BasicTextField(
+                value = url,
+                onValueChange = onUrlChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = c.onSurface),
+                cursorBrush = SolidColor(c.primary),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onSubmit() }),
+                modifier = Modifier.weight(1f).focusRequester(focusRequester),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (url.isEmpty()) {
+                            Text(
+                                hint,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = c.outline,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        inner()
+                    }
+                },
+            )
+            Symbol(
+                CaSymbols.forkRight,
+                contentDescription = stringResource(Res.string.home_action_clone),
+                size = 18.dp,
+                tint = c.primary,
+                modifier = Modifier.clickable { onSubmit() },
+            )
+        } else {
+            Symbol(CaSymbols.forkRight, contentDescription = null, size = 18.dp, tint = c.onSurfaceVariant)
+            Text(
+                hint,
+                style = MaterialTheme.typography.labelLarge,
+                color = c.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -1524,8 +1651,13 @@ private fun HeaderButton(
     label: String,
     primary: Boolean,
     modifier: Modifier = Modifier,
+    elevation: Dp = 4.dp,
+    /** Overrides the scheme's container/content colors; used to fade the button to black mid-animation. */
+    containerColor: Color? = null,
+    contentColor: Color? = null,
     onClick: () -> Unit,
 ) {
+    val c = MaterialTheme.colorScheme
     val content: @Composable RowScope.() -> Unit = {
         Symbol(glyph, contentDescription = null, size = 18.dp)
         Spacer(Modifier.width(8.dp))
@@ -1533,15 +1665,30 @@ private fun HeaderButton(
     }
     val padding = PaddingValues(start = 12.dp, end = 14.dp)
     val shape = RoundedCornerShape(8.dp)
+    val base = modifier.height(36.dp).shadow(elevation, shape)
     if (primary) {
-        Button(onClick = onClick, shape = shape, contentPadding = padding, modifier = modifier.height(36.dp), content = content)
+        Button(
+            onClick = onClick,
+            shape = shape,
+            contentPadding = padding,
+            modifier = base,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = containerColor ?: c.primary,
+                contentColor = contentColor ?: c.onPrimary,
+            ),
+            content = content,
+        )
     } else {
         OutlinedButton(
             onClick = onClick,
             shape = shape,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            border = BorderStroke(1.dp, c.outlineVariant),
             contentPadding = padding,
-            modifier = modifier.height(36.dp),
+            modifier = base,
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = containerColor ?: Color.Transparent,
+                contentColor = contentColor ?: c.onSurface,
+            ),
             content = content,
         )
     }

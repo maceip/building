@@ -14,6 +14,64 @@ import kotlin.test.assertTrue
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 class QuickCloneUrlTest {
 
+    /**
+     * The phone home's clone slot: expanded, typing a URL and tapping the trailing fork glyph submits
+     * it through the same normalization the docked bar used.
+     */
+    @Test
+    fun cloneFieldSubmitsOnTrailingGlyphTap() {
+        val tempDir = Files.createTempDirectory("clone-field-ui-test").toFile()
+        try {
+            var dispatchedUrl: String? = null
+            var fallbackOpened = false
+            var typedUrl = ""
+            PaparazziSession(
+                deviceConfig = DeviceConfig.PIXEL_9_PRO.withHeight(240),
+                reportDir = tempDir,
+            ) {
+                MaterialTheme {
+                    HomeCloneField(
+                        expanded = true,
+                        url = typedUrl,
+                        onUrlChange = { typedUrl = it },
+                        onExpand = {},
+                        onSubmit = {
+                            dispatchQuickCloneUrl(
+                                rawUrl = typedUrl,
+                                onCloneAndOpen = { url, _ -> dispatchedUrl = url },
+                                onCloneRepository = { fallbackOpened = true },
+                            )
+                        },
+                    )
+                }
+            }.use { session ->
+                val root = session.scene.semanticsOwners.first().unmergedRootSemanticsNode
+                fun walk(node: androidx.compose.ui.semantics.SemanticsNode): List<androidx.compose.ui.semantics.SemanticsNode> =
+                    listOf(node) + node.children.flatMap { walk(it) }
+
+                // Type the repo into the field, then submit with the trailing fork glyph — the node
+                // labelled "Clone" that carries an OnClick action.
+                val editable = walk(root).first { it.config.getOrNull(SemanticsActions.SetText) != null }
+                editable.config[SemanticsActions.SetText].action?.invoke(
+                    androidx.compose.ui.text.AnnotatedString("microsoft/vscode"),
+                )
+                session.advanceFrames(3)
+
+                val submitGlyph = walk(root).first { node ->
+                    val desc = node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
+                    "Clone" in desc && node.config.getOrNull(SemanticsActions.OnClick) != null
+                }
+                submitGlyph.config[SemanticsActions.OnClick].action?.invoke()
+                session.advanceFrames(3)
+
+                assertEquals("https://github.com/microsoft/vscode", dispatchedUrl)
+                assertTrue(!fallbackOpened)
+            }
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
     @Test
     fun quickCloneBarRendersAndTriggersCloneInComposeScene() {
         val tempDir = Files.createTempDirectory("quick-clone-ui-test").toFile()
