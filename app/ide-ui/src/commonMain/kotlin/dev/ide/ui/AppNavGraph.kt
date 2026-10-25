@@ -97,6 +97,9 @@ import org.jetbrains.compose.resources.stringResource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
+/** Screen id of the redesigned Agent settings destination (Settings hub → Agent, Home → agent icon). */
+private const val SCREEN_AGENT_SETTINGS: String = "agent.settings"
+
 /**
  * Routes the current [CodeAssistAppState.screen] to its screen composable, animating between them with
  * [ScreenHost]. Every destination reads state from [app] and reports back through its intent functions, so
@@ -786,7 +789,7 @@ private fun ProjectPickerRoute(
             app.openPluginScreen(VcsService.SCREEN_CLONE)
         },
         // Agent-first Home: the agent icon opens the redesigned Agent settings (also in the Settings hub).
-        onOpenAgentSettings = { app.openPluginScreen(dev.ide.ui.screens.SCREEN_AGENT_SETTINGS) },
+        onOpenAgentSettings = { app.openPluginScreen(SCREEN_AGENT_SETTINGS) },
         onCloneGit = { app.openPluginScreen(VcsService.SCREEN_CLONE) },
         onImportPackage = if (fileActions.canPickFile) app::requestProjectImport else null,
     )

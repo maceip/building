@@ -658,26 +658,24 @@ class CodeAssistAppStateTest {
     }
 
     @Test
-    fun gradleImportBlocksThenOpensTheConvertedProject() = runTest {
+    fun gradleFolderImportOpensTheProject() = runTest {
         val backend = settled(importResult = UiProjectResult(true, ""))
         val app = appState(backend, PickingActions("/external/gradle-app"))
         advanceUntilIdle()
 
         app.requestProjectImport()
         advanceUntilIdle()
-        assertFalse(app.showImportModeChoice)
         assertFalse(app.importBusy)
         assertEquals(Screen.Editor, app.screen)
-        assertFalse(app.pendingGradleConvert)
     }
 
     /**
-     * A CodeAssist workspace is adopted as-is: no importer translates it, and the compatibility/convert
-     * question is meaningless for it. Before this it was rejected as "not an importable Gradle project", so a
-     * project folder that had dropped out of the picker could not be brought back.
+     * A CodeAssist workspace is adopted as-is: no importer translates it. Before this it was rejected as
+     * "not an importable Gradle project", so a project folder that had dropped out of the picker could not
+     * be brought back.
      */
     @Test
-    fun importingACodeAssistFolderSkipsTheGradleModeQuestion() = runTest {
+    fun importingACodeAssistFolderAdoptsItAsIs() = runTest {
         val backend = settled(folderKind = UiProjectFolderKind.CODE_ASSIST)
         val app = appState(backend, PickingActions("/external/my-project"))
         advanceUntilIdle()
@@ -685,8 +683,6 @@ class CodeAssistAppStateTest {
         app.requestProjectImport()
         advanceUntilIdle()
 
-        assertFalse(app.showImportModeChoice, "nothing to convert — the mode prompt must not appear")
-        assertFalse(app.pendingGradleConvert)
         assertFalse(app.importBusy)
         assertEquals(Screen.Editor, app.screen)
     }
@@ -701,7 +697,6 @@ class CodeAssistAppStateTest {
         app.requestProjectImport()
         advanceUntilIdle()
 
-        assertFalse(app.showImportModeChoice)
         assertEquals(Screen.Projects, app.screen)
         assertTrue(app.importError != null, "an unrecognised folder must be reported")
     }
@@ -784,8 +779,6 @@ class CodeAssistAppStateTest {
 
         app.requestProjectImport()
         advanceUntilIdle()
-        app.importGradleProject(convert = false)
-        advanceUntilIdle()
         assertFalse(app.importBusy)
         assertEquals(Screen.Projects, app.screen)
         assertEquals(ImportError.GradleFailed("No settings.gradle"), app.importError)
@@ -797,7 +790,7 @@ class CodeAssistAppStateTest {
         val app = appState(backend, PickingActions(null))
         advanceUntilIdle()
 
-        app.importGradleProject(convert = false)
+        app.requestProjectImport()
         advanceUntilIdle()
         assertFalse(app.importBusy)
         assertNull(app.importError)

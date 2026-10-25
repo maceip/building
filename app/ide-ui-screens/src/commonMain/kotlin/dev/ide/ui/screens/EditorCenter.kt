@@ -36,7 +36,6 @@ import dev.ide.ui.actions.dispatchAction
 import dev.ide.ui.backend.IndexUiStatus
 import dev.ide.ui.backend.UiActionContext
 import dev.ide.ui.backend.UiActionPlaces
-import dev.ide.ui.backend.UiCompatibilityInfo
 import dev.ide.ui.components.DepsProgressBar
 import dev.ide.ui.components.EditorTopBar
 import org.jetbrains.compose.resources.stringResource
@@ -71,10 +70,8 @@ import dev.ide.ui.platform.isMobilePlatform
 import dev.ide.ui.theme.Motion
 import kotlinx.coroutines.launch
 import dev.ide.ui.actions.applyWorkspaceEdits
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.withContext
 
 /**
  * Top bar + deps progress + tabs + breadcrumb row + the code canvas — the editor column shared by both
@@ -102,29 +99,10 @@ internal fun EditorCenter(
     val depsScope = rememberCoroutineScope()
     val pluginNavigator = LocalPluginNavigator.current
     val pluginFileOpener = LocalPluginFileOpener.current
-    // Gradle compatibility mode: non-null only for a project imported from Gradle. Drives the top-bar compat
-    // chip + the details banner below the toolbar; the chip re-opens a dismissed banner. `compatEpoch` re-keys
-    // the disk read so a convert/revert (which drops/re-adds the marker without changing rootPath) refreshes it
-    // — otherwise the cached non-null value would leave a ghost banner/chip after converting.
-    var compatEpoch by remember(project.rootPath) { mutableStateOf(0) }
-    // Read off the main thread: its sync-staleness check walks the project tree, which ANR'd the editor open
-    // on large projects and slow storage. `compatLoaded` gates what must wait for the first read.
-    var compatInfo by remember(project.rootPath) { mutableStateOf<UiCompatibilityInfo?>(null) }
-    var compatLoaded by remember(project.rootPath) { mutableStateOf(false) }
-    val showCompatBanner = false
-    LaunchedEffect(project.rootPath, compatEpoch) {
-        val info = withContext(Dispatchers.Default) { state.backend.projects.compatibilityInfo() }
-        compatInfo = info
-        compatLoaded = true
-    }
-    var showConvertDialog by remember(project.rootPath) { mutableStateOf(false) }
     // A project adopted from a folder nothing recognized (a clone). Read once per project: the marker only
     // changes when the project gains a module, which re-opens the editor anyway.
     val unrecognizedInfo = remember(project.rootPath) { state.backend.projects.unrecognizedProjectInfo() }
     var showUnrecognizedBanner by remember(project.rootPath) { mutableStateOf(unrecognizedInfo != null) }
-    LaunchedEffect(project.rootPath, compatLoaded) {
-        state.pendingGradleConvertPrompt = false
-    }
     // @Preview presence (enables the Design view-mode toggle + top-bar shortcut) is set by the editor daemon's
     // PREVIEWS pass below — no separate detection effect.
     var hasPreview by remember(state.active?.path) { mutableStateOf(false) }

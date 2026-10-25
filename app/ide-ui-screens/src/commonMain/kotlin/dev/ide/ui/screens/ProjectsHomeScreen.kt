@@ -1612,6 +1612,22 @@ private fun SortChooser(sort: ProjectSort, onSort: (ProjectSort) -> Unit) {
     }
 }
 
+/** Distinct text color for each project operating system / runtime stack (plain colored text, no pill badge). */
+fun projectStackColor(
+    isAndroid: Boolean = false,
+    isNode: Boolean = false,
+    isPython: Boolean = false,
+    isSwift: Boolean = false,
+    compatibility: Boolean = false,
+): Color = when {
+    isSwift -> Color(0xFFFB923C)      // Swift orange
+    isPython -> Color(0xFFFACC15)     // Python gold
+    isNode -> Color(0xFF4ADE80)       // Node.js green
+    isAndroid -> Color(0xFF3DDC84)    // Android green
+    compatibility -> Color(0xFFA78BFA) // Gradle/Kotlin purple
+    else -> Color(0xFF38BDF8)         // Sky blue
+}
+
 /**
  * One project in the wide list: icon, name over horizontally scrolling colored stack + modules + tags,
  * the last-opened time, and the actions menu.

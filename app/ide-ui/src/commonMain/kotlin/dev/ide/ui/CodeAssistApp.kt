@@ -37,7 +37,6 @@ import dev.ide.ui.platform.PlatformBackHandler
 import dev.ide.ui.platform.PointerInputModeHost
 import dev.ide.ui.platform.PlatformSystemBars
 import dev.ide.ui.platform.rememberConfiguredIdeHaptics
-import dev.ide.ui.screens.GradleImportModeDialog
 import dev.ide.ui.screens.ImportSourceDialog
 import dev.ide.ui.theme.CodeAssistTheme
 import dev.ide.ui.theme.rememberJetBrainsMono
@@ -86,11 +85,8 @@ fun CodeAssistApp(
 
     // The active project changes (create/open) bump the epoch; re-key per-project state on it.
     val state = remember(backend, app.epoch) {
-        IdeUiState(backend, composePreviewHost, initialGradleConvertPrompt = app.pendingGradleConvert)
+        IdeUiState(backend, composePreviewHost)
     }
-    // Clear the one-shot after it has been baked into the (re-created) state, so navigating back to a project
-    // later never re-triggers the convert prompt.
-    LaunchedEffect(state) { app.consumeGradleConvertPrompt() }
     // Cancel the state's async file-read scope when it's replaced (project/backend change) or leaves composition,
     // so a slow read for an abandoned project can't resolve against the new one.
     DisposableEffect(state) { onDispose { state.dispose() } }
@@ -210,12 +206,6 @@ fun CodeAssistApp(
                         onFolder = app::chooseFolderImport,
                         onPackage = app::choosePackageImport,
                         onDismiss = app::dismissImportSourceChoice,
-                    )
-                    GradleImportModeDialog(
-                        visible = false,
-                        onCompat = { app.importGradleProject(convert = false) },
-                        onConvert = { app.importGradleProject(convert = false) },
-                        onDismiss = app::dismissImportModeChoice,
                     )
                 }
             }

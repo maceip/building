@@ -300,13 +300,6 @@ class CodeAssistAppState(
     var showImportSourceChoice: Boolean by mutableStateOf(false)
         private set
 
-    /** The import-time "compatibility mode vs convert" chooser (shown after the folder pick request), and a
-     *  one-shot carried into the freshly-opened editor's state when Convert was chosen. */
-    var showImportModeChoice: Boolean by mutableStateOf(false)
-        private set
-    var pendingGradleConvert: Boolean by mutableStateOf(false)
-        private set
-
     // ---- backend-derived state ----
 
     /** The active project epoch: create/open bumps it, and per-project state is re-keyed on it. */
@@ -329,7 +322,7 @@ class CodeAssistAppState(
      *  exits the app as usual. */
     val canNavigateBack: Boolean
         get() = screen != Screen.Projects || homeTab != HomeTab.Projects ||
-            showAnalytics || showImportSourceChoice || showImportModeChoice
+            showAnalytics || showImportSourceChoice
 
     // Session resume across a process kill: the project that was on screen last run (captured up-front, before
     // any bridge runs, so the tracking below cannot clear it before the resume reads it) and whether resume is
@@ -675,14 +668,9 @@ class CodeAssistAppState(
 
     // ---- project import ----
 
-    /** The folder the user picked, held while the compatibility/convert question is answered for it. */
-    private var pendingImportPath: String? = null
-
     /**
-     * The picker's "Import project" action. Picks the folder FIRST and asks what it is, because the only
-     * follow-up question -- compatibility vs convert -- applies to a foreign build system and not to a
-     * CodeAssist workspace. Asking first (as this did) meant a CodeAssist project folder had to answer a
-     * question about Gradle conversion that meant nothing for it, before being rejected anyway.
+     * The picker's "Import project" action. The folder is inspected and adopted/imported directly: there is no
+     * follow-up question, so a CodeAssist workspace is never asked about Gradle conversion it doesn't need.
      */
     fun requestProjectImport() {
         // The two sources sit behind different host APIs (pickDirectory vs pickFile), so which picker to
@@ -719,9 +707,9 @@ class CodeAssistAppState(
             scope.launch {
                 when (backend.projects.inspectProjectFolder(path)) {
                     // Nothing to translate: adopt it and open it.
-                    UiProjectFolderKind.CODE_ASSIST, UiProjectFolderKind.NODE, UiProjectFolderKind.SWIFT, UiProjectFolderKind.PYTHON -> runImport(path, convert = false)
+                    UiProjectFolderKind.CODE_ASSIST, UiProjectFolderKind.NODE, UiProjectFolderKind.SWIFT, UiProjectFolderKind.PYTHON -> runImport(path)
                     // Foreign build system: open directly without prompting the user to convert formats.
-                    UiProjectFolderKind.GRADLE -> runImport(path, convert = false)
+                    UiProjectFolderKind.GRADLE -> runImport(path)
                     UiProjectFolderKind.UNKNOWN -> {
                         importBusy = false
                         importError = ImportError.GradleFailed("")
@@ -731,37 +719,15 @@ class CodeAssistAppState(
         }
     }
 
-    fun dismissImportModeChoice() {
-        showImportModeChoice = false
-        pendingImportPath = null
-    }
-
-    /** Answer to the compatibility/convert prompt, for the folder already picked. */
-    fun importGradleProject(convert: Boolean) {
-        val path = pendingImportPath
-        showImportModeChoice = false
-        pendingImportPath = null
-        if (path != null) {
-            importBusy = true
-            scope.launch { runImport(path, false) }
-        }
-    }
-
     /** Import [path] and open it. */
-    private suspend fun runImport(path: String, convert: Boolean) {
+    private suspend fun runImport(path: String) {
         val result = backend.projects.importExternalProject(path)
         importBusy = false
         if (result.success) {
-            pendingGradleConvert = false
             screen = Screen.Editor
         } else {
             importError = ImportError.GradleFailed(result.message)
         }
-    }
-
-    /** Clear the convert one-shot once it has been baked into the (re-created) per-project state. */
-    fun consumeGradleConvertPrompt() {
-        pendingGradleConvert = false
     }
 
     fun dismissImportError() {
@@ -1041,7 +1007,6 @@ class CodeAssistAppState(
     fun navigateBack() {
         when {
             showImportSourceChoice -> dismissImportSourceChoice()
-            showImportModeChoice -> dismissImportModeChoice()
             showAnalytics -> setAnalyticsConsent(false)
 
             // A contributed screen holding its own claim on Back answers first: it is the deeper handler,

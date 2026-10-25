@@ -5,11 +5,9 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,7 +23,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -33,8 +30,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -49,18 +44,12 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -325,109 +314,6 @@ fun AgentReplyBody(text: String, modifier: Modifier = Modifier) {
     )
 }
 
-@Composable
-fun AgentStepLog(
-    title: String,
-    rows: List<Triple<String, String, String>>,
-    modifier: Modifier = Modifier,
-    expanded: Boolean = false,
-) {
-    var open by remember(expanded) { mutableStateOf(expanded) }
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(AgentUi.chrome.bg)
-            .border(1.dp, AgentUi.chrome.hairline, RoundedCornerShape(14.dp))
-            .clickable { open = !open }
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            AgentStatusDot(active = true)
-            Text(title, fontSize = 13.sp, color = AgentUi.chrome.textMuted)
-        }
-        if (open) {
-            rows.forEach { (kind, detail, delta) ->
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(kind, fontSize = 12.5.sp, color = AgentUi.chrome.textFaint, modifier = Modifier.width(52.dp))
-                    Text(detail, fontSize = 12.5.sp, color = AgentUi.chrome.textMuted, modifier = Modifier.weight(1f))
-                    if (delta.isNotEmpty()) {
-                        Text(
-                            delta,
-                            fontSize = 12.5.sp,
-                            color = if (delta.startsWith("+")) AgentUi.chrome.accent else AgentUi.chrome.danger,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun AgentDiffSummary(
-    files: List<Triple<String, String, String>>,
-    primaryLabel: String,
-    onPrimary: () -> Unit,
-    secondaryLabel: String,
-    onSecondary: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(AgentUi.chrome.surface)
-            .border(1.dp, AgentUi.chrome.hairlineStrong, RoundedCornerShape(16.dp)),
-    ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            files.forEach { (name, add, del) ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(name, fontSize = 13.sp, color = AgentUi.chrome.text, modifier = Modifier.weight(1f))
-                    if (add.isNotEmpty()) {
-                        Text(add, fontSize = 12.5.sp, color = AgentUi.chrome.accent, modifier = Modifier.padding(end = 6.dp))
-                    }
-                    if (del.isNotEmpty()) {
-                        Text(del, fontSize = 12.5.sp, color = AgentUi.chrome.danger)
-                    }
-                }
-            }
-        }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(46.dp),
-        ) {
-            Box(
-                Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .clickable(onClick = onPrimary)
-                    .padding(horizontal = 14.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                Text(primaryLabel, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = AgentUi.chrome.text)
-            }
-            Box(
-                Modifier
-                    .width(1.dp)
-                    .fillMaxWidth()
-                    .background(AgentUi.chrome.hairlineStrong),
-            )
-            Box(
-                Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .clickable(onClick = onSecondary),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(secondaryLabel, fontSize = 14.sp, color = AgentUi.chrome.textMuted)
-            }
-        }
-    }
-}
-
 /**
  * Multiplatform animated text shimmer brush that sweeps a specular highlight across [baseColor].
  */
@@ -450,122 +336,6 @@ fun rememberTextShimmerBrush(
         start = Offset(phase, 0f),
         end = Offset(phase + 220f, 0f),
     )
-}
-
-@Composable
-fun AgentProjectRow(
-    title: String,
-    meta: String,
-    time: String,
-    letter: String,
-    selected: Boolean = false,
-    statusColor: Color = AgentUi.chrome.textFaint,
-    avatar: ImageBitmap? = null,
-    stackLabel: String = "",
-    stackColor: Color = Color.Unspecified,
-    modulesLabel: String = "",
-    tags: List<String> = emptyList(),
-    shimmerSubtitle: Boolean = false,
-    onClick: () -> Unit = {},
-    modifier: Modifier = Modifier,
-) {
-    val bg = if (selected) AgentUi.chrome.surface else Color.Transparent
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(bg)
-            .clickable(onClick = onClick)
-            .padding(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Box(
-            Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(if (selected) AgentUi.chrome.surfaceAlt else AgentUi.chrome.surface),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (avatar != null) {
-                Image(
-                    bitmap = avatar,
-                    contentDescription = title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
-                Text(letter, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = AgentUi.chrome.text)
-            }
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(
-                title,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
-                color = AgentUi.chrome.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            val resolvedStackColor = if (stackColor != Color.Unspecified) stackColor else AgentUi.chrome.accent
-            val stackShimmer = if (shimmerSubtitle) rememberTextShimmerBrush(resolvedStackColor) else null
-            val metaShimmer = if (shimmerSubtitle) rememberTextShimmerBrush(AgentUi.chrome.textMuted) else null
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (stackLabel.isNotBlank() || modulesLabel.isNotBlank() || tags.isNotEmpty()) {
-                    val annotated = buildAnnotatedString {
-                        if (stackLabel.isNotBlank()) {
-                            val style = if (stackShimmer != null) {
-                                SpanStyle(brush = stackShimmer, fontWeight = FontWeight.Medium)
-                            } else {
-                                SpanStyle(color = resolvedStackColor, fontWeight = FontWeight.Medium)
-                            }
-                            withStyle(style) { append(stackLabel) }
-                        }
-                        val tailSegments = buildList {
-                            if (modulesLabel.isNotBlank()) add(modulesLabel)
-                            addAll(tags.filter { it.isNotBlank() })
-                        }
-                        if (tailSegments.isNotEmpty()) {
-                            val prefix = if (stackLabel.isNotBlank()) " · " else ""
-                            val tailText = prefix + tailSegments.joinToString(" · ")
-                            val style = if (metaShimmer != null) {
-                                SpanStyle(brush = metaShimmer)
-                            } else {
-                                SpanStyle(color = AgentUi.chrome.textMuted)
-                            }
-                            withStyle(style) { append(tailText) }
-                        }
-                    }
-                    Text(
-                        text = annotated,
-                        fontSize = 13.sp,
-                        maxLines = 1,
-                        softWrap = false,
-                    )
-                } else {
-                    val fallbackStyle = if (metaShimmer != null) {
-                        TextStyle(fontSize = 13.sp, brush = metaShimmer)
-                    } else {
-                        TextStyle(fontSize = 13.sp, color = AgentUi.chrome.textMuted)
-                    }
-                    Text(
-                        text = meta,
-                        style = fallbackStyle,
-                        maxLines = 1,
-                        softWrap = false,
-                    )
-                }
-            }
-        }
-        if (time.isNotEmpty()) {
-            Text(time, fontSize = 12.sp, color = AgentUi.chrome.textFaint, maxLines = 1)
-        }
-    }
 }
 
 @Composable
@@ -607,41 +377,6 @@ fun AgentSegmented(
 }
 
 @Composable
-fun AgentToggleRow(
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(64.dp)
-            .padding(horizontal = 20.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(title, fontSize = 15.sp, color = AgentUi.chrome.text)
-            Text(subtitle, fontSize = 12.5.sp, color = AgentUi.chrome.textFaint)
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = AgentUi.chrome.accentInk,
-                checkedTrackColor = AgentUi.chrome.accent,
-                checkedBorderColor = Color.Transparent,
-                uncheckedThumbColor = AgentUi.chrome.textMuted,
-                uncheckedTrackColor = AgentUi.chrome.surfaceAlt,
-                uncheckedBorderColor = Color.Transparent,
-            ),
-        )
-    }
-}
-
-@Composable
 fun AgentRadioRow(
     label: String,
     selected: Boolean,
@@ -677,31 +412,6 @@ fun AgentRadioRow(
             }
         }
         Text(label, fontSize = 15.sp, color = AgentUi.chrome.text)
-    }
-}
-
-@Composable
-fun AgentComposerMetaChip(
-    label: String,
-    onClick: () -> Unit = {},
-    leadingDot: Boolean = true,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier
-            .height(32.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        if (leadingDot) AgentStatusDot(active = true, size = 6.dp)
-        Text(label, fontSize = 12.5.sp, color = AgentUi.chrome.textMuted)
     }
 }
 
