@@ -1,6 +1,5 @@
 package dev.ide.ui.components
 
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -14,19 +13,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 
 
 
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -41,7 +35,6 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -322,79 +315,6 @@ fun SquareToneButton(
 
 /** One destination in [AppNavBar]. */
 data class NavDestination(val id: String, val label: String, val glyph: Char)
-
-/**
- * The compact 60 dp bottom navigation.
- *
- * Hand-built rather than an M3 [androidx.compose.material3.NavigationBar] for one reason: the selected
- * indicator **animates its width** from 48 to 64 dp, and the stock indicator is a fixed size with no hook
- * to drive it. Everything else follows the component's contract — a `selectableGroup` of `Tab`-role
- * items, labels always visible, the filled glyph variant for the selected state.
- */
-@Composable
-fun AppNavBar(
-    destinations: List<NavDestination>,
-    selectedId: String,
-    onSelect: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val c = MaterialTheme.colorScheme
-    Surface(color = c.surfaceContainerLow, modifier = modifier.fillMaxWidth()) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
-        ) {
-            Row(
-                Modifier.height(60.dp).fillMaxWidth().padding(horizontal = 8.dp).selectableGroup(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                destinations.forEach { d ->
-                    val selected = d.id == selectedId
-                    val pillWidth by animateDpAsState(
-                        targetValue = if (selected) 64.dp else 48.dp,
-                        animationSpec = CaMotion.defaultSpatial(),
-                        label = "navPill",
-                    )
-                    Column(
-                        Modifier.weight(1f)
-                            .selectable(
-                                selected = selected,
-                                onClick = { onSelect(d.id) },
-                                role = Role.Tab,
-                            )
-                            .padding(top = 6.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(3.dp),
-                    ) {
-                        Box(
-                            Modifier.width(pillWidth).height(28.dp)
-                                .clip(CircleShape)
-                                .background(if (selected) c.primaryContainer else Color.Transparent),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Symbol(
-                                glyph = d.glyph,
-                                contentDescription = null,
-                                size = 20.dp,
-                                filled = selected,
-                                tint = if (selected) c.onPrimaryContainer else c.onSurfaceVariant,
-                            )
-                        }
-                        Text(
-                            text = d.label,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                            ),
-                            color = if (selected) c.onSurface else c.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
 
 /** A tonal icon tile: the square/circle/diagonal element that fronts a card or list row. */
 @Composable

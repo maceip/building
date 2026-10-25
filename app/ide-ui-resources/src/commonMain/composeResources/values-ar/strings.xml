@@ -572,6 +572,9 @@
     <string name="home_new_project_subtitle">تُولَّد الهياكل محليًا، دون حاجة إلى شبكة.</string>
     <string name="home_import_project">استيراد مشروع</string>
     <string name="home_clone_repository">استنساخ من Git</string>
+    <string name="home_action_create">إنشاء</string>
+    <string name="home_action_clone">استنساخ</string>
+    <string name="home_action_open">فتح</string>
     <string name="home_from_store">ابدأ من قالب في المتجر</string>
     <string name="home_seg_projects">المشاريع</string>
     <string name="home_seg_updates">التحديثات</string>

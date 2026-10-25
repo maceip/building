@@ -762,6 +762,8 @@ private fun ProjectPickerRoute(
         } else null,
         onBackup = app::backupProjects,
         onOpenHub = { app.openHub(Screen.Projects) },
+        // The Explore/Store tab: the phone home has no bottom bar, so the header icon is its entry.
+        onOpenExplore = { app.showStore() },
         onSubmitSuggestions = if (fileActions.canOpenUrl) {
             { fileActions.openUrl(BetaInfo.FEEDBACK_URL) }
         } else null,

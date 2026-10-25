@@ -12,12 +12,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -48,7 +46,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.HomeTab
-import dev.ide.ui.components.AppNavBar
 import dev.ide.ui.components.NavDestination
 import dev.ide.ui.components.RareCounter
 import dev.ide.ui.generated.resources.Res
@@ -75,9 +72,11 @@ val LocalHomeSidebarShown = staticCompositionLocalOf { false }
  * picker/store/learn wiring stays in one place) and crossfades on switch. Only shown on `Screen.Projects`;
  * full-screen destinations (editor, settings, run) push over it without the navigation.
  *
- * On a phone the navigation is an [AppNavBar] along the bottom. From [HomeSidebarBreakpoint] up (a tablet, a
- * desktop window, a phone in landscape) it is a left sidebar instead, IntelliJ's welcome-screen layout, with
- * [projectCount] beside Projects and [sidebarFooter] (the inbox and account entries) at its foot.
+ * On a phone the content fills the screen — the Projects tab carries its own Explore entry in the header
+ * (the store's destination), so no bottom bar is spent on one tab switch. From [HomeSidebarBreakpoint] up
+ * (a tablet, a desktop window, a phone in landscape) it is a left sidebar instead, IntelliJ's
+ * welcome-screen layout, with [projectCount] beside Projects and [sidebarFooter] (the inbox and account
+ * entries) at its foot.
  */
 @Composable
 fun HomeScreen(
@@ -130,16 +129,10 @@ fun HomeScreen(
                 }
             }
         } else {
-            // The app pads for the keyboard at its root (`safeDrawing`), so a bar at the foot of this column
-            // rode up on top of the soft keyboard whenever a tab's field took focus (the store's search).
-            // It hides while the keyboard is up instead, as the editor's does. The IME inset is read raw,
-            // since that root padding would zero a consumed one. Always 0 on desktop.
-            val keyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+            // No bottom bar: the phone home is one screen. The keyboard-inset dance the bar needed is gone
+            // with it; the app still pads for the keyboard at its root (`safeDrawing`).
             Column(Modifier.fillMaxSize()) {
                 content(Modifier.weight(1f).fillMaxWidth())
-                if (!keyboardOpen) {
-                    AppNavBar(destinations = destinations, selectedId = tab.name, onSelect = select)
-                }
             }
         }
     }

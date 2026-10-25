@@ -100,6 +100,9 @@ import dev.ide.ui.components.WatermarkGlyph
 import dev.ide.ui.components.pressScale
 import dev.ide.ui.generated.resources.Res
 import dev.ide.ui.generated.resources.home_account_title
+import dev.ide.ui.generated.resources.home_action_clone
+import dev.ide.ui.generated.resources.home_action_create
+import dev.ide.ui.generated.resources.home_action_open
 import dev.ide.ui.generated.resources.home_backup
 import dev.ide.ui.generated.resources.home_clone_repository
 import dev.ide.ui.generated.resources.home_delete
@@ -112,6 +115,7 @@ import dev.ide.ui.generated.resources.home_settings_tools
 import dev.ide.ui.generated.resources.home_share
 import dev.ide.ui.generated.resources.home_sponsor
 import dev.ide.ui.generated.resources.home_star_github
+import dev.ide.ui.generated.resources.home_store
 import dev.ide.ui.generated.resources.join_the_community
 import dev.ide.ui.generated.resources.join_the_community_content
 import dev.ide.ui.generated.resources.project_opened_days
@@ -193,6 +197,11 @@ fun ProjectsHomeScreen(
     onExportProject: ((ProjectInfo) -> Unit)? = null,
     onBackup: (() -> Unit)? = null,
     onOpenHub: (() -> Unit)? = null,
+    /**
+     * Opens the Explore/Store tab of the home screen. The phone home has no bottom bar, so this is the
+     * destination's entry point there; null hides the header icon (the wide home keeps its sidebar).
+     */
+    onOpenExplore: (() -> Unit)? = null,
     onSubmitSuggestions: (() -> Unit)? = null,
     onJoinDiscord: (() -> Unit)? = null,
     onSponsor: (() -> Unit)? = null,
@@ -290,7 +299,13 @@ fun ProjectsHomeScreen(
             onCloneAndOpen = onCloneAndOpen,
         )
     } else
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.TopCenter) {
+    // The phone home is one screen: the project list takes the space, and the import/clone bar is docked
+    // at the foot rather than sitting between the action row and the list (where it pushed the first
+    // project off-screen and read as a second, competing set of buttons).
+    Column(
+        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
       PullToRefreshBox(
         isRefreshing = isRefreshing,
         onRefresh = {
@@ -317,7 +332,7 @@ fun ProjectsHomeScreen(
                 modifier = Modifier.align(Alignment.TopCenter),
             )
         },
-        modifier = Modifier.widthIn(max = 720.dp).fillMaxSize(),
+        modifier = Modifier.weight(1f).widthIn(max = 720.dp).fillMaxWidth(),
       ) {
         LazyColumn(
             Modifier.fillMaxSize(),
@@ -327,6 +342,7 @@ fun ProjectsHomeScreen(
                 HomeHeader(
                     onOpenAccount = { sheet = HomeSheet.Account },
                     onOpenHub = onOpenHub,
+                    onOpenExplore = onOpenExplore,
                     onBack = null,
                     bell = bell,
                 )
@@ -338,15 +354,6 @@ fun ProjectsHomeScreen(
                     onCloneRepository = effectiveClone,
                     onImportProject = onImportProject,
                 )
-            }
-            if (onCloneAndOpen != null || effectiveClone != null) {
-                item("quickClone") {
-                    QuickCloneBar(
-                        onCloneUrl = { rawUrl ->
-                            dispatchQuickCloneUrl(rawUrl, onCloneAndOpen, effectiveClone)
-                        },
-                    )
-                }
             }
             item("segments") {
                 SegmentRow(
@@ -382,6 +389,16 @@ fun ProjectsHomeScreen(
                 item("empty") { EmptyList() }
             }
         }
+      }
+      if (onCloneAndOpen != null || effectiveClone != null) {
+          // Docked at the foot: the import/clone affordance stays reachable without spending a row between
+          // the actions and the list. Capped at the list's width so it lines up with the content above it.
+          QuickCloneBar(
+              onCloneUrl = { rawUrl ->
+                  dispatchQuickCloneUrl(rawUrl, onCloneAndOpen, effectiveClone)
+              },
+              modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth().padding(bottom = 10.dp),
+          )
       }
     }
     }
@@ -452,6 +469,7 @@ private enum class HomeSheet { Account, NewProject }
 private fun HomeHeader(
     onOpenAccount: () -> Unit,
     onOpenHub: (() -> Unit)? = null,
+    onOpenExplore: (() -> Unit)? = null,
     onBack: (() -> Unit)? = null,
     /** The notification bell, supplied by the host so this screen needs no backend of its own. */
     bell: (@Composable () -> Unit)? = null,
@@ -478,6 +496,16 @@ private fun HomeHeader(
             modifier = Modifier.weight(1f),
         )
         bell?.invoke()
+        // The Explore/Store destination, which the phone home reaches from here since it has no bottom bar.
+        if (onOpenExplore != null) {
+            SquareToneButton(
+                glyph = CaSymbols.travelExplore,
+                contentDescription = stringResource(Res.string.home_store),
+                onClick = onOpenExplore,
+                shape = CircleShape,
+                size = 40.dp,
+            )
+        }
         if (onOpenHub != null) {
             SquareToneButton(
                 glyph = CaSymbols.settings,
@@ -500,6 +528,10 @@ private fun HomeHeader(
 /**
  * Primary project creation actions: New Project alongside direct 1-tap Clone (Git / GitHub) and Import
  * affordances so users never have to hunt inside a hidden overflow menu to clone from GitHub.
+ *
+ * Compact labels on purpose: at three equal weights on a phone the full names ("Create new app",
+ * "Clone app", "Open folder") all ellipsized — every button read as "+ Create …". The glyph plus one
+ * word carries the same meaning; the full names live in the destinations these open.
  */
 @Composable
 private fun HomeActions(
@@ -514,7 +546,7 @@ private fun HomeActions(
     ) {
         HeaderButton(
             glyph = CaSymbols.add,
-            label = stringResource(Res.string.home_new_project),
+            label = stringResource(Res.string.home_action_create),
             primary = true,
             modifier = Modifier.weight(1f),
             onClick = onNewProject,
@@ -522,7 +554,7 @@ private fun HomeActions(
         if (onCloneRepository != null) {
             HeaderButton(
                 glyph = CaSymbols.forkRight,
-                label = stringResource(Res.string.home_clone_repository),
+                label = stringResource(Res.string.home_action_clone),
                 primary = false,
                 modifier = Modifier.weight(1f),
                 onClick = onCloneRepository,
@@ -531,7 +563,7 @@ private fun HomeActions(
         if (onImportProject != null) {
             HeaderButton(
                 glyph = CaSymbols.folderOpen,
-                label = stringResource(Res.string.home_import_project),
+                label = stringResource(Res.string.home_action_open),
                 primary = false,
                 modifier = Modifier.weight(1f),
                 onClick = onImportProject,

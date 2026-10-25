@@ -166,10 +166,12 @@ class AgentHomeRowsTest {
             assertFalse("What should we build?" in plainStrings, "Onboarding prompt gate must not be rendered")
             assertFalse("Import or clone" in plainStrings, "Unstyled 'Import or clone' text must not be rendered")
             assertFalse("Continue" in plainStrings, "Unstyled 'Continue' section must not be rendered")
-            assertTrue("Clone app" in plainStrings, "Expected 'Clone app' button on ProjectsHomeScreen (present: $plainStrings)")
+            assertTrue("Create" in plainStrings, "Expected 'Create' action button on ProjectsHomeScreen (present: $plainStrings)")
+            assertTrue("Open" in plainStrings, "Expected 'Open' action button on ProjectsHomeScreen (present: $plainStrings)")
+            // "Clone" twice: the action row's clone button and the QuickCloneBar's, which is docked at the foot.
+            assertEquals(2, plainStrings.count { it == "Clone" }, "Expected the action-row Clone button and the QuickCloneBar Clone button (present: $plainStrings)")
             assertTrue("Paste GitHub URL or owner/repo to clone…" in plainStrings, "Expected QuickCloneBar URL input on ProjectsHomeScreen")
             assertTrue("Paste" in plainStrings, "Expected 'Paste' button in QuickCloneBar")
-            assertTrue("Clone" in plainStrings, "Expected 'Clone' button in QuickCloneBar")
 
             // 2. Most recent project ("SignalAndroid") title has NO shimmer brush, while its inline subtitle DOES have shimmer brushes.
             val recentTitle = allTextStrings.firstOrNull { it.text == "SignalAndroid" }
