@@ -9,7 +9,10 @@ import dev.ide.vcs.VcsText
 import org.eclipse.jgit.lib.EmptyProgressMonitor
 import org.eclipse.jgit.transport.CredentialsProvider
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider
+import java.io.EOFException
+import java.io.InterruptedIOException
 import java.net.ConnectException
+import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import javax.net.ssl.SSLException
@@ -124,6 +127,76 @@ private val AUTH_STATUS = Regex("""(?<![\w.])40[13](?![\w.])""")
 private fun looksLikeAuthFailure(reason: String): Boolean {
     val lower = reason.lowercase()
     return AUTH_MARKERS.any { it in lower } || AUTH_STATUS.containsMatchIn(lower)
+}
+
+private val TRANSIENT_ABORT_MARKERS = listOf(
+    "software caused connection abort",
+    "connection abort",
+    "connection reset",
+    "broken pipe",
+    "unexpected end of stream",
+    "unexpected end of file",
+    "premature eof",
+    "stream was reset",
+    "socket closed",
+)
+
+/**
+ * Whether [this] failure was caused by a transient OS/network socket abort (such as Android's background
+ * UID socket termination `ECONNABORTED` / `"Software caused connection abort"` when switching focused apps,
+ * or a brief Wi-Fi/cellular handover reset) that can be safely retried.
+ */
+internal fun Throwable.isTransientTransportAbort(): Boolean {
+    if (Thread.currentThread().isInterrupted) return false
+    val msgReason = reason()
+    if (looksLikeAuthFailure(msgReason)) return false
+    var cause: Throwable? = this
+    while (cause != null) {
+        if (cause is InterruptedException) return false
+        if (cause is SocketException || cause is EOFException || cause is SocketTimeoutException) {
+            return true
+        }
+        if (cause is InterruptedIOException && !Thread.currentThread().isInterrupted) {
+            return true
+        }
+        val lower = cause.message?.lowercase().orEmpty()
+        if (TRANSIENT_ABORT_MARKERS.any { it in lower }) {
+            return true
+        }
+        cause = cause.cause
+    }
+    return false
+}
+
+/**
+ * Retries [block] when a Git network transport operation is interrupted by a transient socket abort
+ * (for example, `SocketException: Software caused connection abort` when the user switches focused apps
+ * mid-clone on Android).
+ */
+internal fun <T> withTransientNetworkRetry(
+    maxAttempts: Int = 4,
+    initialDelayMs: Long = 600L,
+    onRetry: (attempt: Int, error: Throwable) -> Unit = { _, _ -> },
+    block: (attempt: Int) -> T,
+): T {
+    var attempt = 1
+    while (true) {
+        try {
+            return block(attempt)
+        } catch (e: Throwable) {
+            if (attempt >= maxAttempts || !e.isTransientTransportAbort()) {
+                throw e
+            }
+            onRetry(attempt, e)
+            try {
+                Thread.sleep(initialDelayMs * attempt)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw e
+            }
+            attempt++
+        }
+    }
 }
 
 /**

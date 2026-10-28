@@ -82,6 +82,9 @@ import dev.ide.vcs.ui.generated.resources.vcs_clone_yours
 import dev.ide.vcs.ui.generated.resources.vcs_fork
 import dev.ide.vcs.ui.generated.resources.vcs_private
 import dev.ide.vcs.ui.generated.resources.vcs_sign_in_github
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
@@ -217,6 +220,32 @@ private fun deriveRepoName(url: String): String =
     url.trim().trimEnd('/').substringAfterLast('/').removeSuffix(".git").trim()
 
 /**
+ * Process-scoped clone session state keyed by [VcsService] so that switching focused Android apps,
+ * configuration changes, or navigating between IDE tabs mid-clone never cancels the active clone
+ * coroutine or drops queued companion repositories.
+ */
+private class CloneSessionState {
+    val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+    var urlInput by mutableStateOf("")
+    var folderInput by mutableStateOf("")
+    var activeCloneUrl by mutableStateOf("")
+    var activeCloneName by mutableStateOf("")
+    var lastInitialUrlHandled by mutableStateOf("")
+    var unrecognized by mutableStateOf<ClonedFolder?>(null)
+    var lastCloned by mutableStateOf<ClonedFolder?>(null)
+    var lastCloneError by mutableStateOf<String?>(null)
+    var authFailed by mutableStateOf(false)
+    val queuedClones = mutableStateListOf<CompanionRepoRecommendation>()
+    val completedCompanions = mutableStateListOf<String>()
+    val completedPaths = androidx.compose.runtime.mutableStateMapOf<String, String>()
+}
+
+private val cloneSessions = mutableMapOf<VcsService, CloneSessionState>()
+
+private fun sessionFor(vcs: VcsService): CloneSessionState =
+    cloneSessions.getOrPut(vcs) { CloneSessionState() }
+
+/**
  * In-app Git Clone screen with a pinned URL & Paste bar at the top, inline live progress bars,
  * and curated companion repositories below in a stable, non-jumping layout.
  */
@@ -229,29 +258,17 @@ internal fun CloneScreen(ctx: ScreenContext) {
     val feedback = rememberVcsFeedback()
     val haptics = rememberIdeHaptics()
     val clipboard = LocalClipboardManager.current
+    val session = remember(vcs) { sessionFor(vcs) }
 
     val initialUrl = (ctx.argument as? String)?.trim().orEmpty()
-    var urlInput by remember(initialUrl) { mutableStateOf(initialUrl) }
-    var folderInput by remember(initialUrl) {
-        mutableStateOf(if (initialUrl.isNotBlank()) deriveRepoName(initialUrl) else "")
-    }
-    var activeCloneUrl by remember(initialUrl) { mutableStateOf(initialUrl) }
-    var activeCloneName by remember(initialUrl) {
-        mutableStateOf(if (initialUrl.isNotBlank()) deriveRepoName(initialUrl) else "")
-    }
-    var autoCloneTriggered by remember(initialUrl) { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var repos by remember { mutableStateOf(emptyList<UiForgeRepo>()) }
     var loading by remember { mutableStateOf(false) }
-    var unrecognized by remember { mutableStateOf<ClonedFolder?>(null) }
-    var lastCloned by remember { mutableStateOf<ClonedFolder?>(null) }
-    var lastCloneError by remember { mutableStateOf<String?>(null) }
-    var authFailed by remember { mutableStateOf(false) }
 
     // Repositories queued by the user while a primary clone is running
-    val queuedClones = remember { mutableStateListOf<CompanionRepoRecommendation>() }
-    val completedCompanions = remember { mutableStateListOf<String>() }
-    val completedPaths = remember { androidx.compose.runtime.mutableStateMapOf<String, String>() }
+    val queuedClones = session.queuedClones
+    val completedCompanions = session.completedCompanions
+    val completedPaths = session.completedPaths
 
     // Periodic "Rat-a-tat" tactile pulse while a clone is actively running
     val pulseIntervalMs = haptics.config.clonePulseIntervalMs.coerceIn(500, 5000).toLong()
@@ -282,20 +299,20 @@ internal fun CloneScreen(ctx: ScreenContext) {
         val cleanUrl = normalizeCloneUrl(targetUrl)
         if (cleanUrl.isBlank()) return
         val cleanName = targetName.trim().ifBlank { deriveRepoName(cleanUrl) }
-        activeCloneUrl = cleanUrl
-        activeCloneName = cleanName
-        lastCloneError = null
+        session.activeCloneUrl = cleanUrl
+        session.activeCloneName = cleanName
+        session.lastCloneError = null
         haptics.cloneStart()
-        scope.launch {
-            unrecognized = null
-            authFailed = false
+        session.sessionScope.launch {
+            session.unrecognized = null
+            session.authFailed = false
             val result = vcs.cloneRepository(cleanUrl, cleanName)
             feedback.show(result)
-            authFailed = !result.ok && result.authRequired
+            session.authFailed = !result.ok && result.authRequired
             val path = result.path
             if (!result.ok || path == null) {
                 val errMsg = result.text?.localized() ?: result.message.ifBlank { "Clone failed for $cleanUrl" }
-                lastCloneError = errMsg
+                session.lastCloneError = errMsg
                 haptics.buildFailed()
                 return@launch
             }
@@ -304,13 +321,13 @@ internal fun CloneScreen(ctx: ScreenContext) {
                 completedCompanions.add(cleanUrl)
             }
             completedPaths[cleanUrl] = path
-            lastCloned = ClonedFolder(cleanName, path)
+            session.lastCloned = ClonedFolder(cleanName, path)
 
             // If the user queued companion repos while multitasking, pull them in next
             while (queuedClones.isNotEmpty()) {
                 val next = queuedClones.removeAt(0)
-                activeCloneUrl = next.cloneUrl
-                activeCloneName = next.name
+                session.activeCloneUrl = next.cloneUrl
+                session.activeCloneName = next.name
                 haptics.cloneStart()
                 val nextRes = vcs.cloneRepository(next.cloneUrl, next.name)
                 val nextPath = nextRes.path
@@ -320,7 +337,7 @@ internal fun CloneScreen(ctx: ScreenContext) {
                         completedCompanions.add(next.cloneUrl)
                     }
                     completedPaths[next.cloneUrl] = nextPath
-                    lastCloned = ClonedFolder(next.name, nextPath)
+                    session.lastCloned = ClonedFolder(next.name, nextPath)
                 }
             }
 
@@ -328,15 +345,19 @@ internal fun CloneScreen(ctx: ScreenContext) {
                 delay(500)
                 ctx.backend.projects.openProject(path)
             } else if (result.projectKind == UiProjectFolderKind.UNKNOWN) {
-                unrecognized = ClonedFolder(cleanName, path)
+                session.unrecognized = ClonedFolder(cleanName, path)
             }
         }
     }
 
     LaunchedEffect(initialUrl) {
-        if (initialUrl.isNotBlank() && !autoCloneTriggered) {
-            autoCloneTriggered = true
-            executeClone(initialUrl, activeCloneName, openWhenDone = true)
+        if (initialUrl.isNotBlank() && session.lastInitialUrlHandled != initialUrl) {
+            session.lastInitialUrlHandled = initialUrl
+            session.urlInput = initialUrl
+            session.folderInput = deriveRepoName(initialUrl)
+            session.activeCloneUrl = initialUrl
+            session.activeCloneName = deriveRepoName(initialUrl)
+            executeClone(initialUrl, session.activeCloneName, openWhenDone = true)
         }
     }
 
@@ -353,35 +374,35 @@ internal fun CloneScreen(ctx: ScreenContext) {
         ) {
             // Pinned top URL & Paste Box + Live Progress Telemetry (never scrolls off-screen)
             CloneUrlInputCard(
-                urlInput = urlInput,
+                urlInput = session.urlInput,
                 onUrlChange = { newUrl ->
-                    val prevAutoFolder = deriveRepoName(urlInput)
-                    urlInput = newUrl
-                    if (folderInput.isBlank() || folderInput == prevAutoFolder) {
-                        folderInput = deriveRepoName(newUrl)
+                    val prevAutoFolder = deriveRepoName(session.urlInput)
+                    session.urlInput = newUrl
+                    if (session.folderInput.isBlank() || session.folderInput == prevAutoFolder) {
+                        session.folderInput = deriveRepoName(newUrl)
                     }
                 },
-                folderInput = folderInput,
-                onFolderChange = { folderInput = it },
+                folderInput = session.folderInput,
+                onFolderChange = { session.folderInput = it },
                 onPasteUrl = {
                     val clipText = clipboard.getText()?.text?.trim().orEmpty()
                     if (clipText.isNotBlank()) {
-                        urlInput = clipText
-                        folderInput = deriveRepoName(clipText)
+                        session.urlInput = clipText
+                        session.folderInput = deriveRepoName(clipText)
                     }
                 },
                 busy = activity.busy,
-                activeCloneName = activeCloneName,
-                activeCloneUrl = activeCloneUrl,
+                activeCloneName = session.activeCloneName,
+                activeCloneUrl = session.activeCloneUrl,
                 taskLabel = localizedText(activity.taskText, activity.task),
                 fraction = activity.fraction,
                 queuedCount = queuedClones.size,
-                lastCloned = lastCloned,
-                lastCloneError = lastCloneError,
+                lastCloned = session.lastCloned,
+                lastCloneError = session.lastCloneError,
                 onCloneUrl = {
                     executeClone(
-                        targetUrl = urlInput,
-                        targetName = folderInput.ifBlank { deriveRepoName(urlInput) },
+                        targetUrl = session.urlInput,
+                        targetName = session.folderInput.ifBlank { deriveRepoName(session.urlInput) },
                         openWhenDone = true,
                     )
                 },
@@ -399,23 +420,23 @@ internal fun CloneScreen(ctx: ScreenContext) {
                     FeedbackStrip(feedback)
                 }
 
-                if (authFailed) {
+                if (session.authFailed) {
                     item("authFailed") {
                         CloneAuthNotice(
                             signedIn = accounts.isNotEmpty(),
-                            onDismiss = { authFailed = false },
+                            onDismiss = { session.authFailed = false },
                             onSignIn = { ctx.openScreen(VcsService.SCREEN_ACCOUNTS) },
                         )
                     }
                 }
 
-                unrecognized?.let { cloned ->
+                session.unrecognized?.let { cloned ->
                     item("unrecognized") {
                         UnrecognizedCloneNotice(
                             name = cloned.name,
-                            onDismiss = { unrecognized = null },
+                            onDismiss = { session.unrecognized = null },
                             onOpen = {
-                                unrecognized = null
+                                session.unrecognized = null
                                 scope.launch { ctx.backend.projects.openProject(cloned.path) }
                             },
                         )
@@ -459,7 +480,7 @@ internal fun CloneScreen(ctx: ScreenContext) {
                 items(companionList, key = { it.fullName }) { companion ->
                     val isQueued = queuedClones.any { it.cloneUrl == companion.cloneUrl }
                     val isCompleted = completedCompanions.contains(companion.cloneUrl)
-                    val isCurrentlyCloning = activity.busy && activeCloneUrl == companion.cloneUrl
+                    val isCurrentlyCloning = activity.busy && session.activeCloneUrl == companion.cloneUrl
                     val clonedPath = completedPaths[companion.cloneUrl]
                     CompanionRepoCard(
                         repo = companion,

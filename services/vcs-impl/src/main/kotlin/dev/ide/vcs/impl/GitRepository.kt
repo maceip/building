@@ -468,13 +468,15 @@ internal class GitRepository(
 
     override fun fetch(remote: String, auth: VcsCredentials?, progress: VcsProgress): VcsSyncResult {
         return try {
-            val result = git.fetch()
-                .setRemote(remote)
-                .setCredentialsProvider(auth.toJGit())
-                .setProgressMonitor(GitProgressMonitor(progress))
-                .setRemoveDeletedRefs(true)
-                .setTimeout(NETWORK_TIMEOUT_SECONDS)
-                .call()
+            val result = withTransientNetworkRetry(maxAttempts = 3, initialDelayMs = 500L) {
+                git.fetch()
+                    .setRemote(remote)
+                    .setCredentialsProvider(auth.toJGit())
+                    .setProgressMonitor(GitProgressMonitor(progress))
+                    .setRemoveDeletedRefs(true)
+                    .setTimeout(NETWORK_TIMEOUT_SECONDS)
+                    .call()
+            }
             val updates = result.trackingRefUpdates.map { "${Repository.shortenRefName(it.localName)}: ${it.result}" }
             VcsSyncResult(ok = true, message = result.messages.trim(), updates = updates)
         } catch (e: Throwable) {

@@ -54,6 +54,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -467,55 +468,60 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
         }
     }
 
-    override suspend fun cloneRepository(url: String, directoryName: String): UiVcsResult = busy(VcsMessage.ACTIVITY_CLONING) {
-        command {
-            val git = provider ?: throw VcsException(VcsText.of(VcsMessage.NO_ENGINE))
-            val manager = ctx.manager ?: throw VcsException(VcsText.of(VcsMessage.NO_PROJECT))
-            val rawName = directoryName.trim().substringAfterLast('/').substringAfterLast('\\').removeSuffix(".git")
-            val name = rawName.ifBlank { url.trim().substringAfterLast('/').removeSuffix(".git") }
-            if (name.isBlank()) throw VcsException(VcsText.of(VcsMessage.CLONE_FOLDER_REQUIRED))
-            // A pasted URL may carry a token (`https://ghp_x@github.com/...`); only the clone itself may see it.
-            val shownUrl = redactUrl(url.trim())
-            val target = manager.projectsRoot.resolve(name)
-            // If this repository was already cloned in an earlier take, clear the stale directory so re-cloning
-            // from the Explorer feed succeeds cleanly instead of failing with FOLDER_NOT_EMPTY.
-            val targetDir = target.toFile()
-            if (targetDir.exists()) {
-                runCatching { targetDir.deleteRecursively() }
-            }
-            val auth = store?.credentialsFor(url) ?: VcsCredentials.Anonymous
-            val cloneDepth = if (url.trim().startsWith("http://") || url.trim().startsWith("https://")) 1 else 0
-            withContext(Dispatchers.IO) {
-                try {
-                    git.clone(url.trim(), target, depth = cloneDepth, auth = auth, progress = progressSink()).close()
-                } catch (e: Throwable) {
-                    val bareMirror = listOfNotNull(
-                        manager.projectsRoot.parent?.resolve("cross-run-bare-ios/$name.git")?.toFile(),
-                        java.io.File("/sdcard/Android/data/dev.ide.android.dev/files/codeassist/cross-run-bare-ios/$name.git"),
-                        java.io.File("/data/local/tmp/cross-run-bare-ios/$name.git"),
-                        java.io.File("/tmp/cross-run-bare-ios/$name.git"),
-                    ).firstOrNull { it.isDirectory }
-                    if (bareMirror != null) {
-                        if (targetDir.exists()) runCatching { targetDir.deleteRecursively() }
-                        git.clone(bareMirror.toURI().toString(), target, depth = 0, auth = VcsCredentials.Anonymous, progress = progressSink()).close()
-                    } else {
-                        throw e
+    override suspend fun cloneRepository(url: String, directoryName: String): UiVcsResult =
+        // Execute on VcsBackend's SupervisorJob scope so UI composition disposal or app-switch lifecycle
+        // transitions never cancel an in-flight clone operation.
+        scope.async {
+            busy(VcsMessage.ACTIVITY_CLONING) {
+                command {
+                    val git = provider ?: throw VcsException(VcsText.of(VcsMessage.NO_ENGINE))
+                    val manager = ctx.manager ?: throw VcsException(VcsText.of(VcsMessage.NO_PROJECT))
+                    val rawName = directoryName.trim().substringAfterLast('/').substringAfterLast('\\').removeSuffix(".git")
+                    val name = rawName.ifBlank { url.trim().substringAfterLast('/').removeSuffix(".git") }
+                    if (name.isBlank()) throw VcsException(VcsText.of(VcsMessage.CLONE_FOLDER_REQUIRED))
+                    // A pasted URL may carry a token (`https://ghp_x@github.com/...`); only the clone itself may see it.
+                    val shownUrl = redactUrl(url.trim())
+                    val target = manager.projectsRoot.resolve(name)
+                    // If this repository was already cloned in an earlier take, clear the stale directory so re-cloning
+                    // from the Explorer feed succeeds cleanly instead of failing with FOLDER_NOT_EMPTY.
+                    val targetDir = target.toFile()
+                    if (targetDir.exists()) {
+                        runCatching { targetDir.deleteRecursively() }
                     }
+                    val auth = store?.credentialsFor(url) ?: VcsCredentials.Anonymous
+                    val cloneDepth = if (url.trim().startsWith("http://") || url.trim().startsWith("https://")) 1 else 0
+                    withContext(Dispatchers.IO) {
+                        try {
+                            git.clone(url.trim(), target, depth = cloneDepth, auth = auth, progress = progressSink()).close()
+                        } catch (e: Throwable) {
+                            val bareMirror = listOfNotNull(
+                                manager.projectsRoot.parent?.resolve("cross-run-bare-ios/$name.git")?.toFile(),
+                                java.io.File("/sdcard/Android/data/dev.ide.android.dev/files/codeassist/cross-run-bare-ios/$name.git"),
+                                java.io.File("/data/local/tmp/cross-run-bare-ios/$name.git"),
+                                java.io.File("/tmp/cross-run-bare-ios/$name.git"),
+                            ).firstOrNull { it.isDirectory }
+                            if (bareMirror != null) {
+                                if (targetDir.exists()) runCatching { targetDir.deleteRecursively() }
+                                git.clone(bareMirror.toURI().toString(), target, depth = 0, auth = VcsCredentials.Anonymous, progress = progressSink()).close()
+                            } else {
+                                throw e
+                            }
+                        }
+                    }
+                    // A repository is not a CodeAssist project. Adopt whatever landed so it is listable and openable,
+                    // and report what it turned out to be: a clone that no build system recognizes is a real outcome
+                    // the screen has to say out loud, not a silent one the user discovers via an empty picker.
+                    val kind = withContext(Dispatchers.IO) {
+                        runCatching { manager.adoptFolderInPlace(target, origin = shownUrl) }
+                            .getOrElse { e ->
+                                log.warn("Cloned $shownUrl but could not adopt $target as a project", e)
+                                ImportableKind.NONE
+                            }
+                    }
+                    ok(VcsMessage.CLONED, name).copy(path = target.toString(), projectKind = kind.toUi())
                 }
             }
-            // A repository is not a CodeAssist project. Adopt whatever landed so it is listable and openable,
-            // and report what it turned out to be: a clone that no build system recognizes is a real outcome
-            // the screen has to say out loud, not a silent one the user discovers via an empty picker.
-            val kind = withContext(Dispatchers.IO) {
-                runCatching { manager.adoptFolderInPlace(target, origin = shownUrl) }
-                    .getOrElse { e ->
-                        log.warn("Cloned $shownUrl but could not adopt $target as a project", e)
-                        ImportableKind.NONE
-                    }
-            }
-            ok(VcsMessage.CLONED, name).copy(path = target.toString(), projectKind = kind.toUi())
-        }
-    }
+        }.await()
 
     override suspend fun publishToForge(name: String, description: String, private: Boolean): UiVcsResult =
         busy(VcsMessage.ACTIVITY_PUBLISHING) {

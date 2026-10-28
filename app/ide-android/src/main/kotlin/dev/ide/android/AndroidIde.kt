@@ -213,6 +213,9 @@ object AndroidIde {
         // app alive (the MainActivity main-thread guard handles the UI looper). See IdeServicesBackend.
         backend.installCrashReporting()
         AndroidMemory.registerTrimHandler(appContext, backend)
+        // Promote the IDE process to a foreground service with CPU/Wi-Fi locks whenever a Git clone/sync is
+        // active so switching focused Android apps mid-clone never triggers OS socket termination (ECONNABORTED).
+        dev.ide.android.vcs.VcsForegroundService.bindToVcsActivity(appContext, backend.vcs.activity)
         // Plugins load once per process, so applying an installed plugin's change means starting again. Both
         // halves of that are wired here, and only in the UI process: the restart itself, and the watch that
         // notices a plugin app being installed, updated or uninstalled while the IDE is running (the `:build`

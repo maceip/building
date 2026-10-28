@@ -212,4 +212,124 @@ class CloneScreenTest {
             scene.close()
         }
     }
+
+    @Test
+    fun midCloneAppSwitchOrCompositionDisposalDoesNotAbortCloneOrLoseQueuedRepos() {
+        val cloneCompleted = kotlinx.coroutines.CompletableDeferred<UiVcsResult>()
+        val fakeVcs = object : VcsService {
+            override val status = MutableStateFlow(UiVcsStatus())
+            override val accounts = MutableStateFlow(emptyList<UiVcsAccount>())
+            override val activity = MutableStateFlow(UiVcsActivity())
+            override fun supported(): Boolean = true
+
+            val calls = mutableListOf<Pair<String, String>>()
+
+            override suspend fun cloneRepository(url: String, directoryName: String): UiVcsResult {
+                calls += url to directoryName
+                activity.value = UiVcsActivity(busy = true, task = "Receiving objects", fraction = 0.42f)
+                return try {
+                    if (calls.size == 1) {
+                        cloneCompleted.await()
+                    } else {
+                        UiVcsResult(
+                            ok = true,
+                            path = "/workspace/$directoryName",
+                            projectKind = UiProjectFolderKind.NODE,
+                            message = "Cloned $directoryName",
+                        )
+                    }
+                } finally {
+                    activity.value = UiVcsActivity()
+                }
+            }
+        }
+
+        val openedProjects = mutableListOf<String>()
+        val backend = object : StubBackend() {
+            override val vcs: VcsService = fakeVcs
+            override suspend fun openProject(rootPath: String): Boolean {
+                openedProjects += rootPath
+                return true
+            }
+        }
+        val ctx = object : ScreenContext {
+            override val backend = backend
+            override fun back() {}
+            override fun openScreen(id: String) {}
+        }
+        val clipboard = FakeClipboard("maceip/building")
+
+        // 1. Mount first composition, paste URL, start clone, and queue a companion repo
+        val scene1 = ImageComposeScene(width = 900, height = 4200, density = Density(2f)) {
+            CompositionLocalProvider(LocalClipboardManager provides clipboard) {
+                CodeAssistTheme(dark = true) {
+                    CloneScreen(ctx)
+                }
+            }
+        }
+        var time = 0L
+        fun frames(scene: ImageComposeScene, count: Int = 12) {
+            Snapshot.sendApplyNotifications()
+            repeat(count) {
+                time += 16_666_667L
+                scene.render(time)
+            }
+        }
+        fun clickText(scene: ImageComposeScene, label: String) {
+            val node = findNodeByText(scene, label)
+            assertNotNull(node, "Expected node '$label' in ${collectTexts(scene)}")
+            val center = node.boundsInRoot.center
+            scene.sendPointerEvent(PointerEventType.Press, center)
+            scene.sendPointerEvent(PointerEventType.Release, center)
+            frames(scene)
+        }
+
+        frames(scene1)
+        clickText(scene1, "Paste URL")
+        clickText(scene1, "Clone")
+        assertEquals(listOf("https://github.com/maceip/building.git" to "building"), fakeVcs.calls)
+        assertTrue(fakeVcs.activity.value.busy, "Clone should be in flight")
+
+        // Queue a companion repo while primary clone is in flight
+        clickText(scene1, "jameshibbard/nodegui-password-generator")
+        assertTrue("Queued ✓" in collectTexts(scene1))
+
+        // 2. Simulate switching focused Android apps / disposing composition mid-clone
+        scene1.close()
+
+        // 3. Complete the primary clone while UI composition is disposed
+        cloneCompleted.complete(
+            UiVcsResult(
+                ok = true,
+                path = "/workspace/building",
+                projectKind = UiProjectFolderKind.GRADLE,
+                message = "Cloned building",
+            ),
+        )
+
+        // 4. Re-mount CloneScreen (user switches back to the app) and verify both primary and queued clones succeeded!
+        val scene2 = ImageComposeScene(width = 900, height = 4200, density = Density(2f)) {
+            CompositionLocalProvider(LocalClipboardManager provides clipboard) {
+                CodeAssistTheme(dark = true) {
+                    CloneScreen(ctx)
+                }
+            }
+        }
+        try {
+            frames(scene2, 40)
+            assertEquals(
+                listOf(
+                    "https://github.com/maceip/building.git" to "building",
+                    "https://github.com/jameshibbard/nodegui-password-generator.git" to "nodegui-password-generator",
+                ),
+                fakeVcs.calls,
+                "Both the primary clone and the queued companion repo must complete even when composition was disposed mid-clone",
+            )
+            val textsAfterResume = collectTexts(scene2)
+            assertTrue("Cloned nodegui-password-generator ✓" in textsAfterResume, "Expected 'Cloned nodegui-password-generator ✓' in $textsAfterResume")
+            assertTrue("Open Project" in textsAfterResume, "Expected 'Open Project' in $textsAfterResume")
+        } finally {
+            scene2.close()
+        }
+    }
 }
