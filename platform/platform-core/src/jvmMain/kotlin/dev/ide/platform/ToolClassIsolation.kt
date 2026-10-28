@@ -71,7 +71,9 @@ object ToolClassIsolation {
 class ToolUrlClassLoader(urls: Array<URL>, parent: ClassLoader?) : URLClassLoader(urls, parent) {
     override fun loadClass(name: String, resolve: Boolean): Class<*> {
         if (ToolClassIsolation.isChildFirst(name)) {
-            synchronized(getClassLoadingLock(name)) {
+            // Synchronize on `this` (consistent with ArtKotlinPluginLoader) so self-hosting builds against
+            // Android's android.jar (which omits Java 7's ClassLoader.getClassLoadingLock) compile cleanly.
+            synchronized(this) {
                 findLoadedClass(name)?.let { return it }
                 // Absent from the tool's own jars: fall through to the normal parent-first delegation.
                 try {

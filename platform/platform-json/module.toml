@@ -1,0 +1,17 @@
+version = 2
+
+[module]
+type = "java-lib"
+name = "platform-json"
+languageLevel = "JAVA_17"
+output = "build/codeassist/classes"
+
+[sourceSets.commonMain]
+scope = "IMPLEMENTATION"
+java = ["src/commonMain/kotlin"]
+
+[dependencies]
+implementation = ["kotlin-stdlib"]
+
+[kotlin]
+commonSourceRoots = ["src/commonMain/kotlin"]

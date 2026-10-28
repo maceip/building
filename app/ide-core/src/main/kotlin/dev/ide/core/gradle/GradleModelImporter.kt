@@ -90,10 +90,11 @@ class GradleModelImporter : ProjectImporter {
         }
 
         val messages = ArrayList<SyncMessage>()
-        val modules = (root["modules"] as? List<*>).orEmpty()
+        val rawModules = (root["modules"] as? List<*>).orEmpty()
             .filterIsInstance<Map<*, *>>()
             .map { module(request.root, it, messages) }
-        if (modules.isEmpty()) messages.add(SyncMessage(SyncSeverity.WARNING, "$DUMP_PATH declares no modules"))
+        if (rawModules.isEmpty()) messages.add(SyncMessage(SyncSeverity.WARNING, "$DUMP_PATH declares no modules"))
+        val modules = healWithScriptModel(request, rawModules)
 
         val target = root["target"] as? String
         if (target != null) {
@@ -118,6 +119,78 @@ class GradleModelImporter : ProjectImporter {
             ),
             messages,
         )
+    }
+
+    /**
+     * Reconcile the exported model against the on-disk Gradle scripts when `.platform/gradle-model.json` lags
+     * behind recent refactorings (e.g. a newly extracted module like `:model-api` or a JVM module converted to
+     * Kotlin Multiplatform whose `src/main/kotlin` moved to `src/commonMain/kotlin` + `src/jvmMain/kotlin`).
+     *
+     * Authoritative exported entries stay untouched when their declared source roots exist on disk; only
+     * missing modules, modules whose declared main source roots no longer exist on disk, and newly added
+     * inter-module dependencies (`project(":...")`) are healed from the live script model.
+     */
+    private suspend fun healWithScriptModel(
+        request: SyncRequest,
+        exported: List<ExternalModule>,
+    ): List<ExternalModule> {
+        if (!GradleImport.isGradleProject(request.root)) return exported
+        val scriptModel = runCatching { GradleProjectImporter().resolve(request).model }.getOrNull() ?: return exported
+        val scriptByName = scriptModel.modules.associateBy { it.name }
+        val exportedNames = exported.mapTo(HashSet()) { it.name }
+        val allKnownModuleNames = exportedNames + scriptByName.keys
+
+        val healedExisting = exported.map { mod ->
+            val scriptMod = scriptByName[mod.name] ?: return@map mod
+            val moduleDir = request.root.resolve(mod.dirRelPath)
+            val existingMainSources = mod.sourceSets
+                .filter { it.scope != DependencyScope.TEST_IMPLEMENTATION }
+                .flatMap { set -> set.roots.filterValues { ContentRole.SOURCE in it }.keys }
+            val scriptMainSources = scriptMod.sourceSets
+                .filter { it.scope != DependencyScope.TEST_IMPLEMENTATION }
+                .flatMap { set -> set.roots.filterValues { ContentRole.SOURCE in it }.keys }
+            val sourcesMissingOnDisk =
+                (existingMainSources.isEmpty() || existingMainSources.none { Files.isDirectory(moduleDir.resolve(it)) }) &&
+                    scriptMainSources.any { Files.isDirectory(moduleDir.resolve(it)) }
+
+            val existingModDeps = mod.dependencies.filterIsInstance<ExternalModuleRef>().mapTo(HashSet()) { it.moduleName }
+            val extraModDeps = scriptMod.dependencies
+                .filterIsInstance<ExternalModuleRef>()
+                .filter { it.moduleName !in existingModDeps && it.moduleName in allKnownModuleNames }
+            val existingLibCoords = mod.dependencies.filterIsInstance<ExternalLibrary>().mapTo(HashSet()) {
+                it.coordinate.substringBeforeLast(':')
+            }
+            val extraLibDeps = if (sourcesMissingOnDisk) {
+                scriptMod.dependencies.filterIsInstance<ExternalLibrary>().filter {
+                    it.coordinate.substringBeforeLast(':') !in existingLibCoords
+                }
+            } else emptyList()
+            val mergedDependencies = mod.dependencies + extraModDeps + extraLibDeps
+
+            if (!sourcesMissingOnDisk && extraModDeps.isEmpty()) {
+                mod
+            } else if (!sourcesMissingOnDisk) {
+                mod.copy(dependencies = mergedDependencies)
+            } else {
+                val scriptKotlinFacet = scriptMod.facets.firstOrNull { it.table == KotlinFacetCodec.tomlTable }
+                val mergedFacets = if (scriptKotlinFacet != null) {
+                    mod.facets.filterNot { it.table == KotlinFacetCodec.tomlTable } + scriptKotlinFacet
+                } else {
+                    mod.facets
+                }
+                mod.copy(
+                    sourceSets = scriptMod.sourceSets,
+                    dependencies = mergedDependencies,
+                    facets = mergedFacets,
+                )
+            }
+        }
+
+        val missingModules = scriptModel.modules
+            .filter { it.name !in exportedNames }
+            .map { it.copy(outputRelPath = OUTPUT_ROOT) }
+
+        return healedExisting + missingModules
     }
 
     // --- modules ---
@@ -333,6 +406,7 @@ class GradleModelImporter : ProjectImporter {
     private fun repositories(root: Map<*, *>): List<ExternalRepository> =
         (root["repositories"] as? List<*>).orEmpty().filterIsInstance<Map<*, *>>().mapNotNull { repo ->
             val url = repo["url"] as? String ?: return@mapNotNull null
+            if (DEAD_REPO_SUBSTRINGS.any { it in url }) return@mapNotNull null
             ExternalRepository(repo["name"] as? String ?: url, url)
         }
 
@@ -355,5 +429,10 @@ class GradleModelImporter : ProjectImporter {
 
         /** Compile output for an imported module: a subtree of `build/` that is CodeAssist's alone. */
         private const val OUTPUT_ROOT = "build/codeassist/classes"
+
+        private val DEAD_REPO_SUBSTRINGS = listOf(
+            "bytedance.com/repository/pangle",
+            "mintegral.com",
+        )
     }
 }

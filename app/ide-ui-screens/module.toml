@@ -14,10 +14,14 @@ java = ["src/commonMain/kotlin"]
 scope = "TEST_IMPLEMENTATION"
 java = ["src/desktopTest/kotlin"]
 
+[sourceSets.jvmShared]
+scope = "IMPLEMENTATION"
+java = ["src/jvmShared/kotlin"]
+
 [dependencies]
 api = [{ module = "ide-ui-core" }, { module = "ide-ui-components" }, { module = "ide-ui-editor" }]
-implementation = ["kotlin-stdlib"]
+implementation = ["org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1", "kotlin-stdlib"]
 testImplementation = [{ module = "ide-ui-testing" }, "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0", "org.jetbrains.compose.desktop:desktop-jvm-macos-arm64:1.11.1"]
 
 [kotlin]
-commonSourceRoots = ["src/commonMain/kotlin"]
+commonSourceRoots = ["src/commonMain/kotlin", "src/jvmShared/kotlin"]

@@ -332,4 +332,20 @@ class CloneScreenTest {
             scene2.close()
         }
     }
+
+    @Test
+    fun normalizeCloneUrlSanitizesGboardAutoCorrectSpacesAndCapitalization() {
+        assertEquals(
+            "https://github.com/maceip/building.git",
+            normalizeCloneUrl("https://GitHub. com/maceip/building. git"),
+        )
+        assertEquals(
+            "https://github.com/maceip/building.git",
+            normalizeCloneUrl("maceip/building"),
+        )
+        assertEquals(
+            "https://github.com/maceip/building",
+            normalizeCloneUrl("GitHub. com/maceip/building"),
+        )
+    }
 }

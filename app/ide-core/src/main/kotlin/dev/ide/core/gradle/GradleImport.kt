@@ -246,7 +246,7 @@ object GradleImport {
     private fun parseRootName(settings: String?): String? =
         settings?.let { firstGroup(it, """rootProject\.name\s*=\s*['"]([^'"]+)['"]""") }
 
-    /** Gradle paths from `include ':app', ':feature:core'` (Groovy + Kotlin DSL). */
+    /** Gradle paths from `include ':app', ':feature:core'` (Groovy + Kotlin DSL, single- and multi-line). */
     private fun parseIncludes(settings: String?): List<String> {
         if (settings == null) return emptyList()
         val out = LinkedHashSet<String>()
@@ -254,6 +254,9 @@ object GradleImport {
             val trimmed = line.trim()
             if (!trimmed.startsWith("include")) continue
             for (m in Regex("""['"](:[^'"]+)['"]""").findAll(trimmed)) out.add(m.groupValues[1])
+        }
+        for (call in Regex("""\binclude\s*\(([^)]*)\)""").findAll(settings)) {
+            for (m in Regex("""['"](:[^'"]+)['"]""").findAll(call.groupValues[1])) out.add(m.groupValues[1])
         }
         return out.toList()
     }
@@ -271,6 +274,33 @@ object GradleImport {
         return if (Files.isDirectory(root.resolve("src"))) listOf(":") else emptyList()
     }
 
+    /**
+     * Resolve the on-disk directory for [gradlePath]. Checks `<root>/<gradlePath>` first; if absent, checks
+     * immediate child directories `<root>/<layer>/<gradlePath>` that hold a build script (for builds like
+     * `maceip/building` that map `project(":platform-core").projectDir = file("platform/platform-core")`).
+     */
+    private fun resolveModuleDir(root: Path, gradlePath: String): Pair<String, Path>? {
+        val directRel = gradlePath.trim(':').replace(':', '/')
+        if (directRel.isEmpty()) return "" to root
+        val direct = root.resolve(directRel)
+        if (Files.isDirectory(direct) && BUILD_FILES.any { Files.exists(direct.resolve(it)) }) {
+            return directRel to direct
+        }
+        val nested = runCatching {
+            Files.newDirectoryStream(root).use { stream ->
+                stream.asSequence()
+                    .filter { Files.isDirectory(it) }
+                    .map { it.fileName.toString() + "/" + directRel to it.resolve(directRel) }
+                    .firstOrNull { (_, dir) ->
+                        Files.isDirectory(dir) && BUILD_FILES.any { b -> Files.exists(dir.resolve(b)) }
+                    }
+            }
+        }.getOrNull()
+        if (nested != null) return nested
+        if (Files.isDirectory(direct)) return directRel to direct
+        return null
+    }
+
     private fun parseModule(
         root: Path,
         gradlePath: String,
@@ -281,9 +311,7 @@ object GradleImport {
         context: ProjectContext,
         notes: MutableList<String>,
     ): ModuleSpec? {
-        val dirRel = gradlePath.trim(':').replace(':', '/')
-        val dir = if (dirRel.isEmpty()) root else root.resolve(dirRel)
-        if (!Files.isDirectory(dir)) return null
+        val (dirRel, dir) = resolveModuleDir(root, gradlePath) ?: return null
         val build = BUILD_FILES.firstNotNullOfOrNull { readStripped(dir.resolve(it)) } ?: ""
         val name = moduleNames[normalizeGradlePath(gradlePath)]
             ?: gradlePath.trimEnd(':').substringAfterLast(':').ifEmpty { root.fileName?.toString() ?: "app" }

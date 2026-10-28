@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +47,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.backend.UiForgeRepo
@@ -201,23 +205,42 @@ private val COMPANION_RECOMMENDATIONS = listOf(
     ),
 )
 
-private fun normalizeCloneUrl(raw: String): String {
-    val trimmed = raw.trim()
-    if (trimmed.isEmpty()) return ""
-    if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("git@") || trimmed.startsWith("ssh://")) {
-        return trimmed
+internal fun normalizeCloneUrl(raw: String): String {
+    // Strip accidental IME auto-correct spaces around dots, slashes, and colons (e.g. Gboard inserting
+    // a space after "." when typing "https://github.com/owner/repo.git").
+    val sanitized = raw.trim()
+        .replace(Regex("""\s*\.\s*"""), ".")
+        .replace(Regex("""\s*/\s*"""), "/")
+        .replace(Regex("""\s*:\s*"""), ":")
+    if (sanitized.isEmpty()) return ""
+    val lower = sanitized.lowercase()
+    if (lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("git@") || lower.startsWith("ssh://")) {
+        val schemeEnd = sanitized.indexOf("://")
+        if (schemeEnd > 0) {
+            val scheme = sanitized.substring(0, schemeEnd).lowercase()
+            val rest = sanitized.substring(schemeEnd + 3)
+            val slashIdx = rest.indexOf('/')
+            return if (slashIdx > 0) {
+                val host = rest.substring(0, slashIdx).lowercase()
+                val path = rest.substring(slashIdx)
+                "$scheme://$host$path"
+            } else {
+                "$scheme://${rest.lowercase()}"
+            }
+        }
+        return sanitized
     }
-    if (trimmed.startsWith("github.com/")) {
-        return "https://$trimmed"
+    if (lower.startsWith("github.com/")) {
+        return "https://github.com/${sanitized.substring("github.com/".length)}"
     }
-    if (trimmed.count { it == '/' } == 1 && !trimmed.contains(' ') && !trimmed.startsWith('/')) {
-        return "https://github.com/$trimmed.git"
+    if (sanitized.count { it == '/' } == 1 && !sanitized.contains(' ') && !sanitized.startsWith('/')) {
+        return "https://github.com/$sanitized.git"
     }
-    return trimmed
+    return sanitized
 }
 
 private fun deriveRepoName(url: String): String =
-    url.trim().trimEnd('/').substringAfterLast('/').removeSuffix(".git").trim()
+    normalizeCloneUrl(url).trimEnd('/').substringAfterLast('/').removeSuffix(".git").trim()
 
 /**
  * Process-scoped clone session state keyed by [VcsService] so that switching focused Android apps,
@@ -616,6 +639,12 @@ private fun CloneUrlInputCard(
             onValueChange = onUrlChange,
             placeholder = "https://github.com/owner/repo or owner/repo",
             leading = CaIcons.cloudDownload,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Uri,
+                autoCorrectEnabled = false,
+                capitalization = KeyboardCapitalization.None,
+                imeAction = ImeAction.Go,
+            ),
         )
 
         Row(
@@ -629,6 +658,12 @@ private fun CloneUrlInputCard(
                 placeholder = stringResource(Res.string.vcs_clone_folder),
                 leading = CaIcons.folder,
                 modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Ascii,
+                    autoCorrectEnabled = false,
+                    capitalization = KeyboardCapitalization.None,
+                    imeAction = ImeAction.Done,
+                ),
             )
             PrimaryButton(
                 text = if (busy) "Cloning…" else stringResource(Res.string.vcs_clone_action),

@@ -10,9 +10,18 @@ output = "build/codeassist/classes"
 scope = "IMPLEMENTATION"
 java = ["src/commonMain/kotlin"]
 
+[sourceSets.desktopMain]
+scope = "IMPLEMENTATION"
+java = ["src/desktopMain/kotlin"]
+
+[sourceSets.desktopTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/desktopTest/kotlin"]
+
 [dependencies]
-api = [{ module = "ide-ui-api" }]
+api = [{ module = "ide-ui-api" }, "org.jetbrains.compose.runtime:runtime:1.11.1", "org.jetbrains.compose.ui:ui:1.11.1", "org.jetbrains.compose.desktop:desktop-jvm-macos-arm64:1.11.1"]
 implementation = ["org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0", "kotlin-stdlib"]
+testImplementation = ["org.jetbrains.compose.foundation:foundation:1.11.1", "org.jetbrains.compose.material3:material3:1.9.0"]
 
 [kotlin]
 commonSourceRoots = ["src/commonMain/kotlin"]

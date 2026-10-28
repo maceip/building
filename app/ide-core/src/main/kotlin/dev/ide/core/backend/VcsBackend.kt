@@ -518,6 +518,13 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
                                 ImportableKind.NONE
                             }
                     }
+                    // If the user re-cloned the currently open project, reload the active engine so in-memory
+                    // services and dependency reconciliation reflect the newly adopted workspace on disk.
+                    if (ctx.servicesOrNull?.workspaceRoot?.toAbsolutePath()?.normalize() == target.toAbsolutePath().normalize()) {
+                        withContext(Dispatchers.IO) {
+                            runCatching { ctx.swapEngine(manager.open(target.toString())) }
+                        }
+                    }
                     ok(VcsMessage.CLONED, name).copy(path = target.toString(), projectKind = kind.toUi())
                 }
             }

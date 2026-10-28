@@ -17,7 +17,7 @@ java = ["src/desktopTest/kotlin"]
 [dependencies]
 api = [{ module = "ide-ui-core" }]
 implementation = ["kotlin-stdlib"]
-testImplementation = [{ module = "ide-ui-testing" }, "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0", "org.jetbrains.compose.desktop:desktop-jvm-macos-arm64:1.11.1"]
+testImplementation = [{ module = "ide-ui-testing" }, "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0", "org.jetbrains.compose.desktop:desktop-jvm-macos-arm64:1.11.1", { module = "plugin-api" }]
 
 [kotlin]
 commonSourceRoots = ["src/commonMain/kotlin"]

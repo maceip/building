@@ -200,8 +200,11 @@ class AndroidBuildSystem(
      * at compile time. Compile-only — these are never fed to D8/aapt2/the dexer (D8 desugars the indy), so
      * only the `compileJava` classpaths use this; `sdk.androidJar` stays the lone arg everywhere else.
      */
+    private val extraBootStubs: List<Path> =
+        bootClasspath.filter { it != sdk.androidJar && it != sdk.coreLambdaStubs && Files.isRegularFile(it) }
+
     private val compileBootclasspath: List<Path> =
-        listOf(sdk.androidJar) + listOfNotNull(sdk.coreLambdaStubs.takeIf { Files.exists(it) })
+        (extraBootStubs + listOf(sdk.androidJar) + listOfNotNull(sdk.coreLambdaStubs.takeIf { Files.exists(it) })).distinct()
 
     /** [facet]'s compileSdk `android.jar` from [platformFor], or the build's default when it is not installed. */
     private fun androidJarFor(facet: AndroidFacet): Path =
@@ -209,7 +212,8 @@ class AndroidBuildSystem(
 
     /** [compileBootclasspath] with [androidJar] in place of the default `android.jar`. */
     private fun compileBootclasspathFor(androidJar: Path): List<Path> =
-        if (androidJar == sdk.androidJar) compileBootclasspath else listOf(androidJar) + compileBootclasspath.drop(1)
+        if (androidJar == sdk.androidJar) compileBootclasspath
+        else compileBootclasspath.map { if (it == sdk.androidJar) androidJar else it }
 
     /** [bootClasspath] with [androidJar] in place of the default `android.jar` (on ART the boot path holds it). */
     private fun bootClasspathFor(androidJar: Path): List<Path> =
@@ -1131,7 +1135,7 @@ class AndroidBuildSystem(
             GenerateLibraryRTask(
                 generateR,
                 srcRoots(ContentRole.ANDROID_RES),
-                buildDir.parent.resolve(facet.manifest),
+                moduleDir(m).resolve(facet.manifest),
                 androidJar,
                 facet.namespace,
                 facet.minSdk,
@@ -1342,7 +1346,7 @@ class AndroidBuildSystem(
     ) {
         val classesOut = outputDir(lib)
         val buildDir = classesOut.parent
-        val moduleDir = buildDir.parent
+        val moduleDir = moduleDir(lib)
         val libVariant = AndroidVariants.matchLibraryVariant(lib, variant, facet)
         fun srcRoots(role: ContentRole): List<Path> = contentRoots(lib, libVariant, role)
         val rRoot = buildDir.resolve("intermediates").resolve("r")
@@ -1636,7 +1640,7 @@ class AndroidBuildSystem(
     private inner class Layout(module: Module, variantName: String) {
         private val classesOut: Path = outputDir(module)   // <module>/build/classes
         private val buildDir: Path = classesOut.parent                  // <module>/build
-        private val moduleDirField: Path = buildDir.parent              // <module>
+        private val moduleDirField: Path = moduleDir(module)            // <module>
         private val inter: Path = buildDir.resolve("intermediates").resolve("android").resolve(variantName)
 
         val mergedRes: Path = inter.resolve("merged-res")

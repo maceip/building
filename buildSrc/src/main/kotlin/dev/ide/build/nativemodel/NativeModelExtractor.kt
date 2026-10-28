@@ -101,16 +101,17 @@ internal object NativeModelExtractor {
             kmp && androidLib && target == "android" -> "android-lib"
             else -> "java-lib"
         }
-        val sourceSets = if (kmp) kmpSourceSets(p, target) else plainSourceSets(p, app)
+        val mainSets = if (kmp) mainSourceSetsFor(p, target) else listOf("main")
+        val sourceSets = if (kmp) kmpSourceSets(p, target, mainSets) else plainSourceSets(p, app)
         val entry = linkedMapOf<String, Any?>(
             "name" to p.name,
             "dir" to p.projectDir.relativeTo(root.projectDir).invariantPath(),
             "type" to type,
             "multiplatform" to kmp,
             "sourceSets" to sourceSets,
-            "dependencies" to (if (kmp) kmpDependencies(p, target) else plainDependencies(p)),
+            "dependencies" to (if (kmp) kmpDependencies(p, target, mainSets) else plainDependencies(p)),
         )
-        composeResources(p, if (kmp) SOURCE_SETS_BY_TARGET.getValue(target) else listOf("main"))
+        composeResources(p, mainSets)
             ?.let { entry["composeResources"] = it }
         if (type != "java-lib") entry["android"] = androidFacet(p, app)
         return entry
@@ -118,14 +119,37 @@ internal object NativeModelExtractor {
 
     // --- source sets ---
 
+    private fun mainSourceSetsFor(p: Project, target: String): List<String> {
+        val leaf = when {
+            target == "android" && hasSourceSet(p, "androidMain") -> "androidMain"
+            target == "desktop" && hasSourceSet(p, "desktopMain") -> "desktopMain"
+            hasSourceSet(p, "jvmMain") -> "jvmMain"
+            else -> SOURCE_SETS_BY_TARGET.getValue(target).last()
+        }
+        return listOf("commonMain", "jvmShared", leaf)
+    }
+
+    private fun testSourceSetsFor(p: Project, target: String): List<String> {
+        val leaf = when {
+            target == "android" && hasSourceSet(p, "androidUnitTest") -> "androidUnitTest"
+            target == "desktop" && hasSourceSet(p, "desktopTest") -> "desktopTest"
+            hasSourceSet(p, "jvmTest") -> "jvmTest"
+            else -> TEST_SOURCE_SETS_BY_TARGET.getValue(target).last()
+        }
+        return listOf("commonTest", leaf)
+    }
+
+    private fun hasSourceSet(p: Project, name: String): Boolean =
+        p.configurations.findByName("${name}Implementation") != null ||
+            File(p.projectDir, "src/$name").isDirectory
+
     private fun plainSourceSets(p: Project, android: Boolean): List<Map<String, Any?>> = listOfNotNull(
         sourceSet(p, "main", "IMPLEMENTATION", "src/main", android),
         sourceSet(p, "test", "TEST_IMPLEMENTATION", "src/test", android = false),
     )
 
-    private fun kmpSourceSets(p: Project, target: String): List<Map<String, Any?>> {
-        val android = target == "android"
-        val sets = SOURCE_SETS_BY_TARGET.getValue(target)
+    private fun kmpSourceSets(p: Project, target: String, sets: List<String>): List<Map<String, Any?>> {
+        val android = target == "android" && sets.last() == "androidMain"
         // Everything above the leaf platform set is COMMON: that is what the compiler has to be told, or an
         // `expect` and its `actual` are rejected as "declared in the same module". The leaf is last.
         val platformSet = sets.last()
@@ -133,7 +157,7 @@ internal object NativeModelExtractor {
             sourceSet(p, name, "IMPLEMENTATION", "src/$name", android)
                 ?.let { if (name == platformSet) it else it + ("common" to true) }
         }
-        val test = TEST_SOURCE_SETS_BY_TARGET.getValue(target)
+        val test = testSourceSetsFor(p, target)
             .mapNotNull { sourceSet(p, it, "TEST_IMPLEMENTATION", "src/$it", android = false) }
         return main + test
     }
@@ -198,11 +222,11 @@ internal object NativeModelExtractor {
                 }
             }
 
-    private fun kmpDependencies(p: Project, target: String): List<Map<String, Any?>> {
-        val main = SOURCE_SETS_BY_TARGET.getValue(target).flatMap { set ->
+    private fun kmpDependencies(p: Project, target: String, mainSets: List<String>): List<Map<String, Any?>> {
+        val main = mainSets.flatMap { set ->
             SCOPE_BY_SUFFIX.flatMap { (suffix, scope) -> dependenciesOf(p, set + suffix, scope, variant = null) }
         }
-        val test = TEST_SOURCE_SETS_BY_TARGET.getValue(target).flatMap { set ->
+        val test = testSourceSetsFor(p, target).flatMap { set ->
             SCOPE_BY_SUFFIX.keys.flatMap { suffix ->
                 dependenciesOf(p, set + suffix, "TEST_IMPLEMENTATION", variant = null)
             }

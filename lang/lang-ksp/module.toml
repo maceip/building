@@ -16,5 +16,5 @@ java = ["src/test/kotlin"]
 
 [dependencies]
 api = [{ module = "build-api" }]
-implementation = ["com.google.devtools.ksp:symbol-processing-api:2.3.10", "com.google.devtools.ksp:symbol-processing-common-deps:2.3.10", "org.ow2.asm:asm:9.7", "kotlin-stdlib"]
-testImplementation = [{ platform = "org.junit:junit-bom:5.11.4" }, "org.jetbrains.kotlin:kotlin-test:2.4.0", { module = "test-support" }, "com.google.devtools.ksp:symbol-processing-aa-embeddable:2.3.10", "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0"]
+implementation = ["com.google.devtools.ksp:symbol-processing-api:2.3.12", "com.google.devtools.ksp:symbol-processing-common-deps:2.3.12", "org.ow2.asm:asm:9.7", "kotlin-stdlib"]
+testImplementation = [{ platform = "org.junit:junit-bom:5.11.4" }, "org.jetbrains.kotlin:kotlin-test:2.5.0-Beta2", { module = "test-support" }, "com.google.devtools.ksp:symbol-processing-aa-embeddable:2.3.12", "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0"]

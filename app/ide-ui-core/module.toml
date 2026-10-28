@@ -19,7 +19,7 @@ scope = "TEST_IMPLEMENTATION"
 java = ["src/desktopTest/kotlin"]
 
 [dependencies]
-api = [{ module = "ide-ui-api" }, { module = "ide-ui-resources" }, "org.jetbrains.compose.runtime:runtime:1.11.1", "org.jetbrains.compose.foundation:foundation:1.11.1", "org.jetbrains.compose.material3:material3:1.9.0", "org.jetbrains.compose.ui:ui:1.11.1", "org.jetbrains.compose.ui:ui-tooling-preview:1.11.1"]
+api = [{ module = "ide-ui-api" }, { module = "ide-ui-resources" }, "org.jetbrains.compose.runtime:runtime:1.11.1", "org.jetbrains.compose.foundation:foundation:1.11.1", "org.jetbrains.compose.material3:material3:1.9.0", "org.jetbrains.compose.ui:ui:1.11.1", "org.jetbrains.compose.ui:ui-tooling-preview:1.11.1", { module = "model-api" }]
 implementation = ["org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0", "kotlin-stdlib"]
 testImplementation = [{ module = "ide-ui-testing" }, "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0", "org.jetbrains.compose.desktop:desktop-jvm-macos-arm64:1.11.1"]
 

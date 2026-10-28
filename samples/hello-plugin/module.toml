@@ -6,6 +6,11 @@ name = "hello-plugin"
 languageLevel = "JAVA_17"
 output = "build/codeassist/classes"
 
+[sourceSets.androidTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/androidTest/java", "src/androidTest/kotlin"]
+resources = ["src/androidTest/resources"]
+
 [sourceSets.debug]
 scope = "IMPLEMENTATION"
 aidl = ["src/debug/aidl"]
@@ -33,8 +38,13 @@ jniLibs = ["src/release/jniLibs"]
 res = ["src/release/res"]
 resources = ["src/release/resources"]
 
+[sourceSets.test]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/test/java", "src/test/kotlin"]
+resources = ["src/test/resources"]
+
 [dependencies]
-api = ["org.jetbrains.kotlin:kotlin-stdlib:2.4.0"]
+api = ["org.jetbrains.kotlin:kotlin-stdlib:2.5.0-Beta2"]
 implementation = ["kotlin-stdlib"]
 compileOnly = [{ module = "plugin-api" }, { module = "plugin-ui-api" }, { module = "build-api" }, { module = "interp-api" }, "androidx.compose.runtime:runtime:1.11.2", "androidx.compose.foundation:foundation:1.11.2", "androidx.compose.ui:ui:1.11.2", "androidx.compose.material3:material3:1.4.0", "androidx.compose.ui:ui-tooling-preview:1.11.2"]
 
