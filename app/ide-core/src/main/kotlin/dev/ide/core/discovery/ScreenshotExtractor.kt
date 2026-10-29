@@ -18,6 +18,9 @@ object ScreenshotExtractor {
         /** Tier 2: Intelligent README Markdown and HTML scraping with heuristic scoring. */
         TIER_2_README_SCRAPE(2, "Intelligent README Image Scraping"),
 
+        /** Tier 2B: Linked webpage (homepage / docs site) screenshot extraction. */
+        TIER_2B_LINKED_WEBPAGE(2, "GitHub Linked Webpage Screenshot Crawl"),
+
         /** Tier 3: Repository asset directories crawler (/screenshots, /art, /assets). */
         TIER_3_ASSET_CRAWLER(3, "Repository Assets Directory Scan"),
 
@@ -25,7 +28,10 @@ object ScreenshotExtractor {
         TIER_4_AST_PREVIEWS(4, "Static AST @Preview Target Analysis"),
 
         /** Tier 5: Headless On-Device Build and Offscreen Snapshot (Staged contract for Vivari/ART). */
-        TIER_5_ACTIVE_HEADLESS_RENDER(5, "Headless On-Device Build & Render")
+        TIER_5_ACTIVE_HEADLESS_RENDER(5, "Headless On-Device Build & Render"),
+
+        /** Tier 6: Last-ditch dynamic source-code visual synthesis. */
+        TIER_6_SOURCE_SYNTHESIS(6, "Dynamic Source Code Visual Synthesis")
     }
 
     data class ScreenshotCandidate(
@@ -137,7 +143,16 @@ object ScreenshotExtractor {
     ): List<ScreenshotCandidate> {
         val candidates = mutableListOf<ScreenshotCandidate>()
 
-        // 1. Match HTML <img ... src="..." ...>
+        // 1. Match HTML <img ... data-canonical-src="..." or src="..." ...>
+        val canonicalImgRegex = Regex("""<img\s+[^>]*?data-canonical-src=["']([^"']+)["'][^>]*?>""", RegexOption.IGNORE_CASE)
+        for (match in canonicalImgRegex.findAll(readmeContent)) {
+            val rawSrc = match.groupValues[1]
+            val fullTag = match.value
+            processImageCandidate(rawSrc, fullTag, owner, repo, branch, AggressivenessTier.TIER_2_README_SCRAPE)?.let {
+                candidates.add(it)
+            }
+        }
+
         val htmlImgRegex = Regex("""<img\s+[^>]*?src=["']([^"']+)["'][^>]*?>""", RegexOption.IGNORE_CASE)
         for (match in htmlImgRegex.findAll(readmeContent)) {
             val rawSrc = match.groupValues[1]
@@ -157,7 +172,133 @@ object ScreenshotExtractor {
             }
         }
 
+        return candidates.distinctBy { it.url }
+    }
+
+    /**
+     * Extracts candidate project webpage URLs from the repository's configured homepageUrl
+     * and external links in README content.
+     */
+    fun extractLinkedWebpageUrls(
+        readmeContent: String?,
+        homepageUrl: String? = null
+    ): List<String> {
+        val urls = mutableListOf<String>()
+        if (!homepageUrl.isNullOrBlank() && (homepageUrl.startsWith("http://") || homepageUrl.startsWith("https://"))) {
+            urls.add(homepageUrl.trim())
+        }
+        if (!readmeContent.isNullOrBlank()) {
+            val linkRegex = Regex("""https?://[a-zA-Z0-9._~:/?#\[\]@!$&'*+,;=-]+""")
+            for (match in linkRegex.findAll(readmeContent)) {
+                val url = match.value.trimEnd(')', '.', ',', ';', '"', '\'', '>', ']')
+                val lower = url.lowercase()
+                if (lower.contains("github.com") ||
+                    lower.contains("githubusercontent.com") ||
+                    lower.contains("githubassets.com") ||
+                    lower.contains("shields.io") ||
+                    lower.contains("twitter.com") ||
+                    lower.contains("x.com") ||
+                    lower.contains("discord.") ||
+                    lower.contains("t.me/") ||
+                    lower.contains("linkedin.com") ||
+                    lower.contains("youtube.com") ||
+                    lower.contains("youtu.be") ||
+                    lower.contains("medium.com") ||
+                    lower.contains("opensource.org") ||
+                    lower.contains("apache.org/licenses") ||
+                    lower.endsWith(".svg") ||
+                    lower.endsWith(".png") ||
+                    lower.endsWith(".jpg") ||
+                    lower.endsWith(".webp") ||
+                    lower.endsWith(".gif")
+                ) {
+                    continue
+                }
+                urls.add(url)
+            }
+        }
+        return urls.distinct().take(4)
+    }
+
+    /**
+     * Best-effort extraction of app screenshots from a GitHub-linked external webpage HTML.
+     * Inspects `<img src="...">` with screenshot/UI/app cues as well as `<meta property="og:image">`
+     * and `<meta name="twitter:image">`.
+     */
+    fun extractWebpageScreenshots(
+        webpageUrl: String,
+        htmlContent: String
+    ): List<ScreenshotCandidate> {
+        if (htmlContent.isBlank()) return emptyList()
+        val candidates = mutableListOf<ScreenshotCandidate>()
+
+        // 1. Inspect <img ... src="..."> tags on the webpage
+        val imgRegex = Regex("""<img\s+[^>]*?(?:src|data-src)=["']([^"']+)["'][^>]*?>""", RegexOption.IGNORE_CASE)
+        for (match in imgRegex.findAll(htmlContent)) {
+            val rawSrc = match.groupValues[1].trim()
+            val fullTag = match.value
+            val resolved = resolveAgainstBaseUrl(webpageUrl, rawSrc) ?: continue
+            val lower = resolved.lowercase()
+            if (BADGE_DOMAINS.any { lower.contains(it) }) continue
+            if (lower.endsWith(".svg") || lower.contains("favicon") || lower.contains("avatar") || lower.contains("logo-small")) continue
+            var score = 0.68
+            val contextLower = "$resolved $fullTag".lowercase()
+            if (SCREENSHOT_KEYWORDS.any { contextLower.contains(it) }) {
+                score += 0.24
+            }
+            if (contextLower.contains("hero") || contextLower.contains("app") || contextLower.contains("window") || contextLower.contains("dashboard")) {
+                score += 0.12
+            }
+            candidates.add(
+                ScreenshotCandidate(
+                    url = resolved,
+                    tier = AggressivenessTier.TIER_2B_LINKED_WEBPAGE,
+                    confidenceScore = score.coerceIn(0.0, 0.96),
+                    caption = "Linked Webpage Screenshot",
+                    isHeroBanner = score >= 0.82
+                )
+            )
+        }
+
+        // 2. Inspect OpenGraph / Twitter preview image tags on the project's own website
+        val metaRegex = Regex(
+            """<meta\s+[^>]*?(?:property|name)=["'](?:og:image|twitter:image|twitter:image:src)["'][^>]*?content=["']([^"']+)["'][^>]*?>|<meta\s+[^>]*?content=["']([^"']+)["'][^>]*?(?:property|name)=["'](?:og:image|twitter:image|twitter:image:src)["'][^>]*?>""",
+            RegexOption.IGNORE_CASE
+        )
+        for (match in metaRegex.findAll(htmlContent)) {
+            val rawUrl = match.groupValues[1].ifBlank { match.groupValues[2] }.trim()
+            val resolved = resolveAgainstBaseUrl(webpageUrl, rawUrl) ?: continue
+            if (resolved.contains("opengraph.githubassets.com")) continue
+            candidates.add(
+                ScreenshotCandidate(
+                    url = resolved,
+                    tier = AggressivenessTier.TIER_2B_LINKED_WEBPAGE,
+                    confidenceScore = 0.78,
+                    caption = "Project Webpage Preview Card",
+                    isHeroBanner = true
+                )
+            )
+        }
+
         return candidates
+            .distinctBy { it.url }
+            .sortedByDescending { it.confidenceScore }
+    }
+
+    private fun resolveAgainstBaseUrl(baseUrl: String, href: String): String? {
+        val clean = href.trim()
+        if (clean.isBlank() || clean.startsWith("data:") || clean.startsWith("javascript:")) return null
+        return try {
+            if (clean.startsWith("http://") || clean.startsWith("https://")) {
+                clean
+            } else if (clean.startsWith("//")) {
+                "https:$clean"
+            } else {
+                URI.create(baseUrl).resolve(clean).toString()
+            }
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**

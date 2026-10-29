@@ -1,29 +1,17 @@
 package dev.ide.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.collectAsState
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.style.TextAlign
-import dev.ide.ui.backend.UiGitHubAuthState
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -37,16 +25,20 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -59,17 +51,24 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.ide.ui.backend.IdeBackend
+import dev.ide.ui.backend.SUPPORTED_PHONE_LANGUAGES
 import dev.ide.ui.backend.UiDiscoveredRepo
 import dev.ide.ui.backend.UiDiscoveryFeed
+import dev.ide.ui.backend.UiGitHubAuthState
 import dev.ide.ui.backend.UiNorthStarBenchmark
 import dev.ide.ui.backend.UiPeerProject
-import dev.ide.ui.components.Eyebrow
+import dev.ide.ui.backend.UiScreenshotSourceTier
+import dev.ide.ui.backend.UiTrendingPeriod
 import dev.ide.ui.components.SquareToneButton
 import dev.ide.ui.components.pressScale
 import dev.ide.ui.editor.preview.decodeImageBytes
@@ -84,30 +83,457 @@ private data class ExplorerCategory(
     val id: String,
     val label: String,
     val topic: String,
-    val symbol: Char
+    val symbol: Char,
+    val isLanguageFilter: Boolean = true
 )
 
 private val EXPLORER_CATEGORIES = listOf(
-    ExplorerCategory("all", "All", "android", CaSymbols.explore),
-    ExplorerCategory("swift", "SwiftUI & iOS", "swiftui", CaSymbols.phoneAndroid),
-    ExplorerCategory("python", "Python", "python", CaSymbols.codeBlocks),
-    ExplorerCategory("node", "Node.js", "nodejs", CaSymbols.terminal),
-    ExplorerCategory("agents", "Agents", "agents", CaSymbols.deployedCode),
-    ExplorerCategory("llm", "LLMs", "llm", CaSymbols.bolt),
-    ExplorerCategory("pentesting", "Pen Testing", "penetration-testing", CaSymbols.terminal),
-    ExplorerCategory("reverse", "Reverse Eng", "reverse-engineering", CaSymbols.construction),
-    ExplorerCategory("gaming", "Gaming", "gaming", CaSymbols.rocketLaunch),
-    ExplorerCategory("science", "Science", "science", CaSymbols.functions)
+    ExplorerCategory("all", "All Languages", "all", CaSymbols.explore, isLanguageFilter = true),
+    ExplorerCategory("kotlin", "Kotlin", "kotlin", CaSymbols.phoneAndroid, isLanguageFilter = true),
+    ExplorerCategory("swift", "Swift & iOS", "swift", CaSymbols.phoneAndroid, isLanguageFilter = true),
+    ExplorerCategory("python", "Python", "python", CaSymbols.codeBlocks, isLanguageFilter = true),
+    ExplorerCategory("typescript", "TypeScript", "typescript", CaSymbols.codeBlocks, isLanguageFilter = true),
+    ExplorerCategory("javascript", "JavaScript", "javascript", CaSymbols.terminal, isLanguageFilter = true),
+    ExplorerCategory("java", "Java", "java", CaSymbols.deployedCode, isLanguageFilter = true),
+    ExplorerCategory("rust", "Rust", "rust", CaSymbols.bolt, isLanguageFilter = true),
+    ExplorerCategory("c++", "C++", "c++", CaSymbols.construction, isLanguageFilter = true),
+    ExplorerCategory("agents", "AI Agents", "agents", CaSymbols.deployedCode, isLanguageFilter = false),
+    ExplorerCategory("llm", "LLMs", "llm", CaSymbols.bolt, isLanguageFilter = false),
+    ExplorerCategory("pentesting", "Pen Testing", "penetration-testing", CaSymbols.terminal, isLanguageFilter = false),
+    ExplorerCategory("reverse", "Reverse Eng", "reverse-engineering", CaSymbols.construction, isLanguageFilter = false),
+    ExplorerCategory("gaming", "Gaming", "gaming", CaSymbols.rocketLaunch, isLanguageFilter = false),
+    ExplorerCategory("science", "Science", "science", CaSymbols.functions, isLanguageFilter = false)
 )
+
+private enum class PeerNetworkFilter(val id: String, val label: String) {
+    ALL("all", "All Related"),
+    SAME_AUTHOR("author", "By Author"),
+    STARRED("starred", "★ Starred"),
+    FIRST_HOP("hop1", "1st-Hop Following"),
+    SECOND_HOP("hop2", "2nd-Hop Following"),
+    SIMILAR("similar", "Related Stack")
+}
+
+/**
+ * Compact, self-contained **Trending Repos Widget** that displays the current
+ * `Daily`, `Weekly`, and `Monthly` GitHub trending lists for all popular phone-supported languages,
+ * with Just-In-Time (JIT) best-effort app screenshot generation (local GUI/Compose preview build ->
+ * repo/linked webpage screenshot -> dynamic source synthesis).
+ */
+@Composable
+fun TrendingReposWidget(
+    backend: IdeBackend,
+    onCloneAndOpen: (htmlUrl: String, repoName: String) -> Unit,
+    onOpenExplorer: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val scope = rememberCoroutineScope()
+    val haptics = rememberIdeHaptics()
+    val c = MaterialTheme.colorScheme
+    val languages = remember(backend) { backend.discovery.supportedLanguages().ifEmpty { SUPPORTED_PHONE_LANGUAGES } }
+
+    var selectedPeriod by remember { mutableStateOf(UiTrendingPeriod.DAILY) }
+    var selectedLanguageId by remember { mutableStateOf(languages.first().id) }
+    var feed by remember { mutableStateOf<UiDiscoveryFeed?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    val jitScreenshots = remember { mutableStateMapOf<String, Pair<String, UiScreenshotSourceTier>>() }
+    val buildingSlugs = remember { mutableStateMapOf<String, Boolean>() }
+
+    fun loadWidgetFeed(langId: String, period: UiTrendingPeriod, forceRefresh: Boolean = false) {
+        selectedLanguageId = langId
+        selectedPeriod = period
+        scope.launch {
+            loading = true
+            val result = runCatching {
+                backend.discovery.getTrendingFeed(
+                    language = langId,
+                    period = period,
+                    refresh = forceRefresh
+                )
+            }.getOrDefault(UiDiscoveryFeed())
+            feed = result
+            loading = false
+        }
+    }
+
+    LaunchedEffect(backend) {
+        loadWidgetFeed(selectedLanguageId, selectedPeriod, forceRefresh = false)
+    }
+
+    val repos = feed?.trendingHero.orEmpty()
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("trending_repos_widget")
+            .border(0.5.dp, c.outlineVariant.copy(alpha = 0.6f), RoundedCornerShape(16.dp)),
+        shape = RoundedCornerShape(16.dp),
+        color = c.surfaceContainerLow
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Header row + Period switcher (Daily / Weekly / Monthly)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Symbol(CaSymbols.rocketLaunch, contentDescription = null, size = 16.dp, tint = c.primary)
+                    Column {
+                        Text(
+                            "Trending Repos",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = c.onSurface
+                        )
+                        Text(
+                            if (feed?.isFromBuildBundle == true) "Bundled + Live JIT Previews" else "Live GitHub Crawler",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            color = c.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Segmented Period Selector (Daily | Weekly | Monthly)
+                Row(
+                    modifier = Modifier
+                        .background(c.surfaceContainerHigh, RoundedCornerShape(8.dp))
+                        .padding(2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    UiTrendingPeriod.entries.forEach { period ->
+                        val isSelected = selectedPeriod == period
+                        Surface(
+                            onClick = {
+                                haptics.tap()
+                                if (selectedPeriod != period) {
+                                    loadWidgetFeed(selectedLanguageId, period, forceRefresh = false)
+                                }
+                            },
+                            modifier = Modifier.testTag("widget_period_${period.sinceParam}"),
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isSelected) c.primary else Color.Transparent
+                        ) {
+                            Text(
+                                period.label,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                ),
+                                color = if (isSelected) c.onPrimary else c.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Supported Phone Languages Bar
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(languages, key = { it.id }) { lang ->
+                    val isSelected = selectedLanguageId == lang.id
+                    Surface(
+                        onClick = {
+                            haptics.tap()
+                            if (selectedLanguageId != lang.id) {
+                                loadWidgetFeed(lang.id, selectedPeriod, forceRefresh = false)
+                            }
+                        },
+                        modifier = Modifier.testTag("widget_lang_${lang.id}"),
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isSelected) c.secondaryContainer else c.surfaceContainerHigh,
+                        border = if (isSelected) BorderStroke(1.dp, c.primary) else null
+                    ) {
+                        Text(
+                            lang.label,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            ),
+                            color = if (isSelected) c.onSecondaryContainer else c.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (loading && repos.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(90.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
+            } else if (repos.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    repos.take(3).forEach { repo ->
+                        val overrideShot = jitScreenshots[repo.slug]
+                        val effectiveShotUrl = overrideShot?.first ?: repo.screenshotUrl
+                        val effectiveTier = overrideShot?.second ?: repo.screenshotSourceTier
+                        val isBuilding = buildingSlugs[repo.slug] == true
+
+                        TrendingWidgetItemRow(
+                            repo = repo,
+                            screenshotUrl = effectiveShotUrl,
+                            tier = effectiveTier,
+                            isBuildingPreview = isBuilding,
+                            backend = backend,
+                            onBuildPreview = {
+                                if (!isBuilding) {
+                                    haptics.tap()
+                                    buildingSlugs[repo.slug] = true
+                                    scope.launch {
+                                        val built = runCatching {
+                                            backend.discovery.resolveOrGenerateAppImage(repo, forceLocalBuild = true)
+                                        }.getOrNull()
+                                        if (built != null) {
+                                            jitScreenshots[repo.slug] = built
+                                        }
+                                        buildingSlugs[repo.slug] = false
+                                    }
+                                }
+                            },
+                            onAutoResolveNeeded = {
+                                if (jitScreenshots[repo.slug] == null && buildingSlugs[repo.slug] != true) {
+                                    buildingSlugs[repo.slug] = true
+                                    scope.launch {
+                                        val resolved = runCatching {
+                                            backend.discovery.resolveOrGenerateAppImage(repo, forceLocalBuild = false)
+                                        }.getOrNull()
+                                        if (resolved != null) {
+                                            jitScreenshots[repo.slug] = resolved
+                                        }
+                                        buildingSlugs[repo.slug] = false
+                                    }
+                                }
+                            },
+                            onClone = { onCloneAndOpen(repo.htmlUrl, repo.name) }
+                        )
+                    }
+                }
+
+                if (onOpenExplorer != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Surface(
+                            onClick = { haptics.tap(); onOpenExplorer() },
+                            modifier = Modifier.testTag("widget_open_full_explorer"),
+                            shape = RoundedCornerShape(6.dp),
+                            color = c.surfaceContainerHigh
+                        ) {
+                            Text(
+                                "Explore Full Gallery & 2-Hop Author Graph →",
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                color = c.primary
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrendingWidgetItemRow(
+    repo: UiDiscoveredRepo,
+    screenshotUrl: String?,
+    tier: UiScreenshotSourceTier,
+    isBuildingPreview: Boolean,
+    backend: IdeBackend,
+    onBuildPreview: () -> Unit,
+    onAutoResolveNeeded: () -> Unit,
+    onClone: () -> Unit
+) {
+    val c = MaterialTheme.colorScheme
+    val bitmap by produceState<ImageBitmap?>(null, repo.slug, screenshotUrl) {
+        value = null
+        if (!screenshotUrl.isNullOrBlank()) {
+            val bytes = backend.discovery.loadScreenshotBytes(screenshotUrl)
+            val decoded = bytes?.let { withContext(Dispatchers.Default) { decodeImageBytes(it) } }
+            value = decoded
+            if (decoded == null) {
+                onAutoResolveNeeded()
+            }
+        } else {
+            onAutoResolveNeeded()
+        }
+    }
+
+    Surface(
+        onClick = onClone,
+        shape = RoundedCornerShape(10.dp),
+        color = c.surfaceContainer,
+        border = BorderStroke(0.5.dp, c.outlineVariant.copy(alpha = 0.4f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // App Preview Thumbnail
+            Box(
+                modifier = Modifier
+                    .width(76.dp)
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(c.surfaceContainerHighest),
+                contentAlignment = Alignment.Center
+            ) {
+                val bmp = bitmap
+                if (bmp != null) {
+                    Image(
+                        bitmap = bmp,
+                        contentDescription = "${repo.name} preview",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else if (isBuildingPreview) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 1.5.dp)
+                } else {
+                    Symbol(CaSymbols.codeBlocks, contentDescription = null, size = 18.dp, tint = c.primary)
+                }
+            }
+
+            // Repo metadata
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        "${repo.owner}/${repo.name}",
+                        modifier = Modifier.weight(1f, fill = false),
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        color = c.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (repo.starsInPeriod > 0) {
+                        Text(
+                            "+${repo.starsInPeriod} ★",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = Color(0xFF10B981),
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                }
+
+                Text(
+                    repo.description.ifBlank { "${repo.language} trending project" },
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                    color = c.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        "${repo.language.ifBlank { "App" }} • ${repo.stars} ★",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        color = c.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                    Text(
+                        tier.badgeLabel,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 8.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = c.primary,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+
+            // On-Demand Local Build Preview button + Clone button
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalAlignment = Alignment.End
+            ) {
+                Surface(
+                    onClick = onBuildPreview,
+                    modifier = Modifier.testTag("widget_build_preview_${repo.slug}"),
+                    shape = RoundedCornerShape(5.dp),
+                    color = c.surfaceContainerHigh
+                ) {
+                    Text(
+                        if (isBuildingPreview) "Building..." else "Build Shot",
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                        color = c.primary
+                    )
+                }
+                Surface(
+                    onClick = onClone,
+                    modifier = Modifier.testTag("widget_clone_${repo.slug}"),
+                    shape = RoundedCornerShape(5.dp),
+                    color = c.primary
+                ) {
+                    Text(
+                        "Clone",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = c.onPrimary
+                    )
+                }
+            }
+        }
+    }
+}
 
 /**
  * Modern, condensed GitHub Explorer feed featuring:
- * 1. Hero visual repository cards with multi-tier screenshot previews.
- * 2. Deep architectural shape intelligence ("Shaped like this one, but with 10x-50x more stars").
- * 3. Runtime capabilities (Zero-Cloud, 100% offline-first, Compose, NDK).
- * 4. Author social graph & peer circle traversal ("Created by @x, whom @y follows").
- * 5. Category filters (Agents, LLMs, Pen Testing, Reverse Engineering, Gaming, Science).
- * 6. GitHub OAuth & PAT rate limit upgrade (60 -> 5,000 req/hr).
+ * 1. Build-time bundled + live Daily / Weekly / Monthly GitHub Trending lists across all
+ *    popular languages supported on this phone.
+ * 2. Hero visual repository cards with 3-tier Just-In-Time (JIT) screenshot generation:
+ *    - Preferred (Tier 1): Build/render GUI app (`SwiftUiPreviewInterpreter`) or Compose `@Preview` locally on demand.
+ *    - Fallback 1 (Tier 2): Search the GitHub repository AND the GitHub linked webpage for a real screenshot.
+ *    - Last-Ditch Effort (Tier 3): Dynamic visual synthesis from inspecting the source code.
+ * 3. Deep 2-Hop Author Social Graph + Starred Repos + Related Apps Explorer:
+ *    - Inspects `@author`, who `@author` follows (`@peer1`), who `@peer1` follows (`@peer2`),
+ *      their starred repos, and ranks repositories related to the currently selected app.
+ * 4. Architectural shape intelligence ("Shaped like this one, but with more stars").
  */
 @Composable
 fun GitHubExplorerFeed(
@@ -121,19 +547,52 @@ fun GitHubExplorerFeed(
     var feed by remember { mutableStateOf<UiDiscoveryFeed?>(initialFeed) }
     var loading by remember { mutableStateOf(feed == null) }
     var selectedCategory by remember { mutableStateOf(EXPLORER_CATEGORIES.first()) }
-    var selectedHeroUrl by remember { mutableStateOf<String?>(null) }
+    var selectedPeriod by remember { mutableStateOf(initialFeed?.period ?: UiTrendingPeriod.DAILY) }
+    var selectedHeroUrl by remember { mutableStateOf<String?>(initialFeed?.trendingHero?.firstOrNull()?.htmlUrl) }
     var showAuthDialog by remember { mutableStateOf(false) }
+    var selectedPeerFilter by remember { mutableStateOf(PeerNetworkFilter.ALL) }
+    var dynamicPeerProjects by remember { mutableStateOf<List<UiPeerProject>>(initialFeed?.authorPeerPicks.orEmpty()) }
+    var loadingPeers by remember { mutableStateOf(false) }
+
+    val jitScreenshots = remember { mutableStateMapOf<String, Pair<String, UiScreenshotSourceTier>>() }
+    val buildingPreviewSlugs = remember { mutableStateMapOf<String, Boolean>() }
+
     val authState by backend.discovery.authState.collectAsState()
     val heroListState = rememberLazyListState()
     val heroSnapFling = rememberSnapFlingBehavior(lazyListState = heroListState)
 
-    fun loadCategory(category: ExplorerCategory, forceRefresh: Boolean = false) {
+    fun loadCategoryAndPeriod(
+        category: ExplorerCategory,
+        period: UiTrendingPeriod,
+        forceRefresh: Boolean = false
+    ) {
         selectedCategory = category
+        selectedPeriod = period
         selectedHeroUrl = null
         scope.launch {
             loading = true
-            val nextFeed = runCatching { backend.discovery.getFeed(topic = category.topic, refresh = forceRefresh) }.getOrDefault(UiDiscoveryFeed())
+            val nextFeed = runCatching {
+                if (category.isLanguageFilter) {
+                    val trending = backend.discovery.getTrendingFeed(
+                        language = category.topic,
+                        period = period,
+                        refresh = forceRefresh
+                    )
+                    if (trending.trendingHero.isNotEmpty()) {
+                        trending
+                    } else {
+                        backend.discovery.getFeed(
+                            topic = if (category.topic == "all") "android" else category.topic,
+                            language = if (category.topic == "all") "kotlin" else category.topic,
+                            refresh = forceRefresh
+                        )
+                    }
+                } else {
+                    backend.discovery.getFeed(topic = category.topic, refresh = forceRefresh)
+                }
+            }.getOrDefault(UiDiscoveryFeed())
             feed = nextFeed
+            dynamicPeerProjects = nextFeed.authorPeerPicks
             selectedHeroUrl = nextFeed.trendingHero.firstOrNull()?.htmlUrl
             heroListState.scrollToItem(0)
             loading = false
@@ -142,18 +601,14 @@ fun GitHubExplorerFeed(
 
     LaunchedEffect(backend) {
         if (feed == null) {
-            loading = true
-            val nextFeed = runCatching { backend.discovery.getFeed(topic = selectedCategory.topic) }.getOrDefault(UiDiscoveryFeed())
-            feed = nextFeed
-            selectedHeroUrl = nextFeed.trendingHero.firstOrNull()?.htmlUrl
-            loading = false
+            loadCategoryAndPeriod(selectedCategory, selectedPeriod, forceRefresh = false)
         } else if (selectedHeroUrl == null) {
             selectedHeroUrl = feed?.trendingHero?.firstOrNull()?.htmlUrl
         }
     }
 
     fun refresh() {
-        loadCategory(selectedCategory, forceRefresh = true)
+        loadCategoryAndPeriod(selectedCategory, selectedPeriod, forceRefresh = true)
     }
 
     val currentFeed = feed ?: UiDiscoveryFeed()
@@ -184,6 +639,36 @@ fun GitHubExplorerFeed(
             ?: currentFeed.trendingHero.firstOrNull()
     }
 
+    // Whenever the currently selected app changes, crawl/load its author's 2-hop social network + starred + related repos
+    LaunchedEffect(activeHeroRepo?.htmlUrl, backend) {
+        val target = activeHeroRepo ?: return@LaunchedEffect
+        loadingPeers = true
+        val crawled = runCatching {
+            backend.discovery.getRelatedAndAuthorNetwork(target, refresh = false)
+        }.getOrDefault(emptyList())
+        dynamicPeerProjects = if (crawled.isNotEmpty()) {
+            crawled
+        } else {
+            currentFeed.authorPeerPicks
+        }
+        loadingPeers = false
+    }
+
+    val filteredPeers = remember(dynamicPeerProjects, selectedPeerFilter) {
+        when (selectedPeerFilter) {
+            PeerNetworkFilter.ALL -> dynamicPeerProjects
+            PeerNetworkFilter.SAME_AUTHOR -> dynamicPeerProjects.filter { it.relationKind == "SAME_AUTHOR" }
+            PeerNetworkFilter.STARRED -> dynamicPeerProjects.filter {
+                it.relationKind in setOf("AUTHOR_STARRED", "PEER_STARRED", "SECOND_DEGREE_STARRED")
+            }
+            PeerNetworkFilter.FIRST_HOP -> dynamicPeerProjects.filter { it.relationKind == "FOLLOWED_PEER" }
+            PeerNetworkFilter.SECOND_HOP -> dynamicPeerProjects.filter {
+                it.relationKind in setOf("SECOND_DEGREE_PEER", "SECOND_DEGREE_STARRED")
+            }
+            PeerNetworkFilter.SIMILAR -> dynamicPeerProjects.filter { it.relationKind == "RELATED_ARCHITECTURE" }
+        }.ifEmpty { dynamicPeerProjects }
+    }
+
     val activeBenchmarks = remember(activeHeroRepo, currentFeed.northStarBenchmarks, currentFeed.trendingHero) {
         val target = activeHeroRepo
         if (target == null) {
@@ -197,8 +682,6 @@ fun GitHubExplorerFeed(
             if (directMatches.isNotEmpty()) {
                 directMatches.take(4)
             } else {
-                // Synthesize reactive architectural comparisons against the other repos in this category
-                // so every selected/paged hero card shows tailored "Shaped Like <ActiveRepo>" results!
                 currentFeed.trendingHero
                     .filter { !it.htmlUrl.equals(target.htmlUrl, ignoreCase = true) }
                     .sortedByDescending { it.stars }
@@ -242,7 +725,7 @@ fun GitHubExplorerFeed(
                     )
                 }
                 Text(
-                    "Visual previews, architectural twins & peer networks",
+                    "Daily/Weekly/Monthly trending, JIT local GUI previews & 2-hop author graphs",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -291,23 +774,79 @@ fun GitHubExplorerFeed(
             }
         }
 
-        // Category Pills Filter Row
+        // Trending Period Selector Bar (Daily / Weekly / Monthly) + Bundle Provenance Badge
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(10.dp))
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                UiTrendingPeriod.entries.forEach { period ->
+                    val isSelected = selectedPeriod == period
+                    Surface(
+                        onClick = {
+                            haptics.tap()
+                            if (selectedPeriod != period) {
+                                loadCategoryAndPeriod(selectedCategory, period, forceRefresh = false)
+                            }
+                        },
+                        modifier = Modifier.testTag("trending_period_${period.sinceParam}"),
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent
+                    ) {
+                        Text(
+                            period.label,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            ),
+                            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh
+            ) {
+                Text(
+                    if (currentFeed.isFromBuildBundle) "BUNDLED + JIT READY" else "LIVE CRAWL",
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
+        // Supported Phone Languages & Domain Category Pills Row
         LazyRow(
             contentPadding = PaddingValues(horizontal = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(EXPLORER_CATEGORIES) { category ->
+            items(EXPLORER_CATEGORIES, key = { it.id }) { category ->
                 val selected = selectedCategory.id == category.id
                 val interactionSource = remember { MutableInteractionSource() }
                 Surface(
                     onClick = {
                         haptics.tap()
                         if (selectedCategory.id != category.id) {
-                            loadCategory(category)
+                            loadCategoryAndPeriod(category, selectedPeriod, forceRefresh = false)
                         }
                     },
                     interactionSource = interactionSource,
-                    modifier = Modifier.pressScale(interactionSource),
+                    modifier = Modifier
+                        .pressScale(interactionSource)
+                        .testTag("trending_lang_${category.id}"),
                     shape = RoundedCornerShape(8.dp),
                     color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
                     border = if (selected) null else BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -357,7 +896,7 @@ fun GitHubExplorerFeed(
         if (currentFeed.trendingHero.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "TRENDING VISUAL SHOWCASE · ${selectedCategory.label.uppercase()}",
+                    "TRENDING VISUAL SHOWCASE · ${selectedPeriod.label.uppercase()} · ${selectedCategory.label.uppercase()}",
                     modifier = Modifier.padding(horizontal = 20.dp),
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontFamily = FontFamily.Monospace,
@@ -374,14 +913,55 @@ fun GitHubExplorerFeed(
                 ) {
                     itemsIndexed(currentFeed.trendingHero, key = { _, it -> it.htmlUrl }) { index, repo ->
                         val isSelected = activeHeroRepo?.htmlUrl == repo.htmlUrl
+                        val jitOverride = jitScreenshots[repo.slug]
+                        val effectiveRepo = if (jitOverride != null) {
+                            repo.copy(
+                                screenshotUrl = jitOverride.first,
+                                screenshotSourceTier = jitOverride.second
+                            )
+                        } else {
+                            repo
+                        }
+                        val isBuildingPreview = buildingPreviewSlugs[repo.slug] == true
+
                         HeroVisualRepoCard(
-                            repo = repo,
+                            repo = effectiveRepo,
                             selected = isSelected,
+                            isBuildingPreview = isBuildingPreview,
                             backend = backend,
                             onSelect = {
                                 haptics.tap()
                                 selectedHeroUrl = repo.htmlUrl
                                 scope.launch { heroListState.animateScrollToItem(index) }
+                            },
+                            onBuildPreview = {
+                                if (!isBuildingPreview) {
+                                    haptics.tap()
+                                    buildingPreviewSlugs[repo.slug] = true
+                                    scope.launch {
+                                        val built = runCatching {
+                                            backend.discovery.resolveOrGenerateAppImage(repo, forceLocalBuild = true)
+                                        }.getOrNull()
+                                        if (built != null) {
+                                            jitScreenshots[repo.slug] = built
+                                        }
+                                        buildingPreviewSlugs[repo.slug] = false
+                                    }
+                                }
+                            },
+                            onAutoResolveNeeded = {
+                                if (jitScreenshots[repo.slug] == null && buildingPreviewSlugs[repo.slug] != true) {
+                                    buildingPreviewSlugs[repo.slug] = true
+                                    scope.launch {
+                                        val resolved = runCatching {
+                                            backend.discovery.resolveOrGenerateAppImage(repo, forceLocalBuild = false)
+                                        }.getOrNull()
+                                        if (resolved != null) {
+                                            jitScreenshots[repo.slug] = resolved
+                                        }
+                                        buildingPreviewSlugs[repo.slug] = false
+                                    }
+                                }
                             },
                             onClone = { onCloneAndOpen(repo.htmlUrl, repo.name) }
                         )
@@ -423,24 +1003,64 @@ fun GitHubExplorerFeed(
             }
         }
 
-        // 3. Developer Peer Circle Traversal
-        if (currentFeed.authorPeerPicks.isNotEmpty()) {
+        // 3. Deep 2-Hop Author Social Graph + Starred Repos + Related Apps
+        if (dynamicPeerProjects.isNotEmpty() || loadingPeers) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "AUTHOR'S PEER CIRCLE",
-                    modifier = Modifier.padding(horizontal = 20.dp),
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 1.sp
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                val authorTitle = activeHeroRepo?.owner?.let { "@${it.uppercase()}'S 2-HOP NETWORK & RELATED" }
+                    ?: "AUTHOR'S PEER CIRCLE"
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        authorTitle,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 1.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (loadingPeers) {
+                        CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                    }
+                }
+
+                // Filter Chips for 2-Hop Social Graph & Starred Repos
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(PeerNetworkFilter.entries, key = { it.id }) { filter ->
+                        val isSelected = selectedPeerFilter == filter
+                        Surface(
+                            onClick = {
+                                haptics.tap()
+                                selectedPeerFilter = filter
+                            },
+                            modifier = Modifier.testTag("peer_filter_${filter.id}"),
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                            border = if (isSelected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null
+                        ) {
+                            Text(
+                                filter.label,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                ),
+                                color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
 
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(currentFeed.authorPeerPicks, key = { it.htmlUrl }) { peer ->
+                    items(filteredPeers, key = { it.htmlUrl }) { peer ->
                         AuthorPeerCard(
                             peer = peer,
                             onClone = { onCloneAndOpen(peer.htmlUrl, peer.name) }
@@ -453,15 +1073,19 @@ fun GitHubExplorerFeed(
 }
 
 /**
- * Visual Hero Card rendering screenshot preview banner and capability pills.
+ * Visual Hero Card rendering screenshot preview banner, screenshot provenance tier badge,
+ * star velocity in period, on-demand local GUI/Compose preview build button, and capability pills.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun HeroVisualRepoCard(
     repo: UiDiscoveredRepo,
     selected: Boolean,
+    isBuildingPreview: Boolean,
     backend: IdeBackend,
     onSelect: () -> Unit,
+    onBuildPreview: () -> Unit,
+    onAutoResolveNeeded: () -> Unit,
     onClone: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -473,7 +1097,13 @@ private fun HeroVisualRepoCard(
         val url = repo.screenshotUrl
         if (!url.isNullOrBlank()) {
             val bytes = backend.discovery.loadScreenshotBytes(url)
-            value = bytes?.let { withContext(Dispatchers.Default) { decodeImageBytes(it) } }
+            val decoded = bytes?.let { withContext(Dispatchers.Default) { decodeImageBytes(it) } }
+            value = decoded
+            if (decoded == null) {
+                onAutoResolveNeeded()
+            }
+        } else {
+            onAutoResolveNeeded()
         }
     }
 
@@ -481,7 +1111,7 @@ private fun HeroVisualRepoCard(
         onClick = onSelect,
         interactionSource = cardInteraction,
         modifier = modifier
-            .width(280.dp)
+            .width(292.dp)
             .pressScale(cardInteraction)
             .border(
                 width = if (selected) 1.5.dp else 0.5.dp,
@@ -496,7 +1126,7 @@ private fun HeroVisualRepoCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(130.dp)
+                    .height(140.dp)
                     .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                     .background(c.surfaceContainerHigh),
                 contentAlignment = Alignment.Center
@@ -517,27 +1147,35 @@ private fun HeroVisualRepoCard(
                                 Brush.verticalGradient(
                                     colors = listOf(
                                         Color.Transparent,
-                                        Color.Black.copy(alpha = 0.45f)
+                                        Color.Black.copy(alpha = 0.55f)
                                     )
                                 )
                             )
                     )
                 } else {
-                    // Sleek architectural placeholder motif with star badge
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Symbol(CaSymbols.codeBlocks, contentDescription = null, size = 32.dp, tint = c.primary)
-                        Text(
-                            repo.name,
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = c.onSurface
-                        )
+                        if (isBuildingPreview) {
+                            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                            Text(
+                                "Building Local Preview...",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = c.primary
+                            )
+                        } else {
+                            Symbol(CaSymbols.codeBlocks, contentDescription = null, size = 32.dp, tint = c.primary)
+                            Text(
+                                repo.name,
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = c.onSurface
+                            )
+                        }
                     }
                 }
 
-                // Top Floating Badges
+                // Top Floating Badges (Total Stars + Velocity + Zero Cloud)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -546,22 +1184,41 @@ private fun HeroVisualRepoCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Star Badge
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = Color.Black.copy(alpha = 0.65f)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color.Black.copy(alpha = 0.70f)
                         ) {
-                            Symbol(CaSymbols.star, contentDescription = null, size = 12.dp, tint = Color(0xFFFFB800))
-                            Text(
-                                "${repo.stars}",
-                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                                color = Color.White
-                            )
+                            Row(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Symbol(CaSymbols.star, contentDescription = null, size = 12.dp, tint = Color(0xFFFFB800))
+                                Text(
+                                    "${repo.stars}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                                    color = Color.White
+                                )
+                            }
+                        }
+
+                        if (repo.starsInPeriod > 0) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color(0xFF065F46).copy(alpha = 0.88f)
+                            ) {
+                                Text(
+                                    "+${repo.starsInPeriod} ★",
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    ),
+                                    color = Color(0xFFA7F3D0)
+                                )
+                            }
                         }
                     }
 
@@ -581,6 +1238,50 @@ private fun HeroVisualRepoCard(
                                 color = Color(0xFFA7F3D0)
                             )
                         }
+                    }
+                }
+
+                // Bottom Floating Row: Screenshot Provenance Tier Badge + On-Demand Build Preview Trigger
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp)
+                        .align(Alignment.BottomStart),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(5.dp),
+                        color = Color.Black.copy(alpha = 0.72f)
+                    ) {
+                        Text(
+                            repo.screenshotSourceTier.badgeLabel,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            color = Color(0xFF38BDF8)
+                        )
+                    }
+
+                    Surface(
+                        onClick = onBuildPreview,
+                        modifier = Modifier.testTag("hero_build_preview_${repo.slug}"),
+                        shape = RoundedCornerShape(5.dp),
+                        color = Color.Black.copy(alpha = 0.78f),
+                        border = BorderStroke(0.5.dp, Color(0xFF38BDF8).copy(alpha = 0.7f))
+                    ) {
+                        Text(
+                            if (isBuildingPreview) "Building..." else "Build Preview",
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            color = Color.White
+                        )
                     }
                 }
             }
@@ -621,7 +1322,7 @@ private fun HeroVisualRepoCard(
                         repo.usesCompose -> CapabilityTag("Jetpack Compose", Color(0xFF4F46E5), Color(0xFFEEF2FF))
                         langLower == "swift" -> CapabilityTag("Swift & iOS", Color(0xFFEA580C), Color(0xFFFFF7ED))
                         langLower == "python" || langLower == "jupyter notebook" -> CapabilityTag("Python 3", Color(0xFF2563EB), Color(0xFFEFF6FF))
-                        langLower == "javascript" || langLower == "typescript" -> CapabilityTag("Node.js", Color(0xFF16A34A), Color(0xFFF0FDF4))
+                        langLower == "javascript" || langLower == "typescript" -> CapabilityTag(repo.language, Color(0xFF16A34A), Color(0xFFF0FDF4))
                         repo.language.isNotBlank() -> CapabilityTag(repo.language, Color(0xFF4F46E5), Color(0xFFEEF2FF))
                     }
                     if (repo.isOfflineFirst) {
@@ -697,8 +1398,11 @@ private fun NorthStarBenchmarkCard(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
                         benchmark.northStarName,
+                        modifier = Modifier.weight(1f, fill = false),
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = c.onSurface
+                        color = c.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Surface(
                         shape = RoundedCornerShape(4.dp),
@@ -712,7 +1416,9 @@ private fun NorthStarBenchmarkCard(
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold
                             ),
-                            color = c.onSecondaryContainer
+                            color = c.onSecondaryContainer,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }
@@ -736,7 +1442,6 @@ private fun NorthStarBenchmarkCard(
             }
 
             val cloneInteraction = remember { MutableInteractionSource() }
-            val haptics = rememberIdeHaptics()
             Surface(
                 onClick = { haptics.heavyTap(); onClone() },
                 interactionSource = cloneInteraction,
@@ -756,7 +1461,7 @@ private fun NorthStarBenchmarkCard(
 }
 
 /**
- * Author's Peer Card displaying social graph discovery.
+ * Author's 2-Hop Peer & Starred Repository Card displaying social graph path and relevance score.
  */
 @Composable
 private fun AuthorPeerCard(
@@ -772,7 +1477,7 @@ private fun AuthorPeerCard(
         onClick = { haptics.heavyTap(); onClone() },
         interactionSource = cardInteraction,
         modifier = modifier
-            .width(240.dp)
+            .width(256.dp)
             .pressScale(cardInteraction)
             .border(0.5.dp, c.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
         shape = RoundedCornerShape(12.dp),
@@ -782,17 +1487,41 @@ private fun AuthorPeerCard(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text(
-                peer.attributionText,
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Medium
-                ),
-                color = c.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    peer.socialPathText.ifBlank { peer.attributionText },
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = c.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (peer.relevanceScore > 0) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = c.secondaryContainer
+                    ) {
+                        Text(
+                            "${peer.relevanceScore}%",
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = c.onSecondaryContainer
+                        )
+                    }
+                }
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -800,9 +1529,12 @@ private fun AuthorPeerCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    peer.name,
+                    "${peer.owner}/${peer.name}",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = c.onSurface
+                    color = c.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     Symbol(CaSymbols.star, contentDescription = null, size = 12.dp, tint = Color(0xFFFFB800))
@@ -815,17 +1547,27 @@ private fun AuthorPeerCard(
             }
 
             Text(
-                peer.description.ifBlank { "Open source tool from author's circle." },
+                peer.description.ifBlank { "Open source project discovered in author's 2-hop network." },
                 style = MaterialTheme.typography.bodySmall,
                 color = c.onSurfaceVariant,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
 
+            Text(
+                peer.relevanceReason.ifBlank { peer.attributionText },
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace
+                ),
+                color = c.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
             Spacer(Modifier.height(2.dp))
 
             val peerInteraction = remember { MutableInteractionSource() }
-            val haptics = rememberIdeHaptics()
             Surface(
                 onClick = { haptics.heavyTap(); onClone() },
                 interactionSource = peerInteraction,
@@ -908,7 +1650,6 @@ private fun GitHubAuthDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Rate limit status & upgrade banner
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = if (authState.isAuthenticated) colors.primaryContainer.copy(alpha = 0.5f) else colors.surfaceContainerHigh,
@@ -1091,4 +1832,3 @@ private fun GitHubAuthDialog(
         }
     )
 }
-

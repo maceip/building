@@ -70,6 +70,7 @@ fun AgentHomeContent(
     modifier: Modifier = Modifier,
     agentIcon: ImageVector = CaIcons.arrowRight,
     accountIcon: ImageVector = CaIcons.close,
+    trendingWidgetSlot: (@Composable () -> Unit)? = null,
 ) {
     Column(
         modifier = modifier
@@ -192,6 +193,7 @@ fun AgentHomeContent(
                     .padding(12.dp),
             )
         }
+        trendingWidgetSlot?.invoke()
         Spacer(Modifier.height(12.dp))
     }
 }

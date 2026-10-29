@@ -341,6 +341,17 @@ fun ProjectsHomeScreen(
             onOpenItem = { item -> ordered.firstOrNull { it.rootPath == item.id }?.let(onOpen) },
             onSeeAllProjects = { showAllProjects = true },
             modifier = Modifier.fillMaxSize(),
+            trendingWidgetSlot = if (backend != null && backend.discovery.supported() && onCloneAndOpen != null) {
+                {
+                    TrendingReposWidget(
+                        backend = backend,
+                        onCloneAndOpen = onCloneAndOpen,
+                        onOpenExplorer = onCloneGit,
+                    )
+                }
+            } else {
+                null
+            },
         )
     } else
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.TopCenter) {
@@ -422,6 +433,16 @@ fun ProjectsHomeScreen(
                 }
             } else {
                 item("empty") { EmptyList() }
+            }
+            if (backend != null && backend.discovery.supported() && onCloneAndOpen != null) {
+                item("trending_widget") {
+                    TrendingReposWidget(
+                        backend = backend,
+                        onCloneAndOpen = onCloneAndOpen,
+                        onOpenExplorer = onCloneGit,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    )
+                }
             }
         }
       }
@@ -1294,6 +1315,16 @@ private fun WideProjectsHome(
                         onShare = onExportProject?.let { export -> { export(project) } },
                         onDelete = onRequestDelete?.let { request -> { request(project) } },
                     )
+                }
+                if (backend != null && backend.discovery.supported() && onCloneAndOpen != null) {
+                    item("trending_widget") {
+                        TrendingReposWidget(
+                            backend = backend,
+                            onCloneAndOpen = onCloneAndOpen,
+                            onOpenExplorer = onCloneRepository,
+                            modifier = Modifier.padding(top = 16.dp),
+                        )
+                    }
                 }
             }
         }

@@ -116,3 +116,15 @@ tasks.named<ProcessResources>("processResources") {
     from(swingApiStubs) { into("swing") }
 }
 
+tasks.register<JavaExec>("generateBundledTrendingCatalog") {
+    group = "discovery"
+    description = "Crawls live GitHub daily/weekly/monthly trending lists for all phone-supported languages, builds/fetches/synthesizes app screenshots, crawls 2-hop author social networks, and bundles them into src/main/resources/discovery."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("dev.ide.core.discovery.BundledTrendingGenerator")
+    args(
+        layout.projectDirectory.dir("src/main/resources").asFile.absolutePath,
+        project.findProperty("trendingItemsPerBucket")?.toString() ?: "4"
+    )
+}
+
+
