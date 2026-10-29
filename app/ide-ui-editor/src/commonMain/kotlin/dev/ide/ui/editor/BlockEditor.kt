@@ -487,7 +487,9 @@ internal class BlockEditorModel(
     val backend: IdeBackend,
     var scope: CoroutineScope,
 ) {
-    val kotlin = path.endsWith(".kt") || path.endsWith(".kts")
+    val kotlin = path.endsWith(".kt") || path.endsWith(".kts") || path.endsWith(".swift")
+    private val isSwift = path.endsWith(".swift")
+    private var initialSwiftAutoOpenDone = false
     private val wrap = SnippetWrap(kotlin)
 
     var tree by mutableStateOf<UiBlockNode?>(null); private set
@@ -549,6 +551,14 @@ internal class BlockEditorModel(
             outline?.functions?.firstOrNull { it.group == group && it.name == name }?.let { open(it); pendingOpen = null }
         }
         openKey?.let { key -> outline?.find(key, openName, openGroup)?.let { openKey = it.key; openName = it.name } }
+        if (isSwift && !initialSwiftAutoOpenDone && openKey == null) {
+            val fns = outline?.functions.orEmpty()
+            val targetFn = fns.singleOrNull() ?: fns.firstOrNull { it.name == "body" }
+            if (targetFn != null) {
+                initialSwiftAutoOpenDone = true
+                open(targetFn)
+            }
+        }
     }
 
     fun open(fn: OutlineFunction) {

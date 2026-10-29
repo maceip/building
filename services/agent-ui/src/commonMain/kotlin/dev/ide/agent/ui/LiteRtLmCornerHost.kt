@@ -65,7 +65,7 @@ const val SCREEN_LITERT_LM_CORNER = "agent.litert.corner"
 private val LiteRtCornerComponent = Log.registerComponent(
     id = "agent.litert.corner",
     owner = "agent-ui",
-    description = "Self-Serve LiteRT-LM Corner (model serving catalog, NPU/GPU/CPU delegates, local loopback & IPC server, guest-app SDK)",
+    description = "Self-Serve LiteRT-LM Corner (model serving catalog, AI Core, NPU/GPU/CPU delegates, local loopback & IPC server, guest-app SDK)",
 )
 
 @Composable
@@ -106,15 +106,7 @@ fun LiteRtLmCornerHost(
     }
 
     val delegateValues = remember { listOf(UiLiteRtDelegate.CPU, UiLiteRtDelegate.GPU, UiLiteRtDelegate.NPU) }
-    val delegateLabels = remember(state.hardware.availableDelegates) {
-        delegateValues.map { d ->
-            when (d) {
-                UiLiteRtDelegate.CPU -> "CPU (XNNPACK)"
-                UiLiteRtDelegate.GPU -> "GPU (OpenCL/Metal)"
-                UiLiteRtDelegate.NPU -> "NPU (Tensor/QNN)"
-            }
-        }
-    }
+    val delegateLabels = remember { listOf("CPU", "GPU", "NPU") }
     val selectedDelegateIndex = delegateValues.indexOf(state.hardware.selectedDelegate).coerceAtLeast(0)
 
     val guestLanguages = remember {
@@ -126,7 +118,7 @@ fun LiteRtLmCornerHost(
         )
     }
     val guestLanguageLabels = remember {
-        listOf("Kotlin / Android", "Swift / iOS", "Node.js", "Python")
+        listOf("Kotlin", "Swift", "Node.js", "Python")
     }
     val selectedGuestIndex = guestLanguages.indexOf(state.selectedGuestLanguage).coerceAtLeast(0)
 
@@ -144,7 +136,7 @@ fun LiteRtLmCornerHost(
     ) {
         AgentTopBar(
             title = "Self-Serve LiteRT-LM Corner",
-            subtitle = "On-device .litertlm catalog · NPU/GPU/CPU delegates · Local loopback & IPC",
+            subtitle = "AI Core + bundled .litertlm · NPU/GPU/CPU · Local loopback & IPC",
             onBack = onBack,
             backIcon = CaIcons.arrowLeft,
         )
@@ -243,7 +235,7 @@ fun LiteRtLmCornerHost(
             // 2. Self-Serve On-Device .litertlm Model Catalog
             // -----------------------------------------------------------------------------------------
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                AgentSectionLabel("On-Device .litertlm Model Catalog")
+                AgentSectionLabel("On-Device AI Core & .litertlm Model Catalog")
                 state.models.forEach { model ->
                     LiteRtModelCard(
                         model = model,
@@ -375,12 +367,27 @@ fun LiteRtLmCornerHost(
                                     .padding(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Text(
-                                    "On-Device Inference Smoke Test",
-                                    fontSize = 13.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = AgentUi.chrome.text,
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        "On-Device Inference Smoke Test",
+                                        fontSize = 13.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = AgentUi.chrome.text,
+                                    )
+                                    AgentChip(
+                                        label = if (state.activeModelId.isNotBlank()) {
+                                            "${state.activeModelId} · ${state.hardware.selectedDelegate.name}"
+                                        } else {
+                                            "No active model"
+                                        },
+                                        selected = state.activeModelId.isNotBlank(),
+                                        onClick = null,
+                                    )
+                                }
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -398,32 +405,17 @@ fun LiteRtLmCornerHost(
                                         modifier = Modifier.fillMaxWidth().testTag("litert_smoke_prompt_input"),
                                     )
                                 }
-                                Row(
+                                AgentPrimaryButton(
+                                    label = if (state.lastSmokeTestBusy) "Running smoke test…" else "Run local smoke test",
+                                    onClick = {
+                                        Log.traceUiAction(LiteRtCornerComponent.id.value, "RunSmokeTest") {
+                                            agent.runLiteRtSmokeTest(smokePrompt)
+                                            Log.recordStateMutation(LiteRtCornerComponent.id.value, "smokeTest", smokePrompt)
+                                            refreshLocalSnapshot()
+                                        }
+                                    },
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text(
-                                        if (state.activeModelId.isNotBlank()) {
-                                            "Target: ${state.activeModelId} (${state.hardware.selectedDelegate.name})"
-                                        } else {
-                                            "No active model installed yet"
-                                        },
-                                        fontSize = 12.sp,
-                                        color = AgentUi.chrome.textFaint,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    AgentPrimaryButton(
-                                        label = if (state.lastSmokeTestBusy) "Running smoke test…" else "Run local smoke test",
-                                        onClick = {
-                                            Log.traceUiAction(LiteRtCornerComponent.id.value, "RunSmokeTest") {
-                                                agent.runLiteRtSmokeTest(smokePrompt)
-                                                Log.recordStateMutation(LiteRtCornerComponent.id.value, "smokeTest", smokePrompt)
-                                                refreshLocalSnapshot()
-                                            }
-                                        },
-                                    )
-                                }
+                                )
                                 if (state.lastSmokeTestResponse.isNotBlank()) {
                                     Box(
                                         modifier = Modifier
@@ -550,12 +542,16 @@ private fun LiteRtModelCard(
     val chrome = AgentUi.chrome
     val isActive = model.status == UiLiteRtModelStatus.ACTIVE
     val isInstalled = model.status == UiLiteRtModelStatus.INSTALLED || isActive
-    val statusText = when (model.status) {
-        UiLiteRtModelStatus.NOT_INSTALLED -> "Not installed · ${formatBytes(model.estimatedSizeBytes)}"
-        UiLiteRtModelStatus.DOWNLOADING -> "Downloading · ${formatBytes(model.downloadedBytes)}"
-        UiLiteRtModelStatus.INSTALLED -> "Installed · ${formatBytes(model.sizeOnDiskBytes)}"
-        UiLiteRtModelStatus.ACTIVE -> "Active on-device · ${formatBytes(model.sizeOnDiskBytes)}"
-        UiLiteRtModelStatus.ERROR -> "Verification failed"
+    val statusText = when {
+        model.isSystemAiCore && isActive -> "Active · System AI Core"
+        model.isSystemAiCore && isInstalled -> "Built-in · 0 B download"
+        model.isBundled && isActive -> "Active · Bundled in APK"
+        model.isBundled && isInstalled -> "Bundled · Ready"
+        model.status == UiLiteRtModelStatus.NOT_INSTALLED -> "Not installed · ${formatBytes(model.estimatedSizeBytes)}"
+        model.status == UiLiteRtModelStatus.DOWNLOADING -> "Downloading · ${formatBytes(model.downloadedBytes)}"
+        model.status == UiLiteRtModelStatus.INSTALLED -> "Installed · ${formatBytes(model.sizeOnDiskBytes)}"
+        model.status == UiLiteRtModelStatus.ACTIVE -> "Active on-device · ${formatBytes(model.sizeOnDiskBytes)}"
+        else -> "Verification failed"
     }
 
     AgentSurface(
@@ -606,6 +602,11 @@ private fun LiteRtModelCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                if (model.isSystemAiCore) {
+                    AgentChip(label = "System Built-In · 0 B", selected = true, onClick = null)
+                } else if (model.isBundled) {
+                    AgentChip(label = "Bundled in APK", selected = true, onClick = null)
+                }
                 AgentChip(
                     label = "Delegates: ${model.supportedDelegates.joinToString("/") { it.name }}",
                     selected = false,
@@ -620,8 +621,13 @@ private fun LiteRtModelCard(
             }
 
             if (isInstalled && model.sha256.isNotBlank()) {
+                val locationLabel = if (model.isSystemAiCore) {
+                    "Bound to ${model.localFilePath}"
+                } else {
+                    "Verified .litertlm · sha256:${model.sha256.take(16)}… · ${model.localFilePath}"
+                }
                 Text(
-                    "Verified .litertlm · sha256:${model.sha256.take(16)}… · ${model.localFilePath}",
+                    locationLabel,
                     fontSize = 11.5.sp,
                     color = chrome.textFaint,
                     maxLines = 1,
@@ -708,29 +714,33 @@ private fun EndpointRow(
     onCopy: () -> Unit,
 ) {
     val chrome = AgentUi.chrome
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(chrome.bg)
             .border(1.dp, chrome.hairline, RoundedCornerShape(10.dp))
             .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
             Text(label, fontSize = 11.5.sp, color = chrome.textFaint, fontWeight = FontWeight.Medium)
-            Text(
-                value,
-                style = Ca.type.codeSmall,
-                color = chrome.text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            AgentGhostButton(
+                label = copyButtonLabel,
+                onClick = onCopy,
             )
         }
-        AgentGhostButton(
-            label = copyButtonLabel,
-            onClick = onCopy,
+        Text(
+            value,
+            style = Ca.type.codeSmall,
+            color = chrome.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

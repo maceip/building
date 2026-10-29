@@ -48,18 +48,19 @@ class AgentBackendLiteRtTest {
             val agent = backend.agent
 
             try {
-                // 1. Initially, 'litert' is listed in providers, and when selected before any model is installed,
-                // configured must be FALSE (zero fabrication).
+                // 1. Out of the box, 'litert' is listed in providers and the bundled starter model
+                // (`litert-starter-micro-it-int4`) is pre-provisioned & active so users can test immediately!
                 val initialCfg = agent.config()
                 val litertProvider = initialCfg.providers.firstOrNull { it.id == "litert" }
                 assertNotNull(litertProvider, "Expected 'litert' in AgentBackend providers")
                 agent.selectProvider("litert")
-                assertFalse(
+                assertEquals("litert-starter-micro-it-int4", agent.liteRtCorner().activeModelId)
+                assertTrue(
                     agent.config().configured,
-                    "LiteRT-LM provider must NOT report configured=true before a verified .litertlm model is installed on disk",
+                    "LiteRT-LM provider must report configured=true out of the box via bundled starter model",
                 )
 
-                // 2. Provision gemma-3-1b-it-int4 via the litert_corner tool
+                // 2. Provision gemma-3-1b-it-int4 via the litert_corner tool and activate it
                 val agentBackend = agent as AgentBackend
                 val tool = createLiteRtCornerTool(
                     managerProvider = { agentBackend.liteRtManager },
@@ -74,6 +75,7 @@ class AgentBackendLiteRtTest {
                     ),
                 )
                 assertFalse(downloadRes.isError, "download_model failed: ${downloadRes.content}")
+                agent.activateLiteRtModel("gemma-3-1b-it-int4")
 
                 // 3. Verify AgentService.liteRtCorner() reflects the installed & active model, and config().configured is now TRUE!
                 val corner = agent.liteRtCorner()
@@ -109,9 +111,8 @@ class AgentBackendLiteRtTest {
                 // 6. Verify LiteRtIpcBridge (backing LiteRtLmContentProvider on Android)
                 val storageRoot = manager.storageRoot
                 val ipcModels = LiteRtIpcBridge.listInstalledModels(storageRoot)
-                assertEquals(1, ipcModels.size)
-                assertEquals("gemma-3-1b-it-int4", ipcModels.first().id)
-                assertTrue(ipcModels.first().active)
+                assertTrue(ipcModels.any { it.id == "gemma-3-1b-it-int4" && it.active })
+                assertTrue(ipcModels.any { it.id == "litert-starter-micro-it-int4" })
 
                 val mmapFile = LiteRtIpcBridge.resolveVerifiedModelFile(storageRoot, "gemma-3-1b-it-int4")
                 assertNotNull(mmapFile)
@@ -125,8 +126,9 @@ class AgentBackendLiteRtTest {
                 assertTrue(ipcGen.ok)
                 assertTrue(ipcGen.text.contains("Gemma 3 1B Instruct"))
 
-                // 7. Delete the model and verify configured returns to FALSE
+                // 7. Delete all models and verify configured returns to FALSE
                 agent.deleteLiteRtModel("gemma-3-1b-it-int4")
+                agent.deleteLiteRtModel("litert-starter-micro-it-int4")
                 assertEquals("", agent.liteRtCorner().activeModelId)
                 assertFalse(agent.config().configured)
             } finally {

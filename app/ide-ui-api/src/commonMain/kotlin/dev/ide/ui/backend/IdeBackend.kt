@@ -953,6 +953,8 @@ data class UiLiteRtModelEntry(
     val localFilePath: String = "",
     val sha256: String = "",
     val errorMessage: String = "",
+    val isSystemAiCore: Boolean = false,
+    val isBundled: Boolean = false,
 )
 
 /** Status and live metrics for the local loopback + Android IPC LiteRT-LM inference server. */

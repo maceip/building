@@ -264,6 +264,7 @@ object AndroidIde {
         // Classify the device first, in every process that stands up a manager, so caches sized at
         // construction already see the tier.
         AndroidMemory.detect(context)
+        dev.ide.android.litert.AndroidAiCoreBridge.install(context)
         val home = appHomeDir(context).apply { mkdirs() }
         val androidJar = copyAsset(context, "android.jar", File(home, "android.jar"))
         // The Java 9+ desugar stubs (`java.lang.invoke.StringConcatFactory`/`LambdaMetafactory`): `android.jar`

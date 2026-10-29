@@ -84,6 +84,8 @@ internal fun LiteRtCornerSnapshot.toUi(): UiLiteRtCornerState = UiLiteRtCornerSt
             localFilePath = entry.localFilePath,
             sha256 = entry.sha256,
             errorMessage = entry.errorMessage,
+            isSystemAiCore = entry.spec.isSystemAiCore,
+            isBundled = entry.spec.isBundled,
         )
     },
     activeModelId = activeModelId,
@@ -135,7 +137,9 @@ internal fun createLiteRtCornerTool(
         return when (val action = args.string("action")) {
             "status" -> {
                 val snap = manager.currentSnapshot()
-                val installed = snap.entries.filter { it.sizeOnDiskBytes > 0L }.map { "${it.spec.id} (${it.status})" }
+                val installed = snap.entries
+                    .filter { it.status == LiteRtModelInstallState.INSTALLED || it.status == LiteRtModelInstallState.ACTIVE }
+                    .map { "${it.spec.id} (${it.status})" }
                 ToolExecutionResult.ok(
                     "LiteRT-LM Corner: soc='${snap.hardware.socName}', delegate=${snap.selectedDelegate.id}, " +
                         "activeModel='${snap.activeModelId.ifBlank { "none" }}', installed=${installed.ifEmpty { listOf("none") }}, " +
@@ -212,7 +216,10 @@ object LiteRtIpcBridge {
     fun listInstalledModels(storageRoot: Path): List<LiteRtIpcModelRow> {
         val snap = managerFor(storageRoot).currentSnapshot()
         return snap.entries
-            .filter { it.sizeOnDiskBytes > 0L && it.localFilePath.isNotBlank() }
+            .filter {
+                (it.status == LiteRtModelInstallState.INSTALLED || it.status == LiteRtModelInstallState.ACTIVE) &&
+                    it.localFilePath.isNotBlank()
+            }
             .map { entry ->
                 LiteRtIpcModelRow(
                     id = entry.spec.id,

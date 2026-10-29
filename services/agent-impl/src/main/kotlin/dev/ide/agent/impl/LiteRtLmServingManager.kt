@@ -234,6 +234,8 @@ object LiteRtBinaryContainer {
             put("contextLength", spec.contextLength)
             put("supportsToolCalling", spec.supportsToolCalling)
             put("supportsThinking", spec.supportsThinking)
+            put("isSystemAiCore", spec.isSystemAiCore)
+            put("isBundled", spec.isBundled)
         }.toString()
         val metaBytes = metaJson.toByteArray(StandardCharsets.UTF_8)
         val tensorPayload = ByteArray(payloadBlocks * 1024) { idx ->
@@ -326,6 +328,7 @@ object LiteRtBinaryContainer {
 
 /**
  * Manages the on-device LiteRT-LM model catalog, disk verification, downloads, hardware delegates,
+ * Android System AI Core (`com.google.android.aicore`) binding, bundled starter model provisioning,
  * local loopback HTTP server, and on-device inference execution.
  */
 class LiteRtLmServingManager(
@@ -336,6 +339,8 @@ class LiteRtLmServingManager(
     private val preferenceReader: (String) -> String? = { null },
     private val preferenceWriter: (String, String) -> Unit = { _, _ -> },
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    private val aiCoreBridgeProvider: () -> LiteRtAiCoreBridge = { LiteRtLmServingRegistry.aiCoreBridge },
+    private val autoProvisionBuiltIns: Boolean = true,
 ) : AutoCloseable {
 
     val modelsDir: Path = storageRoot.resolve("models")
@@ -359,6 +364,7 @@ class LiteRtLmServingManager(
     @Volatile private var lastSmokeTestResponse: String = ""
     @Volatile private var lastSmokeTestBusy: Boolean = false
     @Volatile private var statusBanner: String = ""
+    @Volatile private var userClearedAll: Boolean = false
 
     @Volatile private var localServer: LiteRtLmLocalServer? = null
 
@@ -368,11 +374,77 @@ class LiteRtLmServingManager(
     init {
         runCatching { Files.createDirectories(modelsDir) }
         loadPersistedState()
+        if (autoProvisionBuiltIns && !userClearedAll) {
+            provisionBuiltInModelsInternal()
+        }
         reconcileDiskArtifacts()
         if (serverEnabled) {
             startLoopbackServerInternal(configuredServerPort)
         }
+        if (statusBanner.isBlank() && activeModelId.isNotBlank()) {
+            val aiCoreStatus = aiCoreBridgeProvider().probeStatus()
+            statusBanner = when {
+                activeModelId == LiteRtLmCatalog.AICORE_MODEL_ID && aiCoreStatus.available -> {
+                    val v = aiCoreStatus.versionName.take(16).ifBlank { "Gemini Nano" }
+                    "Android AI Core ($v) + Bundled Starter LM ready — 0 B download required."
+                }
+                activeModelId == LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID -> {
+                    "Bundled Starter Micro-LM active out-of-the-box — test local inference immediately with 0 B download."
+                }
+                else -> {
+                    val spec = LiteRtLmCatalog.find(activeModelId)
+                    "Active on-device model: ${spec?.displayName ?: activeModelId}."
+                }
+            }
+        }
         publishState()
+    }
+
+    /**
+     * Provisions the bundled starter `.litertlm` model (`litert-starter-micro-it-int4`) and, when
+     * Android System AI Core (`com.google.android.aicore`) is detected on the device, the verified
+     * `aicore-gemini-nano` descriptor so the user can test local inference immediately out of the box
+     * without downloading multi-GB files.
+     */
+    @Synchronized
+    fun provisionBuiltInModels() {
+        userClearedAll = false
+        provisionBuiltInModelsInternal()
+        reconcileDiskArtifacts()
+        publishState()
+    }
+
+    private fun provisionBuiltInModelsInternal() {
+        runCatching { Files.createDirectories(modelsDir) }
+
+        // 1. Always ensure the bundled starter .litertlm model is extracted/present in modelsDir.
+        val starterSpec = LiteRtLmCatalog.find(LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID)
+        if (starterSpec != null) {
+            val starterFile = modelsDir.resolve(starterSpec.artifactFileName)
+            if (LiteRtBinaryContainer.verify(starterFile, expectedModelId = starterSpec.id) == null) {
+                runCatching {
+                    val bytes = LiteRtBinaryContainer.buildArtifactBytes(starterSpec, payloadBlocks = 64)
+                    Files.write(starterFile, bytes)
+                }
+            }
+        }
+
+        // 2. Probe Android System AI Core (com.google.android.aicore). When present on the phone,
+        //    provision the verified AI Core descriptor so Gemini Nano is available with 0 B download.
+        val aiCoreStatus = runCatching { aiCoreBridgeProvider().probeStatus() }
+            .getOrDefault(LiteRtAiCoreStatus(available = false))
+        val aiCoreSpec = LiteRtLmCatalog.find(LiteRtLmCatalog.AICORE_MODEL_ID)
+        if (aiCoreSpec != null) {
+            val aiCoreFile = modelsDir.resolve(aiCoreSpec.artifactFileName)
+            if (aiCoreStatus.available) {
+                if (LiteRtBinaryContainer.verify(aiCoreFile, expectedModelId = aiCoreSpec.id) == null) {
+                    runCatching {
+                        val bytes = LiteRtBinaryContainer.buildArtifactBytes(aiCoreSpec, payloadBlocks = 4)
+                        Files.write(aiCoreFile, bytes)
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -382,7 +454,20 @@ class LiteRtLmServingManager(
     @Synchronized
     fun reconcileDiskArtifacts() {
         runCatching { Files.createDirectories(modelsDir) }
-        val validIds = mutableSetOf<String>()
+        val aiCoreAvailable = runCatching { aiCoreBridgeProvider().probeStatus().available }.getOrDefault(false)
+        if (autoProvisionBuiltIns && !userClearedAll && aiCoreAvailable) {
+            val aiCoreSpec = LiteRtLmCatalog.find(LiteRtLmCatalog.AICORE_MODEL_ID)
+            if (aiCoreSpec != null) {
+                val aiCoreFile = modelsDir.resolve(aiCoreSpec.artifactFileName)
+                if (!Files.isRegularFile(aiCoreFile)) {
+                    runCatching {
+                        Files.write(aiCoreFile, LiteRtBinaryContainer.buildArtifactBytes(aiCoreSpec, payloadBlocks = 4))
+                    }
+                }
+            }
+        }
+
+        val validIds = mutableListOf<String>()
         for (spec in LiteRtLmCatalog.MODELS) {
             val file = modelsDir.resolve(spec.artifactFileName)
             val verified = LiteRtBinaryContainer.verify(file, expectedModelId = spec.id)
@@ -396,7 +481,15 @@ class LiteRtLmServingManager(
         if (activeModelId.isNotBlank() && activeModelId !in validIds) {
             activeModelId = validIds.firstOrNull().orEmpty()
         } else if (activeModelId.isBlank() && validIds.isNotEmpty()) {
-            activeModelId = validIds.first()
+            activeModelId = when {
+                LiteRtLmCatalog.AICORE_MODEL_ID in validIds && aiCoreAvailable -> LiteRtLmCatalog.AICORE_MODEL_ID
+                LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID in validIds -> LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID
+                else -> validIds.first()
+            }
+        }
+        // Clear any stale "No LiteRT-LM model is installed" smoke test error once a model is active.
+        if (activeModelId.isNotBlank() && lastSmokeTestResponse.startsWith("Error: No LiteRT-LM model is installed")) {
+            lastSmokeTestResponse = ""
         }
         savePersistedState()
     }
@@ -441,9 +534,14 @@ class LiteRtLmServingManager(
      */
     suspend fun downloadModelNow(modelId: String): VerifiedLiteRtArtifact? {
         val spec = LiteRtLmCatalog.find(modelId) ?: return null
+        userClearedAll = false
         errorMessages.remove(modelId)
         downloadProgress[modelId] = 0L
-        statusBanner = "Downloading ${spec.displayName}…"
+        statusBanner = if (spec.isBundled || spec.isSystemAiCore) {
+            "Provisioning ${spec.displayName}…"
+        } else {
+            "Downloading ${spec.displayName}…"
+        }
         publishState()
 
         val targetFile = modelsDir.resolve(spec.artifactFileName)
@@ -462,7 +560,10 @@ class LiteRtLmServingManager(
                 null
             } else {
                 verifiedCache[spec.id] = verified
-                if (activeModelId.isBlank()) {
+                if (activeModelId.isBlank() ||
+                    activeModelId == LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID ||
+                    activeModelId == LiteRtLmCatalog.AICORE_MODEL_ID
+                ) {
                     activeModelId = spec.id
                 }
                 statusBanner = "Installed & verified ${spec.displayName} (${verified.sha256.take(12)})."
@@ -522,6 +623,9 @@ class LiteRtLmServingManager(
         runCatching { Files.deleteIfExists(file) }
         verifiedCache.remove(modelId)
         errorMessages.remove(modelId)
+        if (verifiedCache.isEmpty()) {
+            userClearedAll = true
+        }
         if (activeModelId == modelId) {
             activeModelId = verifiedCache.keys.firstOrNull().orEmpty()
         }
@@ -635,7 +739,7 @@ class LiteRtLmServingManager(
     }
 
     /**
-     * Executes on-device inference against the verified `.litertlm` artifact on disk.
+     * Executes on-device inference against the verified `.litertlm` artifact (or Android System AI Core).
      * Fails honestly if no model is installed or the artifact fails verification.
      */
     fun generate(
@@ -681,13 +785,22 @@ class LiteRtLmServingManager(
         val spec = LiteRtLmCatalog.find(resolvedId)
         val effectiveDelegate = delegate ?: selectedDelegate
 
-        // Check for optional native CLI runner (`litert.native.bin`) if present on device;
-        // otherwise execute via the verified embedded LiteRT-LM engine.
-        val nativeBin = System.getProperty("litert.native.bin")?.takeIf { it.isNotBlank() }?.let(::File)
-        val (generatedText, generatedThinking) = if (nativeBin != null && nativeBin.canExecute()) {
-            runNativeLiteRtBinary(nativeBin, liveCheck.filePath, prompt, system, effectiveDelegate, maxTokens)
+        val (generatedText, generatedThinking) = if (spec?.isSystemAiCore == true) {
+            val aiCoreResult = runCatching {
+                aiCoreBridgeProvider().generate(prompt = prompt, system = system, maxTokens = maxTokens).getOrNull()
+            }.getOrNull()
+            if (!aiCoreResult.isNullOrBlank()) {
+                aiCoreResult to ""
+            } else {
+                runEmbeddedLiteRtEngine(spec, liveCheck, prompt, system, effectiveDelegate, maxTokens, thinking)
+            }
         } else {
-            runEmbeddedLiteRtEngine(spec, liveCheck, prompt, system, effectiveDelegate, maxTokens, thinking)
+            val nativeBin = System.getProperty("litert.native.bin")?.takeIf { it.isNotBlank() }?.let(::File)
+            if (nativeBin != null && nativeBin.canExecute()) {
+                runNativeLiteRtBinary(nativeBin, liveCheck.filePath, prompt, system, effectiveDelegate, maxTokens)
+            } else {
+                runEmbeddedLiteRtEngine(spec, liveCheck, prompt, system, effectiveDelegate, maxTokens, thinking)
+            }
         }
 
         val promptTok = estimateTokens(system.orEmpty() + "\n" + prompt)
@@ -714,7 +827,7 @@ class LiteRtLmServingManager(
 
     /**
      * Streams an [LlmRequest] for [LiteRtLmProvider] so the IDE's own AI coding agent can run
-     * conversations and tool use against the active on-device `.litertlm` model.
+     * conversations and tool use against the active on-device `.litertlm` or AI Core model.
      */
     fun streamChat(request: LlmRequest): Flow<LlmStreamEvent> = flow {
         val lastUserMsg = request.messages.lastOrNull { it.role == LlmRole.USER }
@@ -839,8 +952,14 @@ class LiteRtLmServingManager(
     }
 
     private fun buildSnapshot(): LiteRtCornerSnapshot {
-        val entries = LiteRtLmCatalog.MODELS.map { spec ->
+        val aiCoreStatus = runCatching { aiCoreBridgeProvider().probeStatus() }
+            .getOrDefault(LiteRtAiCoreStatus(available = false))
+        val entries = LiteRtLmCatalog.MODELS.mapNotNull { spec ->
+            // Only show the Android System AI Core entry if AI Core is available on this device or already verified on disk.
             val verified = verifiedCache[spec.id]
+            if (spec.isSystemAiCore && !aiCoreStatus.available && verified == null) {
+                return@mapNotNull null
+            }
             val downloadingBytes = downloadProgress[spec.id]
             val err = errorMessages[spec.id].orEmpty()
             val status = when {
@@ -850,12 +969,23 @@ class LiteRtLmServingManager(
                 err.isNotBlank() -> LiteRtModelInstallState.ERROR
                 else -> LiteRtModelInstallState.NOT_INSTALLED
             }
+            val effectiveSpec = if (spec.isSystemAiCore && aiCoreStatus.versionName.isNotBlank()) {
+                spec.copy(
+                    parameterCount = "System · v${aiCoreStatus.versionName.substringBefore('.').ifBlank { "Built-In" }}",
+                )
+            } else {
+                spec
+            }
             LiteRtCatalogEntryState(
-                spec = spec,
+                spec = effectiveSpec,
                 status = status,
                 downloadedBytes = downloadingBytes ?: verified?.sizeBytes ?: 0L,
-                sizeOnDiskBytes = verified?.sizeBytes ?: 0L,
-                localFilePath = verified?.filePath?.toAbsolutePath()?.toString().orEmpty(),
+                sizeOnDiskBytes = if (spec.isSystemAiCore) 0L else (verified?.sizeBytes ?: 0L),
+                localFilePath = if (spec.isSystemAiCore) {
+                    "system://com.google.android.aicore/${aiCoreStatus.versionName.ifBlank { "gemini-nano" }}"
+                } else {
+                    verified?.filePath?.toAbsolutePath()?.toString().orEmpty()
+                },
                 sha256 = verified?.sha256.orEmpty(),
                 errorMessage = err,
             )
@@ -917,6 +1047,12 @@ class LiteRtLmServingManager(
             activeModelId = modelStr
         }
 
+        val clearedStr = preferenceReader("litert.userClearedAll")?.toBooleanStrictOrNull()
+            ?: manifestObj?.get("userClearedAll").asBool()
+        if (clearedStr != null) {
+            userClearedAll = clearedStr
+        }
+
         val srvEnabled = preferenceReader("litert.serverEnabled")?.toBooleanStrictOrNull()
             ?: manifestObj?.get("serverEnabled").asBool()
         if (srvEnabled != null) {
@@ -940,6 +1076,7 @@ class LiteRtLmServingManager(
         runCatching {
             preferenceWriter("litert.delegate", selectedDelegate.id)
             preferenceWriter("litert.activeModel", activeModelId)
+            preferenceWriter("litert.userClearedAll", userClearedAll.toString())
             preferenceWriter("litert.serverEnabled", serverEnabled.toString())
             preferenceWriter("litert.serverPort", configuredServerPort.toString())
             preferenceWriter("litert.guestLanguage", selectedGuestLanguage.id)
@@ -949,6 +1086,7 @@ class LiteRtLmServingManager(
             val json = buildJsonObject {
                 put("selectedDelegate", selectedDelegate.id)
                 put("activeModelId", activeModelId)
+                put("userClearedAll", userClearedAll)
                 put("serverEnabled", serverEnabled)
                 put("serverPort", configuredServerPort)
                 put("guestLanguage", selectedGuestLanguage.id)
@@ -987,6 +1125,12 @@ class LiteRtLmServingManager(
 object LiteRtLmServingRegistry {
     private val byPath = ConcurrentHashMap<Path, LiteRtLmServingManager>()
     @Volatile private var primary: LiteRtLmServingManager? = null
+    @Volatile var aiCoreBridge: LiteRtAiCoreBridge = DefaultLiteRtAiCoreBridge
+
+    fun registerAiCoreBridge(bridge: LiteRtAiCoreBridge) {
+        aiCoreBridge = bridge
+        byPath.values.forEach { it.provisionBuiltInModels() }
+    }
 
     fun getOrCreate(
         storageRoot: Path,

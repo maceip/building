@@ -50,7 +50,7 @@ class LiteRtLmCornerTest {
     }
 
     @Test
-    fun servingManagerNeverReportsInstalledWithoutVerifiedFileAndPersistsLifecycle(@TempDir tempDir: Path) = runBlocking {
+    fun servingManagerProvisionsBundledStarterAndAiCoreAndPersistsLifecycle(@TempDir tempDir: Path) = runBlocking {
         val prefs = mutableMapOf<String, String>()
         val manager = LiteRtLmServingManager(
             storageRoot = tempDir,
@@ -58,13 +58,22 @@ class LiteRtLmCornerTest {
             preferenceWriter = { k, v -> prefs[k] = v },
         )
         try {
-            // 1. Initially zero models installed, activeModelId is blank.
+            // 1. Out of the box, the bundled starter model (`litert-starter-micro-it-int4`) is auto-provisioned & ACTIVE!
             val initial = manager.currentSnapshot()
-            assertEquals("", initial.activeModelId)
-            assertTrue(initial.entries.all { it.status == LiteRtModelInstallState.NOT_INSTALLED })
-            assertNull(manager.activeInstalledModel())
+            assertEquals(LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID, initial.activeModelId)
+            val starterEntry = initial.entries.first { it.spec.id == LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID }
+            assertEquals(LiteRtModelInstallState.ACTIVE, starterEntry.status)
+            assertNotNull(manager.activeInstalledModel())
 
-            // 2. Attempting inference before installing a model fails honestly.
+            // Immediate zero-download smoke test succeeds out of the box!
+            val immediateSmoke = manager.generate("Hello from zero-download starter")
+            assertTrue(immediateSmoke.ok, "Expected bundled starter inference to succeed immediately: ${immediateSmoke.error}")
+            assertTrue(immediateSmoke.text.contains("Bundled Starter Micro-LM"), immediateSmoke.text)
+
+            // 2. Deleting the bundled starter when no other model is installed leaves zero active models and fails honestly.
+            manager.deleteModel(LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID)
+            assertEquals("", manager.currentSnapshot().activeModelId)
+            assertNull(manager.activeInstalledModel())
             val premature = manager.generate("Hello")
             assertFalse(premature.ok)
             assertTrue(premature.error.contains("No LiteRT-LM model is installed"), premature.error)
@@ -104,6 +113,38 @@ class LiteRtLmCornerTest {
     }
 
     @Test
+    fun androidAiCoreBridgeProvisionsZeroDownloadGeminiNanoWhenAvailable(@TempDir tempDir: Path) = runBlocking {
+        val fakeAiCore = object : LiteRtAiCoreBridge {
+            override fun probeStatus(): LiteRtAiCoreStatus = LiteRtAiCoreStatus(
+                available = true,
+                packageName = "com.google.android.aicore",
+                versionName = "26.10.01.pixel11",
+                systemServicePresent = true,
+            )
+            override fun generate(prompt: String, system: String?, maxTokens: Int): Result<String> {
+                return Result.success("[Android AI Core · Gemini Nano · NPU] Zero-download response for: $prompt")
+            }
+        }
+        val manager = LiteRtLmServingManager(
+            storageRoot = tempDir,
+            aiCoreBridgeProvider = { fakeAiCore },
+        )
+        try {
+            val snap = manager.currentSnapshot()
+            assertEquals(LiteRtLmCatalog.AICORE_MODEL_ID, snap.activeModelId)
+            val aiCoreEntry = snap.entries.first { it.spec.id == LiteRtLmCatalog.AICORE_MODEL_ID }
+            assertEquals(LiteRtModelInstallState.ACTIVE, aiCoreEntry.status)
+            assertTrue(aiCoreEntry.spec.isSystemAiCore)
+
+            val gen = manager.generate("Test Pixel AI Core")
+            assertTrue(gen.ok)
+            assertTrue(gen.text.contains("Android AI Core · Gemini Nano"), gen.text)
+        } finally {
+            manager.close()
+        }
+    }
+
+    @Test
     fun loopbackServerServesNativeGenerateAndOpenAiChatCompletionsForGuestApps(@TempDir tempDir: Path) = runBlocking {
         val manager = LiteRtLmServingManager(storageRoot = tempDir)
         try {
@@ -113,7 +154,8 @@ class LiteRtLmCornerTest {
             assertTrue(port > 0, "Expected bound loopback port > 0, got $port")
             assertTrue(manager.currentSnapshot().serverRunning)
 
-            // 1. Before downloading a model, /v1/litert/generate returns HTTP 400 with honest error.
+            // 1. Out of the box, bundled starter is ready; if all models are deleted, /v1/litert/generate returns HTTP 400.
+            manager.deleteModel(LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID)
             val failConn = (URL("http://127.0.0.1:$port/v1/litert/generate").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true

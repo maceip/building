@@ -326,7 +326,7 @@ class LiteRtLmCornerHostTest {
             assertTrue("Qwen 2.5 Coder 1.5B" in initialTexts)
 
             // 1. Switch hardware delegate to NPU
-            clickText("NPU (Tensor/QNN)")
+            clickText("NPU")
             assertEquals(UiLiteRtDelegate.NPU, fakeAgent.selectedDelegate)
             assertTrue("NPU active" in collectTexts(scene))
 
@@ -357,7 +357,7 @@ class LiteRtLmCornerHostTest {
             assertTrue(collectTexts(scene).any { it.contains("Local runtime healthy") })
 
             // 7. Switch Guest SDK language tabs & scaffold client into project
-            clickText("Swift / iOS")
+            clickText("Swift")
             assertEquals(UiLiteRtGuestLanguage.SWIFT, fakeAgent.guestLanguage)
             assertTrue(collectTexts(scene).any { it.contains("Guest SDK snippet for SWIFT") })
 
