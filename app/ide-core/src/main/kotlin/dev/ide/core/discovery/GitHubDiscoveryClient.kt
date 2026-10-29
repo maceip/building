@@ -421,8 +421,14 @@ class GitHubDiscoveryClient(
             )
         }
 
-        // 3. Who the author follows (1st-hop: @owner -> @peer1)
-        val firstHopLogins = fetchUserFollowingLogins(owner, maxUsers = 4)
+        // 3. Who the author follows (1st-hop: @owner -> @peer1).
+        // If @owner is an organization (no public following list), fall back to the repository's top human contributors.
+        val directFollowing = fetchUserFollowingLogins(owner, maxUsers = 4)
+        val firstHopLogins = if (directFollowing.isNotEmpty()) {
+            directFollowing
+        } else {
+            fetchRepoContributorLogins(owner, repoName, maxUsers = 3)
+        }
         for (peer1 in firstHopLogins.take(3)) {
             // 3A. 1st-hop peer's own top repositories (FOLLOWED_PEER)
             val peer1Repos = fetchUserRepositories(peer1, perPage = 3)
@@ -686,22 +692,64 @@ class GitHubDiscoveryClient(
         return parseStarredOrUserReposHtml(html, defaultOwner = login).take(perPage)
     }
 
+    /**
+     * Extracts the top human contributors for a repository (useful when [owner] is a GitHub Organization).
+     */
+    fun fetchRepoContributorLogins(owner: String, repoName: String, maxUsers: Int = 3): List<String> {
+        val apiUrl = "$apiBase/repos/$owner/$repoName/contributors?per_page=${maxUsers + 2}"
+        val apiText = executeGet(apiUrl)
+        if (!apiText.isNullOrBlank()) {
+            try {
+                val arr = json.parseToJsonElement(apiText).jsonArray
+                val logins = arr.mapNotNull { it.jsonObject["login"]?.jsonPrimitive?.content }
+                    .filter {
+                        !it.equals(owner, ignoreCase = true) &&
+                            !it.endsWith("[bot]") &&
+                            !it.endsWith("-bot") &&
+                            it != "web-flow" &&
+                            it != "claude"
+                    }
+                    .take(maxUsers)
+                if (logins.isNotEmpty()) return logins
+            } catch (_: Exception) {
+            }
+        }
+
+        if (apiBase != DEFAULT_API_BASE && webBase == DEFAULT_WEB_BASE) return emptyList()
+        val commitsHtml = executeWebGet("$webBase/$owner/$repoName/commits") ?: return emptyList()
+        val loginRegex = Regex(""""login"\s*:\s*"([A-Za-z0-9-]+)"""")
+        return loginRegex.findAll(commitsHtml)
+            .map { it.groupValues[1].trim() }
+            .filter {
+                it.isNotBlank() &&
+                    !it.equals(owner, ignoreCase = true) &&
+                    !it.endsWith("-bot") &&
+                    it != "web-flow" &&
+                    it != "claude"
+            }
+            .distinct()
+            .take(maxUsers)
+            .toList()
+    }
+
     fun parseStarredOrUserReposHtml(html: String, defaultOwner: String = ""): List<RawRepoItem> {
         if (html.isBlank()) return emptyList()
         val results = mutableListOf<RawRepoItem>()
-        // Matches both `?tab=stars` (`<h3><a href="/owner/repo">`) and `?tab=repositories` (`itemprop="name codeRepository"`)
-        val blockRegex = Regex(
-            """<(?:div|li)\s+class=["'][^"']*(?:col-12\s+d-block|public\s+source)[^"']*["'][^>]*>([\s\S]*?)</(?:div|li)>""",
+        // Split on each repository item container (`?tab=stars` uses `div.col-12.d-block`, `?tab=repositories` uses `li.public.source`)
+        val itemStartRegex = Regex(
+            """<(?:div|li)\s+class=["'][^"']*(?:col-12\s+d-block|public\s+source)[^"']*["'][^>]*>""",
             RegexOption.IGNORE_CASE
         )
-        val hrefRegex = Regex("""<a\s+[^>]*?href=["']/([^/"'\s]+)/([^/"'\s]+)["'][^>]*>""", RegexOption.IGNORE_CASE)
+        val hrefRegex = Regex("""<h3[^>]*>[\s\S]*?<a\s+[^>]*?href=["']/([^/"'\s]+)/([^/"'\s]+)["'][^>]*>""", RegexOption.IGNORE_CASE)
+        val fallbackHrefRegex = Regex("""<a\s+[^>]*?href=["']/([^/"'\s]+)/([^/"'\s]+)["'][^>]*>""", RegexOption.IGNORE_CASE)
         val descRegex = Regex("""<p\s+[^>]*?itemprop=["']description["'][^>]*>([\s\S]*?)</p>""", RegexOption.IGNORE_CASE)
         val langRegex = Regex("""itemprop=["']programmingLanguage["'][^>]*>([^<]+)</span>""", RegexOption.IGNORE_CASE)
         val starsRegex = Regex("""href=["']/[^"']+/stargazers["'][^>]*>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
 
-        for (match in blockRegex.findAll(html)) {
-            val block = match.groupValues[1]
-            val hrefMatch = hrefRegex.find(block) ?: continue
+        val chunks = itemStartRegex.split(html).drop(1)
+        for (rawChunk in chunks) {
+            val block = rawChunk.take(4000)
+            val hrefMatch = hrefRegex.find(block) ?: fallbackHrefRegex.find(block) ?: continue
             val owner = hrefMatch.groupValues[1].trim().ifBlank { defaultOwner }
             val name = hrefMatch.groupValues[2].trim()
             if (owner.isBlank() || name.isBlank() || owner in setOf("login", "sponsors", "orgs", "topics")) continue
