@@ -136,7 +136,7 @@ fun LiteRtLmCornerHost(
     ) {
         AgentTopBar(
             title = "Self-Serve LiteRT-LM Corner",
-            subtitle = "AI Core + bundled .litertlm · NPU/GPU/CPU · Local loopback & IPC",
+            subtitle = "AI Core + on-device .litertlm · NPU/GPU/CPU · Local loopback & IPC",
             onBack = onBack,
             backIcon = CaIcons.arrowLeft,
         )

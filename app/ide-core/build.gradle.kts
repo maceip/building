@@ -84,6 +84,7 @@ dependencies {
     testImplementation(project(":bench-support"))
     // Bouncy Castle: the keystore-registry test creates a real keystore (KeystoreCrypto.create needs BC at runtime).
     testImplementation(libs.bouncycastle.pkix)
+    testImplementation("com.google.ai.edge.litertlm:litertlm-jvm:0.17.1")
 }
 
 // Several tests boot a real IdeServices and build the full library index (android.jar, the JDK, the Android

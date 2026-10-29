@@ -554,25 +554,43 @@ class LiveGitHubTrendingDeviceTest {
         val status = bridge.probeStatus()
         Log.i(
             TAG,
-            "=== [TEST 09] AndroidAiCoreBridge status on Pixel: available=${status.available}, " +
+            "=== [TEST 09] AndroidAiCoreBridge status on device: available=${status.available}, " +
                 "pkg=${status.packageName}, version=${status.versionName}, odi=${status.systemServicePresent} ==="
         )
-        assertTrue("Expected Android AI Core (com.google.android.aicore) to be detected on Pixel 11 Pro XL", status.available)
 
         val storageRoot = File(testCacheDir, "litert-corner").apply { mkdirs() }.toPath()
         val manager = dev.ide.agent.impl.LiteRtLmServingManager(storageRoot = storageRoot)
         try {
-            val snap = manager.currentSnapshot()
-            val aiCoreEntry = snap.entries.firstOrNull { it.spec.id == dev.ide.agent.impl.LiteRtLmCatalog.AICORE_MODEL_ID }
-            assertNotNull("Expected Android AI Core entry in LiteRT-LM Corner catalog on Pixel", aiCoreEntry)
-            val smokeResult = manager.runSmokeTestNow("Write a one-line Kotlin greeting function")
+            if (status.available) {
+                val snap = manager.currentSnapshot()
+                val aiCoreEntry = snap.entries.firstOrNull { it.spec.id == dev.ide.agent.impl.LiteRtLmCatalog.AICORE_MODEL_ID }
+                assertNotNull("Expected Android AI Core entry in LiteRT-LM Corner catalog on Pixel", aiCoreEntry)
+                val aiCoreSmoke = manager.runSmokeTestNow("Write a one-line Kotlin greeting function")
+                Log.i(
+                    TAG,
+                    "=== [TEST 09A] Android AI Core smoke test: ok=${aiCoreSmoke.ok}, " +
+                        "model=${aiCoreSmoke.modelId}, latency=${aiCoreSmoke.latencyMs}ms, text=${aiCoreSmoke.text} ==="
+                )
+                assertTrue("Expected on-device Android AI Core (Gemini Nano) smoke test to succeed: ${aiCoreSmoke.error}", aiCoreSmoke.ok)
+                assertTrue("Expected non-blank generated response from Android AI Core", aiCoreSmoke.text.isNotBlank())
+            }
+
+            // Provision and execute real SmolLM2 135M Instruct (.litertlm) via com.google.ai.edge.litertlm.Engine
+            val verified = kotlinx.coroutines.runBlocking {
+                manager.downloadModelNow("smollm2-135m-instruct")
+            }
+            assertNotNull("Expected real SmolLM2_135M_Instruct.litertlm to be provisioned and verified on-device", verified)
+            assertTrue("Expected .litertlm file > 100 MB, got ${verified!!.sizeBytes}", verified.sizeBytes > 100_000_000L)
+            assertTrue("Expected activateModel(smollm2-135m-instruct) to succeed", manager.activateModel("smollm2-135m-instruct"))
+
+            val engineResult = manager.runSmokeTestNow("Say hello in one short sentence.")
             Log.i(
                 TAG,
-                "=== [TEST 09 PASS] LiteRT-LM Corner & Android AI Core smoke test: ok=${smokeResult.ok}, " +
-                    "model=${smokeResult.modelId}, latency=${smokeResult.latencyMs}ms, text=${smokeResult.text} ==="
+                "=== [TEST 09B PASS] Real LiteRT-LM Engine (smollm2-135m-instruct) on-device: ok=${engineResult.ok}, " +
+                    "model=${engineResult.modelId}, delegate=${engineResult.delegate.id}, latency=${engineResult.latencyMs}ms, text=${engineResult.text} ==="
             )
-            assertTrue("Expected on-device AICore / LiteRT-LM smoke test to succeed", smokeResult.ok)
-            assertTrue("Expected non-blank generated response", smokeResult.text.isNotBlank())
+            assertTrue("Expected real com.google.ai.edge.litertlm.Engine inference to succeed: ${engineResult.error}", engineResult.ok)
+            assertTrue("Expected non-blank generated response from real LiteRT-LM Engine", engineResult.text.isNotBlank())
         } finally {
             manager.close()
         }

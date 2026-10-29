@@ -1,5 +1,15 @@
 package dev.ide.agent.impl
 
+import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Content
+import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.ConversationConfig
+import com.google.ai.edge.litertlm.Engine
+import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.InputData
+import com.google.ai.edge.litertlm.LogSeverity
+import com.google.ai.edge.litertlm.SamplerConfig
+import com.google.ai.edge.litertlm.SessionConfig
 import dev.ide.agent.ContentPart
 import dev.ide.agent.LlmMessage
 import dev.ide.agent.LlmRequest
@@ -24,6 +34,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -32,13 +43,14 @@ import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Verified metadata for a `.litertlm` model file physically present on disk.
+ * Verified metadata for a `.litertlm` model file physically present on disk (or system AI Core binding).
  */
 data class VerifiedLiteRtArtifact(
     val modelId: String,
@@ -49,6 +61,197 @@ data class VerifiedLiteRtArtifact(
     val embeddedModelFamily: String,
     val embeddedQuantization: String,
 )
+
+/**
+ * Output of a real on-device `com.google.ai.edge.litertlm.Engine` generation call.
+ */
+data class LiteRtEngineOutput(
+    val text: String,
+    val thinking: String = "",
+    val backendUsed: String = "",
+)
+
+/**
+ * Bridge to the native Google AI Edge LiteRT-LM runtime (`com.google.ai.edge.litertlm.Engine`).
+ */
+interface LiteRtEngineBridge : AutoCloseable {
+    fun generate(
+        modelPath: Path,
+        prompt: String,
+        system: String? = null,
+        delegate: LiteRtHardwareDelegate = LiteRtHardwareDelegate.CPU,
+        maxTokens: Int = 512,
+        temperature: Double = 0.2,
+        thinking: Boolean = false,
+    ): Result<LiteRtEngineOutput>
+
+    override fun close() {}
+}
+
+/**
+ * Default JVM/Desktop/Android implementation of [LiteRtEngineBridge] backed directly by
+ * `com.google.ai.edge.litertlm.Engine` (`litertlm-jvm` on Desktop/JVM, `litertlm-android` on Android).
+ *
+ * Never fabricates or mocks output: all responses come from the native C++ LiteRT-LM engine.
+ */
+class JvmLiteRtEngineBridge(
+    private val cacheRootProvider: () -> File? = { null },
+    private val npuLibraryDirProvider: () -> String = { "" },
+) : LiteRtEngineBridge {
+
+    private data class EngineKey(
+        val canonicalPath: String,
+        val backendName: String,
+    )
+
+    private val engineLock = Any()
+    private var cachedKey: EngineKey? = null
+    private var cachedEngine: Engine? = null
+
+    init {
+        runCatching { Engine.setNativeMinLogSeverity(LogSeverity.ERROR) }
+    }
+
+    private fun resolveBackend(delegate: LiteRtHardwareDelegate): Backend = when (delegate) {
+        LiteRtHardwareDelegate.CPU -> Backend.CPU(4, null)
+        LiteRtHardwareDelegate.GPU -> Backend.GPU()
+        LiteRtHardwareDelegate.NPU -> {
+            val dir = npuLibraryDirProvider()
+            Backend.NPU(dir)
+        }
+    }
+
+    private fun getOrInitEngineForCandidate(
+        modelFile: File,
+        candidate: LiteRtHardwareDelegate,
+    ): Engine {
+        val canonical = modelFile.canonicalPath
+        val key = EngineKey(canonical, candidate.id)
+        cachedEngine?.let { existing ->
+            if (cachedKey == key && existing.isInitialized()) {
+                return existing
+            }
+        }
+        cachedEngine?.let { old -> runCatching { old.close() } }
+        cachedEngine = null
+        cachedKey = null
+
+        val cacheDir = cacheRootProvider()?.let { root ->
+            File(root, "litert-lm-cache/${modelFile.name}-${candidate.id.lowercase()}").apply { mkdirs() }.absolutePath
+        } ?: ":nocache"
+
+        val config = EngineConfig(
+            modelFile.absolutePath,
+            resolveBackend(candidate),
+            null,
+            null,
+            null,
+            null,
+            cacheDir,
+        )
+        val engine = Engine(config)
+        engine.initialize()
+        cachedKey = key
+        cachedEngine = engine
+        return engine
+    }
+
+    override fun generate(
+        modelPath: Path,
+        prompt: String,
+        system: String?,
+        delegate: LiteRtHardwareDelegate,
+        maxTokens: Int,
+        temperature: Double,
+        thinking: Boolean,
+    ): Result<LiteRtEngineOutput> = runCatching {
+        val file = modelPath.toFile()
+        require(file.isFile && file.length() >= LiteRtBinaryContainer.MIN_VALID_BYTES) {
+            "LiteRT-LM model file does not exist or is invalid: ${file.absolutePath}"
+        }
+        val candidates = buildList {
+            add(delegate)
+            if (delegate != LiteRtHardwareDelegate.CPU) {
+                add(LiteRtHardwareDelegate.CPU)
+            }
+        }
+        val sampler = SamplerConfig(
+            topK = if (temperature <= 0.0) 1 else 40,
+            topP = 0.95,
+            temperature = temperature.coerceAtLeast(0.0),
+            seed = 0,
+        )
+        val sysContents = system?.trim()?.takeIf { it.isNotEmpty() }?.let { Contents.of(it) }
+
+        synchronized(engineLock) {
+            var lastError: Throwable? = null
+            for (candidate in candidates) {
+                try {
+                    val engine = getOrInitEngineForCandidate(file, candidate)
+                    return@synchronized try {
+                        val convCtor = ConversationConfig::class.java.getConstructor(
+                            Contents::class.java,
+                            List::class.java,
+                            List::class.java,
+                            SamplerConfig::class.java,
+                            Boolean::class.javaPrimitiveType,
+                        )
+                        val convConfig = convCtor.newInstance(
+                            sysContents,
+                            emptyList<Any>(),
+                            emptyList<Any>(),
+                            sampler,
+                            false,
+                        )
+                        engine.createConversation(convConfig).use { conversation ->
+                            val response = conversation.sendMessage(Contents.of(Content.Text(prompt)))
+                            val text = response.contents.contents
+                                .filterIsInstance<Content.Text>()
+                                .joinToString("") { it.text }
+                                .trim()
+                            val thought = (response.channels["thought"] ?: response.channels["thinking"]).orEmpty().trim()
+                            LiteRtEngineOutput(
+                                text = text,
+                                thinking = thought,
+                                backendUsed = candidate.id,
+                            )
+                        }
+                    } catch (convErr: Exception) {
+                        val msg = convErr.message.orEmpty()
+                        if (msg.contains("OpenCL", ignoreCase = true) || msg.contains("dispatch", ignoreCase = true)) {
+                            throw convErr
+                        }
+                        // Models without a Jinja chat template in LlmMetadata run via Session.generateContent.
+                        val fullPrompt = if (!system.isNullOrBlank()) "$system\n\n$prompt" else prompt
+                        val sessionConfig = SessionConfig::class.java.getConstructor().newInstance()
+                        engine.createSession(sessionConfig).use { session ->
+                            val raw = session.generateContent(listOf(InputData.Text(fullPrompt))).trim()
+                            LiteRtEngineOutput(
+                                text = raw,
+                                thinking = "",
+                                backendUsed = candidate.id,
+                            )
+                        }
+                    }
+                } catch (t: Throwable) {
+                    lastError = t
+                    runCatching { cachedEngine?.close() }
+                    cachedEngine = null
+                    cachedKey = null
+                }
+            }
+            throw lastError ?: IllegalStateException("Failed to execute LiteRT-LM Engine for ${file.absolutePath}")
+        }
+    }
+
+    override fun close() {
+        synchronized(engineLock) {
+            runCatching { cachedEngine?.close() }
+            cachedEngine = null
+            cachedKey = null
+        }
+    }
+}
 
 /**
  * Result of a single local LiteRT-LM generation call (used by `/v1/litert/generate`,
@@ -127,13 +330,17 @@ fun interface LiteRtModelArtifactFetcher {
 }
 
 /**
- * Default model artifact fetcher.
+ * Real model artifact fetcher.
  *
- * When a local mirror URL (`http://127.0.0.1:...` / `file://...`) is configured on [spec] or via
- * `litert.mirror.baseUrl`, streams bytes over HTTP/file. Otherwise constructs a self-contained,
- * header-verified `.litertlm` binary bundle on disk containing the magic header (`LITERTLM`),
- * serialized model descriptor, tokenizer vocabulary, and quantized tensor blocks so local
- * development and guest-app testing work deterministically offline and on-device.
+ * Streams real `.litertlm` artifacts from:
+ * 1. `litert.mirror.baseUrl` when configured via system property.
+ * 2. Local verified `.litertlm` cache directories (`/data/local/tmp/litert-lm`, `/sdcard/Download`,
+ *    `~/Downloads`, `~/.litert-lm/models`, `~/.avery/redteam-models`) if the exact real `.litertlm`
+ *    artifact is already present on disk.
+ * 3. The model's `spec.downloadUrl` over HTTPS/HTTP/file (with HTTP redirect following and optional
+ *    `HF_TOKEN` / `HUGGING_FACE_HUB_TOKEN` bearer authentication).
+ *
+ * Never generates synthetic or fake model bytes.
  */
 class DefaultLiteRtModelArtifactFetcher : LiteRtModelArtifactFetcher {
     override suspend fun fetch(
@@ -141,38 +348,50 @@ class DefaultLiteRtModelArtifactFetcher : LiteRtModelArtifactFetcher {
         targetFile: Path,
         onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit,
     ): Unit = withContext(Dispatchers.IO) {
+        if (spec.isSystemAiCore) {
+            return@withContext
+        }
         Files.createDirectories(targetFile.parent)
         val partFile = targetFile.resolveSibling("${targetFile.fileName}.part")
         val mirrorBase = System.getProperty("litert.mirror.baseUrl")?.trim()?.trimEnd('/')
-        val effectiveUrl = if (!mirrorBase.isNullOrBlank()) {
-            "$mirrorBase/${spec.artifactFileName}"
-        } else {
-            spec.downloadUrl
-        }
-
-        if (effectiveUrl.startsWith("http://127.0.0.1") ||
-            effectiveUrl.startsWith("http://localhost") ||
-            effectiveUrl.startsWith("file://")
-        ) {
-            streamFromUrl(effectiveUrl, partFile, spec.estimatedSizeBytes, onProgress)
-        } else {
-            // Write a valid, verifiable .litertlm binary container in chunks with real byte progress.
-            val bytes = LiteRtBinaryContainer.buildArtifactBytes(spec)
-            val total = bytes.size.toLong()
-            val chunkSize = (bytes.size / 4).coerceAtLeast(4096)
-            Files.newOutputStream(partFile).use { out ->
-                var offset = 0
-                while (offset < bytes.size) {
-                    val len = minOf(chunkSize, bytes.size - offset)
-                    out.write(bytes, offset, len)
-                    offset += len
-                    onProgress(offset.toLong(), total)
+        val effectiveUrl = when {
+            !mirrorBase.isNullOrBlank() -> "$mirrorBase/${spec.artifactFileName}"
+            else -> {
+                val localCached = findLocalCachedArtifact(spec)
+                if (localCached != null) {
+                    localCached.toUri().toString()
+                } else {
+                    spec.downloadUrl
                 }
-                out.flush()
             }
         }
+
+        streamFromUrl(effectiveUrl, partFile, spec.estimatedSizeBytes, onProgress)
         Files.move(partFile, targetFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-        Unit
+    }
+
+    private fun findLocalCachedArtifact(spec: LiteRtModelCatalogSpec): Path? {
+        val home = System.getProperty("user.home").orEmpty()
+        val candidatePaths = buildList {
+            System.getProperty("litert.local.cache.dir")?.takeIf { it.isNotBlank() }?.let {
+                add(Paths.get(it, spec.artifactFileName))
+            }
+            add(Paths.get("/data/local/tmp/litert-lm", spec.artifactFileName))
+            add(Paths.get("/sdcard/Download", spec.artifactFileName))
+            if (home.isNotBlank()) {
+                add(Paths.get(home, "Downloads", spec.artifactFileName))
+                add(Paths.get(home, ".litert-lm", "models", spec.artifactFileName))
+                add(Paths.get(home, ".avery", "redteam-models", spec.artifactFileName))
+                add(Paths.get(home, ".avery", "redteam-models", spec.artifactFileName.lowercase()))
+                add(Paths.get(home, "DTR", ".work", "gate-demo-models", "models", "gemma4.litertlm").takeIf {
+                    spec.id == "gemma-4-e2b-it"
+                })
+            }
+        }.filterNotNull()
+
+        return candidatePaths.firstOrNull { path ->
+            Files.isRegularFile(path) && LiteRtBinaryContainer.verify(path, expectedModelId = spec.id) != null
+        }
     }
 
     private fun streamFromUrl(
@@ -181,13 +400,66 @@ class DefaultLiteRtModelArtifactFetcher : LiteRtModelArtifactFetcher {
         fallbackTotal: Long,
         onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit,
     ) {
-        val conn = URL(url).openConnection()
-        conn.connectTimeout = 5_000
-        conn.readTimeout = 30_000
-        val total = conn.contentLengthLong.takeIf { it > 0L } ?: fallbackTotal
-        conn.getInputStream().use { input ->
-            copyWithProgress(input, partFile, total, onProgress)
+        if (url.startsWith("file:")) {
+            val conn = URL(url).openConnection()
+            val total = conn.contentLengthLong.takeIf { it > 0L } ?: fallbackTotal
+            conn.getInputStream().use { input ->
+                copyWithProgress(input, partFile, total, onProgress)
+            }
+            return
         }
+
+        val token = (
+            System.getProperty("litert.hf.token")
+                ?: System.getenv("HF_TOKEN")
+                ?: System.getenv("HUGGING_FACE_HUB_TOKEN")
+            )?.trim()?.takeIf { it.isNotEmpty() }
+
+        var currentUrl = url
+        var redirects = 0
+        while (redirects <= 5) {
+            val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                connectTimeout = 15_000
+                readTimeout = 60_000
+                setRequestProperty("User-Agent", "CodeAssist-LiteRT-LM/1.0")
+                if (token != null && (currentUrl.contains("huggingface.co") || currentUrl.contains("hf.co"))) {
+                    setRequestProperty("Authorization", "Bearer $token")
+                }
+            }
+            val code = conn.responseCode
+            if (code in listOf(301, 302, 303, 307, 308)) {
+                val location = conn.getHeaderField("Location")
+                    ?: throw IOException("Redirect ($code) without Location header from $currentUrl")
+                currentUrl = URL(URL(currentUrl), location).toString()
+                conn.disconnect()
+                redirects++
+                continue
+            }
+            if (code !in 200..299) {
+                val errBody = runCatching {
+                    conn.errorStream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText().take(240) }
+                }.getOrNull().orEmpty()
+                conn.disconnect()
+                throw IOException(
+                    buildString {
+                        append("HTTP $code downloading $url")
+                        if (code == 401 || code == 403) {
+                            append(" (set HF_TOKEN or -Dlitert.hf.token for gated HuggingFace models)")
+                        }
+                        if (errBody.isNotBlank()) {
+                            append(": $errBody")
+                        }
+                    },
+                )
+            }
+            val total = conn.contentLengthLong.takeIf { it > 0L } ?: fallbackTotal
+            conn.inputStream.use { input ->
+                copyWithProgress(input, partFile, total, onProgress)
+            }
+            return
+        }
+        throw IOException("Too many redirects downloading $url")
     }
 
     private fun copyWithProgress(
@@ -197,7 +469,7 @@ class DefaultLiteRtModelArtifactFetcher : LiteRtModelArtifactFetcher {
         onProgress: (Long, Long) -> Unit,
     ) {
         Files.newOutputStream(partFile).use { out ->
-            val buf = ByteArray(16 * 1024)
+            val buf = ByteArray(64 * 1024)
             var written = 0L
             while (true) {
                 val n = input.read(buf)
@@ -212,53 +484,47 @@ class DefaultLiteRtModelArtifactFetcher : LiteRtModelArtifactFetcher {
 }
 
 /**
- * Binary container format for `.litertlm` artifacts:
- * - Bytes 0..7: ASCII magic `LITERTLM`
- * - Bytes 8..11: uint32 format version (`1`)
- * - Bytes 12..15: uint32 JSON metadata length (`metaLen`)
- * - Bytes 16..(16 + metaLen - 1): UTF-8 JSON metadata object (`id`, `family`, `parameterCount`, `quantization`, `contextLength`)
- * - Remaining bytes: deterministic INT4 quantized embedding/attention tensor block for verification.
+ * Verifies real `.litertlm` binary files on disk according to the official Google AI Edge LiteRT-LM
+ * binary schema (`litertlm_read.cc`):
+ * - Bytes `0..7`: ASCII magic `LITERTLM`
+ * - Bytes `8..11`: uint32 `major_version` (`1`)
+ * - Bytes `12..15`: uint32 `minor_version`
+ * - Bytes `16..19`: uint32 `patch_version`
+ * - Bytes `20..23`: 4-byte zero padding
+ * - Bytes `24..31`: uint64 `header_end_offset` (`> 32` and `<= fileSize`)
+ *
+ * Never generates synthetic `.litertlm` containers.
  */
 object LiteRtBinaryContainer {
     const val MAGIC = "LITERTLM"
     const val TFLITE_MAGIC = "TFL3"
     const val MIN_VALID_BYTES = 128L
 
-    fun buildArtifactBytes(spec: LiteRtModelCatalogSpec, payloadBlocks: Int = 64): ByteArray {
-        val metaJson = buildJsonObject {
-            put("id", spec.id)
-            put("displayName", spec.displayName)
-            put("family", spec.family)
-            put("parameterCount", spec.parameterCount)
-            put("quantization", spec.quantization)
-            put("contextLength", spec.contextLength)
-            put("supportsToolCalling", spec.supportsToolCalling)
-            put("supportsThinking", spec.supportsThinking)
-            put("isSystemAiCore", spec.isSystemAiCore)
-            put("isBundled", spec.isBundled)
-        }.toString()
-        val metaBytes = metaJson.toByteArray(StandardCharsets.UTF_8)
-        val tensorPayload = ByteArray(payloadBlocks * 1024) { idx ->
-            ((spec.id.hashCode() xor (idx * 31)) and 0xFF).toByte()
-        }
-        val totalSize = 8 + 4 + 4 + metaBytes.size + tensorPayload.size
-        val buffer = ByteBuffer.allocate(totalSize).order(ByteOrder.LITTLE_ENDIAN)
-        buffer.put(MAGIC.toByteArray(StandardCharsets.US_ASCII))
-        buffer.putInt(1) // version 1
-        buffer.putInt(metaBytes.size)
-        buffer.put(metaBytes)
-        buffer.put(tensorPayload)
-        return buffer.array()
-    }
+    private data class CacheStamp(
+        val absolutePath: String,
+        val sizeBytes: Long,
+        val lastModifiedMillis: Long,
+    )
+
+    private val verificationCache = ConcurrentHashMap<CacheStamp, VerifiedLiteRtArtifact>()
 
     fun verify(filePath: Path, expectedModelId: String? = null): VerifiedLiteRtArtifact? {
         if (!Files.isRegularFile(filePath)) return null
         val size = runCatching { Files.size(filePath) }.getOrDefault(0L)
         if (size < MIN_VALID_BYTES) return null
+        val mtime = runCatching { Files.getLastModifiedTime(filePath).toMillis() }.getOrDefault(0L)
+        val absPath = filePath.toAbsolutePath().normalize().toString()
+        val stamp = CacheStamp(absPath, size, mtime)
+        verificationCache[stamp]?.let { cached ->
+            return if (expectedModelId != null && cached.modelId != expectedModelId) {
+                cached.copy(modelId = expectedModelId)
+            } else {
+                cached
+            }
+        }
 
         return runCatching {
-            val header = ByteArray(16)
-            var metaJsonStr = ""
+            val header = ByteArray(32)
             val digest = MessageDigest.getInstance("SHA-256")
             Files.newInputStream(filePath).use { input ->
                 var headerRead = 0
@@ -267,34 +533,30 @@ object LiteRtBinaryContainer {
                     if (r < 0) break
                     headerRead += r
                 }
-                if (headerRead < 16) return null
+                if (headerRead < 32) return null
                 digest.update(header, 0, headerRead)
 
                 val magicAscii = String(header, 0, 8, StandardCharsets.US_ASCII)
                 val tfliteAscii = String(header, 4, 4, StandardCharsets.US_ASCII)
                 val isZip = header[0] == 0x50.toByte() && header[1] == 0x4B.toByte()
                 if (magicAscii == MAGIC) {
-                    val bb = ByteBuffer.wrap(header, 8, 8).order(ByteOrder.LITTLE_ENDIAN)
-                    val version = bb.int
-                    val metaLen = bb.int
-                    if (version >= 1 && metaLen in 2..65_536) {
-                        val metaBytes = ByteArray(metaLen)
-                        var mRead = 0
-                        while (mRead < metaLen) {
-                            val r = input.read(metaBytes, mRead, metaLen - mRead)
-                            if (r < 0) break
-                            mRead += r
-                        }
-                        if (mRead == metaLen) {
-                            digest.update(metaBytes, 0, mRead)
-                            metaJsonStr = String(metaBytes, StandardCharsets.UTF_8)
-                        }
+                    val bb = ByteBuffer.wrap(header, 8, 24).order(ByteOrder.LITTLE_ENDIAN)
+                    val majorVersion = bb.int
+                    val minorVersion = bb.int
+                    val patchVersion = bb.int
+                    val padding = bb.int
+                    val headerEndOffset = bb.long
+                    if (majorVersion != 1 || minorVersion < 0 || patchVersion < 0 || padding != 0) {
+                        return null
+                    }
+                    if (headerEndOffset <= 32L || headerEndOffset > size) {
+                        return null
                     }
                 } else if (tfliteAscii != TFLITE_MAGIC && !isZip) {
                     return null
                 }
 
-                val buf = ByteArray(32 * 1024)
+                val buf = ByteArray(128 * 1024)
                 while (true) {
                     val n = input.read(buf)
                     if (n < 0) break
@@ -302,15 +564,11 @@ object LiteRtBinaryContainer {
                 }
             }
             val shaHex = digest.digest().joinToString("") { "%02x".format(it) }
-            val metaObj = if (metaJsonStr.isNotBlank()) {
-                runCatching { AgentJson.parseToJsonElement(metaJsonStr).asObj() }.getOrNull()
-            } else null
-
-            val resolvedId = metaObj?.get("id").asStr()
-                ?: expectedModelId
+            val resolvedId = expectedModelId
                 ?: filePath.fileName.toString().removeSuffix(".litertlm")
-            val family = metaObj?.get("family").asStr() ?: "LiteRT-LM"
-            val quant = metaObj?.get("quantization").asStr() ?: "INT4"
+            val spec = LiteRtLmCatalog.find(resolvedId)
+            val family = spec?.family ?: "LiteRT-LM"
+            val quant = spec?.quantization ?: "INT4"
             val magicLabel = if (String(header, 0, 8, StandardCharsets.US_ASCII) == MAGIC) MAGIC else "TFLITE/TASK"
 
             VerifiedLiteRtArtifact(
@@ -321,15 +579,17 @@ object LiteRtBinaryContainer {
                 formatMagic = magicLabel,
                 embeddedModelFamily = family,
                 embeddedQuantization = quant,
-            )
+            ).also { verified ->
+                verificationCache[stamp] = verified
+            }
         }.getOrNull()
     }
 }
 
 /**
- * Manages the on-device LiteRT-LM model catalog, disk verification, downloads, hardware delegates,
- * Android System AI Core (`com.google.android.aicore`) binding, bundled starter model provisioning,
- * local loopback HTTP server, and on-device inference execution.
+ * Manages the on-device LiteRT-LM model catalog, real `.litertlm` disk verification, downloads,
+ * hardware delegates, Android System AI Core (`com.google.android.aicore`) binding,
+ * local loopback HTTP server, and real `com.google.ai.edge.litertlm.Engine` inference execution.
  */
 class LiteRtLmServingManager(
     val storageRoot: Path,
@@ -340,6 +600,7 @@ class LiteRtLmServingManager(
     private val preferenceWriter: (String, String) -> Unit = { _, _ -> },
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val aiCoreBridgeProvider: () -> LiteRtAiCoreBridge = { LiteRtLmServingRegistry.aiCoreBridge },
+    private val engineBridgeProvider: () -> LiteRtEngineBridge = { LiteRtLmServingRegistry.engineBridge },
     private val autoProvisionBuiltIns: Boolean = true,
 ) : AutoCloseable {
 
@@ -374,9 +635,6 @@ class LiteRtLmServingManager(
     init {
         runCatching { Files.createDirectories(modelsDir) }
         loadPersistedState()
-        if (autoProvisionBuiltIns && !userClearedAll) {
-            provisionBuiltInModelsInternal()
-        }
         reconcileDiskArtifacts()
         if (serverEnabled) {
             startLoopbackServerInternal(configuredServerPort)
@@ -385,11 +643,8 @@ class LiteRtLmServingManager(
             val aiCoreStatus = aiCoreBridgeProvider().probeStatus()
             statusBanner = when {
                 activeModelId == LiteRtLmCatalog.AICORE_MODEL_ID && aiCoreStatus.available -> {
-                    val v = aiCoreStatus.versionName.take(16).ifBlank { "Gemini Nano" }
-                    "Android AI Core ($v) + Bundled Starter LM ready — 0 B download required."
-                }
-                activeModelId == LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID -> {
-                    "Bundled Starter Micro-LM active out-of-the-box — test local inference immediately with 0 B download."
+                    val v = aiCoreStatus.versionName.take(24).ifBlank { "Gemini Nano" }
+                    "Android AI Core ($v) ready on Tensor NPU — 0 B download required."
                 }
                 else -> {
                     val spec = LiteRtLmCatalog.find(activeModelId)
@@ -401,74 +656,47 @@ class LiteRtLmServingManager(
     }
 
     /**
-     * Provisions the bundled starter `.litertlm` model (`litert-starter-micro-it-int4`) and, when
-     * Android System AI Core (`com.google.android.aicore`) is detected on the device, the verified
-     * `aicore-gemini-nano` descriptor so the user can test local inference immediately out of the box
-     * without downloading multi-GB files.
+     * Refreshes built-in system bindings (such as Android System AI Core `com.google.android.aicore`)
+     * and reconciles verified `.litertlm` artifacts on disk.
      */
     @Synchronized
     fun provisionBuiltInModels() {
         userClearedAll = false
-        provisionBuiltInModelsInternal()
         reconcileDiskArtifacts()
         publishState()
     }
 
-    private fun provisionBuiltInModelsInternal() {
-        runCatching { Files.createDirectories(modelsDir) }
-
-        // 1. Always ensure the bundled starter .litertlm model is extracted/present in modelsDir.
-        val starterSpec = LiteRtLmCatalog.find(LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID)
-        if (starterSpec != null) {
-            val starterFile = modelsDir.resolve(starterSpec.artifactFileName)
-            if (LiteRtBinaryContainer.verify(starterFile, expectedModelId = starterSpec.id) == null) {
-                runCatching {
-                    val bytes = LiteRtBinaryContainer.buildArtifactBytes(starterSpec, payloadBlocks = 64)
-                    Files.write(starterFile, bytes)
-                }
-            }
-        }
-
-        // 2. Probe Android System AI Core (com.google.android.aicore). When present on the phone,
-        //    provision the verified AI Core descriptor so Gemini Nano is available with 0 B download.
-        val aiCoreStatus = runCatching { aiCoreBridgeProvider().probeStatus() }
-            .getOrDefault(LiteRtAiCoreStatus(available = false))
-        val aiCoreSpec = LiteRtLmCatalog.find(LiteRtLmCatalog.AICORE_MODEL_ID)
-        if (aiCoreSpec != null) {
-            val aiCoreFile = modelsDir.resolve(aiCoreSpec.artifactFileName)
-            if (aiCoreStatus.available) {
-                if (LiteRtBinaryContainer.verify(aiCoreFile, expectedModelId = aiCoreSpec.id) == null) {
-                    runCatching {
-                        val bytes = LiteRtBinaryContainer.buildArtifactBytes(aiCoreSpec, payloadBlocks = 4)
-                        Files.write(aiCoreFile, bytes)
-                    }
-                }
-            }
-        }
-    }
-
     /**
-     * Re-scans [modelsDir] and verifies every catalog model file on disk so [state]
-     * always reflects physical disk reality (never reports a missing/corrupt file as installed).
+     * Re-scans [modelsDir] and verifies every catalog `.litertlm` model file on disk (plus Android System AI Core
+     * when present on the device) so [state] always reflects physical reality.
      */
     @Synchronized
     fun reconcileDiskArtifacts() {
         runCatching { Files.createDirectories(modelsDir) }
-        val aiCoreAvailable = runCatching { aiCoreBridgeProvider().probeStatus().available }.getOrDefault(false)
-        if (autoProvisionBuiltIns && !userClearedAll && aiCoreAvailable) {
-            val aiCoreSpec = LiteRtLmCatalog.find(LiteRtLmCatalog.AICORE_MODEL_ID)
-            if (aiCoreSpec != null) {
-                val aiCoreFile = modelsDir.resolve(aiCoreSpec.artifactFileName)
-                if (!Files.isRegularFile(aiCoreFile)) {
-                    runCatching {
-                        Files.write(aiCoreFile, LiteRtBinaryContainer.buildArtifactBytes(aiCoreSpec, payloadBlocks = 4))
-                    }
-                }
-            }
-        }
+        val aiCoreStatus = runCatching { aiCoreBridgeProvider().probeStatus() }
+            .getOrDefault(LiteRtAiCoreStatus(available = false))
 
         val validIds = mutableListOf<String>()
         for (spec in LiteRtLmCatalog.MODELS) {
+            if (spec.isSystemAiCore) {
+                if (aiCoreStatus.available && !userClearedAll) {
+                    val sysArtifact = VerifiedLiteRtArtifact(
+                        modelId = spec.id,
+                        filePath = modelsDir.resolve(spec.artifactFileName),
+                        sizeBytes = 0L,
+                        sha256 = sha256Hex("aicore:${aiCoreStatus.packageName}:${aiCoreStatus.versionName}"),
+                        formatMagic = "AICORE",
+                        embeddedModelFamily = spec.family,
+                        embeddedQuantization = spec.quantization,
+                    )
+                    verifiedCache[spec.id] = sysArtifact
+                    validIds += spec.id
+                } else {
+                    verifiedCache.remove(spec.id)
+                }
+                continue
+            }
+
             val file = modelsDir.resolve(spec.artifactFileName)
             val verified = LiteRtBinaryContainer.verify(file, expectedModelId = spec.id)
             if (verified != null) {
@@ -478,16 +706,15 @@ class LiteRtLmServingManager(
                 verifiedCache.remove(spec.id)
             }
         }
+
         if (activeModelId.isNotBlank() && activeModelId !in validIds) {
             activeModelId = validIds.firstOrNull().orEmpty()
         } else if (activeModelId.isBlank() && validIds.isNotEmpty()) {
-            activeModelId = when {
-                LiteRtLmCatalog.AICORE_MODEL_ID in validIds && aiCoreAvailable -> LiteRtLmCatalog.AICORE_MODEL_ID
-                LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID in validIds -> LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID
-                else -> validIds.first()
-            }
+            // Prefer real .litertlm models installed on disk first, otherwise Android System AI Core.
+            val diskModel = validIds.firstOrNull { it != LiteRtLmCatalog.AICORE_MODEL_ID }
+            activeModelId = diskModel ?: validIds.first()
         }
-        // Clear any stale "No LiteRT-LM model is installed" smoke test error once a model is active.
+
         if (activeModelId.isNotBlank() && lastSmokeTestResponse.startsWith("Error: No LiteRT-LM model is installed")) {
             lastSmokeTestResponse = ""
         }
@@ -530,18 +757,31 @@ class LiteRtLmServingManager(
     }
 
     /**
-     * Synchronously provisions or downloads [modelId] and verifies the `.litertlm` file on disk.
+     * Synchronously downloads [modelId] and verifies the real `.litertlm` file on disk.
      */
     suspend fun downloadModelNow(modelId: String): VerifiedLiteRtArtifact? {
         val spec = LiteRtLmCatalog.find(modelId) ?: return null
         userClearedAll = false
         errorMessages.remove(modelId)
-        downloadProgress[modelId] = 0L
-        statusBanner = if (spec.isBundled || spec.isSystemAiCore) {
-            "Provisioning ${spec.displayName}…"
-        } else {
-            "Downloading ${spec.displayName}…"
+
+        if (spec.isSystemAiCore) {
+            reconcileDiskArtifacts()
+            val aiCoreArtifact = verifiedCache[spec.id]
+            if (aiCoreArtifact != null) {
+                if (activeModelId.isBlank()) activeModelId = spec.id
+                statusBanner = "Android AI Core (${spec.displayName}) is active."
+                savePersistedState()
+                publishState()
+            } else {
+                errorMessages[modelId] = "Android AI Core (com.google.android.aicore) is not available on this device."
+                statusBanner = errorMessages[modelId].orEmpty()
+                publishState()
+            }
+            return aiCoreArtifact
         }
+
+        downloadProgress[modelId] = 0L
+        statusBanner = "Downloading ${spec.displayName}…"
         publishState()
 
         val targetFile = modelsDir.resolve(spec.artifactFileName)
@@ -554,16 +794,13 @@ class LiteRtLmServingManager(
             val verified = LiteRtBinaryContainer.verify(targetFile, expectedModelId = spec.id)
             if (verified == null) {
                 Files.deleteIfExists(targetFile)
-                errorMessages[modelId] = "Artifact verification failed (invalid .litertlm header)."
+                errorMessages[modelId] = "Artifact verification failed (invalid .litertlm binary header)."
                 statusBanner = "Verification failed for ${spec.displayName}."
                 publishState()
                 null
             } else {
                 verifiedCache[spec.id] = verified
-                if (activeModelId.isBlank() ||
-                    activeModelId == LiteRtLmCatalog.BUNDLED_STARTER_MODEL_ID ||
-                    activeModelId == LiteRtLmCatalog.AICORE_MODEL_ID
-                ) {
+                if (activeModelId.isBlank() || activeModelId == LiteRtLmCatalog.AICORE_MODEL_ID) {
                     activeModelId = spec.id
                 }
                 statusBanner = "Installed & verified ${spec.displayName} (${verified.sha256.take(12)})."
@@ -739,8 +976,10 @@ class LiteRtLmServingManager(
     }
 
     /**
-     * Executes on-device inference against the verified `.litertlm` artifact (or Android System AI Core).
-     * Fails honestly if no model is installed or the artifact fails verification.
+     * Executes real on-device inference against the verified `.litertlm` artifact via `com.google.ai.edge.litertlm.Engine`
+     * or Android System AI Core (`com.google.mlkit.genai.prompt.Generation`).
+     *
+     * Never fabricates or mocks output: fails honestly if no model is installed or if native inference returns an error.
      */
     fun generate(
         prompt: String,
@@ -758,7 +997,7 @@ class LiteRtLmServingManager(
                 ok = false,
                 modelId = "",
                 delegate = delegate ?: selectedDelegate,
-                error = "No LiteRT-LM model is installed on this device. Download a model in the Self-Serve LiteRT-LM Corner first.",
+                error = "No LiteRT-LM model is installed on this device. Download a .litertlm model in the Self-Serve LiteRT-LM Corner first.",
             )
         }
         val verified = verifiedCache[resolvedId]
@@ -769,37 +1008,66 @@ class LiteRtLmServingManager(
                 error = "Model '$resolvedId' is not installed on disk. Download it in the Self-Serve LiteRT-LM Corner first.",
             )
 
-        // Re-verify the physical file exists and is non-empty before executing.
-        val liveCheck = LiteRtBinaryContainer.verify(verified.filePath, expectedModelId = resolvedId)
-        if (liveCheck == null) {
-            verifiedCache.remove(resolvedId)
-            publishState()
-            return LiteRtGenerationResult(
-                ok = false,
-                modelId = resolvedId,
-                delegate = delegate ?: selectedDelegate,
-                error = "Model artifact at ${verified.filePath} is missing or corrupted.",
-            )
-        }
-
         val spec = LiteRtLmCatalog.find(resolvedId)
         val effectiveDelegate = delegate ?: selectedDelegate
 
         val (generatedText, generatedThinking) = if (spec?.isSystemAiCore == true) {
-            val aiCoreResult = runCatching {
-                aiCoreBridgeProvider().generate(prompt = prompt, system = system, maxTokens = maxTokens).getOrNull()
-            }.getOrNull()
-            if (!aiCoreResult.isNullOrBlank()) {
-                aiCoreResult to ""
-            } else {
-                runEmbeddedLiteRtEngine(spec, liveCheck, prompt, system, effectiveDelegate, maxTokens, thinking)
+            val aiCoreOutcome = aiCoreBridgeProvider().generate(
+                prompt = prompt,
+                system = system,
+                maxTokens = maxTokens,
+            )
+            val text = aiCoreOutcome.getOrElse { err ->
+                return LiteRtGenerationResult(
+                    ok = false,
+                    modelId = resolvedId,
+                    delegate = effectiveDelegate,
+                    error = err.message ?: "Android AI Core inference failed.",
+                )
             }
+            text to ""
         } else {
+            val liveCheck = LiteRtBinaryContainer.verify(verified.filePath, expectedModelId = resolvedId)
+            if (liveCheck == null) {
+                verifiedCache.remove(resolvedId)
+                publishState()
+                return LiteRtGenerationResult(
+                    ok = false,
+                    modelId = resolvedId,
+                    delegate = effectiveDelegate,
+                    error = "Model artifact at ${verified.filePath} is missing or corrupted.",
+                )
+            }
+
             val nativeBin = System.getProperty("litert.native.bin")?.takeIf { it.isNotBlank() }?.let(::File)
             if (nativeBin != null && nativeBin.canExecute()) {
-                runNativeLiteRtBinary(nativeBin, liveCheck.filePath, prompt, system, effectiveDelegate, maxTokens)
+                val binOut = runNativeLiteRtBinary(nativeBin, liveCheck.filePath, prompt, system, effectiveDelegate, maxTokens)
+                    .getOrElse { err ->
+                        return LiteRtGenerationResult(
+                            ok = false,
+                            modelId = resolvedId,
+                            delegate = effectiveDelegate,
+                            error = err.message ?: "Native LiteRT-LM binary execution failed.",
+                        )
+                    }
+                binOut to ""
             } else {
-                runEmbeddedLiteRtEngine(spec, liveCheck, prompt, system, effectiveDelegate, maxTokens, thinking)
+                val engineOut = engineBridgeProvider().generate(
+                    modelPath = liveCheck.filePath,
+                    prompt = prompt,
+                    system = system,
+                    delegate = effectiveDelegate,
+                    maxTokens = maxTokens,
+                    thinking = thinking,
+                ).getOrElse { err ->
+                    return LiteRtGenerationResult(
+                        ok = false,
+                        modelId = resolvedId,
+                        delegate = effectiveDelegate,
+                        error = "LiteRT-LM Engine error (${resolvedId}): ${err.message ?: err::class.simpleName}",
+                    )
+                }
+                engineOut.text to engineOut.thinking
             }
         }
 
@@ -821,7 +1089,7 @@ class LiteRtLmServingManager(
             promptTokens = promptTok,
             completionTokens = completionTok,
             latencyMs = elapsedMs,
-            artifactSha256 = liveCheck.sha256,
+            artifactSha256 = verified.sha256,
         )
     }
 
@@ -855,7 +1123,6 @@ class LiteRtLmServingManager(
             emit(LlmStreamEvent.ThinkingCompleted(result.thinking, signature = "litert-thinking"))
         }
 
-        // Stream in token-sized chunks for natural progressive rendering in the chat UI.
         val words = result.text.split(Regex("(?<=\\s)"))
         for (chunk in words) {
             if (chunk.isNotEmpty()) {
@@ -880,7 +1147,7 @@ class LiteRtLmServingManager(
         system: String?,
         delegate: LiteRtHardwareDelegate,
         maxTokens: Int,
-    ): Pair<String, String> = runCatching {
+    ): Result<String> = runCatching {
         val fullPrompt = if (!system.isNullOrBlank()) "$system\n\n$prompt" else prompt
         val proc = ProcessBuilder(
             binary.absolutePath,
@@ -890,55 +1157,20 @@ class LiteRtLmServingManager(
             "--prompt=$fullPrompt",
         ).redirectErrorStream(true).start()
         val output = proc.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }.trim()
-        proc.waitFor()
-        output to ""
-    }.getOrElse { e ->
-        "Native LiteRT-LM execution error: ${e.message}" to ""
-    }
-
-    private fun runEmbeddedLiteRtEngine(
-        spec: LiteRtModelCatalogSpec?,
-        artifact: VerifiedLiteRtArtifact,
-        prompt: String,
-        system: String?,
-        delegate: LiteRtHardwareDelegate,
-        maxTokens: Int,
-        thinkingRequested: Boolean,
-    ): Pair<String, String> {
-        val modelTitle = spec?.displayName ?: artifact.modelId
-        val cleanPrompt = prompt.trim()
-        val thinkingText = if (spec?.supportsThinking == true && thinkingRequested) {
-            "Analyzing prompt on-device with $modelTitle (${delegate.id} delegate, artifact ${artifact.sha256.take(8)}): \"${cleanPrompt.take(120)}\"."
-        } else {
-            ""
+        val exit = proc.waitFor()
+        if (exit != 0) {
+            throw IOException("Native LiteRT-LM exited with code $exit: $output")
         }
-
-        val responseText = buildString {
-            append("[LiteRT-LM On-Device · $modelTitle · ${delegate.id} · sha256:${artifact.sha256.take(8)}] ")
-            when {
-                cleanPrompt.contains("ping", ignoreCase = true) ||
-                    cleanPrompt.contains("status", ignoreCase = true) ||
-                    cleanPrompt.contains("health", ignoreCase = true) -> {
-                    append("On-device runtime is active and verified at ${artifact.filePath.fileName} (${artifact.sizeBytes} bytes). ")
-                    append("Hardware delegate ${delegate.displayName} is serving local requests.")
-                }
-                cleanPrompt.contains("kotlin", ignoreCase = true) ||
-                    cleanPrompt.contains("code", ignoreCase = true) ||
-                    cleanPrompt.contains("function", ignoreCase = true) -> {
-                    append("Here is the local response for your request: ")
-                    append("`fun localInferenceReady(): Boolean = true` — generated on-device by $modelTitle.")
-                }
-                else -> {
-                    append("Processed locally by $modelTitle on ${delegate.id}: ")
-                    append(cleanPrompt.take(maxTokens.coerceAtMost(400)))
-                }
-            }
-        }
-        return responseText to thinkingText
+        output
     }
 
     private fun estimateTokens(text: String): Int =
         (text.trim().length / 4).coerceAtLeast(1)
+
+    private fun sha256Hex(input: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(input.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 
     fun currentSnapshot(): LiteRtCornerSnapshot = _state.value
 
@@ -955,7 +1187,6 @@ class LiteRtLmServingManager(
         val aiCoreStatus = runCatching { aiCoreBridgeProvider().probeStatus() }
             .getOrDefault(LiteRtAiCoreStatus(available = false))
         val entries = LiteRtLmCatalog.MODELS.mapNotNull { spec ->
-            // Only show the Android System AI Core entry if AI Core is available on this device or already verified on disk.
             val verified = verifiedCache[spec.id]
             if (spec.isSystemAiCore && !aiCoreStatus.available && verified == null) {
                 return@mapNotNull null
@@ -1126,10 +1357,15 @@ object LiteRtLmServingRegistry {
     private val byPath = ConcurrentHashMap<Path, LiteRtLmServingManager>()
     @Volatile private var primary: LiteRtLmServingManager? = null
     @Volatile var aiCoreBridge: LiteRtAiCoreBridge = DefaultLiteRtAiCoreBridge
+    @Volatile var engineBridge: LiteRtEngineBridge = JvmLiteRtEngineBridge()
 
     fun registerAiCoreBridge(bridge: LiteRtAiCoreBridge) {
         aiCoreBridge = bridge
         byPath.values.forEach { it.provisionBuiltInModels() }
+    }
+
+    fun registerEngineBridge(bridge: LiteRtEngineBridge) {
+        engineBridge = bridge
     }
 
     fun getOrCreate(

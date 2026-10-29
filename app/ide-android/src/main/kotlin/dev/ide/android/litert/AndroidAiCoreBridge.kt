@@ -2,6 +2,7 @@ package dev.ide.android.litert
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import com.google.mlkit.genai.common.DownloadStatus
 import com.google.mlkit.genai.common.FeatureStatus
@@ -10,17 +11,31 @@ import com.google.mlkit.genai.prompt.Generation
 import com.google.mlkit.genai.prompt.GenerativeModel
 import com.google.mlkit.genai.prompt.SystemInstruction
 import com.google.mlkit.genai.prompt.TextPart
+import dev.ide.agent.impl.JvmLiteRtEngineBridge
 import dev.ide.agent.impl.LiteRtAiCoreBridge
 import dev.ide.agent.impl.LiteRtAiCoreStatus
+import dev.ide.agent.impl.LiteRtLmServingRegistry
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.util.zip.ZipFile
 
 /**
  * Android implementation of [LiteRtAiCoreBridge] that detects and binds to the built-in
  * Google AI Core (`com.google.android.aicore` / `on_device_intelligence` system service)
  * via ML Kit GenAI Prompt (`com.google.mlkit.genai.prompt.Generation`) on Pixel and modern
  * Android devices.
+ *
+ * Also installs the Android-configured [JvmLiteRtEngineBridge] with `context.cacheDir` and
+ * isolated NPU dispatch libraries (`libLiteRtDispatch_GoogleTensor.so` / `libLiteRtDispatch_MediaTek.so`).
+ *
+ * Never fabricates or mocks output: returns only real Gemini Nano output or the exact runtime exception.
  */
 class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
 
@@ -49,13 +64,14 @@ class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
             context.getSystemService("on_device_intelligence") != null
         }.getOrDefault(false)
 
+        var checkError: Throwable? = null
         val featureStatusCode = runCatching {
             runBlocking {
                 withTimeoutOrNull(2_000L) {
                     getOrCreateClient()?.checkStatus()
                 }
             }
-        }.getOrNull()
+        }.onFailure { checkError = it }.getOrNull()
 
         val featureStatusLabel = when (featureStatusCode) {
             FeatureStatus.AVAILABLE -> "AVAILABLE"
@@ -65,16 +81,19 @@ class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
             else -> null
         }
 
-        val available = pkgInfo != null ||
-            serviceResolvable ||
-            odiServicePresent ||
-            featureStatusCode == FeatureStatus.AVAILABLE ||
-            featureStatusCode == FeatureStatus.DOWNLOADABLE ||
-            featureStatusCode == FeatureStatus.DOWNLOADING
+        val aiCorePackagePresent = pkgInfo != null || serviceResolvable
+        val statusRejected = checkError?.message?.let { msg ->
+            msg.contains("-101") || msg.contains("not installed", ignoreCase = true)
+        } == true || featureStatusCode == FeatureStatus.UNAVAILABLE
 
-        val rawVersion = pkgInfo?.versionName.orEmpty().ifBlank {
-            if (odiServicePresent) "System OnDeviceIntelligence" else ""
-        }
+        val available = !statusRejected && (
+            aiCorePackagePresent ||
+                featureStatusCode == FeatureStatus.AVAILABLE ||
+                featureStatusCode == FeatureStatus.DOWNLOADABLE ||
+                featureStatusCode == FeatureStatus.DOWNLOADING
+            )
+
+        val rawVersion = pkgInfo?.versionName.orEmpty()
         val versionName = if (!featureStatusLabel.isNullOrBlank() && rawVersion.isNotBlank()) {
             "$rawVersion ($featureStatusLabel)"
         } else {
@@ -94,87 +113,43 @@ class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
         prompt: String,
         system: String?,
         maxTokens: Int,
-    ): Result<String> {
+    ): Result<String> = runCatching {
         val status = probeStatus()
         if (!status.available) {
-            return Result.failure(
-                IllegalStateException("Android AI Core ($AICORE_PACKAGE) is not installed on this device."),
-            )
+            throw IllegalStateException("Android AI Core ($AICORE_PACKAGE) is not installed on this device.")
         }
         val cleanPrompt = prompt.trim()
         val versionShort = status.versionName.substringBefore(".thirdparty").take(18).ifBlank { "system" }
 
-        // 1. Attempt live on-device Gemini Nano inference through ML Kit GenAI Prompt -> com.google.android.aicore
-        val mlkitResult = runCatching {
-            runBlocking {
-                withTimeoutOrNull(25_000L) {
-                    val client = getOrCreateClient()
-                        ?: error("ML Kit GenAI Generation.getClient() unavailable")
-                    val fStatus = runCatching { client.checkStatus() }.getOrDefault(FeatureStatus.UNAVAILABLE)
-                    if (fStatus == FeatureStatus.DOWNLOADABLE) {
-                        runCatching {
-                            client.download().collect { dl ->
-                                if (dl is DownloadStatus.DownloadFailed) {
-                                    throw dl.e
-                                }
-                            }
+        runBlocking {
+            withTimeout(25_000L) {
+                val client = getOrCreateClient()
+                    ?: throw IllegalStateException("ML Kit GenAI Generation.getClient() is unavailable.")
+                val fStatus = runCatching { client.checkStatus() }.getOrDefault(FeatureStatus.UNAVAILABLE)
+                if (fStatus == FeatureStatus.DOWNLOADABLE) {
+                    client.download().collect { dl ->
+                        if (dl is DownloadStatus.DownloadFailed) {
+                            throw dl.e
                         }
                     }
-                    runCatching { client.warmup() }
-                    val reqBuilder = if (!system.isNullOrBlank()) {
-                        GenerateContentRequest.Builder(SystemInstruction(system), TextPart(cleanPrompt))
-                    } else {
-                        GenerateContentRequest.Builder(TextPart(cleanPrompt))
-                    }
-                    reqBuilder.maxOutputTokens = maxTokens.coerceIn(16, 1024)
-                    val response = client.generateContent(reqBuilder.build())
-                    val text = response.candidates
-                        .mapNotNull { it.text?.trim() }
-                        .firstOrNull { it.isNotEmpty() }
-                    if (!text.isNullOrBlank()) {
-                        "[Android AI Core · Gemini Nano · ${status.packageName} v$versionShort] $text"
-                    } else {
-                        null
-                    }
                 }
-            }
-        }.onFailure { err ->
-            Log.w(TAG, "ML Kit GenAI AICore call returned fallback diagnostic: ${err.message}")
-        }.getOrNull()
-
-        if (!mlkitResult.isNullOrBlank()) {
-            return Result.success(mlkitResult)
-        }
-
-        // 2. If AICore service is installed on device (e.g. stub/downloading feature pack or background caller),
-        // return a deterministic diagnostic response via the bound AICore bridge so callers never crash.
-        val response = buildString {
-            append("[Android AI Core · Gemini Nano · ${status.packageName} v$versionShort] ")
-            when {
-                cleanPrompt.contains("ping", ignoreCase = true) ||
-                    cleanPrompt.contains("status", ignoreCase = true) ||
-                    cleanPrompt.contains("health", ignoreCase = true) -> {
-                    append("Built-in Android AI Core (Gemini Nano) is loaded and active on Tensor NPU ")
-                    if (status.systemServicePresent) {
-                        append("(on_device_intelligence system service active). ")
-                    } else {
-                        append("(AICore service bound). ")
-                    }
-                    append("0 B model download required.")
+                runCatching { client.warmup() }
+                val reqBuilder = if (!system.isNullOrBlank()) {
+                    GenerateContentRequest.Builder(SystemInstruction(system), TextPart(cleanPrompt))
+                } else {
+                    GenerateContentRequest.Builder(TextPart(cleanPrompt))
                 }
-                cleanPrompt.contains("kotlin", ignoreCase = true) ||
-                    cleanPrompt.contains("code", ignoreCase = true) ||
-                    cleanPrompt.contains("function", ignoreCase = true) -> {
-                    append("Here is the local response from Android AI Core: ")
-                    append("`fun localInferenceReady(): Boolean = true` — generated on-device by Gemini Nano.")
-                }
-                else -> {
-                    append("Processed on-device by Android AI Core (Gemini Nano): ")
-                    append(cleanPrompt.take(maxTokens.coerceAtMost(400)))
-                }
+                reqBuilder.maxOutputTokens = maxTokens.coerceIn(16, 1024)
+                val response = client.generateContent(reqBuilder.build())
+                val text = response.candidates
+                    .mapNotNull { it.text?.trim() }
+                    .firstOrNull { it.isNotEmpty() }
+                    ?: throw IllegalStateException("Android AI Core returned an empty candidate list.")
+                "[Android AI Core · Gemini Nano · ${status.packageName} v$versionShort] $text"
             }
         }
-        return Result.success(response)
+    }.onFailure { err ->
+        Log.w(TAG, "Android AI Core generation failed: ${err.message}", err)
     }
 
     companion object {
@@ -182,9 +157,72 @@ class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
         const val AICORE_PACKAGE = "com.google.android.aicore"
         const val AICORE_BIND_ACTION = "com.google.android.apps.aicore.service.BIND_SERVICE"
 
+        private val VENDOR_LIBS = mapOf(
+            "google-tensor" to listOf("libLiteRtDispatch_GoogleTensor.so", "libLiteRtCompilerPlugin_google_tensor.so"),
+            "mediatek" to listOf("libLiteRtDispatch_MediaTek.so", "libLiteRtCompilerPlugin_MediaTek.so"),
+        )
+
+        private fun <T> fromInstalledNativeLib(context: Context, name: String, consume: (InputStream) -> T): T? {
+            val extracted = File(context.applicationInfo.nativeLibraryDir, name)
+            if (extracted.isFile) return extracted.inputStream().use(consume)
+            val apks = listOf(context.applicationInfo.sourceDir) + context.applicationInfo.splitSourceDirs.orEmpty()
+            for (path in apks) {
+                runCatching {
+                    ZipFile(path).use { apk ->
+                        for (abi in Build.SUPPORTED_ABIS) {
+                            val entry = apk.getEntry("lib/$abi/$name") ?: continue
+                            return apk.getInputStream(entry).use(consume)
+                        }
+                    }
+                }
+            }
+            return null
+        }
+
+        @Synchronized
+        internal fun resolveNpuVendorDirectory(context: Context): String {
+            val socLower = listOf(Build.SOC_MODEL, Build.HARDWARE, Build.MODEL, Build.SOC_MANUFACTURER)
+                .joinToString(" ")
+                .lowercase()
+            val preferredVendor = if (socLower.contains("mt6") || socLower.contains("dimensity")) {
+                "mediatek"
+            } else {
+                "google-tensor"
+            }
+            val names = VENDOR_LIBS[preferredVendor].orEmpty()
+            val destination = File(context.codeCacheDir, "litert-npu/$preferredVendor").apply { mkdirs() }
+            var allStaged = true
+            for (name in names) {
+                val target = File(destination, name)
+                if (target.isFile && target.length() > 0L) continue
+                val bytes = fromInstalledNativeLib(context, name) { it.readBytes() }
+                if (bytes == null) {
+                    allStaged = false
+                    break
+                }
+                val temp = File.createTempFile(".npu-", ".partial", destination)
+                try {
+                    FileOutputStream(temp).use {
+                        it.write(bytes)
+                        it.fd.sync()
+                    }
+                    temp.setReadOnly()
+                    Files.move(temp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                } finally {
+                    temp.delete()
+                }
+            }
+            return if (allStaged) destination.absolutePath else context.applicationInfo.nativeLibraryDir
+        }
+
         fun install(context: Context) {
-            dev.ide.agent.impl.LiteRtLmServingRegistry.registerAiCoreBridge(
-                AndroidAiCoreBridge(context.applicationContext),
+            val appCtx = context.applicationContext
+            LiteRtLmServingRegistry.registerAiCoreBridge(AndroidAiCoreBridge(appCtx))
+            LiteRtLmServingRegistry.registerEngineBridge(
+                JvmLiteRtEngineBridge(
+                    cacheRootProvider = { appCtx.cacheDir },
+                    npuLibraryDirProvider = { resolveNpuVendorDirectory(appCtx) },
+                ),
             )
         }
     }

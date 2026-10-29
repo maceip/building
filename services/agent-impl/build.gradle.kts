@@ -12,6 +12,8 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)
     implementation(libs.kotlinx.serialization.json)
+    compileOnly("com.google.ai.edge.litertlm:litertlm-jvm:0.17.1")
 
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation("com.google.ai.edge.litertlm:litertlm-jvm:0.17.1")
 }
