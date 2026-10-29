@@ -286,6 +286,16 @@
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
             </intent-filter>
         </provider>
+
+        <!-- Self-Serve LiteRT-LM Corner IPC provider: lets guest Android apps built on the phone query
+             installed .litertlm models, invoke on-device inference via ContentResolver.call("generate", ...),
+             or open read-only ParcelFileDescriptors (mmap) to verified .litertlm model artifacts without
+             duplicating model weights into each guest APK. -->
+        <provider
+                android:name=".litert.LiteRtLmContentProvider"
+                android:authorities="${applicationId}.litertlm"
+                android:exported="true"
+                android:grantUriPermissions="true" />
     </application>
 
 </manifest>

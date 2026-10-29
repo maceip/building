@@ -50,5 +50,16 @@ object AgentUiPlugin : UiPlugin {
                 toolDescription = "On-device vs cloud, models, and what the agent may do"
             },
         )
+        scope.screen(
+            ScreenContribution(
+                id = SCREEN_LITERT_LM_CORNER,
+                title = "LiteRT-LM Corner",
+                content = { ctx -> LiteRtLmCornerScreen(ctx) },
+            ).apply {
+                settingsGroup = ScreenSettingsGroup.SYSTEM
+                toolIconId = "cpu"
+                toolDescription = "Self-serve on-device .litertlm model catalog, NPU/GPU delegates, loopback server & guest SDK"
+            },
+        )
     }
 }

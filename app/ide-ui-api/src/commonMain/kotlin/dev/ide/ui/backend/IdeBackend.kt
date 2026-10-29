@@ -899,6 +899,89 @@ data class UiAgentPermissionRequest(
 
 enum class UiAgentPermissionDecision { DENY, ALLOW_ONCE, ALLOW_SESSION }
 
+/** Hardware execution delegate for on-device LiteRT-LM inference (`CPU`, `GPU`, `NPU`). */
+enum class UiLiteRtDelegate(val id: String, val label: String) {
+    CPU("CPU", "CPU (XNNPACK)"),
+    GPU("GPU", "GPU (OpenCL/Vulkan)"),
+    NPU("NPU", "NPU (Tensor/QNN)"),
+}
+
+/** On-device LiteRT-LM model lifecycle state. */
+enum class UiLiteRtModelStatus {
+    NOT_INSTALLED,
+    DOWNLOADING,
+    INSTALLED,
+    ACTIVE,
+    ERROR,
+}
+
+/** Guest-app SDK target language for local LiteRT-LM inference building blocks. */
+enum class UiLiteRtGuestLanguage(val id: String, val label: String, val relativeFilePath: String) {
+    KOTLIN_ANDROID("kotlin", "Kotlin / Android", "src/main/kotlin/litert/LiteRtLocalClient.kt"),
+    SWIFT("swift", "Swift / iOS", "Sources/LiteRtLocalClient.swift"),
+    NODE_JS("node", "Node.js", "src/litertClient.mjs"),
+    PYTHON("python", "Python", "litert_client.py"),
+}
+
+/** Hardware capability and storage state for the Self-Serve LiteRT-LM Corner. */
+data class UiLiteRtHardwareInfo(
+    val socName: String = "Local Host Runtime",
+    val availableDelegates: List<UiLiteRtDelegate> = listOf(UiLiteRtDelegate.CPU),
+    val recommendedDelegate: UiLiteRtDelegate = UiLiteRtDelegate.CPU,
+    val selectedDelegate: UiLiteRtDelegate = UiLiteRtDelegate.CPU,
+    val freeStorageBytes: Long = 0L,
+    val usedModelStorageBytes: Long = 0L,
+    val modelsDirectoryPath: String = "",
+)
+
+/** One model entry in the Self-Serve LiteRT-LM Catalog. */
+data class UiLiteRtModelEntry(
+    val id: String,
+    val displayName: String,
+    val family: String,
+    val parameterCount: String,
+    val quantization: String,
+    val description: String,
+    val estimatedSizeBytes: Long,
+    val downloadedBytes: Long = 0L,
+    val sizeOnDiskBytes: Long = 0L,
+    val contextLength: Int = 32_768,
+    val supportedDelegates: List<UiLiteRtDelegate> = listOf(UiLiteRtDelegate.CPU),
+    val supportsToolCalling: Boolean = false,
+    val supportsThinking: Boolean = false,
+    val status: UiLiteRtModelStatus = UiLiteRtModelStatus.NOT_INSTALLED,
+    val localFilePath: String = "",
+    val sha256: String = "",
+    val errorMessage: String = "",
+)
+
+/** Status and live metrics for the local loopback + Android IPC LiteRT-LM inference server. */
+data class UiLiteRtServerStatus(
+    val enabled: Boolean = false,
+    val running: Boolean = false,
+    val port: Int = 11435,
+    val openAiEndpoint: String = "http://127.0.0.1:11435/v1/chat/completions",
+    val nativeEndpoint: String = "http://127.0.0.1:11435/v1/litert/generate",
+    val ipcUri: String = "content://dev.ide.android.litertlm",
+    val requestsServed: Long = 0L,
+    val tokensGenerated: Long = 0L,
+    val lastLatencyMs: Long = 0L,
+)
+
+/** Complete UI state for the Self-Serve LiteRT-LM Corner. */
+data class UiLiteRtCornerState(
+    val hardware: UiLiteRtHardwareInfo = UiLiteRtHardwareInfo(),
+    val models: List<UiLiteRtModelEntry> = emptyList(),
+    val activeModelId: String = "",
+    val server: UiLiteRtServerStatus = UiLiteRtServerStatus(),
+    val selectedGuestLanguage: UiLiteRtGuestLanguage = UiLiteRtGuestLanguage.KOTLIN_ANDROID,
+    val guestSnippet: String = "",
+    val lastSmokeTestPrompt: String = "",
+    val lastSmokeTestResponse: String = "",
+    val lastSmokeTestBusy: Boolean = false,
+    val statusBanner: String = "",
+)
+
 /**
  * An unexpected error surfaced as a non-fatal dialog (IntelliJ "Internal Error" style). [title] is a short
  * heading (the exception type), [message] a one-line summary, [detail] the full stack trace text for the

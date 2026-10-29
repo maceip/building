@@ -19,6 +19,11 @@ import dev.ide.agent.WriteRequest
 import dev.ide.agent.impl.AgentLoop
 import dev.ide.agent.impl.AgentProviders
 import dev.ide.agent.impl.CheckpointWorkspace
+import dev.ide.agent.impl.LiteRtGuestSdkSnippets
+import dev.ide.agent.impl.LiteRtLmCatalog
+import dev.ide.agent.impl.LiteRtLmProvider
+import dev.ide.agent.impl.LiteRtLmServingManager
+import dev.ide.agent.impl.LiteRtLmServingRegistry
 import dev.ide.agent.impl.LlmErrorKind
 import dev.ide.agent.impl.RequestPacer
 import dev.ide.agent.impl.HistoryCompactor
@@ -54,6 +59,9 @@ import dev.ide.ui.backend.UiAgentProvider
 import dev.ide.ui.backend.UiAgentRole
 import dev.ide.ui.backend.UiAgentToolCall
 import dev.ide.ui.backend.UiAgentToolStatus
+import dev.ide.ui.backend.UiLiteRtCornerState
+import dev.ide.ui.backend.UiLiteRtDelegate
+import dev.ide.ui.backend.UiLiteRtGuestLanguage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -68,6 +76,7 @@ import kotlinx.coroutines.launch
 import java.lang.ref.WeakReference
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -84,8 +93,24 @@ import kotlin.io.path.readText
 internal class AgentBackend(private val ctx: BackendContext) : AgentService {
 
     private val transport = OkHttpLlmTransport()
-    private val registry = AgentProviders.registry(transport)
     private val workspace = IdeAgentWorkspace(ctx)
+
+    internal val liteRtManager: LiteRtLmServingManager = LiteRtLmServingRegistry.getOrCreate(
+        storageRoot = resolveLiteRtStorageRoot(),
+        preferenceReader = { key -> pref(key) },
+        preferenceWriter = { key, value -> ctx.manager?.setPreference("settings.$AI_PAGE.$key", value) },
+    )
+
+    private val registry = AgentProviders.registry(
+        transport = transport,
+        liteRtManagerProvider = { liteRtManager },
+    )
+
+    private fun resolveLiteRtStorageRoot(): Path {
+        ctx.manager?.storageRoot?.let { return it.resolve("litert-lm") }
+        ctx.servicesOrNull?.workspaceRoot?.let { return it.resolve(".codeassist").resolve("litert-lm") }
+        return Paths.get(System.getProperty("java.io.tmpdir"), "codeassist-litert-lm")
+    }
 
     /** The agent's own writes go through this, so each turn's changes can be shown as diffs and reverted. */
     private val checkpoints = CheckpointWorkspace(workspace)
@@ -170,12 +195,17 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         }
     }
 
+    private val liteRtCornerTool = createLiteRtCornerTool(
+        managerProvider = { liteRtManager },
+        scaffoldClientIntoWorkspace = { lang -> scaffoldGuestClientInternal(lang) },
+    )
+
     private val spillStore = dev.ide.agent.impl.ToolResultSpillStore(checkpoints)
     private val usageLedger = dev.ide.agent.impl.UsageLedger()
 
     private val tools = dev.ide.agent.impl.createSelfExtendingToolRegistry(
         workspace = checkpoints,
-        extraTools = listOf(ftpControlTool, cloneRepositoryTool, runProjectTool),
+        extraTools = listOf(ftpControlTool, cloneRepositoryTool, runProjectTool, liteRtCornerTool),
         gateProvider = { gate },
         spillStore = spillStore,
         usageLedger = usageLedger,
@@ -185,11 +215,14 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
      *  and recording them into one would let that turn's Undo revert someone else's work. */
     private val mcpTools = dev.ide.agent.impl.createSelfExtendingToolRegistry(
         workspace = workspace,
-        extraTools = listOf(ftpControlTool, cloneRepositoryTool, runProjectTool),
+        extraTools = listOf(ftpControlTool, cloneRepositoryTool, runProjectTool, liteRtCornerTool),
         gateProvider = { AllowAllGate },
     )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val log = Log.logger("ide.agent")
+
+    private val _liteRtCornerState = MutableStateFlow(liteRtManager.currentSnapshot().toUi())
+    override val liteRtCornerState: StateFlow<UiLiteRtCornerState> = _liteRtCornerState.asStateFlow()
 
     /** The in-app MCP-over-HTTP server, started when the "MCP server" AI setting is on. The server is
      *  opt-in: enabling it is itself the permission to edit the open project, so its tools run under
@@ -212,6 +245,11 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         }
         if (prefBool(FTP_PREF, default = false)) {
             ftpServer = startFtpServer()
+        }
+        scope.launch {
+            liteRtManager.state.collect { snap ->
+                _liteRtCornerState.value = snap.toUi()
+            }
         }
     }
 
@@ -327,10 +365,16 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         /** An optional additional CA certificate (PEM) to trust for a custom endpoint behind a private/regional
          *  CA (e.g. GigaChat's Russian Trusted Root CA). Only the custom [GATEWAY] endpoint uses it. */
         val caCertificatePem: String? = null,
+        val onDeviceModelInstalled: Boolean = false,
     ) {
-        /** A custom gateway is often a local server (Ollama, LM Studio) that takes no key; its URL is what it needs. */
+        /** A custom gateway is often a local server (Ollama, LM Studio) that takes no key; its URL is what it needs.
+         *  For on-device LiteRT-LM, readiness requires a verified `.litertlm` model installed on disk. */
         val ready: Boolean
-            get() = if (selectedId == GATEWAY) !baseUrl.isNullOrBlank() else !apiKey.isNullOrBlank()
+            get() = when (selectedId) {
+                GATEWAY -> !baseUrl.isNullOrBlank()
+                LiteRtLmProvider.ID -> onDeviceModelInstalled
+                else -> !apiKey.isNullOrBlank()
+            }
     }
 
     private fun resolveConfig(): ResolvedConfig {
@@ -343,6 +387,21 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
                 model = pref("gatewayModel").orEmpty(),
                 baseUrl = pref("gatewayBaseUrl"),
                 caCertificatePem = pref("gatewayCaCert"),
+            )
+        }
+        if (selected == LiteRtLmProvider.ID) {
+            val activeArtifact = liteRtManager.activeInstalledModel()
+            val chosen = chosenModel(selected)?.takeIf { liteRtManager.verifiedArtifact(it) != null }
+                ?: activeArtifact?.modelId
+                ?: LiteRtLmCatalog.DEFAULT_MODEL_ID
+            val snap = liteRtManager.currentSnapshot()
+            return ResolvedConfig(
+                selectedId = LiteRtLmProvider.ID,
+                clientProviderId = LiteRtLmProvider.ID,
+                apiKey = if (activeArtifact != null) "on-device:${activeArtifact.modelId}" else "",
+                model = chosen,
+                baseUrl = snap.openAiEndpoint,
+                onDeviceModelInstalled = activeArtifact != null,
             )
         }
         val provider = registry.provider(selected)
@@ -375,6 +434,7 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         "mimo" -> model.startsWith("mimo-")
         "openai" -> !model.startsWith("claude") && !model.startsWith("gemini") && !model.startsWith("muse-") && !model.startsWith("mimo-") && '/' !in model
         "openrouter" -> '/' in model
+        LiteRtLmProvider.ID -> LiteRtLmCatalog.find(model) != null
         else -> true
     }
 
@@ -413,6 +473,7 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         "mimo" -> "mimoKey"
         "gemini" -> "geminiKey"
         "openrouter" -> "openrouterKey"
+        LiteRtLmProvider.ID -> "litertKey"
         GATEWAY -> "gatewayKey"
         else -> "anthropicKey"
     }
@@ -433,12 +494,22 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
     override fun config(): UiAgentConfig {
         val cfg = resolveConfig()
         val builtins = registry.providers.map { p ->
+            val isLiteRt = p.id == LiteRtLmProvider.ID
+            val activeLiteRt = if (isLiteRt) liteRtManager.activeInstalledModel() else null
             UiAgentProvider(
                 p.id, p.displayName,
                 p.models.map { UiAgentModel(it.id, it.displayName) },
-                p.defaultModel,
-                apiKey = pref(keyField(p.id)).orEmpty(),
-                baseUrl = pref(baseUrlField(p.id)).orEmpty(),
+                activeLiteRt?.modelId ?: p.defaultModel,
+                apiKey = if (isLiteRt) {
+                    if (activeLiteRt != null) "on-device:${activeLiteRt.modelId}" else ""
+                } else {
+                    pref(keyField(p.id)).orEmpty()
+                },
+                baseUrl = if (isLiteRt) {
+                    liteRtManager.currentSnapshot().openAiEndpoint
+                } else {
+                    pref(baseUrlField(p.id)).orEmpty()
+                },
             )
         }
         // A synthetic "Custom gateway" entry (OpenAI-compatible endpoint); its client is the OpenAI provider.
@@ -478,6 +549,10 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         val selected = pref("provider") ?: registry.providers.firstOrNull()?.id ?: "anthropic"
         val field = if (selected == GATEWAY) "gatewayModel" else "model.$selected"
         ctx.manager?.setPreference("settings.$AI_PAGE.$field", model)
+        if (selected == LiteRtLmProvider.ID && liteRtManager.verifiedArtifact(model) != null) {
+            liteRtManager.activateModel(model)
+            syncLiteRtCornerState()
+        }
         resetLoop()
     }
 
@@ -501,6 +576,110 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         ctx.manager?.setPreference("settings.$AI_PAGE.gatewayModel", model)
         ctx.manager?.setPreference("settings.$AI_PAGE.gatewayCaCert", caCert)
         resetLoop()
+    }
+
+    private fun syncLiteRtCornerState(): UiLiteRtCornerState {
+        val ui = liteRtManager.currentSnapshot().toUi()
+        _liteRtCornerState.value = ui
+        return ui
+    }
+
+    override fun liteRtCorner(): UiLiteRtCornerState = syncLiteRtCornerState()
+
+    override fun selectLiteRtDelegate(delegate: UiLiteRtDelegate) {
+        liteRtManager.selectDelegate(delegate.toDomain())
+        syncLiteRtCornerState()
+    }
+
+    override fun downloadLiteRtModel(modelId: String) {
+        liteRtManager.downloadModel(modelId)
+        syncLiteRtCornerState()
+    }
+
+    override fun cancelLiteRtDownload(modelId: String) {
+        liteRtManager.cancelDownload(modelId)
+        syncLiteRtCornerState()
+    }
+
+    override fun deleteLiteRtModel(modelId: String) {
+        liteRtManager.deleteModel(modelId)
+        syncLiteRtCornerState()
+        resetLoop()
+    }
+
+    override fun activateLiteRtModel(modelId: String) {
+        if (liteRtManager.activateModel(modelId)) {
+            ctx.manager?.setPreference("settings.$AI_PAGE.model.${LiteRtLmProvider.ID}", modelId)
+            resetLoop()
+        }
+        syncLiteRtCornerState()
+    }
+
+    override fun useLiteRtInIdeAgent(modelId: String) {
+        if (liteRtManager.activateModel(modelId)) {
+            ctx.manager?.setPreference("settings.$AI_PAGE.provider", LiteRtLmProvider.ID)
+            ctx.manager?.setPreference("settings.$AI_PAGE.model.${LiteRtLmProvider.ID}", modelId)
+            liteRtManager.setStatusBanner("Active IDE Agent switched to LiteRT-LM ($modelId).")
+            resetLoop()
+        }
+        syncLiteRtCornerState()
+    }
+
+    override fun setLiteRtServerEnabled(enabled: Boolean) {
+        liteRtManager.setServerEnabled(enabled)
+        syncLiteRtCornerState()
+    }
+
+    override fun setLiteRtServerPort(port: Int) {
+        liteRtManager.setServerPort(port)
+        syncLiteRtCornerState()
+    }
+
+    override fun selectLiteRtGuestLanguage(language: UiLiteRtGuestLanguage) {
+        liteRtManager.selectGuestLanguage(language.toDomain())
+        syncLiteRtCornerState()
+    }
+
+    override fun runLiteRtSmokeTest(prompt: String) {
+        liteRtManager.runSmokeTestNow(prompt)
+        syncLiteRtCornerState()
+    }
+
+    override fun scaffoldLiteRtGuestClient(language: UiLiteRtGuestLanguage): String {
+        val written = scaffoldGuestClientNow(language.toDomain())
+        syncLiteRtCornerState()
+        return written
+    }
+
+    private fun scaffoldGuestClientNow(language: dev.ide.agent.impl.LiteRtGuestLanguage): String {
+        val snap = liteRtManager.currentSnapshot()
+        val code = LiteRtGuestSdkSnippets.generateSnippet(
+            language = language,
+            port = snap.serverPort,
+            modelId = snap.activeModelId.ifBlank { LiteRtLmCatalog.DEFAULT_MODEL_ID },
+            delegate = snap.selectedDelegate,
+            ipcAuthority = snap.ipcAuthority,
+        )
+        val rootDir = ctx.servicesOrNull?.workspaceRoot
+            ?: resolveLiteRtStorageRoot().resolve("guest-sdk")
+        val targetFile = rootDir.resolve(language.relativeFilePath).normalize()
+        runCatching {
+            Files.createDirectories(targetFile.parent)
+            Files.writeString(targetFile, code)
+        }
+        val displayPath = if (ctx.servicesOrNull?.workspaceRoot != null) {
+            language.relativeFilePath
+        } else {
+            targetFile.toAbsolutePath().toString()
+        }
+        liteRtManager.setStatusBanner("Added ${language.displayName} local inference client at $displayPath")
+        return targetFile.toAbsolutePath().toString()
+    }
+
+    private suspend fun scaffoldGuestClientInternal(language: dev.ide.agent.impl.LiteRtGuestLanguage): String {
+        val path = scaffoldGuestClientNow(language)
+        syncLiteRtCornerState()
+        return path
     }
 
     override fun refreshModels() {
