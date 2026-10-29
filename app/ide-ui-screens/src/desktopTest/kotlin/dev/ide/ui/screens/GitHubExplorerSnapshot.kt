@@ -233,6 +233,18 @@ class GitHubExplorerSnapshot {
         onNodeWithTag("hero_build_preview_chethan616-clearpdf").performClick()
         waitForIdle()
         assertTrue(backend.localBuildPreviewCount >= 1, "Clicking Build Preview must invoke resolveOrGenerateAppImage(forceLocalBuild = true)")
+
+        // Verify integrated README.md card and modal dialog
+        onNodeWithTag("readme_card_toggle_expand").performClick()
+        waitForIdle()
+        onNodeWithTag("hero_readme_chethan616-clearpdf").performClick()
+        waitForIdle()
+        onNodeWithTag("readme_dialog_close").performClick()
+        waitForIdle()
+        onNodeWithTag("explorer_app_readme_button").performClick()
+        waitForIdle()
+        onNodeWithTag("readme_dialog_close").performClick()
+        waitForIdle()
     }
 
     @OptIn(ExperimentalTestApi::class)

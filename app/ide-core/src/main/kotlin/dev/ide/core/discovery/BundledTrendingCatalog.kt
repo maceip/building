@@ -25,6 +25,7 @@ import java.nio.file.Path
 object BundledTrendingCatalog {
 
     const val CATALOG_RESOURCE_PATH = "discovery/bundled-trending-catalog.json"
+    const val APP_README_RESOURCE_PATH = "discovery/README.md"
 
     val SUPPORTED_LANGUAGE_KEYS = listOf(
         "all",
@@ -298,5 +299,45 @@ object BundledTrendingCatalog {
         } catch (_: Exception) {
             null
         }
+    }
+
+    /**
+     * Loads the bundled `README.md` (`discovery/README.md`) packaged inside the app resources.
+     */
+    fun loadBundledAppReadme(): String? {
+        val stream = BundledTrendingCatalog::class.java.classLoader
+            ?.getResourceAsStream(APP_README_RESOURCE_PATH)
+            ?: Thread.currentThread().contextClassLoader?.getResourceAsStream(APP_README_RESOURCE_PATH)
+        if (stream != null) {
+            val text = runCatching { stream.bufferedReader(Charsets.UTF_8).use { it.readText() } }.getOrNull()
+            if (!text.isNullOrBlank()) return sanitizeMarkdownForRenderer(text)
+        }
+        val rootReadme = Path.of("README.md")
+        if (Files.isRegularFile(rootReadme)) {
+            val text = runCatching { Files.readString(rootReadme) }.getOrNull()
+            if (!text.isNullOrBlank()) return sanitizeMarkdownForRenderer(text)
+        }
+        return null
+    }
+
+    /**
+     * Strips inline HTML tags (`<div>`, `<img>`, `<table>`, `<!-- -->`) from GitHub-flavored `README.md`
+     * files while preserving headings, lists, links, emphasis, and fenced code blocks for the native
+     * Compose `Markdown` (`ListingProse`) renderer.
+     */
+    fun sanitizeMarkdownForRenderer(rawMarkdown: String): String {
+        if (rawMarkdown.isBlank()) return ""
+        return rawMarkdown
+            .replace(Regex("""<!--[\s\S]*?-->"""), "")
+            .replace(Regex("""\[!\[([^\]]*)\]\([^)]+\)\]\(([^)]+)\)""")) { m ->
+                val alt = m.groupValues[1].trim()
+                val link = m.groupValues[2].trim()
+                if (alt.isNotEmpty()) "[$alt]($link)" else ""
+            }
+            .replace(Regex("""!\[([^\]]*)\]\([^)]+\)"""), "")
+            .replace(Regex("""<img\s+[^>]*?/?>""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""</?(?:div|p|br|sub|sup|kbd|details|summary|picture|source|table|thead|tbody|tr|td|th|hr|span|center|a|h[1-6])[^>]*>""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\n{3,}"""), "\n\n")
+            .trim()
     }
 }

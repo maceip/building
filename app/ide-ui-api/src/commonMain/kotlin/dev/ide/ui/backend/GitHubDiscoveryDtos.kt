@@ -185,6 +185,22 @@ interface GitHubDiscoveryService {
 
     fun supportedLanguages(): List<UiSupportedPhoneLanguage> = SUPPORTED_PHONE_LANGUAGES
 
+    suspend fun fetchReadmeMarkdown(repo: UiDiscoveredRepo): String = buildString {
+        appendLine("# ${repo.owner}/${repo.name}")
+        appendLine()
+        appendLine(repo.description.ifBlank { "Trending ${repo.language.ifBlank { "open-source" }} repository on GitHub." })
+        appendLine()
+        appendLine("- **Language:** ${repo.language.ifBlank { "Multi-language" }}")
+        appendLine("- **Stars:** ${repo.stars} ★ (${if (repo.starsInPeriod > 0) "+${repo.starsInPeriod} ${repo.trendingPeriod.velocitySuffix}" else repo.trendingPeriod.label})")
+        appendLine("- **Forks:** ${repo.forks}")
+        appendLine("- **Repository:** ${repo.htmlUrl}")
+        if (!repo.homepageUrl.isNullOrBlank()) {
+            appendLine("- **Website:** ${repo.homepageUrl}")
+        }
+    }
+
+    suspend fun getBundledAppReadmeMarkdown(): String = "# CodeAssist\n\nOn-device IDE and Smart GitHub Trending & Discovery Service."
+
     suspend fun search(query: String): List<UiDiscoveredRepo>
     suspend fun downloadScreenshot(url: String): String?
     suspend fun loadScreenshotBytes(url: String): ByteArray? = null

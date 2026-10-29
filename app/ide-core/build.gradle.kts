@@ -114,6 +114,7 @@ dependencies { swingApiStubs(project(mapOf("path" to ":awt-toolkit", "configurat
 
 tasks.named<ProcessResources>("processResources") {
     from(swingApiStubs) { into("swing") }
+    from(rootProject.file("README.md")) { into("discovery") }
 }
 
 tasks.register<JavaExec>("generateBundledTrendingCatalog") {

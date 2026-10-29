@@ -622,6 +622,92 @@ class GitHubDiscoveryClient(
     }
 
     /**
+     * Fetches the repository's `README.md` Markdown from GitHub (or local disk cache),
+     * sanitizing raw HTML tags while preserving Markdown structure for native in-app rendering.
+     */
+    fun fetchRepositoryReadmeMarkdown(
+        owner: String,
+        repoName: String,
+        defaultBranch: String = "main",
+        description: String = "",
+        language: String = "",
+        stars: Int = 0,
+        starsInPeriod: Int = 0,
+        periodLabel: String = "Daily",
+        htmlUrl: String = "https://github.com/$owner/$repoName",
+        homepageUrl: String? = null
+    ): String {
+        val safeOwner = owner.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val safeRepo = repoName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val readmeCacheDir = cacheDir?.resolve("discovery/readmes")
+            ?: Path.of(System.getProperty("java.io.tmpdir"), "building_discovery_readmes")
+        val cachedFile = readmeCacheDir.resolve("${safeOwner}__${safeRepo}.md")
+
+        if (Files.isRegularFile(cachedFile)) {
+            val cached = runCatching { Files.readString(cachedFile) }.getOrNull()
+            if (!cached.isNullOrBlank()) return BundledTrendingCatalog.sanitizeMarkdownForRenderer(cached)
+        }
+
+        val branches = listOf(defaultBranch.ifBlank { "main" }, "main", "master").distinct()
+        val fileNames = listOf("README.md", "readme.md", "Readme.md")
+        var fetchedRaw: String? = null
+
+        if (apiBase == DEFAULT_API_BASE) {
+            outer@ for (br in branches) {
+                for (fn in fileNames) {
+                    val rawUrl = "https://raw.githubusercontent.com/$owner/$repoName/$br/$fn"
+                    val text = executeWebGet(rawUrl)
+                    if (!text.isNullOrBlank() && !text.startsWith("404:")) {
+                        fetchedRaw = text
+                        break@outer
+                    }
+                }
+            }
+        }
+
+        val sanitized = if (!fetchedRaw.isNullOrBlank()) {
+            BundledTrendingCatalog.sanitizeMarkdownForRenderer(fetchedRaw)
+        } else {
+            null
+        }
+
+        val finalMarkdown = if (!sanitized.isNullOrBlank()) {
+            sanitized
+        } else {
+            buildString {
+                appendLine("# $owner/$repoName")
+                appendLine()
+                appendLine(description.ifBlank { "Trending ${language.ifBlank { "open-source" }} project on GitHub." })
+                appendLine()
+                appendLine("## Overview")
+                appendLine("- **Language:** ${language.ifBlank { "Multi-language" }}")
+                if (stars > 0) {
+                    val velocity = if (starsInPeriod > 0) " (+$starsInPeriod $periodLabel)" else ""
+                    appendLine("- **Stars:** $stars ★$velocity")
+                }
+                appendLine("- **GitHub Repository:** $htmlUrl")
+                if (!homepageUrl.isNullOrBlank()) {
+                    appendLine("- **Project Webpage:** $homepageUrl")
+                }
+            }.trim()
+        }
+
+        runCatching {
+            Files.createDirectories(readmeCacheDir)
+            Files.writeString(cachedFile, finalMarkdown)
+        }
+        return finalMarkdown
+    }
+
+    /**
+     * Loads the bundled application `README.md` (`discovery/README.md`).
+     */
+    fun loadBundledAppReadmeMarkdown(): String {
+        return BundledTrendingCatalog.loadBundledAppReadme()
+            ?: "# CodeAssist\n\nOn-device IDE with Smart GitHub Trending & 2-Hop Social Graph Explorer."
+    }
+
+    /**
      * Fetches the logins of developers that [login] follows (via REST API first, then GitHub HTML `?tab=following`).
      */
     fun fetchUserFollowingLogins(login: String, maxUsers: Int = 5): List<String> {

@@ -480,6 +480,17 @@ class LiveGitHubTrendingDeviceTest {
                 "=== [TEST 07 PASS] DiscoveryBackend resolved image for ${topRepo.owner}/${topRepo.name}: " +
                     "tier=${resolvedShot.second}, path=${resolvedShot.first}, bitmap=${decoded!!.width}x${decoded.height} ==="
             )
+
+            // 6. Integrated README.md verification (both bundled App README.md and live repo README.md)
+            val appReadme = backend.getBundledAppReadmeMarkdown()
+            assertTrue("Expected bundled App README.md to contain Smart GitHub Trending section", appReadme.contains("Smart GitHub Trending"))
+            val repoReadme = backend.fetchReadmeMarkdown(topRepo)
+            assertTrue("Expected live repo README.md to be non-blank", repoReadme.isNotBlank())
+            Log.i(
+                TAG,
+                "=== [TEST 07B PASS] Integrated README.md verified: appReadme=${appReadme.length} chars, " +
+                    "repoReadme(${topRepo.owner}/${topRepo.name})=${repoReadme.length} chars ==="
+            )
         }
     }
 

@@ -173,6 +173,25 @@ class DiscoveryBackend(
         client.loadScreenshotBytes(url)
     }
 
+    override suspend fun fetchReadmeMarkdown(repo: UiDiscoveredRepo): String = withContext(Dispatchers.IO) {
+        client.fetchRepositoryReadmeMarkdown(
+            owner = repo.owner,
+            repoName = repo.name,
+            defaultBranch = repo.defaultBranch,
+            description = repo.description,
+            language = repo.language,
+            stars = repo.stars,
+            starsInPeriod = repo.starsInPeriod,
+            periodLabel = repo.trendingPeriod.velocitySuffix,
+            htmlUrl = repo.htmlUrl,
+            homepageUrl = repo.homepageUrl
+        )
+    }
+
+    override suspend fun getBundledAppReadmeMarkdown(): String = withContext(Dispatchers.IO) {
+        client.loadBundledAppReadmeMarkdown()
+    }
+
     override suspend fun submitToken(token: String): Boolean = withContext(Dispatchers.IO) {
         val trimmed = token.trim()
         if (trimmed.isBlank()) {

@@ -25,8 +25,10 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -556,6 +558,9 @@ fun GitHubExplorerFeed(
 
     val jitScreenshots = remember { mutableStateMapOf<String, Pair<String, UiScreenshotSourceTier>>() }
     val buildingPreviewSlugs = remember { mutableStateMapOf<String, Boolean>() }
+    var readmeDialogTitle by remember { mutableStateOf<String?>(null) }
+    var readmeDialogMarkdown by remember { mutableStateOf<String?>(null) }
+    var loadingReadmeDialog by remember { mutableStateOf(false) }
 
     val authState by backend.discovery.authState.collectAsState()
     val heroListState = rememberLazyListState()
@@ -715,7 +720,10 @@ fun GitHubExplorerFeed(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Symbol(CaSymbols.travelExplore, contentDescription = null, size = 18.dp, tint = MaterialTheme.colorScheme.primary)
                     Text(
@@ -727,11 +735,54 @@ fun GitHubExplorerFeed(
                 Text(
                     "Daily/Weekly/Monthly trending, JIT local GUI previews & 2-hop author graphs",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                // Bundled App README.md Button
+                Surface(
+                    onClick = {
+                        haptics.tap()
+                        readmeDialogTitle = "README.md · CodeAssist"
+                        loadingReadmeDialog = true
+                        scope.launch {
+                            readmeDialogMarkdown = runCatching {
+                                backend.discovery.getBundledAppReadmeMarkdown()
+                            }.getOrDefault("# CodeAssist\n\nOn-device IDE & Smart GitHub Trending Service.")
+                            loadingReadmeDialog = false
+                        }
+                    },
+                    modifier = Modifier.testTag("explorer_app_readme_button"),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Symbol(
+                            CaSymbols.codeBlocks,
+                            contentDescription = null,
+                            size = 13.dp,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            "README.md",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp
+                            ),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
                 // Auth & Rate Limit Chip
                 val authInteraction = remember { MutableInteractionSource() }
                 Surface(
@@ -882,6 +933,19 @@ fun GitHubExplorerFeed(
             )
         }
 
+        if (readmeDialogTitle != null) {
+            ReadmeMarkdownDialog(
+                title = readmeDialogTitle ?: "README.md",
+                markdown = readmeDialogMarkdown.orEmpty(),
+                loading = loadingReadmeDialog,
+                onDismiss = {
+                    readmeDialogTitle = null
+                    readmeDialogMarkdown = null
+                    loadingReadmeDialog = false
+                }
+            )
+        }
+
         if (loading && currentFeed.trendingHero.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxWidth().height(160.dp),
@@ -963,11 +1027,36 @@ fun GitHubExplorerFeed(
                                     }
                                 }
                             },
+                            onViewReadme = {
+                                haptics.tap()
+                                readmeDialogTitle = "README.md · ${repo.owner}/${repo.name}"
+                                loadingReadmeDialog = true
+                                scope.launch {
+                                    readmeDialogMarkdown = runCatching {
+                                        backend.discovery.fetchReadmeMarkdown(repo)
+                                    }.getOrDefault("# ${repo.owner}/${repo.name}\n\n${repo.description}")
+                                    loadingReadmeDialog = false
+                                }
+                            },
                             onClone = { onCloneAndOpen(repo.htmlUrl, repo.name) }
                         )
                     }
                 }
             }
+        }
+
+        // 1B. Integrated README.md Preview Card for Active Repository
+        if (activeHeroRepo != null) {
+            ActiveRepoReadmeCard(
+                repo = activeHeroRepo,
+                backend = backend,
+                onOpenFullReadme = { loadedMd ->
+                    haptics.tap()
+                    readmeDialogTitle = "README.md · ${activeHeroRepo.owner}/${activeHeroRepo.name}"
+                    readmeDialogMarkdown = loadedMd
+                    loadingReadmeDialog = false
+                }
+            )
         }
 
         // 2. "Shaped Like This, But..." (North Star Architectural Benchmarks)
@@ -1086,6 +1175,7 @@ private fun HeroVisualRepoCard(
     onSelect: () -> Unit,
     onBuildPreview: () -> Unit,
     onAutoResolveNeeded: () -> Unit,
+    onViewReadme: () -> Unit,
     onClone: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1335,30 +1425,64 @@ private fun HeroVisualRepoCard(
 
                 Spacer(Modifier.height(4.dp))
 
-                // Clone & Open CTA Button
+                // Clone & Open + README.md Action Row
                 val ctaInteraction = remember { MutableInteractionSource() }
                 val haptics = rememberIdeHaptics()
-                Surface(
-                    onClick = { haptics.heavyTap(); onClone() },
-                    interactionSource = ctaInteraction,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .pressScale(ctaInteraction),
-                    shape = RoundedCornerShape(8.dp),
-                    color = c.primary
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier.padding(vertical = 8.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        onClick = onViewReadme,
+                        modifier = Modifier.testTag("hero_readme_${repo.slug}"),
+                        shape = RoundedCornerShape(8.dp),
+                        color = c.surfaceContainerHigh,
+                        border = BorderStroke(0.5.dp, c.outlineVariant.copy(alpha = 0.6f))
                     ) {
-                        Symbol(CaSymbols.download, contentDescription = null, size = 14.dp, tint = c.onPrimary)
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "Clone & Open in IDE",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                            color = c.onPrimary
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Symbol(CaSymbols.codeBlocks, contentDescription = null, size = 13.dp, tint = c.primary)
+                            Text(
+                                "README.md",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = c.onSurface,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
+
+                    Surface(
+                        onClick = { haptics.heavyTap(); onClone() },
+                        interactionSource = ctaInteraction,
+                        modifier = Modifier
+                            .weight(1f)
+                            .pressScale(ctaInteraction),
+                        shape = RoundedCornerShape(8.dp),
+                        color = c.primary
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Symbol(CaSymbols.download, contentDescription = null, size = 14.dp, tint = c.onPrimary)
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "Clone & Open",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = c.onPrimary,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
                     }
                 }
             }
@@ -1828,6 +1952,192 @@ private fun GitHubAuthDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text(if (authState.isAuthenticated) "Done" else "Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+private fun ActiveRepoReadmeCard(
+    repo: UiDiscoveredRepo,
+    backend: IdeBackend,
+    onOpenFullReadme: (String) -> Unit
+) {
+    val c = MaterialTheme.colorScheme
+    var expanded by remember(repo.htmlUrl) { mutableStateOf(false) }
+    val readmeMarkdown by produceState<String?>(null, repo.htmlUrl) {
+        value = null
+        value = runCatching {
+            backend.discovery.fetchReadmeMarkdown(repo)
+        }.getOrDefault("# ${repo.owner}/${repo.name}\n\n${repo.description}")
+    }
+
+    val currentMd = readmeMarkdown
+    val previewExcerpt = remember(currentMd, expanded) {
+        if (currentMd.isNullOrBlank()) {
+            ""
+        } else if (expanded) {
+            currentMd.take(4000)
+        } else {
+            currentMd.lineSequence().take(10).joinToString("\n").take(500)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp)
+            .testTag("active_repo_readme_card"),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "INTEGRATED README.MD · ${repo.owner.uppercase()}/${repo.name.uppercase()}",
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp
+                ),
+                color = c.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Surface(
+                    onClick = { expanded = !expanded },
+                    modifier = Modifier.testTag("readme_card_toggle_expand"),
+                    shape = RoundedCornerShape(6.dp),
+                    color = c.surfaceContainerHigh
+                ) {
+                    Text(
+                        if (expanded) "Collapse" else "Expand",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = c.primary
+                    )
+                }
+
+                if (!currentMd.isNullOrBlank()) {
+                    Surface(
+                        onClick = { onOpenFullReadme(currentMd) },
+                        modifier = Modifier.testTag("readme_card_open_modal"),
+                        shape = RoundedCornerShape(6.dp),
+                        color = c.secondaryContainer
+                    ) {
+                        Text(
+                            "Full README.md",
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = c.onSecondaryContainer
+                        )
+                    }
+                }
+            }
+        }
+
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = c.surfaceContainerLow,
+            border = BorderStroke(0.5.dp, c.outlineVariant.copy(alpha = 0.5f))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp)
+            ) {
+                if (currentMd == null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 1.5.dp)
+                        Text(
+                            "Loading README.md for ${repo.owner}/${repo.name}...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = c.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    ListingProse(
+                        text = previewExcerpt,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = c.onSurface
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReadmeMarkdownDialog(
+    title: String,
+    markdown: String,
+    loading: Boolean,
+    onDismiss: () -> Unit
+) {
+    val c = MaterialTheme.colorScheme
+    val scrollState = rememberScrollState()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("readme_markdown_dialog"),
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Symbol(CaSymbols.codeBlocks, contentDescription = null, size = 18.dp, tint = c.primary)
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        },
+        text = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(420.dp)
+            ) {
+                if (loading) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState)
+                    ) {
+                        ListingProse(
+                            text = markdown.ifBlank { "# README.md\n\nNo README content available." },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = c.onSurface
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.testTag("readme_dialog_close")
+            ) {
+                Text("Close")
             }
         }
     )
