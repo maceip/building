@@ -1857,6 +1857,46 @@ interface AgentService {
     /** Start or stop the local FTP asset server (persisted under `settings.ai.ftpServer`). */
     fun setFtpServerEnabled(enabled: Boolean) {}
 
+    /** Reactive state of the Self-Serve LiteRT-LM Corner (model catalog, hardware delegates, loopback server, guest SDK). */
+    val liteRtCornerState: StateFlow<UiLiteRtCornerState>
+        get() = Unsupported.liteRtCornerState
+
+    /** Snapshot of the current Self-Serve LiteRT-LM Corner state. */
+    fun liteRtCorner(): UiLiteRtCornerState = liteRtCornerState.value
+
+    /** Select the hardware execution delegate (`CPU`, `GPU`, `NPU`) for local LiteRT-LM inference. */
+    fun selectLiteRtDelegate(delegate: UiLiteRtDelegate) {}
+
+    /** Start downloading / provisioning a `.litertlm` model from the catalog into shared app storage. */
+    fun downloadLiteRtModel(modelId: String) {}
+
+    /** Cancel an in-progress `.litertlm` model download. */
+    fun cancelLiteRtDownload(modelId: String) {}
+
+    /** Delete an installed `.litertlm` model artifact from shared app storage. */
+    fun deleteLiteRtModel(modelId: String) {}
+
+    /** Set an installed `.litertlm` model as the active on-device model. */
+    fun activateLiteRtModel(modelId: String) {}
+
+    /** Activate an installed `.litertlm` model and switch the IDE coding agent to use it via the `"litert"` provider. */
+    fun useLiteRtInIdeAgent(modelId: String) {}
+
+    /** Enable or disable the local loopback (`127.0.0.1:<port>`) LiteRT-LM HTTP inference server for guest apps. */
+    fun setLiteRtServerEnabled(enabled: Boolean) {}
+
+    /** Update the TCP port used by the local loopback LiteRT-LM HTTP inference server. */
+    fun setLiteRtServerPort(port: Int) {}
+
+    /** Select the target language (`Kotlin / Android`, `Swift / iOS`, `Node.js`, `Python`) for the guest-app SDK snippet. */
+    fun selectLiteRtGuestLanguage(language: UiLiteRtGuestLanguage) {}
+
+    /** Run a local inference smoke test against the active on-device LiteRT-LM model. */
+    fun runLiteRtSmokeTest(prompt: String) {}
+
+    /** Write the selected guest-app LiteRT-LM client file into the currently open workspace project. */
+    fun scaffoldLiteRtGuestClient(language: UiLiteRtGuestLanguage = UiLiteRtGuestLanguage.KOTLIN_ANDROID): String = ""
+
     /** A no-op agent for backends that wire none. */
     object Unsupported : AgentService {
         override val chatState: StateFlow<UiAgentChatState> =
@@ -1865,6 +1905,8 @@ interface AgentService {
             kotlinx.coroutines.flow.MutableStateFlow(null)
         override fun config(): UiAgentConfig = UiAgentConfig()
         override val models: StateFlow<List<UiAgentModel>> = kotlinx.coroutines.flow.MutableStateFlow(emptyList())
+        override val liteRtCornerState: StateFlow<UiLiteRtCornerState> =
+            kotlinx.coroutines.flow.MutableStateFlow(UiLiteRtCornerState())
         override fun refreshModels() {}
         override fun setModel(model: String) {}
         override fun selectProvider(id: String) {}

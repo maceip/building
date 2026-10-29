@@ -20,7 +20,14 @@
         <intent>
             <action android:name="dev.ide.codeassist.action.PLUGIN" />
         </intent>
+        <!-- Android System AI Core (Gemini Nano) package & service visibility for the Self-Serve LiteRT-LM Corner. -->
+        <package android:name="com.google.android.aicore" />
+        <intent>
+            <action android:name="com.google.android.apps.aicore.service.BIND_SERVICE" />
+        </intent>
     </queries>
+
+    <uses-permission android:name="com.google.android.apps.aicore.service.BIND_SERVICE" />
 
     <!-- The android "Run" builds a debug APK and installs it via PackageInstaller; the OS shows its own
          install-confirmation. The user must also grant "install unknown apps" to CodeAssist (we deep-link
@@ -271,6 +278,16 @@
                 <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
             </intent-filter>
         </provider>
+
+        <!-- Self-Serve LiteRT-LM Corner IPC provider: lets guest Android apps built on the phone query
+             installed .litertlm models, invoke on-device inference via ContentResolver.call("generate", ...),
+             or open read-only ParcelFileDescriptors (mmap) to verified .litertlm model artifacts without
+             duplicating model weights into each guest APK. -->
+        <provider
+                android:name=".litert.LiteRtLmContentProvider"
+                android:authorities="${applicationId}.litertlm"
+                android:exported="true"
+                android:grantUriPermissions="true" />
 
         <!-- Home-screen AppWidget showing Daily / Weekly / Monthly GitHub Trending repos + JIT app previews. -->
         <receiver

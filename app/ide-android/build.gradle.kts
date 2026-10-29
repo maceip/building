@@ -1087,6 +1087,8 @@ dependencies {
     // app-private project files for Share / "Open with", and grants read access on inbound intents.
     implementation(libs.androidx.core)
     implementation(libs.kotlinx.coroutines.core)
+    // Android System AI Core (Gemini Nano) via ML Kit GenAI Prompt API for the Self-Serve LiteRT-LM Corner.
+    implementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
 
     // The on-device Kotlin interpreter (:interp-core) + its Compose bridge/render surface (:interp-compose,
     // dev.ide.interp.compose — KMP, re-exporting :interp-core): drives a ResolvedTree against the real

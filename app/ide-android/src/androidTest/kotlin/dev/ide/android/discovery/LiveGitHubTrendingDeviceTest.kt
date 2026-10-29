@@ -538,6 +538,46 @@ class LiveGitHubTrendingDeviceTest {
         Log.i(TAG, "=== [TEST 08 PASS] TrendingReposAppWidgetProvider period & language cycling verified on device ===")
     }
 
+    @Test
+    fun test09_androidAiCoreAndLiteRtLmCornerOnDevice() {
+        // Bring MainActivity into the foreground in-process so Android AI Core (com.google.android.aicore)
+        // permits foreground EdgeTPU / Gemini Nano session creation.
+        context.startActivity(
+            Intent(context, dev.ide.android.MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+        )
+        Thread.sleep(2000L)
+
+        dev.ide.android.litert.AndroidAiCoreBridge.install(context)
+        val bridge = dev.ide.android.litert.AndroidAiCoreBridge(context)
+        val status = bridge.probeStatus()
+        Log.i(
+            TAG,
+            "=== [TEST 09] AndroidAiCoreBridge status on Pixel: available=${status.available}, " +
+                "pkg=${status.packageName}, version=${status.versionName}, odi=${status.systemServicePresent} ==="
+        )
+        assertTrue("Expected Android AI Core (com.google.android.aicore) to be detected on Pixel 11 Pro XL", status.available)
+
+        val storageRoot = File(testCacheDir, "litert-corner").apply { mkdirs() }.toPath()
+        val manager = dev.ide.agent.impl.LiteRtLmServingManager(storageRoot = storageRoot)
+        try {
+            val snap = manager.currentSnapshot()
+            val aiCoreEntry = snap.entries.firstOrNull { it.spec.id == dev.ide.agent.impl.LiteRtLmCatalog.AICORE_MODEL_ID }
+            assertNotNull("Expected Android AI Core entry in LiteRT-LM Corner catalog on Pixel", aiCoreEntry)
+            val smokeResult = manager.runSmokeTestNow("Write a one-line Kotlin greeting function")
+            Log.i(
+                TAG,
+                "=== [TEST 09 PASS] LiteRT-LM Corner & Android AI Core smoke test: ok=${smokeResult.ok}, " +
+                    "model=${smokeResult.modelId}, latency=${smokeResult.latencyMs}ms, text=${smokeResult.text} ==="
+            )
+            assertTrue("Expected on-device AICore / LiteRT-LM smoke test to succeed", smokeResult.ok)
+            assertTrue("Expected non-blank generated response", smokeResult.text.isNotBlank())
+        } finally {
+            manager.close()
+        }
+    }
+
     companion object {
         private const val TAG = "LiveGitHubTrendingTest"
     }

@@ -35,6 +35,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -129,6 +131,7 @@ private fun providerSubtitle(id: String): String = when (id) {
     "mimo" -> "Chat & Anthropic Messages API · MiMo V2.6 Pro, Flash, UltraSpeed"
     "gemini" -> "GenerateContent SSE · Gemini 3.8 Flash, 3.1 Pro"
     "openrouter" -> "Unified Gateway · Claude, GPT-6.1 Sol, Muse, MiMo"
+    "litert" -> "On-Device NPU / GPU / CPU · Gemma 3, Qwen 2.5 Coder, DeepSeek R1"
     "gateway" -> "Custom OpenAI / Responses (/v1/responses) / Messages (/v1/messages)"
     else -> ""
 }
@@ -153,7 +156,7 @@ private fun providerBaseUrlHint(id: String): String = when (id) {
 }
 
 @Composable
-private fun ProviderCard(
+internal fun ProviderCard(
     provider: UiAgentProvider,
     selected: Boolean,
     activeModel: String,
@@ -168,6 +171,7 @@ private fun ProviderCard(
 ) {
     val chrome = AgentUi.chrome
     val isGateway = provider.id == "gateway"
+    val isLiteRt = provider.id == "litert"
     var key by remember(provider.id) { mutableStateOf(provider.apiKey) }
     var customBaseUrl by remember(provider.id) { mutableStateOf(oneLine(provider.baseUrl)) }
     var baseUrl by remember(provider.id) { mutableStateOf(oneLine(gatewayBaseUrl)) }
@@ -186,6 +190,7 @@ private fun ProviderCard(
             .clip(shape)
             .background(container, shape)
             .border(1.dp, if (selected) chrome.accent else chrome.hairline, shape)
+            .semantics { this.selected = selected }
             .clickable(onClick = onSelect)
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -216,8 +221,10 @@ private fun ProviderCard(
             }
         }
         if (selected) {
-            val defaultKeyPlaceholder = stringResource(if (isGateway) Res.string.chat_api_key_optional else Res.string.chat_api_key)
-            SecretField(key, providerKeyPlaceholder(provider.id, defaultKeyPlaceholder)) { key = it; onSetKey(it) }
+            if (!isLiteRt) {
+                val defaultKeyPlaceholder = stringResource(if (isGateway) Res.string.chat_api_key_optional else Res.string.chat_api_key)
+                SecretField(key, providerKeyPlaceholder(provider.id, defaultKeyPlaceholder)) { key = it; onSetKey(it) }
+            }
             if (!isGateway && provider.models.isNotEmpty()) {
                 Row(
                     Modifier.fillMaxWidth(),
@@ -233,9 +240,17 @@ private fun ProviderCard(
                         )
                     }
                 }
-                PlainField(customBaseUrl, providerBaseUrlHint(provider.id)) {
-                    customBaseUrl = oneLine(it)
-                    onSetBaseUrl(customBaseUrl)
+                if (!isLiteRt) {
+                    PlainField(customBaseUrl, providerBaseUrlHint(provider.id)) {
+                        customBaseUrl = oneLine(it)
+                        onSetBaseUrl(customBaseUrl)
+                    }
+                } else {
+                    Text(
+                        if (hasKey) "Verified .litertlm model active (${provider.baseUrl})" else "Manage .litertlm models in the Self-Serve LiteRT-LM Corner",
+                        color = chrome.textFaint,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
                 }
             }
             if (isGateway) {

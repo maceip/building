@@ -9,6 +9,8 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.kmp.library)
+    alias(libs.plugins.compose)
+    alias(libs.plugins.kotlin.compose)
 }
 
 kotlin {
@@ -31,7 +33,23 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             api(project(":ide-ui-api"))
+            api(compose.runtime)
+            api(compose.ui)
             implementation(libs.kotlinx.coroutines.core)
+        }
+
+        val desktopMain by getting {
+            dependencies {
+                api(compose.desktop.currentOs)
+            }
+        }
+
+        val desktopTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+                implementation(compose.foundation)
+                implementation(compose.material3)
+            }
         }
     }
 }

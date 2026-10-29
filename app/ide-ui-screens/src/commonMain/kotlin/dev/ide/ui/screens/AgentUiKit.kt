@@ -1,8 +1,15 @@
 package dev.ide.ui.screens
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,11 +19,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -38,12 +47,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -107,23 +124,30 @@ fun AgentChip(
     label: String,
     selected: Boolean = false,
     leading: (@Composable () -> Unit)? = null,
-    onClick: () -> Unit = {},
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val bg = if (selected) AgentUi.chrome.surfaceAlt else Color.Transparent
     val fg = if (selected) AgentUi.chrome.text else AgentUi.chrome.textMuted
     val stroke = if (selected) AgentUi.chrome.hairlineStrong else AgentUi.chrome.hairline
+    val clickModifier = if (onClick != null) {
+        Modifier
+            .semantics { this.selected = selected }
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+    } else {
+        Modifier
+    }
     Row(
         modifier = modifier
             .height(36.dp)
             .clip(RoundedCornerShape(AgentUi.radius.chip))
             .background(bg)
             .border(1.dp, stroke, RoundedCornerShape(AgentUi.radius.chip))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
+            .then(clickModifier)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -404,6 +428,30 @@ fun AgentDiffSummary(
     }
 }
 
+/**
+ * Multiplatform animated text shimmer brush that sweeps a specular highlight across [baseColor].
+ */
+@Composable
+fun rememberTextShimmerBrush(
+    baseColor: Color,
+    highlightColor: Color = Color.White,
+): Brush {
+    val transition = rememberInfiniteTransition(label = "textShimmer")
+    val phase by transition.animateFloat(
+        initialValue = -240f,
+        targetValue = 720f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1900, easing = LinearEasing),
+        ),
+        label = "shimmerOffset",
+    )
+    return Brush.linearGradient(
+        colors = listOf(baseColor, highlightColor, baseColor),
+        start = Offset(phase, 0f),
+        end = Offset(phase + 220f, 0f),
+    )
+}
+
 @Composable
 fun AgentProjectRow(
     title: String,
@@ -412,6 +460,12 @@ fun AgentProjectRow(
     letter: String,
     selected: Boolean = false,
     statusColor: Color = AgentUi.chrome.textFaint,
+    avatar: ImageBitmap? = null,
+    stackLabel: String = "",
+    stackColor: Color = Color.Unspecified,
+    modulesLabel: String = "",
+    tags: List<String> = emptyList(),
+    shimmerSubtitle: Boolean = false,
     onClick: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -433,21 +487,84 @@ fun AgentProjectRow(
                 .background(if (selected) AgentUi.chrome.surfaceAlt else AgentUi.chrome.surface),
             contentAlignment = Alignment.Center,
         ) {
-            Text(letter, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = AgentUi.chrome.text)
+            if (avatar != null) {
+                Image(
+                    bitmap = avatar,
+                    contentDescription = title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Text(letter, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = AgentUi.chrome.text)
+            }
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = AgentUi.chrome.text, maxLines = 1)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (meta.contains("Needs") || meta.contains("review")) {
-                    AgentStatusDot(active = true, size = 7.dp, color = AgentUi.chrome.warn)
-                    Text(meta, fontSize = 13.sp, color = AgentUi.chrome.warn, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                title,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium,
+                color = AgentUi.chrome.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val resolvedStackColor = if (stackColor != Color.Unspecified) stackColor else AgentUi.chrome.accent
+            val stackShimmer = if (shimmerSubtitle) rememberTextShimmerBrush(resolvedStackColor) else null
+            val metaShimmer = if (shimmerSubtitle) rememberTextShimmerBrush(AgentUi.chrome.textMuted) else null
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (stackLabel.isNotBlank() || modulesLabel.isNotBlank() || tags.isNotEmpty()) {
+                    val annotated = buildAnnotatedString {
+                        if (stackLabel.isNotBlank()) {
+                            val style = if (stackShimmer != null) {
+                                SpanStyle(brush = stackShimmer, fontWeight = FontWeight.Medium)
+                            } else {
+                                SpanStyle(color = resolvedStackColor, fontWeight = FontWeight.Medium)
+                            }
+                            withStyle(style) { append(stackLabel) }
+                        }
+                        val tailSegments = buildList {
+                            if (modulesLabel.isNotBlank()) add(modulesLabel)
+                            addAll(tags.filter { it.isNotBlank() })
+                        }
+                        if (tailSegments.isNotEmpty()) {
+                            val prefix = if (stackLabel.isNotBlank()) " · " else ""
+                            val tailText = prefix + tailSegments.joinToString(" · ")
+                            val style = if (metaShimmer != null) {
+                                SpanStyle(brush = metaShimmer)
+                            } else {
+                                SpanStyle(color = AgentUi.chrome.textMuted)
+                            }
+                            withStyle(style) { append(tailText) }
+                        }
+                    }
+                    Text(
+                        text = annotated,
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
                 } else {
-                    AgentStatusDot(active = true, size = 7.dp, color = statusColor)
-                    Text(meta, fontSize = 13.sp, color = AgentUi.chrome.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val fallbackStyle = if (metaShimmer != null) {
+                        TextStyle(fontSize = 13.sp, brush = metaShimmer)
+                    } else {
+                        TextStyle(fontSize = 13.sp, color = AgentUi.chrome.textMuted)
+                    }
+                    Text(
+                        text = meta,
+                        style = fallbackStyle,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
                 }
             }
         }
-        Text(time, fontSize = 12.sp, color = AgentUi.chrome.textFaint)
+        if (time.isNotEmpty()) {
+            Text(time, fontSize = 12.sp, color = AgentUi.chrome.textFaint, maxLines = 1)
+        }
     }
 }
 
@@ -474,6 +591,7 @@ fun AgentSegmented(
                     .height(40.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(if (selected) AgentUi.chrome.surfaceRaised else Color.Transparent)
+                    .semantics { this.selected = selected }
                     .clickable { onSelect(i) },
                 contentAlignment = Alignment.Center,
             ) {
@@ -534,6 +652,7 @@ fun AgentRadioRow(
         modifier = modifier
             .fillMaxWidth()
             .height(52.dp)
+            .semantics { this.selected = selected }
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -592,7 +711,7 @@ fun AgentTopBar(
     title: String,
     subtitle: String? = null,
     onBack: (() -> Unit)? = null,
-    backIcon: ImageVector? = null,
+    backIcon: ImageVector? = CaIcons.arrowLeft,
     actions: @Composable RowScope.() -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
