@@ -121,6 +121,7 @@ internal object AgentSettingsPage : SettingsPage {
                 SettingControl.Choice.Option("openrouter", "OpenRouter"),
                 SettingControl.Choice.Option("muse", "Meta Muse"),
                 SettingControl.Choice.Option("mimo", "Xiaomi MiMo"),
+                SettingControl.Choice.Option("litert", "LiteRT-LM (On-Device)"),
                 SettingControl.Choice.Option("gateway", "Custom gateway"),
             ),
         ),

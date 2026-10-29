@@ -205,6 +205,7 @@ object AndroidIde {
                         workspaceRoot = { backend.agentWorkspaceRoot() },
                         legacyPreference = { key -> backend.agentAiPreference(key) },
                         mcpPort = { backend.agentMcpPort() },
+                        hostAgent = { backend.hostAgentService() },
                     )
                 }
             },

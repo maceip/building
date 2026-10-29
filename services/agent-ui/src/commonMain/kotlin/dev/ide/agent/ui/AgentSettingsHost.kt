@@ -65,6 +65,12 @@ fun AgentSettingsScreen(ctx: ScreenContext) {
                 ctx.openScreen("__hub__")
             }
         },
+        onOpenLiteRtCorner = {
+            Log.traceUiAction(AgentSettingsComponent.id.value, "OpenLiteRtCorner") { scope ->
+                scope.recordEffect("openScreen:$SCREEN_LITERT_LM_CORNER")
+                ctx.openScreen(SCREEN_LITERT_LM_CORNER)
+            }
+        },
     )
 }
 
@@ -73,6 +79,7 @@ fun AgentSettingsHost(
     backend: IdeBackend,
     onBack: () -> Unit = {},
     onOpenEditorPrefs: () -> Unit = {},
+    onOpenLiteRtCorner: () -> Unit = {},
     scrollState: ScrollState = rememberScrollState(),
 ) {
     val agent = backend.agent
@@ -203,6 +210,44 @@ fun AgentSettingsHost(
                                     cfg = agent.config()
                                 }
                             },
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                AgentSectionLabel("LiteRT-LM Corner")
+                AgentSurface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("agent_settings_open_litert_corner")
+                        .clickable(onClick = onOpenLiteRtCorner),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                    stroke = AgentUi.chrome.hairlineStrong,
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                "Self-Serve LiteRT-LM Corner",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = AgentUi.chrome.text,
+                            )
+                            Text(
+                                "Local .litertlm catalog, NPU/GPU delegates, loopback server & guest SDK",
+                                fontSize = 12.5.sp,
+                                color = AgentUi.chrome.textMuted,
+                            )
+                        }
+                        Icon(
+                            CaIcons.arrowRight,
+                            contentDescription = "Open Self-Serve LiteRT-LM Corner",
+                            tint = AgentUi.chrome.textMuted,
+                            modifier = Modifier.size(18.dp),
                         )
                     }
                 }

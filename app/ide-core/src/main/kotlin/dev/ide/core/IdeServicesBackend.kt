@@ -143,6 +143,9 @@ class IdeServicesBackend(
     fun agentMcpPort(): Int? =
         if (agentServiceFactory != null) mcpToolHost.ensureMcpServerForHost() else null
 
+    /** Public host seam: the host Kotlin [AgentBackend] so an external agent wrapper can delegate LiteRT-LM Corner calls. */
+    fun hostAgentService(): dev.ide.ui.backend.AgentService = mcpToolHost
+
     /** Opt-in usage analytics, resolved from the application service container (the on-device host registers a
      *  Supabase-backed [dev.ide.analytics.impl.DefaultAnalyticsService]); absent (desktop / tests) → the no-op
      *  service. Gated on the persisted consent preference — see [analyticsConsent]/[setAnalyticsConsent]. */

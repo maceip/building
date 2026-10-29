@@ -251,6 +251,10 @@ class AgentSettingsHostTest {
             // 7. Click "Editor, keymap, code style & tools" -> navigates to "__hub__".
             clickText("Editor, keymap, code style & tools")
             assertEquals(listOf("__hub__"), openedScreens)
+
+            // 8. Click "Self-Serve LiteRT-LM Corner" -> navigates to SCREEN_LITERT_LM_CORNER ("agent.litert.corner").
+            clickText("Self-Serve LiteRT-LM Corner")
+            assertEquals(listOf("__hub__", SCREEN_LITERT_LM_CORNER), openedScreens)
         } finally {
             scene.close()
         }

@@ -13,6 +13,9 @@ import dev.ide.ui.backend.UiAgentPermissionRequest
 import dev.ide.ui.backend.UiAgentProvider
 import dev.ide.ui.backend.UiAgentRole
 import dev.ide.ui.backend.UiAgentUsage
+import dev.ide.ui.backend.UiLiteRtCornerState
+import dev.ide.ui.backend.UiLiteRtDelegate
+import dev.ide.ui.backend.UiLiteRtGuestLanguage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -47,6 +50,8 @@ class ZCodeAgentService(
     private val legacyPreference: (String) -> String? = { null },
     /** Bound port of the host workspace MCP server (Kotlin-native tools), or null. */
     private val mcpPort: () -> Int? = { null },
+    /** Optional host Kotlin [AgentService] delegate for Self-Serve LiteRT-LM Corner operations. */
+    private val hostAgent: (() -> AgentService)? = null,
 ) : AgentService {
 
     private val appContext = context.applicationContext
@@ -60,6 +65,59 @@ class ZCodeAgentService(
     override val permissionRequest: StateFlow<UiAgentPermissionRequest?> = _permissionRequest.asStateFlow()
     private val _models = MutableStateFlow<List<UiAgentModel>>(emptyList())
     override val models: StateFlow<List<UiAgentModel>> = _models.asStateFlow()
+    override val liteRtCornerState: StateFlow<UiLiteRtCornerState>
+        get() = hostAgent?.invoke()?.liteRtCornerState ?: MutableStateFlow(UiLiteRtCornerState())
+
+    override fun liteRtCorner(): UiLiteRtCornerState =
+        hostAgent?.invoke()?.liteRtCorner() ?: UiLiteRtCornerState()
+
+    override fun selectLiteRtDelegate(delegate: UiLiteRtDelegate) {
+        hostAgent?.invoke()?.selectLiteRtDelegate(delegate)
+    }
+
+    override fun downloadLiteRtModel(modelId: String) {
+        hostAgent?.invoke()?.downloadLiteRtModel(modelId)
+    }
+
+    override fun cancelLiteRtDownload(modelId: String) {
+        hostAgent?.invoke()?.cancelLiteRtDownload(modelId)
+    }
+
+    override fun deleteLiteRtModel(modelId: String) {
+        hostAgent?.invoke()?.deleteLiteRtModel(modelId)
+    }
+
+    override fun activateLiteRtModel(modelId: String) {
+        hostAgent?.invoke()?.activateLiteRtModel(modelId)
+    }
+
+    override fun useLiteRtInIdeAgent(modelId: String) {
+        val host = hostAgent?.invoke()
+        if (host != null) {
+            host.useLiteRtInIdeAgent(modelId)
+            val snap = host.liteRtCorner()
+            setGateway(snap.server.openAiEndpoint.removeSuffix("/chat/completions"), modelId, "")
+        }
+    }
+
+    override fun setLiteRtServerEnabled(enabled: Boolean) {
+        hostAgent?.invoke()?.setLiteRtServerEnabled(enabled)
+    }
+
+    override fun setLiteRtServerPort(port: Int) {
+        hostAgent?.invoke()?.setLiteRtServerPort(port)
+    }
+
+    override fun selectLiteRtGuestLanguage(language: UiLiteRtGuestLanguage) {
+        hostAgent?.invoke()?.selectLiteRtGuestLanguage(language)
+    }
+
+    override fun runLiteRtSmokeTest(prompt: String) {
+        hostAgent?.invoke()?.runLiteRtSmokeTest(prompt)
+    }
+
+    override fun scaffoldLiteRtGuestClient(language: UiLiteRtGuestLanguage): String =
+        hostAgent?.invoke()?.scaffoldLiteRtGuestClient(language).orEmpty()
 
     @Volatile private var job: Job? = null
     @Volatile private var sessionId: String? = prefs.getString(KEY_SESSION, null)
