@@ -14,6 +14,7 @@ data class MachoPatchResult(
     val isUniversal: Boolean,
     val patchedSliceOffset: Long,
     val message: String,
+    val rewrittenRpaths: Int = 0,
 )
 
 /**
@@ -45,6 +46,10 @@ object MachoPatcher {
     const val MH_DYLIB: UInt = 0x06U
 
     const val LC_SEGMENT_64: UInt = 0x19U
+    const val LC_LOAD_DYLIB: UInt = 0x0CU
+    const val LC_LOAD_WEAK_DYLIB: UInt = 0x80000018U
+    const val LC_RPATH: UInt = 0x8000001CU
+    const val LC_REEXPORT_DYLIB: UInt = 0x8000001FU
     const val LC_MAIN: UInt = 0x80000028U
     const val LC_CODE_SIGNATURE: UInt = 0x1DU
 
@@ -131,6 +136,7 @@ object MachoPatcher {
         val endCmdOffset = currentCmdOffset + sizeofcmds
         var pageZeroZeroed = false
         var entryOffset: ULong? = null
+        var rewrittenRpaths = 0
 
         for (i in 0 until ncmds) {
             if (currentCmdOffset + 8 > bytes.size || currentCmdOffset >= endCmdOffset) break
@@ -142,13 +148,19 @@ object MachoPatcher {
                 LC_SEGMENT_64 -> {
                     val segname = readAscii(bytes, currentCmdOffset + 8, 16)
                     if (segname == "__PAGEZERO") {
-                        // vmsize at offset + 32 (8 bytes) -> zero out
-                        writeUInt64LE(bytes, currentCmdOffset + 32, 0UL)
+                        // Relocate __PAGEZERO to single page at 0xFFFFC000..0x100000000 so dyld accepts MH_DYLIB
+                        writeUInt64LE(bytes, currentCmdOffset + 24, 0xFFFFC000UL)
+                        writeUInt64LE(bytes, currentCmdOffset + 32, 0x4000UL)
                         // maxprot at offset + 56 (4 bytes) -> zero out
                         writeUInt32LE(bytes, currentCmdOffset + 56, 0U)
                         // initprot at offset + 60 (4 bytes) -> zero out
                         writeUInt32LE(bytes, currentCmdOffset + 60, 0U)
                         pageZeroZeroed = true
+                    }
+                }
+                LC_RPATH, LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, LC_REEXPORT_DYLIB -> {
+                    if (rewriteExecutablePathInCommand(bytes, currentCmdOffset, cmdsize)) {
+                        rewrittenRpaths++
                     }
                 }
                 LC_MAIN -> {
@@ -168,8 +180,27 @@ object MachoPatcher {
             entryOffset = entryOffset,
             isUniversal = isUniversal,
             patchedSliceOffset = sliceOffset.toLong(),
-            message = "Successfully patched Mach-O to MH_DYLIB (PAGEZERO zeroed: $pageZeroZeroed, entryOff: $entryOffset)",
+            message = "Successfully patched Mach-O to MH_DYLIB (PAGEZERO patched: $pageZeroZeroed, rpaths rewritten: $rewrittenRpaths, entryOff: $entryOffset)",
+            rewrittenRpaths = rewrittenRpaths,
         )
+    }
+
+    private fun rewriteExecutablePathInCommand(bytes: ByteArray, cmdOffset: Int, cmdsize: Int): Boolean {
+        if (cmdsize <= 12) return false
+        val strOffset = readUInt32LE(bytes, cmdOffset + 8).toInt()
+        val start = if (strOffset in 8 until cmdsize) cmdOffset + strOffset else cmdOffset + 8
+        val end = (cmdOffset + cmdsize).coerceAtMost(bytes.size)
+        if (start >= end) return false
+        val currentStr = readAscii(bytes, start, end - start)
+        if (!currentStr.contains("@executable_path")) return false
+        val replaced = currentStr.replace("@executable_path", "@loader_path")
+        val replacedBytes = replaced.encodeToByteArray()
+        for (i in start until end) {
+            bytes[i] = 0
+        }
+        val copyLen = replacedBytes.size.coerceAtMost(end - start - 1)
+        replacedBytes.copyInto(bytes, destinationOffset = start, startIndex = 0, endIndex = copyLen)
+        return true
     }
 
     fun readUInt32LE(bytes: ByteArray, offset: Int): UInt =

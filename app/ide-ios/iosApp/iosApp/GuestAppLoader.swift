@@ -41,4 +41,39 @@ import Darwin
             fn()
         }
     }
+
+    /// Inspects and activates a guest `.app` bundle in-process, resolving its principal class or executable entry.
+    @objc public func activateGuestBundle(_ appPath: String) -> String {
+        let plistPath = (appPath as NSString).appendingPathComponent("Info.plist")
+        let dict = NSDictionary(contentsOfFile: plistPath)
+        let bundleId = (dict?["CFBundleIdentifier"] as? String) ?? "guest.bundle"
+        let principal = (dict?["UIPrincipalClass"] as? String)
+            ?? (dict?["NSPrincipalClass"] as? String)
+            ?? (dict?["CFBundleExecutable"] as? String)
+            ?? "main"
+        if let bundle = Bundle(path: appPath) {
+            _ = bundle.principalClass
+        }
+        return "\(bundleId):\(principal)"
+    }
+}
+
+@_cdecl("ca_guest_activate_bundle")
+public func ca_guest_activate_bundle(
+    _ appPathPtr: UnsafePointer<CChar>?,
+    _ outBuf: UnsafeMutablePointer<CChar>?,
+    _ outBufLen: Int32
+) -> Int32 {
+    guard let appPathPtr = appPathPtr else { return -1 }
+    let appPath = String(cString: appPathPtr)
+    let resolved = GuestAppLoader.shared.activateGuestBundle(appPath)
+    if let outBuf = outBuf, outBufLen > 0 {
+        let utf8 = Array(resolved.utf8CString)
+        let copyCount = min(utf8.count, Int(outBufLen) - 1)
+        for i in 0..<copyCount {
+            outBuf[i] = utf8[i]
+        }
+        outBuf[max(0, copyCount)] = 0
+    }
+    return 0
 }

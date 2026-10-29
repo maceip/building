@@ -77,6 +77,59 @@ class GuiBridgeRuntimeTest {
     }
 
     @Test
+    fun preservesUiKitInteropAndCanvasDeclarationsAndProvidesShimsInPrelude() {
+        val source = """
+            import SwiftUI
+            import UIKit
+
+            @Observable
+            class AppViewModel {
+                var screenWidth: CGFloat = UIScreen.main.bounds.width
+            }
+
+            struct HostedController: UIViewControllerRepresentable {
+                func makeUIViewController(context: Context) -> UIViewController {
+                    UINavigationController(rootViewController: UIHostingController(rootView: Text("Hosted")))
+                }
+                func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
+            }
+
+            struct DrawingView: View {
+                var body: some View {
+                    Canvas { context, size in
+                        var p = Path()
+                        p.move(to: CGPoint(x: 0, y: 0))
+                        p.addLine(to: CGPoint(x: size.width, y: size.height))
+                        context.stroke(p, with: .color(.blue), lineWidth: 2)
+                    }
+                }
+            }
+        """.trimIndent()
+
+        val dropped = GuiBridgeRuntime.dropUnsupportedDeclarations(source)
+        assertEquals(source, dropped, "dropUnsupportedDeclarations must never delete user declarations")
+
+        val prelude = GuiBridgeRuntime.CUPERTINO_BRIDGE_PRELUDE
+        assertTrue(prelude.contains("public final class UIScreen"), "Prelude must shim UIScreen")
+        assertTrue(prelude.contains("public struct UIColor"), "Prelude must shim UIColor")
+        assertTrue(prelude.contains("public struct UIImage"), "Prelude must shim UIImage")
+        assertTrue(prelude.contains("public open class UIViewController"), "Prelude must shim UIViewController")
+        assertTrue(prelude.contains("public open class UIHostingController"), "Prelude must shim UIHostingController")
+        assertTrue(prelude.contains("public open class UINavigationController"), "Prelude must shim UINavigationController")
+        assertTrue(prelude.contains("public protocol UIViewControllerRepresentable"), "Prelude must shim UIViewControllerRepresentable")
+        assertTrue(prelude.contains("public final class UIPasteboard"), "Prelude must shim UIPasteboard")
+        assertTrue(prelude.contains("public final class UIImpactFeedbackGenerator"), "Prelude must shim UIImpactFeedbackGenerator")
+        assertTrue(prelude.contains("public struct Canvas"), "Prelude must shim Canvas")
+        assertTrue(prelude.contains("public var svgPath: String"), "Prelude Path must serialize SVG path commands")
+
+        // Ensure repo-specific hacks were removed from generic prelude
+        assertFalse(prelude.contains("enum ModuleTheme"), "Prelude must not contain repo-specific ModuleTheme")
+        assertFalse(prelude.contains("enum L10n"), "Prelude must not contain repo-specific L10n")
+        assertFalse(prelude.contains("enum FileSizeFormatter"), "Prelude must not contain repo-specific FileSizeFormatter")
+        assertFalse(prelude.contains("struct SpeechLanguageSuggestion"), "Prelude must not contain repo-specific SpeechLanguageSuggestion")
+    }
+
+    @Test
     fun countUnsupportedSwiftImportsAcceptsCommonFrameworks() {
         val source = """
             import SwiftUI

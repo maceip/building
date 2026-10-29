@@ -60,11 +60,51 @@ class GuestAppRunnerTest {
         val patchedFileType = MachoPatcher.readUInt32LE(bytes, 12)
         assertEquals(MachoPatcher.MH_DYLIB, patchedFileType, "Filetype must be updated to MH_DYLIB")
 
+        val patchedVmAddr = MachoPatcher.readUInt64LE(bytes, 56)
+        assertEquals(0xFFFFC000UL, patchedVmAddr, "__PAGEZERO vmaddr must be relocated to 0xFFFFC000")
+
         val patchedVmSize = MachoPatcher.readUInt64LE(bytes, 64)
-        assertEquals(0UL, patchedVmSize, "__PAGEZERO vmsize must be 0")
+        assertEquals(0x4000UL, patchedVmSize, "__PAGEZERO vmsize must be 0x4000")
 
         val patchedMaxProt = MachoPatcher.readUInt32LE(bytes, 88)
         assertEquals(0U, patchedMaxProt, "__PAGEZERO maxprot must be 0")
+    }
+
+    @Test
+    fun testMachoPatcherRewritesExecutablePathInRpathAndLoadDylib() {
+        // 32-byte header + 72-byte __PAGEZERO + 48-byte LC_RPATH + 64-byte LC_LOAD_DYLIB = 216 bytes
+        val bytes = ByteArray(216)
+        MachoPatcher.writeUInt32LE(bytes, 0, MachoPatcher.MH_MAGIC_64)
+        MachoPatcher.writeUInt32LE(bytes, 4, MachoPatcher.CPU_TYPE_ARM64)
+        MachoPatcher.writeUInt32LE(bytes, 8, 0U)
+        MachoPatcher.writeUInt32LE(bytes, 12, MachoPatcher.MH_EXECUTE)
+        MachoPatcher.writeUInt32LE(bytes, 16, 3U)
+        MachoPatcher.writeUInt32LE(bytes, 20, (72 + 48 + 64).toUInt())
+
+        // Cmd 1: __PAGEZERO at 32
+        MachoPatcher.writeUInt32LE(bytes, 32, MachoPatcher.LC_SEGMENT_64)
+        MachoPatcher.writeUInt32LE(bytes, 36, 72U)
+        "__PAGEZERO".encodeToByteArray().copyInto(bytes, 40)
+        MachoPatcher.writeUInt64LE(bytes, 56, 0UL)
+        MachoPatcher.writeUInt64LE(bytes, 64, 0x100000000UL)
+
+        // Cmd 2: LC_RPATH at 104 (size 48)
+        MachoPatcher.writeUInt32LE(bytes, 104, MachoPatcher.LC_RPATH)
+        MachoPatcher.writeUInt32LE(bytes, 108, 48U)
+        MachoPatcher.writeUInt32LE(bytes, 112, 12U) // strOffset = 12
+        "@executable_path/Frameworks".encodeToByteArray().copyInto(bytes, 104 + 12)
+
+        // Cmd 3: LC_LOAD_DYLIB at 152 (size 64)
+        MachoPatcher.writeUInt32LE(bytes, 152, MachoPatcher.LC_LOAD_DYLIB)
+        MachoPatcher.writeUInt32LE(bytes, 156, 64U)
+        MachoPatcher.writeUInt32LE(bytes, 160, 24U) // strOffset = 24
+        "@executable_path/libGuestCore.dylib".encodeToByteArray().copyInto(bytes, 152 + 24)
+
+        val result = MachoPatcher.patchBytes(bytes)
+        assertTrue(result.success)
+        assertEquals(2, result.rewrittenRpaths)
+        assertEquals("@loader_path/Frameworks", MachoPatcher.readAscii(bytes, 104 + 12, 36))
+        assertEquals("@loader_path/libGuestCore.dylib", MachoPatcher.readAscii(bytes, 152 + 24, 40))
     }
 
     @Test
@@ -86,6 +126,8 @@ class GuestAppRunnerTest {
                 <string>Sample Music</string>
                 <key>CFBundleShortVersionString</key>
                 <string>1.5.0</string>
+                <key>UIPrincipalClass</key>
+                <string>SampleMusic.AppDelegate</string>
             </dict>
             </plist>
         """.trimIndent()
@@ -98,6 +140,10 @@ class GuestAppRunnerTest {
         assertEquals("SampleMusic", meta.executableName)
         assertEquals("Sample Music", meta.displayName)
         assertEquals("1.5.0", meta.version)
+        assertEquals("SampleMusic.AppDelegate", meta.principalClass)
+
+        val activated = GuestAppRunner.activateGuestBundle(testAppPath, meta)
+        assertEquals("dev.sample.music:SampleMusic.AppDelegate", activated)
 
         // Test container layout preparation
         val container = GuestAppContainer.prepareContainer(meta.bundleId, meta.displayName)

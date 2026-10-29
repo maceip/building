@@ -152,6 +152,7 @@ internal object IosRuntimeRunner {
         }
 
         // 3. Swift / Xcode / SwiftUI detection
+        val swiftFiles = files.filter { it.endsWith(".swift") }
         val hasPackageSwift = IosFiles.exists(IosFiles.join(root, "Package.swift"))
         val hasXcodeProj = files.any { it.endsWith(".xcodeproj") || it.endsWith(".xcworkspace") } ||
             files.filter { !it.startsWith(".") }.any { sub ->
@@ -160,12 +161,20 @@ internal object IosRuntimeRunner {
                     it == "Package.swift" || it.endsWith(".xcodeproj") || it.endsWith(".xcworkspace") || it.endsWith(".swift")
                 }
             }
-        if (hasPackageSwift || hasXcodeProj) {
+        if (hasPackageSwift || hasXcodeProj || swiftFiles.isNotEmpty()) {
             tasks.add(
                 DiscoveredTask(
                     option = RunTaskOption("swift:run", "swift run (Cupertino UI)", "Swift & iOS"),
                     runtime = RuntimeKind.SWIFT,
                     command = "swift run",
+                    targetFile = null,
+                ),
+            )
+            tasks.add(
+                DiscoveredTask(
+                    option = RunTaskOption("swift:preview", "SwiftUI Preview (Cupertino)", "Swift & iOS"),
+                    runtime = RuntimeKind.SWIFT,
+                    command = "swift preview",
                     targetFile = null,
                 ),
             )
@@ -178,7 +187,6 @@ internal object IosRuntimeRunner {
                 ),
             )
         }
-        val swiftFiles = files.filter { it.endsWith(".swift") }
         for (sw in swiftFiles) {
             tasks.add(
                 DiscoveredTask(

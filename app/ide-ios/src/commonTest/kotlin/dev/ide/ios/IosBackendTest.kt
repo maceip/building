@@ -1702,6 +1702,116 @@ class IosBackendTest {
     }
 
     @Test
+    fun swiftUiMultiFileProjectEvaluatesRendersPngAndHandlesInteractiveCallbacks() = runTest {
+        val swiftDir = IosFiles.join(root, "MultiFileSwiftUIApp")
+        val sourcesDir = IosFiles.join(swiftDir, "Sources")
+        IosFiles.mkdirs(sourcesDir)
+        IosFiles.writeText(
+            IosFiles.join(swiftDir, "Package.swift"),
+            """
+            // swift-tools-version:5.9
+            import PackageDescription
+            let package = Package(name: "MultiFileSwiftUIApp")
+            """.trimIndent(),
+        )
+        IosFiles.writeText(
+            IosFiles.join(sourcesDir, "App.swift"),
+            """
+            import SwiftUI
+
+            @main
+            struct MultiFileSwiftUIApp: App {
+                var body: some Scene {
+                    WindowGroup {
+                        ContentView()
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        IosFiles.writeText(
+            IosFiles.join(sourcesDir, "BadgeView.swift"),
+            """
+            import SwiftUI
+
+            struct BadgeView: View {
+                var body: some View {
+                    VStack {
+                        Text("Custom Subview Active")
+                        Path { path in
+                            path.move(to: CGPoint(x: 5, y: 5))
+                            path.addLine(to: CGPoint(x: 95, y: 50))
+                            path.closeSubpath()
+                        }
+                        .stroke(Color.blue, lineWidth: 2)
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        IosFiles.writeText(
+            IosFiles.join(sourcesDir, "ContentView.swift"),
+            """
+            import SwiftUI
+
+            struct ContentView: View {
+                @State private var counter = 0
+
+                var body: some View {
+                    NavigationStack {
+                        VStack(spacing: 12) {
+                            BadgeView()
+                            Text("Count: \(counter)")
+                            Button("Increment") { counter += 1 }
+                            NavigationLink("View Details") {
+                                Text("Detail Page Content")
+                            }
+                        }
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+
+        assertTrue(backend.openProject(swiftDir), "opens multi-file SwiftUI project")
+        assertTrue(backend.project.isSwift, "project is recognized as Swift")
+
+        backend.build.runBuild()
+        withContext(Dispatchers.Default) {
+            withTimeout(15_000) {
+                while (backend.build.runConsole.value?.frame == null &&
+                    backend.build.buildState.value.status != dev.ide.ui.backend.RunStatus.Failed
+                ) {
+                    delay(50)
+                }
+            }
+        }
+        assertEquals(dev.ide.ui.backend.RunStatus.Succeeded, backend.build.buildState.value.status)
+        val initialFrame = assertNotNull(backend.build.runConsole.value?.frame, "Expected Cupertino ViewNode frame")
+        assertTrue(initialFrame.path.contains("Custom Subview Active"), "Multi-file BadgeView must be expanded: ${initialFrame.path}")
+        assertTrue(initialFrame.path.contains("M 5 5 L 95 50 Z"), "Vector Path must be serialized: ${initialFrame.path}")
+        assertTrue(initialFrame.path.contains("Count: 0"), "Initial @State counter must be 0: ${initialFrame.path}")
+        assertTrue(initialFrame.path.contains("Detail Page Content"), "NavigationLink destination must be preserved: ${initialFrame.path}")
+
+        // Verify real PNG preview was rendered via Skia on disk
+        val pngPath = IosFiles.join(swiftDir, ".build/cupertino-preview.png")
+        val pngBytes = assertNotNull(IosFiles.readBytes(pngPath), "Expected rendered Cupertino PNG at $pngPath")
+        assertTrue(pngBytes.size > 100, "Expected non-empty PNG preview")
+        assertEquals(0x89.toByte(), pngBytes[0], "PNG magic byte 0")
+        assertEquals(0x50.toByte(), pngBytes[1], "PNG magic byte 1")
+        assertTrue(backend.countInkedPixels(pngBytes) > 50, "Expected >50 inked pixels in Cupertino preview PNG")
+
+        // Tap Increment button via sendRunInput and verify @State updates + Interactions counter advances
+        val tapId = Regex(""""onTap":(\d+)""").find(initialFrame.path)!!.groupValues[1]
+        backend.build.sendRunInput("""{"id":"$tapId","kind":"void"}""")
+        val updatedFrame = assertNotNull(backend.build.runConsole.value?.frame)
+        assertTrue(updatedFrame.seq > initialFrame.seq, "Frame seq must advance after button tap")
+        assertTrue(updatedFrame.path.contains("Count: 1"), "Expected Count: 1 after button tap: ${updatedFrame.path}")
+        assertTrue(updatedFrame.path.contains("Interactions: 1"), "Expected Interactions: 1 in updated frame")
+        backend.build.stopBuild()
+    }
+
+    @Test
     fun multiRuntimeProjectCreationAndFileActions() = runTest {
         val nodeProjectDir = IosFiles.join(root, "created-node-app")
         IosFiles.mkdirs(nodeProjectDir)

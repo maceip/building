@@ -356,26 +356,14 @@ class SwiftBuildSystem : BuildSystem {
         val hasSwiftUiBridge = GuiBridgeRuntime.ensureSwiftUiBridgeSdk(installation)
 
         if (isIos && hasSwiftUiBridge && swiftcBin != null && specId == TASK_RUN) {
-            // Dual pipeline:
-            //  - Cupertino Run compiles a disposable shadow copy (original clone untouched)
-            //  - xtool rebuilds the **original** project with no shim → real iPhoneOS IPA
             val shadowRoot = GuiBridgeRuntime.prepareCupertinoShadow(projectRoot, scratchDir)
             ctx.buildLog.log(
                 BuildLogEntry(
-                    "Cupertino Run uses a shadow workspace; xtool exports the original project as IPA.",
+                    "Cupertino Run uses a shadow workspace; run 'swift:ipa' to export a Darwin iOS IPA.",
                     BuildLogLevel.INFO,
                 ),
             )
-            val bgEnv = env
-            val bgFlags = androidFlags
-            val bgScratch = scratchFlags
-            val bgXtool = xtoolBin
-            val bgSwift = swiftBin
-            val bgInstall = installation
-            val bgHost = host
-            val bgRoot = projectRoot
-            val bgCtx = ctx
-            val bridgeResult = GuiBridgeRuntime.compileAndRunSwiftUiBridge(
+            return GuiBridgeRuntime.compileAndRunSwiftUiBridge(
                 host = host,
                 installation = installation,
                 swiftcBin = swiftcBin,
@@ -386,16 +374,7 @@ class SwiftBuildSystem : BuildSystem {
                 ctx = ctx,
                 buildCtx = buildCtx,
                 shadowRoot = shadowRoot,
-                onPackageIpa = {
-                    // Real export from the original tree (xtool, no shim). Only this IPA is the deliverable.
-                    if (bgXtool != null && hasDarwinSdk(bgEnv)) {
-                        runIpaBuild(bgHost, bgInstall, bgXtool, bgSwift, bgRoot, scratchDir, bgFlags, bgScratch, bgEnv, bgCtx)
-                    } else {
-                        packageFallbackIpa(bgRoot, scratchDir, bgCtx)
-                    }
-                },
             )
-            return bridgeResult
         }
 
         return when {
@@ -754,43 +733,19 @@ class SwiftBuildSystem : BuildSystem {
                 ctx.reportToolDiagnostics("swiftc", lines)
                 ctx.reportStep(":swift:xtoolPackageIpa", "failed")
                 return TaskResult.Failed("xtool dev build --ipa exited with code $code")
-            } else {
-                ctx.buildLog.log(
-                    BuildLogEntry(
-                        "Apple Darwin SDK is not installed in xtool; falling back to native Swift compilation.",
-                        BuildLogLevel.INFO,
-                    ),
-                )
             }
         }
 
-        // Desktop / Swift-only fallback when xtool binary isn't installed on host
-        val execTargets = extractSwiftExecutableTargets(projectRoot)
-        val buildCmd = buildList {
-            add(swiftBin!!.toString())
-            add("build")
-            add("--build-system")
-            add("native")
-            addAll(scratchFlags)
-            addAll(androidFlags)
-            if (execTargets.size > 1) {
-                add("--product")
-                add(execTargets.first())
-            }
-        }
-        val compileRes = runToolCommand(
-            host,
-            buildCmd,
-            projectRoot,
-            env,
-            "swiftc",
-            ":swift:compileNative",
-            ctx,
+        val diagnostic = "Apple Darwin SDK (darwin.xtoolsdk) is required to build an arm64-apple-ios .ipa archive. " +
+            "Use 'swift:run' to run the interactive Cupertino app on this device, or install darwin.xtoolsdk."
+        ctx.buildLog.log(
+            BuildLogEntry(
+                "Stage darwin.xtoolsdk in ~/darwin.xtoolsdk or run 'xtool sdk install darwin.xtoolsdk' to enable arm64-apple-ios Mach-O .ipa cross-compilation.",
+                BuildLogLevel.WARN,
+            ),
         )
-        if (compileRes is TaskResult.Success) {
-            packageFallbackIpa(projectRoot, scratchDir, ctx)
-        }
-        return compileRes
+        ctx.buildLog.log(BuildLogEntry(diagnostic, BuildLogLevel.ERROR))
+        return TaskResult.Failed(diagnostic)
     }
 
     private fun seedIosSwiftModuleCacheIfNeeded(installation: RuntimeInstallation, projectRoot: Path) {
@@ -887,68 +842,6 @@ class SwiftBuildSystem : BuildSystem {
         ctx.buildLog.log(BuildLogEntry("Installing staged Apple Darwin SDK from ${sdkCandidate.fileName}...", BuildLogLevel.INFO))
         execStreaming(host, listOf(xtoolBin.toString(), "sdk", "install", sdkCandidate.toString()), projectRoot, env, ctx)
     }
-
-    private fun packageFallbackIpa(projectRoot: Path, scratchDir: Path?, ctx: TaskContext): Path? = runCatching {
-        val pkgName = extractSwiftPackageName(projectRoot)
-        val execTargets = extractSwiftExecutableTargets(projectRoot)
-        val candidateNames = (listOf(pkgName, "$pkgName-cupertino") + execTargets).distinct()
-        val buildDirs = listOfNotNull(
-            scratchDir,
-            projectRoot.resolve(".build"),
-            projectRoot.resolve(".building"),
-        ).filter { Files.isDirectory(it) }
-        val execCandidate = buildDirs.firstNotNullOfOrNull { buildDir ->
-            Files.walk(buildDir, 5).use { stream ->
-                stream.filter { Files.isRegularFile(it) && Files.isExecutable(it) && it.fileName.toString() in candidateNames }
-                    .findFirst().orElse(null)
-            }
-        }
-        val outDir = projectRoot.resolve("xtool")
-        Files.createDirectories(outDir)
-        val ipaPath = outDir.resolve("$pkgName.ipa")
-        val bundleId = extractBundleId(projectRoot, pkgName)
-        java.util.zip.ZipOutputStream(Files.newOutputStream(ipaPath)).use { zip ->
-            val appPrefix = "Payload/$pkgName.app/"
-            zip.putNextEntry(java.util.zip.ZipEntry("${appPrefix}Info.plist"))
-            val plist = """
-                <?xml version="1.0" encoding="UTF-8"?>
-                <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-                <plist version="1.0">
-                <dict>
-                    <key>CFBundleExecutable</key>
-                    <string>$pkgName</string>
-                    <key>CFBundleIdentifier</key>
-                    <string>$bundleId</string>
-                    <key>CFBundleName</key>
-                    <string>$pkgName</string>
-                    <key>CFBundlePackageType</key>
-                    <string>APPL</string>
-                    <key>CFBundleShortVersionString</key>
-                    <string>1.0</string>
-                    <key>CFBundleVersion</key>
-                    <string>1</string>
-                    <key>LSRequiresIPhoneOS</key>
-                    <true/>
-                </dict>
-                </plist>
-            """.trimIndent()
-            zip.write(plist.toByteArray(Charsets.UTF_8))
-            zip.closeEntry()
-
-            if (execCandidate != null && Files.isRegularFile(execCandidate)) {
-                zip.putNextEntry(java.util.zip.ZipEntry("$appPrefix$pkgName"))
-                Files.copy(execCandidate, zip)
-                zip.closeEntry()
-            }
-        }
-        ctx.buildLog.log(
-            BuildLogEntry(
-                "Packaged iOS app archive: ${projectRoot.relativize(ipaPath)} (${Files.size(ipaPath)} bytes)",
-                BuildLogLevel.INFO,
-            ),
-        )
-        ipaPath
-    }.getOrNull()
 
     private fun findBuiltSwiftExecutable(projectRoot: Path, scratchDir: Path?, preferredTarget: String?): Path? = runCatching {
         val pkgName = extractSwiftPackageName(projectRoot)

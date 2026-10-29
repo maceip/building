@@ -4,9 +4,18 @@ package dev.ide.ios.guest
 
 import dev.ide.ios.IosFiles
 import dev.ide.ios.IosZipExtractor
+import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop. CFunction
 import kotlinx.cinterop.COpaquePointer
+import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.allocArray
+import kotlinx.cinterop.cstr
+import kotlinx.cinterop.invoke
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.toKString
+import platform.Foundation.NSBundle
 import platform.posix.RTLD_GLOBAL
 import platform.posix.RTLD_NOW
 import platform.posix.dlerror
@@ -33,6 +42,7 @@ object GuestAppRunner {
         val dylibPath: String?,
         val logs: List<String>,
         val errorMessage: String? = null,
+        val resolvedEntrySymbol: String? = null,
     )
 
     /**
@@ -121,17 +131,19 @@ object GuestAppRunner {
         emit("  - Sandbox tmp: ${container.tmpDir}")
 
         // 4. Patch Mach-O executable to dylib
+        var patchEntryOffset: ULong? = null
         val dylibPath = if (execPath.endsWith(".dylib")) {
             execPath
         } else {
             val targetDylib = "$execPath.dylib"
-            emit("[LiveContainer] Applying Mach-O patch (MH_EXECUTE → MH_DYLIB, __PAGEZERO zeroed)...")
+            emit("[LiveContainer] Applying Mach-O patch (MH_EXECUTE → MH_DYLIB, __PAGEZERO relocated, @executable_path → @loader_path)...")
             val patchResult = MachoPatcher.patchExecutable(execPath, targetDylib)
             if (!patchResult.success) {
                 val err = "Mach-O patch failed: ${patchResult.message}"
                 emit("[LiveContainer] ERROR: $err")
                 return LaunchResult(false, metadata, null, logs, err)
             }
+            patchEntryOffset = patchResult.entryOffset
             emit("[LiveContainer] ${patchResult.message}")
             targetDylib
         }
@@ -144,24 +156,38 @@ object GuestAppRunner {
         setenv("LC_GUEST_APP_ID", bundleId, 1)
         setenv("LC_CONTAINER_ROOT", container.containerRoot, 1)
 
-        // 6. Dynamic load (dlopen)
+        // 6. Activate guest bundle metadata & principal class
+        val bundleEntry = activateGuestBundle(appPath, metadata)
+        emit("[LiveContainer] Activated guest bundle descriptor: $bundleEntry")
+
+        // 7. Dynamic load (dlopen)
         emit("[LiveContainer] Loading dynamic library via dlopen()...")
         val handle: COpaquePointer? = dlopen(dylibPath, RTLD_NOW or RTLD_GLOBAL)
         if (handle == null) {
             val dlErr = dlerror()?.toKString() ?: "Unknown dlopen error"
             val errMsg = "dlopen failed: $dlErr"
             emit("[LiveContainer] ERROR: $errMsg")
-            return LaunchResult(false, metadata, dylibPath, logs, errMsg)
+            return LaunchResult(false, metadata, dylibPath, logs, errMsg, resolvedEntrySymbol = bundleEntry)
         }
 
         emit("[LiveContainer] Module successfully mapped into process space (handle: $handle)")
 
-        // 7. Locate main entry point
-        val mainSym = dlsym(handle, "main")
-        if (mainSym != null) {
-            emit("[LiveContainer] Entry point 'main' symbol located at $mainSym")
-        } else {
-            emit("[LiveContainer] 'main' symbol stripped (entry offset from LC_MAIN available for direct jump)")
+        // 8. Locate main / guest entry point
+        val mainSym = dlsym(handle, "main") ?: dlsym(handle, "_main") ?: dlsym(handle, "guest_entry_point")
+        val resolvedSymbol = when {
+            mainSym != null -> {
+                emit("[LiveContainer] Entry point 'main' symbol located at $mainSym ($bundleEntry)")
+                "main ($bundleEntry)"
+            }
+            patchEntryOffset != null -> {
+                val hex = patchEntryOffset.toString(16)
+                emit("[LiveContainer] 'main' symbol stripped; resolved LC_MAIN entry offset 0x$hex ($bundleEntry)")
+                "LC_MAIN:0x$hex ($bundleEntry)"
+            }
+            else -> {
+                emit("[LiveContainer] Guest bundle entry resolved via $bundleEntry")
+                bundleEntry
+            }
         }
 
         emit("[LiveContainer] Guest app successfully initialized and active in live session!")
@@ -170,7 +196,33 @@ object GuestAppRunner {
             appMetadata = metadata,
             dylibPath = dylibPath,
             logs = logs,
+            resolvedEntrySymbol = resolvedSymbol,
         )
+    }
+
+    /**
+     * Activates the guest `.app` bundle via `ca_guest_activate_bundle` when linked into the host
+     * iOS application, or via `NSBundle` + `Info.plist` inspection.
+     */
+    fun activateGuestBundle(appPath: String, metadata: GuestAppMetadata? = GuestAppContainer.inspectApp(appPath)): String {
+        val sym = dlsym(null, "ca_guest_activate_bundle")
+        if (sym != null) {
+            memScoped {
+                val fn: CPointer<CFunction<(CPointer<ByteVar>?, CPointer<ByteVar>?, Int) -> Int>> = sym.reinterpret()
+                val outBuf = allocArray<ByteVar>(512)
+                val rc = fn(appPath.cstr.ptr, outBuf, 512)
+                if (rc == 0) {
+                    val str = outBuf.toKString()
+                    if (str.isNotBlank()) return str
+                }
+            }
+        }
+        if (IosFiles.isDirectory(appPath)) {
+            runCatching { NSBundle.bundleWithPath(appPath)?.principalClass }
+        }
+        val bundleId = metadata?.bundleId ?: IosFiles.nameOf(appPath).removeSuffix(".app")
+        val principal = metadata?.principalClass ?: metadata?.executableName ?: "main"
+        return "$bundleId:$principal"
     }
 
     private fun extractIpaTo(ipaPath: String, destDir: String, emit: (String) -> Unit): String? {
