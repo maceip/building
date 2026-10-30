@@ -369,5 +369,9 @@
     "termux-exec": "fd6a06a6a74c6fba2d1cec56dc8b5726e6488918322b06fd19fe5cff34b28a5d",
     "zlib": "75e7d0af17fcc3b40004309fdc00a1ddb9ae08346dce5e269902c34ac3966ac9",
     "zstd": "e1b4a5113648da8de189620ba1fce74c48b2d0833d9043391b9a1c91fb606fd3"
+  },
+  "swiftui-bridge-sdk": {
+    "requiredSwiftVersion": "6.4.1",
+    "note": "The Cupertino SwiftUI bridge SDK must be compiled with the same Swift version as the runtime pack (the 'swift' package above). A version mismatch breaks on-device SwiftUI compilation with 'module compiled with Swift X cannot be imported by the Swift Y compiler'. Rebuild the bridge with the matching toolchain via tools/runtime-pack/swiftui-bridge-sdk/build-on-device.sh; the bridge source is version-pinned in that directory's VERSION file, and stage_xtool.py enforces the match."
   }
 }

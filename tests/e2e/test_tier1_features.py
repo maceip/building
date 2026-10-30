@@ -50,24 +50,10 @@ class Tier1FeatureCoverageTest(unittest.TestCase):
         res = subprocess.run(cmd, cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.assertEqual(res.returncode, 0, f"Tier 1 Swift ViewHost tests failed:\n{res.stdout}\n{res.stderr}")
 
-    def test_opaque_box_viewnode_json_schema(self):
-        """Tier 1: Opaque-box contract validation of ViewNode JSON line structure."""
-        sample_node = {
-            "type": "VStack",
-            "id": "node_01",
-            "props": {"spacing": 12, "alignment": "center"},
-            "modifiers": [{"kind": "padding", "args": {"all": 16.0}}],
-            "children": [
-                {"type": "Text", "id": "node_02", "props": {"text": "Header"}},
-                {"type": "Button", "id": "node_03", "props": {"title": "Click", "onTap": 999}}
-            ]
-        }
-        encoded = json.dumps(sample_node)
-        decoded = json.loads(encoded)
-        self.assertEqual(decoded["type"], "VStack")
-        self.assertEqual(decoded["id"], "node_01")
-        self.assertEqual(len(decoded["children"]), 2)
-        self.assertEqual(decoded["children"][1]["props"]["onTap"], 999)
+    # Removed: test_opaque_box_viewnode_json_schema. The previous version round-tripped
+    # a hand-written dict through Python's json module, which exercises no production
+    # code. ViewNode JSON decoding is covered by the Kotlin tests invoked above
+    # (SwiftCupertinoE2ETest.tier1*), which parse ViewNode lines with the real decoder.
 
 if __name__ == "__main__":
     unittest.main()

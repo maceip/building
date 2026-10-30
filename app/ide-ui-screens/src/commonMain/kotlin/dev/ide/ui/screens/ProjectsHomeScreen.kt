@@ -401,6 +401,15 @@ fun ProjectsHomeScreen(
                     )
                 }
             }
+            if (onCloneAndOpen != null || onCloneRepository != null || onCloneGit != null) {
+                item("quickClone") {
+                    QuickCloneBar(
+                        onCloneUrl = { rawUrl ->
+                            dispatchQuickCloneUrl(rawUrl, onCloneAndOpen, onCloneRepository ?: onCloneGit)
+                        },
+                    )
+                }
+            }
             item("segments") {
                 SegmentRow(
                     segment = segment,
@@ -463,6 +472,10 @@ fun ProjectsHomeScreen(
             selectedStack = selectedStack,
             onSelectStack = { selectedStack = it },
             onCloneGit = onCloneGit?.let { { sheet = null; it() } },
+            onCloneUrl = { url ->
+                sheet = null
+                dispatchQuickCloneUrl(url, onCloneAndOpen, onCloneRepository ?: onCloneGit)
+            },
             onOpenFolder = onImportProject?.let { { sheet = null; it() } },
             onImportPackage = onImportPackage?.let { { sheet = null; it() } }
                 ?: onImportProject?.let { { sheet = null; it() } },
@@ -954,6 +967,7 @@ private fun NewProjectSheet(
     selectedStack: Int = 0,
     onSelectStack: (Int) -> Unit = {},
     onCloneGit: (() -> Unit)? = null,
+    onCloneUrl: (String) -> Unit = {},
     onOpenFolder: (() -> Unit)? = null,
     onImportPackage: (() -> Unit)? = null,
 ) {
@@ -971,6 +985,7 @@ private fun NewProjectSheet(
             onClose = onDismiss,
             selectedStack = selectedStack,
             onSelectStack = onSelectStack,
+            onCloneUrl = { url -> onCloneUrl(url) },
             onCloneGit = onCloneGit ?: {},
             onOpenFolder = onOpenFolder ?: {},
             onImportPackage = onImportPackage ?: {},

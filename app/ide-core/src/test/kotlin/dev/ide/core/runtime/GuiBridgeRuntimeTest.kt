@@ -246,4 +246,91 @@ class GuiBridgeRuntimeTest {
             }
         }
     }
+
+    @Test
+    fun focusedCompanionSourcesIncludesSiblingModuleFiles() {
+        // Reproduces the on-device regression: a focused preview that references a type declared in
+        // another module file must compile together with that sibling file, otherwise the build fails
+        // with "cannot find type 'X' in scope".
+        val projectRoot = Files.createTempDirectory("focused-companion-project")
+        val modelsDir = projectRoot.resolve("Calculator/Models")
+        val stylesDir = projectRoot.resolve("Calculator/Styles")
+        Files.createDirectories(modelsDir)
+        Files.createDirectories(stylesDir)
+
+        // Type declared in a sibling module file (the kind that used to be dropped).
+        modelsDir.resolve("ButtonType.swift").writeText(
+            """
+            import Foundation
+            import SwiftUI
+
+            enum ButtonType: Hashable {
+                case digit(Int)
+            }
+            """.trimIndent(),
+        )
+
+        // Preview candidate references ButtonType and lives in a different directory.
+        stylesDir.resolve("CalculatorButtonStyle.swift").writeText(
+            """
+            import SwiftUI
+
+            struct CalculatorButtonStyle: ButtonStyle {
+                func makeBody(configuration: Configuration) -> some View { EmptyView() }
+            }
+
+            struct CalculatorButtonStyle_Previews: PreviewProvider {
+                static let buttonType: ButtonType = .digit(0)
+                static var previews: some View { EmptyView() }
+            }
+            """.trimIndent(),
+        )
+
+        // Real app entry point must be excluded so it does not collide with the shadow @main.
+        projectRoot.resolve("CalculatorApp.swift").writeText(
+            """
+            import SwiftUI
+
+            @main
+            struct CalculatorApp: App {
+                var body: some Scene { WindowGroup { EmptyView() } }
+            }
+            """.trimIndent(),
+        )
+
+        val sources = GuiBridgeRuntime.focusedCompanionSources(projectRoot, emptySet())
+            .map { it.fileName.toString() }
+            .toSet()
+
+        assertTrue(sources.contains("ButtonType.swift"), "Sibling Models/ButtonType.swift must be a focused companion")
+        assertTrue(sources.contains("CalculatorButtonStyle.swift"), "The preview candidate must be a focused companion")
+        assertFalse(sources.contains("CalculatorApp.swift"), "The real @main App entry must be excluded from the focused set")
+    }
+
+    @Test
+    fun focusedCompanionSourcesDropsUnsupportedImportFiles() {
+        // A sibling that depends on an unsupported framework must not be pulled into the focused
+        // module set, which would otherwise reintroduce the unsupported-import failure.
+        val projectRoot = Files.createTempDirectory("focused-companion-unsupported")
+        Files.createDirectories(projectRoot)
+        projectRoot.resolve("Good.swift").writeText(
+            """
+            import SwiftUI
+            struct GoodView: View { var body: some View { EmptyView() } }
+            """.trimIndent(),
+        )
+        projectRoot.resolve("Unsupported.swift").writeText(
+            """
+            import SomeWeirdFramework
+            struct Thing { let x: Int = 0 }
+            """.trimIndent(),
+        )
+
+        val sources = GuiBridgeRuntime.focusedCompanionSources(projectRoot, emptySet())
+            .map { it.fileName.toString() }
+            .toSet()
+
+        assertTrue(sources.contains("Good.swift"), "Safe file must be a focused companion")
+        assertFalse(sources.contains("Unsupported.swift"), "Files with unsupported imports must be dropped")
+    }
 }
