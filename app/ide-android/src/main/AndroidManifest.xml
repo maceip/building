@@ -20,7 +20,14 @@
         <intent>
             <action android:name="dev.ide.codeassist.action.PLUGIN" />
         </intent>
+        <!-- Android System AI Core (Gemini Nano) package & service visibility for the Self-Serve LiteRT-LM Corner. -->
+        <package android:name="com.google.android.aicore" />
+        <intent>
+            <action android:name="com.google.android.apps.aicore.service.BIND_SERVICE" />
+        </intent>
     </queries>
+
+    <uses-permission android:name="com.google.android.apps.aicore.service.BIND_SERVICE" />
 
     <!-- The android "Run" builds a debug APK and installs it via PackageInstaller; the OS shows its own
          install-confirmation. The user must also grant "install unknown apps" to CodeAssist (we deep-link
@@ -37,11 +44,8 @@
          the separate daemon. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <!-- The bundled aapt2/zipalign (lib*.so) must be EXTRACTED into nativeLibraryDir at install so they can
          be exec'd (ART forbids executing binaries from anywhere else). That extraction is driven by
@@ -194,18 +198,6 @@
                     android:value="Running the user's Gradle build in a separate JDK so the project compiles with the Android Gradle Plugin while the editor stays open." />
         </service>
 
-        <!-- Keeps Git clone/fetch/pull/push TCP connections alive and prevents Android's cached-app
-             socket destroyer (ECONNABORTED / 'Software caused connection abort') when the user switches
-             focused apps mid-clone. -->
-        <service
-                android:name=".vcs.VcsForegroundService"
-                android:exported="false"
-                android:foregroundServiceType="dataSync|specialUse">
-            <property
-                    android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                    android:value="Cloning and synchronizing user-initiated Git repositories so network transfers complete uninterrupted if the user switches focused apps." />
-        </service>
-
         <service
                 android:name=".daemon.BuildDaemonService"
                 android:process=":build"
@@ -296,6 +288,21 @@
                 android:authorities="${applicationId}.litertlm"
                 android:exported="true"
                 android:grantUriPermissions="true" />
+
+        <!-- Home-screen AppWidget showing Daily / Weekly / Monthly GitHub Trending repos + JIT app previews. -->
+        <receiver
+                android:name=".widget.TrendingReposAppWidgetProvider"
+                android:exported="true"
+                android:label="GitHub Trending Repos">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="dev.ide.android.widget.ACTION_CYCLE_PERIOD" />
+                <action android:name="dev.ide.android.widget.ACTION_CYCLE_LANGUAGE" />
+            </intent-filter>
+            <meta-data
+                    android:name="android.appwidget.provider"
+                    android:resource="@xml/trending_repos_widget_info" />
+        </receiver>
     </application>
 
 </manifest>

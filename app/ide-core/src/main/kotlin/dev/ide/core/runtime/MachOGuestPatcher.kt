@@ -20,6 +20,10 @@ object MachOGuestPatcher {
     private const val MH_EXECUTE = 0x2
     private const val MH_DYLIB = 0x6
     private const val LC_SEGMENT_64 = 0x19
+    private const val LC_LOAD_DYLIB = 0x0C
+    private const val LC_LOAD_WEAK_DYLIB = 0x80000018.toInt()
+    private const val LC_RPATH = 0x8000001C.toInt()
+    private const val LC_REEXPORT_DYLIB = 0x8000001F.toInt()
 
     data class PatchReport(
         val path: Path,
@@ -60,6 +64,21 @@ object MachOGuestPatcher {
                     buf.putLong(off + 24, 0xFFFFC000L)
                     buf.putLong(off + 32, 0x4000L)
                     pageZeroChanged = true
+                }
+            } else if ((cmd == LC_RPATH || cmd == LC_LOAD_DYLIB || cmd == LC_LOAD_WEAK_DYLIB || cmd == LC_REEXPORT_DYLIB) && cmdsize > 12) {
+                val strOffset = buf.getInt(off + 8)
+                val start = if (strOffset in 8 until cmdsize) off + strOffset else off + 8
+                val end = (off + cmdsize).coerceAtMost(input.size)
+                if (start < end) {
+                    val strBytes = input.copyOfRange(start, end)
+                    val nulIdx = strBytes.indexOf(0.toByte()).let { if (it < 0) strBytes.size else it }
+                    val rawStr = String(strBytes, 0, nulIdx, Charsets.US_ASCII)
+                    if (rawStr.contains("@executable_path")) {
+                        val replaced = rawStr.replace("@executable_path", "@loader_path").toByteArray(Charsets.US_ASCII)
+                        for (k in start until end) input[k] = 0
+                        val copyLen = replaced.size.coerceAtMost(end - start - 1)
+                        System.arraycopy(replaced, 0, input, start, copyLen)
+                    }
                 }
             }
             if (cmdsize <= 0) break

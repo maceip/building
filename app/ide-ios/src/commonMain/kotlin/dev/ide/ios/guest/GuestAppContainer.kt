@@ -11,6 +11,7 @@ data class GuestAppMetadata(
     val version: String,
     val appBundlePath: String,
     val executablePath: String,
+    val principalClass: String? = null,
 )
 
 data class GuestContainerPaths(
@@ -90,6 +91,8 @@ object GuestAppContainer {
         val version = (dict?.get("CFBundleShortVersionString") as? String)
             ?: (dict?.get("CFBundleVersion") as? String)
             ?: "1.0"
+        val principalClass = (dict?.get("UIPrincipalClass") as? String)
+            ?: (dict?.get("NSPrincipalClass") as? String)
 
         val executablePath = IosFiles.join(appPath, executableName)
 
@@ -100,6 +103,7 @@ object GuestAppContainer {
             version = version,
             appBundlePath = appPath,
             executablePath = executablePath,
+            principalClass = principalClass,
         )
     }
 }

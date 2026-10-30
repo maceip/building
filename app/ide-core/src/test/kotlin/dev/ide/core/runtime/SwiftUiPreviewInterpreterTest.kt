@@ -179,4 +179,80 @@ class SwiftUiPreviewInterpreterTest {
         assertTrue(tree.contains("\"type\":\"HStack\""), tree)
         assertTrue(tree.contains("\"type\":\"Spacer\""), tree)
     }
+
+    @Test
+    fun multiStructExpansionVectorPathNavigationTabViewAndSheet() {
+        val mainSource = """
+            import SwiftUI
+
+            struct ContentView: View {
+                @State private var selectedTab = 0
+                @State private var showModal = false
+
+                var body: some View {
+                    TabView(selection: ${'$'}selectedTab) {
+                        NavigationStack {
+                            VStack {
+                                HeaderBadge()
+                                Path { path in
+                                    path.move(to: CGPoint(x: 10, y: 15))
+                                    path.addLine(to: CGPoint(x: 80, y: 90))
+                                    path.closeSubpath()
+                                }
+                                .stroke(Color.blue, lineWidth: 3)
+                                NavigationLink("Open Details") {
+                                    Text("Detail Destination Screen")
+                                }
+                                Button("Show Sheet") { showModal.toggle() }
+                            }
+                            .sheet(isPresented: ${'$'}showModal) {
+                                Text("Presented Modal Content")
+                            }
+                        }
+                        .tabItem {
+                            Label("Home", systemImage: "house")
+                        }
+                        Text("Settings Tab Body")
+                            .tabItem {
+                                Label("Settings", systemImage: "gear")
+                            }
+                    }
+                }
+            }
+        """.trimIndent()
+
+        val badgeSource = """
+            import SwiftUI
+
+            struct HeaderBadge: View {
+                var body: some View {
+                    Text("Custom Badge Expanded")
+                }
+            }
+        """.trimIndent()
+
+        val session = SwiftUiPreviewInterpreter.PreviewSession()
+        val tree1 = SwiftUiPreviewInterpreter.interpret(listOf(mainSource, badgeSource), session)
+
+        assertTrue(tree1.contains("Custom Badge Expanded"), "Multi-file custom View struct must be expanded: $tree1")
+        assertTrue(tree1.contains("\"type\":\"TabView\""), "TabView must be present: $tree1")
+        assertTrue(tree1.contains("\"type\":\"NavigationStack\""), "NavigationStack must be present: $tree1")
+        assertTrue(tree1.contains("\"type\":\"NavigationLink\""), "NavigationLink must be present: $tree1")
+        assertTrue(tree1.contains("Detail Destination Screen"), "NavigationLink destination must be preserved: $tree1")
+        assertTrue(tree1.contains("M 10 15 L 80 90 Z"), "Path closure must serialize SVG path commands: $tree1")
+        assertTrue(tree1.contains("\"type\":\"Sheet\""), "Sheet modifier must attach Sheet node: $tree1")
+        assertTrue(tree1.contains("\"isPresented\":false"), "Sheet initially not presented: $tree1")
+
+        // Tap "Show Sheet" button -> toggles showModal to true
+        val onTapId = Regex(""""onTap":(\d+)""").find(tree1)!!.groupValues[1]
+        assertTrue(session.dispatch("""{"id":"$onTapId","kind":"void"}"""))
+        val tree2 = SwiftUiPreviewInterpreter.interpret(listOf(mainSource, badgeSource), session)
+        assertTrue(tree2.contains("\"isPresented\":true"), "Sheet must become presented after .toggle(): $tree2")
+
+        // Switch tab via onSelect callback
+        val onSelectId = Regex(""""onSelect":(\d+)""").find(tree2)!!.groupValues[1]
+        assertTrue(session.dispatch("""{"id":"$onSelectId","kind":"int","value":1}"""))
+        val tree3 = SwiftUiPreviewInterpreter.interpret(listOf(mainSource, badgeSource), session)
+        assertTrue(tree3.contains("\"selectedIndex\":1"), "TabView selectedIndex must update to 1: $tree3")
+    }
 }

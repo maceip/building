@@ -9,6 +9,7 @@ import dev.ide.ios.store.StoreConfig
 import dev.ide.ios.discovery.IosDiscoveryBackend
 import dev.ide.ios.agent.IosAgentService
 import dev.ide.ios.guest.*
+import dev.ide.ios.swift.IosSwiftUiRuntime
 import dev.ide.android.apk.ApkBuilder
 import dev.ide.android.apk.ApkRuntime
 import dev.ide.ui.backend.GitHubDiscoveryService
@@ -759,6 +760,8 @@ class IosBackend(
     private var runSurfaceHeight = 640
     private var runFrameSeq = 0L
     private var lastRunFramePath: String? = null
+    private var activeSwiftUiSession: IosSwiftUiRuntime.SwiftUiSession? = null
+    private var activeSwiftUiProjectRoot: String? = null
 
     private data class LoweredCandidate(
         val path: String,
@@ -831,6 +834,10 @@ class IosBackend(
                 patchGuestAppArtifacts(root)
                 return
             }
+            "swift:run", "swift:preview" -> {
+                runSwiftUiProjectSession(root, id)
+                return
+            }
             "run" -> {
                 runBuild()
                 return
@@ -858,6 +865,10 @@ class IosBackend(
         val guestArtifacts = GuestAppRunner.findGuestArtifacts(root)
         if (guestArtifacts.isNotEmpty()) {
             runGuestAppSession(root)
+            return
+        }
+        if (active?.isSwift == true || projectModel.isSwift(root)) {
+            runSwiftUiProjectSession(root, "swift run (Cupertino UI)")
             return
         }
         val tasks = IosRuntimeRunner.discoverTasks(root)
@@ -1169,7 +1180,98 @@ class IosBackend(
 
     private val needsFrameRender = MutableStateFlow(false)
 
+    private fun runSwiftUiProjectSession(root: String, taskLabel: String) {
+        val currentRunning = activeRunSession
+        if (currentRunning != null) {
+            stopBuild()
+        }
+        val sessionId = (activeRunSession ?: 0) + 1
+        activeRunSession = sessionId
+
+        val swiftSession = IosSwiftUiRuntime.SwiftUiSession()
+        activeSwiftUiSession = swiftSession
+        activeSwiftUiProjectRoot = root
+
+        _buildState.value = BuildState(status = RunStatus.Running)
+        _runConsole.value = RunConsoleUi(
+            id = sessionId,
+            moduleName = active?.name ?: IosFiles.nameOf(root),
+            mainClass = "Cupertino Bridge ($taskLabel)",
+            phase = RunPhase.Running,
+            transcript = emptyList(),
+            acceptsInput = true,
+        )
+
+        runJob = backendScope.launch {
+            val onChunk: (ConsoleChunk) -> Unit = { chunk ->
+                _runConsole.update { console ->
+                    console?.copy(transcript = console.transcript + chunk)
+                }
+            }
+            onChunk(ConsoleChunk("=== Launching SwiftUI Cupertino Runtime ($taskLabel) ===\n", ConsoleChunkKind.SYSTEM))
+            val bufferMap = LinkedHashMap<String, String>()
+            for (k in buffers.keys) {
+                buffers[k]?.let { bufferMap[k] = it }
+            }
+            val eval = withContext(ioDispatcher) {
+                IosSwiftUiRuntime.evaluateProject(
+                    projectRoot = root,
+                    session = swiftSession,
+                    buffers = bufferMap,
+                    renderPng = true,
+                )
+            }
+            onChunk(
+                ConsoleChunk(
+                    "[SwiftUI Runtime] Parsed ${eval.swiftFiles.size} Swift files (${eval.discoveredTypes.size} types) in ${eval.projectName}\n",
+                    ConsoleChunkKind.SYSTEM,
+                ),
+            )
+            onChunk(
+                ConsoleChunk(
+                    "[SwiftUI Runtime] Root view: ${eval.rootViewName}\n",
+                    ConsoleChunkKind.OUTPUT,
+                ),
+            )
+            if (eval.previewPngPath != null) {
+                onChunk(
+                    ConsoleChunk(
+                        "[SwiftUI Runtime] Rendered Cupertino preview PNG: ${eval.previewPngPath} (${eval.previewPngBytes?.size ?: 0} bytes)\n",
+                        ConsoleChunkKind.SYSTEM,
+                    ),
+                )
+            }
+            val frameUi = RunFrameUi(
+                path = eval.viewNodeJson,
+                width = 0,
+                height = 0,
+                seq = ++runFrameSeq,
+            )
+            _runConsole.update {
+                it?.copy(
+                    mainClass = "Cupertino Bridge (${eval.rootViewName})",
+                    phase = RunPhase.Running,
+                    acceptsInput = true,
+                    frame = frameUi,
+                )
+            }
+            _buildState.value = BuildState(
+                status = RunStatus.Succeeded,
+                log = buildList {
+                    add(BuildLogLine("Evaluated SwiftUI target '${eval.rootViewName}' (${eval.swiftFiles.size} files)", UiLogLevel.Info))
+                    if (eval.previewPngPath != null) {
+                        add(BuildLogLine("Rendered Cupertino preview PNG: ${eval.previewPngPath}", UiLogLevel.Info))
+                    }
+                },
+            )
+        }
+    }
+
     private fun runExternalRuntimeTask(task: IosRuntimeRunner.DiscoveredTask, root: String) {
+        if (task.runtime == IosRuntimeRunner.RuntimeKind.SWIFT) {
+            runSwiftUiProjectSession(root, task.option.label)
+            return
+        }
         val currentRunning = activeRunSession
         if (currentRunning != null) {
             stopBuild()
@@ -1587,6 +1689,8 @@ class IosBackend(
     override fun stopBuild() {
         val s = activeRunSession
         activeRunSession = null
+        activeSwiftUiSession = null
+        activeSwiftUiProjectRoot = null
         runJob?.cancel()
         runJob = null
         lastRunFramePath?.let { IosFiles.delete(it) }
@@ -1601,6 +1705,36 @@ class IosBackend(
     override fun sendRunInput(text: String) {
         val line = if (text.endsWith("\n")) text else "$text\n"
         val chunk = ConsoleChunk(line, ConsoleChunkKind.INPUT)
+        val swiftSession = activeSwiftUiSession
+        val swiftRoot = activeSwiftUiProjectRoot
+        if (swiftSession != null && swiftRoot != null && text.trim().startsWith("{")) {
+            val changed = swiftSession.dispatch(text.trim())
+            if (changed) {
+                val bufferMap = LinkedHashMap<String, String>()
+                for (k in buffers.keys) {
+                    buffers[k]?.let { bufferMap[k] = it }
+                }
+                val updated = IosSwiftUiRuntime.evaluateProject(
+                    projectRoot = swiftRoot,
+                    session = swiftSession,
+                    buffers = bufferMap,
+                    renderPng = false,
+                )
+                val nextFrame = RunFrameUi(
+                    path = updated.viewNodeJson,
+                    width = 0,
+                    height = 0,
+                    seq = ++runFrameSeq,
+                )
+                _runConsole.update { console ->
+                    console?.copy(
+                        transcript = console.transcript + chunk,
+                        frame = nextFrame,
+                    )
+                }
+                return
+            }
+        }
         if (_runConsole.value == null) {
             _runConsole.value = RunConsoleUi(
                 id = 1,

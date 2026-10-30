@@ -5,11 +5,15 @@ import dev.ide.core.discovery.GitHubDiscoveryClient
 import dev.ide.core.discovery.GitHubDiscoveryEngine
 import dev.ide.core.discovery.RepoShapeEngine
 import dev.ide.ui.backend.GitHubDiscoveryService
+import dev.ide.ui.backend.SUPPORTED_PHONE_LANGUAGES
 import dev.ide.ui.backend.UiDiscoveredRepo
 import dev.ide.ui.backend.UiDiscoveryFeed
 import dev.ide.ui.backend.UiGitHubAuthState
 import dev.ide.ui.backend.UiNorthStarBenchmark
 import dev.ide.ui.backend.UiPeerProject
+import dev.ide.ui.backend.UiScreenshotSourceTier
+import dev.ide.ui.backend.UiSupportedPhoneLanguage
+import dev.ide.ui.backend.UiTrendingPeriod
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,15 +29,16 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class DiscoveryBackend(
     private val client: GitHubDiscoveryClient = GitHubDiscoveryClient(),
-    private val cacheDir: Path? = null
+    private val cacheDir: Path? = null,
+    private val localProjectsDir: Path? = null
 ) : GitHubDiscoveryService {
 
     private val feedCache = ConcurrentHashMap<String, UiDiscoveryFeed>()
+    private val relatedCache = ConcurrentHashMap<String, List<UiPeerProject>>()
     private val _authState = MutableStateFlow(UiGitHubAuthState())
     override val authState: StateFlow<UiGitHubAuthState> = _authState.asStateFlow()
 
     init {
-        // Restore persisted PAT if available
         if (cacheDir != null) {
             val tokenFile = cacheDir.resolve("discovery/pat.token")
             if (Files.exists(tokenFile)) {
@@ -59,27 +64,100 @@ class DiscoveryBackend(
 
     override fun supported(): Boolean = true
 
+    override fun supportedLanguages(): List<UiSupportedPhoneLanguage> = SUPPORTED_PHONE_LANGUAGES
+
     override suspend fun getFeed(
         topic: String,
         language: String,
         refresh: Boolean
     ): UiDiscoveryFeed = withContext(Dispatchers.IO) {
-        val cacheKey = "$topic:$language"
+        val cacheKey = "feed:$topic:$language"
         val held = feedCache[cacheKey]
         if (!refresh && held != null) {
             return@withContext held
         }
 
         val rawFeed = client.getDiscoveryFeed(topic = topic, language = language)
-
-        val uiFeed = UiDiscoveryFeed(
-            trendingHero = rawFeed.trendingHero.map { it.toUi() },
-            northStarBenchmarks = rawFeed.northStarBenchmarks.map { it.toUi() },
-            authorPeerPicks = rawFeed.authorPeerPicks.map { it.toUi() },
-            highVelocityRising = rawFeed.highVelocityRising.map { it.toUi() }
-        )
+        val uiFeed = rawFeed.toUiFeed(UiTrendingPeriod.DAILY, language.ifBlank { topic })
         feedCache[cacheKey] = uiFeed
         uiFeed
+    }
+
+    override suspend fun getTrendingFeed(
+        language: String,
+        period: UiTrendingPeriod,
+        refresh: Boolean
+    ): UiDiscoveryFeed = withContext(Dispatchers.IO) {
+        val normLang = language.lowercase().trim().ifBlank { "all" }
+        val cacheKey = "trending:$normLang:${period.sinceParam}"
+        val held = feedCache[cacheKey]
+        if (!refresh && held != null) {
+            return@withContext held
+        }
+
+        val rawFeed = client.getTrendingFeed(
+            language = normLang,
+            period = period.sinceParam,
+            limit = 10,
+            preferLive = refresh
+        )
+        val uiFeed = rawFeed.toUiFeed(period, normLang)
+        feedCache[cacheKey] = uiFeed
+        uiFeed
+    }
+
+    override suspend fun getRelatedAndAuthorNetwork(
+        repo: UiDiscoveredRepo,
+        refresh: Boolean
+    ): List<UiPeerProject> = withContext(Dispatchers.IO) {
+        val key = "${repo.owner}/${repo.name}".lowercase()
+        val held = relatedCache[key]
+        if (!refresh && !held.isNullOrEmpty()) {
+            return@withContext held
+        }
+
+        val peers = client.crawlRelatedAndAuthorNetwork(
+            owner = repo.owner,
+            repoName = repo.name,
+            language = repo.language,
+            description = repo.description,
+            topics = repo.topics,
+            limit = 16
+        ).map { it.toUi() }
+
+        if (peers.isNotEmpty()) {
+            relatedCache[key] = peers
+        }
+        peers
+    }
+
+    override suspend fun resolveOrGenerateAppImage(
+        repo: UiDiscoveredRepo,
+        forceLocalBuild: Boolean
+    ): Pair<String, UiScreenshotSourceTier>? = withContext(Dispatchers.IO) {
+        val candidateLocalDir = localProjectsDir?.let { root ->
+            val byName = root.resolve(repo.name)
+            val bySlug = root.resolve("${repo.owner}-${repo.name}")
+            when {
+                Files.isDirectory(byName) -> byName
+                Files.isDirectory(bySlug) -> bySlug
+                else -> null
+            }
+        }
+
+        val resolved = client.resolveOrGenerateAppImage(
+            owner = repo.owner,
+            repoName = repo.name,
+            language = repo.language,
+            description = repo.description,
+            defaultBranch = repo.defaultBranch,
+            homepageUrl = repo.homepageUrl,
+            forceLocalBuild = forceLocalBuild,
+            localRepoDir = candidateLocalDir
+        ) ?: return@withContext null
+
+        val tierEnum = mapTierString(resolved.second)
+        resolved.first to tierEnum
     }
 
     override suspend fun search(query: String): List<UiDiscoveredRepo> = withContext(Dispatchers.IO) {
@@ -93,6 +171,25 @@ class DiscoveryBackend(
 
     override suspend fun loadScreenshotBytes(url: String): ByteArray? = withContext(Dispatchers.IO) {
         client.loadScreenshotBytes(url)
+    }
+
+    override suspend fun fetchReadmeMarkdown(repo: UiDiscoveredRepo): String = withContext(Dispatchers.IO) {
+        client.fetchRepositoryReadmeMarkdown(
+            owner = repo.owner,
+            repoName = repo.name,
+            defaultBranch = repo.defaultBranch,
+            description = repo.description,
+            language = repo.language,
+            stars = repo.stars,
+            starsInPeriod = repo.starsInPeriod,
+            periodLabel = repo.trendingPeriod.velocitySuffix,
+            htmlUrl = repo.htmlUrl,
+            homepageUrl = repo.homepageUrl
+        )
+    }
+
+    override suspend fun getBundledAppReadmeMarkdown(): String = withContext(Dispatchers.IO) {
+        client.loadBundledAppReadmeMarkdown()
     }
 
     override suspend fun submitToken(token: String): Boolean = withContext(Dispatchers.IO) {
@@ -113,6 +210,7 @@ class DiscoveryBackend(
                 }
             }
             feedCache.clear()
+            relatedCache.clear()
             _authState.value = UiGitHubAuthState(
                 isAuthenticated = true,
                 username = verified.first,
@@ -135,6 +233,7 @@ class DiscoveryBackend(
             runCatching { Files.deleteIfExists(tokenFile) }
         }
         feedCache.clear()
+        relatedCache.clear()
         val rate = client.fetchRateLimit(null)
         _authState.value = UiGitHubAuthState(
             isAuthenticated = false,
@@ -146,8 +245,36 @@ class DiscoveryBackend(
         )
     }
 
+    private fun GitHubDiscoveryEngine.DiscoveryFeed.toUiFeed(
+        period: UiTrendingPeriod,
+        selectedLang: String
+    ): UiDiscoveryFeed {
+        // Seed relatedCache from any pre-bundled relatedPeers on discovered repos
+        for (r in trendingHero) {
+            if (r.relatedPeers.isNotEmpty()) {
+                val key = "${r.owner}/${r.name}".lowercase()
+                relatedCache.putIfAbsent(key, r.relatedPeers.map { it.toUi() })
+            }
+        }
+        return UiDiscoveryFeed(
+            trendingHero = trendingHero.map { it.toUi() },
+            northStarBenchmarks = northStarBenchmarks.map { it.toUi() },
+            authorPeerPicks = authorPeerPicks.map { it.toUi() },
+            highVelocityRising = highVelocityRising.map { it.toUi() },
+            period = period,
+            selectedLanguage = selectedLang,
+            isFromBuildBundle = isFromBuildBundle,
+            bundledAtIso = bundledAtIso
+        )
+    }
+
     private fun GitHubDiscoveryEngine.DiscoveredRepository.toUi(): UiDiscoveredRepo {
-        val bestShot = screenshots.firstOrNull()?.url
+        val bestShot = localScreenshotPath ?: screenshots.firstOrNull()?.url
+        val periodEnum = when (trendingPeriod.lowercase()) {
+            "weekly" -> UiTrendingPeriod.WEEKLY
+            "monthly" -> UiTrendingPeriod.MONTHLY
+            else -> UiTrendingPeriod.DAILY
+        }
         return UiDiscoveredRepo(
             slug = slug,
             owner = owner,
@@ -167,8 +294,24 @@ class DiscoveryBackend(
             usesNativeNdk = capabilities.usesNativeNdk,
             permissions = capabilities.requestedPermissions,
             featureTags = capabilities.coreFeatureTags,
-            topics = genome.topics.toList()
+            topics = genome.topics.toList(),
+            starsInPeriod = starsInPeriod,
+            trendingPeriod = periodEnum,
+            homepageUrl = homepageUrl,
+            defaultBranch = defaultBranch,
+            screenshotSourceTier = mapTierString(screenshotSourceTier),
+            builtByAvatars = builtByAvatars
         )
+    }
+
+    private fun mapTierString(raw: String): UiScreenshotSourceTier {
+        return when (raw.uppercase()) {
+            "LOCAL_BUILD_PREVIEW" -> UiScreenshotSourceTier.LOCAL_BUILD_PREVIEW
+            "BUNDLED_BUILD_TIME" -> UiScreenshotSourceTier.BUNDLED_BUILD_TIME
+            "REPO_OR_WEBPAGE_SCREENSHOT" -> UiScreenshotSourceTier.REPO_OR_WEBPAGE_SCREENSHOT
+            "DYNAMIC_SOURCE_SYNTHESIS" -> UiScreenshotSourceTier.DYNAMIC_SOURCE_SYNTHESIS
+            else -> UiScreenshotSourceTier.OPENGRAPH_FALLBACK
+        }
     }
 
     private fun RepoShapeEngine.ComparisonResult.toUi(): UiNorthStarBenchmark {
@@ -186,6 +329,11 @@ class DiscoveryBackend(
     }
 
     private fun DeveloperGraphEngine.PeerRepository.toUi(): UiPeerProject {
+        val pathText = if (socialChain.isNotEmpty()) {
+            socialChain.joinToString(" → ") { if (it.startsWith("@") || it.startsWith("★")) it else "@$it" }
+        } else {
+            "@$connectedViaAuthor → @$owner"
+        }
         return UiPeerProject(
             slug = slug,
             name = name,
@@ -194,7 +342,12 @@ class DiscoveryBackend(
             stars = stars,
             language = language,
             attributionText = DeveloperGraphEngine.formatAttribution(this),
-            htmlUrl = "https://github.com/$slug"
+            htmlUrl = "https://github.com/$slug",
+            relationKind = connectionReason.name,
+            socialPathText = pathText,
+            relevanceReason = relevanceReason,
+            relevanceScore = relevanceScore,
+            screenshotUrl = screenshotUrl
         )
     }
 }

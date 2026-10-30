@@ -23,14 +23,26 @@ class GitHubDiscoveryEngine {
         val screenshots: List<ScreenshotExtractor.ScreenshotCandidate>,
         val genome: RepoShapeEngine.RepoGenome,
         val capabilities: CapabilityAnalyzer.CapabilityProfile,
-        val authorAttribution: String? = null
+        val authorAttribution: String? = null,
+        val starsInPeriod: Int = 0,
+        val trendingPeriod: String = "daily",
+        val homepageUrl: String? = null,
+        val defaultBranch: String = "main",
+        val builtByAvatars: List<String> = emptyList(),
+        val localScreenshotPath: String? = null,
+        val screenshotSourceTier: String = "OPENGRAPH_FALLBACK",
+        val relatedPeers: List<DeveloperGraphEngine.PeerRepository> = emptyList()
     )
 
     data class DiscoveryFeed(
         val trendingHero: List<DiscoveredRepository>,
         val northStarBenchmarks: List<RepoShapeEngine.ComparisonResult>,
         val highVelocityRising: List<RepoShapeEngine.ComparisonResult>,
-        val authorPeerPicks: List<DeveloperGraphEngine.PeerRepository>
+        val authorPeerPicks: List<DeveloperGraphEngine.PeerRepository>,
+        val period: String = "daily",
+        val selectedLanguage: String = "all",
+        val isFromBuildBundle: Boolean = false,
+        val bundledAtIso: String? = null
     )
 
     /**
@@ -50,7 +62,15 @@ class GitHubDiscoveryEngine {
         fileTreePaths: List<String> = emptyList(),
         topics: List<String> = emptyList(),
         license: String = "MIT",
-        maxScreenshotTier: ScreenshotExtractor.AggressivenessTier = ScreenshotExtractor.AggressivenessTier.TIER_2_README_SCRAPE
+        maxScreenshotTier: ScreenshotExtractor.AggressivenessTier = ScreenshotExtractor.AggressivenessTier.TIER_2_README_SCRAPE,
+        starsInPeriod: Int = 0,
+        trendingPeriod: String = "daily",
+        homepageUrl: String? = null,
+        defaultBranch: String = "main",
+        builtByAvatars: List<String> = emptyList(),
+        localScreenshotPath: String? = null,
+        screenshotSourceTier: String = "OPENGRAPH_FALLBACK",
+        relatedPeers: List<DeveloperGraphEngine.PeerRepository> = emptyList()
     ): DiscoveredRepository {
         val slug = "$owner/$name".lowercase().replace('/', '-')
 
@@ -60,6 +80,7 @@ class GitHubDiscoveryEngine {
             repo = name,
             readmeContent = readmeContent,
             fileTreePaths = fileTreePaths,
+            branch = defaultBranch,
             maxTier = maxScreenshotTier
         )
 
@@ -92,7 +113,15 @@ class GitHubDiscoveryEngine {
             htmlUrl = htmlUrl,
             screenshots = screenshots,
             genome = genome,
-            capabilities = capabilities
+            capabilities = capabilities,
+            starsInPeriod = starsInPeriod,
+            trendingPeriod = trendingPeriod,
+            homepageUrl = homepageUrl,
+            defaultBranch = defaultBranch,
+            builtByAvatars = builtByAvatars,
+            localScreenshotPath = localScreenshotPath,
+            screenshotSourceTier = screenshotSourceTier,
+            relatedPeers = relatedPeers
         )
     }
 

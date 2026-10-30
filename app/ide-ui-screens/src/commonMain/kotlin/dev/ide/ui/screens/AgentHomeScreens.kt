@@ -20,11 +20,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -35,22 +38,6 @@ import dev.ide.ui.theme.AgentUi
 /** Screen id of the redesigned Agent settings destination (Settings hub → Agent, Home → agent icon). */
 const val SCREEN_AGENT_SETTINGS: String = "agent.settings"
 
-/** Distinct text color for each project operating system / runtime stack (plain colored text, no pill badge). */
-fun projectStackColor(
-    isAndroid: Boolean = false,
-    isNode: Boolean = false,
-    isPython: Boolean = false,
-    isSwift: Boolean = false,
-    compatibility: Boolean = false,
-): Color = when {
-    isSwift -> Color(0xFFFB923C)      // Swift orange
-    isPython -> Color(0xFFFACC15)     // Python gold
-    isNode -> Color(0xFF4ADE80)       // Node.js green
-    isAndroid -> Color(0xFF3DDC84)    // Android green
-    compatibility -> Color(0xFFA78BFA) // Gradle/Kotlin purple
-    else -> Color(0xFF38BDF8)         // Sky blue
-}
-
 /** One row in the Home "Continue" list. */
 data class AgentContinueItem(
     val id: String,
@@ -59,12 +46,6 @@ data class AgentContinueItem(
     val time: String,
     val letter: String,
     val needsAttention: Boolean = false,
-    val stackLabel: String = "",
-    val stackColor: Color = Color.Unspecified,
-    val modulesLabel: String = "",
-    val tags: List<String> = emptyList(),
-    val avatar: ImageBitmap? = null,
-    val shimmerSubtitle: Boolean = false,
 )
 
 /**
@@ -78,20 +59,18 @@ fun AgentHomeContent(
     onPromptChange: (String) -> Unit,
     onStart: () -> Unit,
     onOpenAgentSettings: () -> Unit = {},
-    onOpenSettings: (() -> Unit)? = null,
     onOpenAccount: () -> Unit = {},
     onNewProject: () -> Unit = {},
     onImportOrClone: () -> Unit = {},
-    onDeviceLabel: String = "Configure AI",
-    providerConfigured: Boolean = false,
+    onDeviceLabel: String = "On-device",
     continueItems: List<AgentContinueItem> = emptyList(),
     allProjectsLabel: String = "All projects",
     onOpenItem: (AgentContinueItem) -> Unit = {},
     onSeeAllProjects: () -> Unit = {},
     modifier: Modifier = Modifier,
-    agentIcon: ImageVector = CaIcons.sparkle,
-    settingsIcon: ImageVector = CaIcons.gear,
-    accountIcon: ImageVector = CaIcons.account,
+    agentIcon: ImageVector = CaIcons.arrowRight,
+    accountIcon: ImageVector = CaIcons.close,
+    trendingWidgetSlot: (@Composable () -> Unit)? = null,
 ) {
     Column(
         modifier = modifier
@@ -102,10 +81,7 @@ fun AgentHomeContent(
         verticalArrangement = Arrangement.spacedBy(28.dp),
     ) {
         Spacer(Modifier.height(4.dp))
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 appName,
                 fontSize = 14.sp,
@@ -115,9 +91,6 @@ fun AgentHomeContent(
                 modifier = Modifier.weight(1f),
             )
             AgentIconCircle(agentIcon, "Agent settings", onOpenAgentSettings, Modifier.size(44.dp))
-            if (onOpenSettings != null) {
-                AgentIconCircle(settingsIcon, "Settings", onOpenSettings, Modifier.size(44.dp))
-            }
             AgentIconCircle(accountIcon, "Account", onOpenAccount, Modifier.size(44.dp))
         }
 
@@ -175,8 +148,8 @@ fun AgentHomeContent(
                             .clickable(onClick = onOpenAgentSettings)
                             .padding(horizontal = 12.dp),
                     ) {
-                        AgentStatusDot(active = providerConfigured, size = 7.dp)
-                        Text(onDeviceLabel, fontSize = 13.sp, color = AgentUi.chrome.textMuted, maxLines = 1)
+                        AgentStatusDot(active = true, size = 7.dp)
+                        Text(onDeviceLabel, fontSize = 13.sp, color = AgentUi.chrome.textMuted)
                     }
                     Spacer(Modifier.weight(1f))
                     AgentIconCircle(CaIcons.arrowRight, "Start", onStart, Modifier.size(44.dp), accent = true)
@@ -184,6 +157,43 @@ fun AgentHomeContent(
             }
         }
 
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 6.dp),
+            ) {
+                AgentSectionLabel("Continue")
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "Import or clone",
+                    fontSize = 14.sp,
+                    color = AgentUi.chrome.textMuted,
+                    modifier = Modifier.clickable(onClick = onImportOrClone),
+                )
+            }
+            continueItems.forEach { item ->
+                AgentProjectRow(
+                    title = item.title,
+                    meta = item.meta,
+                    time = item.time,
+                    letter = item.letter,
+                    selected = item.needsAttention,
+                    statusColor = if (item.needsAttention) AgentUi.chrome.warn else AgentUi.chrome.accent,
+                    onClick = { onOpenItem(item) },
+                )
+            }
+            Text(
+                allProjectsLabel,
+                fontSize = 14.sp,
+                color = AgentUi.chrome.textMuted,
+                modifier = Modifier
+                    .clickable(onClick = onSeeAllProjects)
+                    .padding(12.dp),
+            )
+        }
+        trendingWidgetSlot?.invoke()
         Spacer(Modifier.height(12.dp))
     }
 }
@@ -314,6 +324,120 @@ fun NewProjectSheetContent(
                     Text(label, fontSize = 15.sp, color = AgentUi.chrome.text)
                 }
             }
+        }
+    }
+}
+
+/**
+ * Agent settings: on-device vs cloud, model cards, permission radios, privacy toggles.
+ */
+@Composable
+fun AgentSettingsContent(
+    modeIndex: Int,
+    onModeChange: (Int) -> Unit,
+    localModelTitle: String,
+    localModelMeta: String,
+    secondaryModelTitle: String,
+    secondaryModelMeta: String,
+    permissionIndex: Int,
+    onPermissionChange: (Int) -> Unit,
+    offlineOnly: Boolean,
+    onOfflineOnlyChange: (Boolean) -> Unit,
+    pauseLowBattery: Boolean,
+    onPauseLowBatteryChange: (Boolean) -> Unit,
+    onOpenEditorPrefs: () -> Unit = {},
+    onDownloadModel: () -> Unit = {},
+    onBack: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(AgentUi.chrome.bg)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
+    ) {
+        AgentTopBar(title = "", onBack = onBack, backIcon = CaIcons.arrowLeft)
+        Column(
+            Modifier.padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+            Text(
+                "Agent",
+                fontSize = 30.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = AgentUi.chrome.text,
+            )
+            AgentSegmented(
+                options = listOf("On this phone", "Cloud"),
+                selectedIndex = modeIndex,
+                onSelect = onModeChange,
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                AgentSurface(
+                    stroke = AgentUi.chrome.accent,
+                    contentPadding = PaddingValues(16.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        AgentStatusDot(active = true, size = 8.dp)
+                        Column {
+                            Text(localModelTitle, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = AgentUi.chrome.text)
+                            Text("Active", fontSize = 12.sp, color = AgentUi.chrome.textFaint)
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(localModelMeta, fontSize = 12.sp, color = AgentUi.chrome.textMuted)
+                }
+                AgentSurface(contentPadding = PaddingValues(16.dp), stroke = AgentUi.chrome.hairline) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .border(1.5.dp, AgentUi.chrome.textFaint, RoundedCornerShape(2.dp)),
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(secondaryModelTitle, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = AgentUi.chrome.text)
+                            Text(secondaryModelMeta, fontSize = 12.sp, color = AgentUi.chrome.textFaint)
+                        }
+                        AgentGhostButton("Download", onDownloadModel)
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                AgentSectionLabel("The agent may…")
+                val perms = listOf(
+                    "Suggest only — I apply every edit",
+                    "Edit and build — ask before installs",
+                    "Full auto in this project",
+                )
+                perms.forEachIndexed { i, label ->
+                    AgentRadioRow(label = label, selected = i == permissionIndex, onSelect = { onPermissionChange(i) })
+                }
+            }
+            Column {
+                AgentToggleRow(
+                    "Never send code off this phone",
+                    "Blocks cloud fallback and web tools",
+                    offlineOnly,
+                    onOfflineOnlyChange,
+                )
+                AgentToggleRow(
+                    "Pause when battery is low",
+                    "Resumes on charger · below 20%",
+                    pauseLowBattery,
+                    onPauseLowBatteryChange,
+                )
+            }
+            Text(
+                "Editor, keymap & code style",
+                fontSize = 14.sp,
+                color = AgentUi.chrome.textMuted,
+                modifier = Modifier
+                    .clickable(onClick = onOpenEditorPrefs)
+                    .padding(vertical = 8.dp),
+            )
+            Spacer(Modifier.height(12.dp))
         }
     }
 }

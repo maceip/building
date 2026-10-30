@@ -11,15 +11,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
-import dev.ide.ui.editor.preview.decodeImageBytes
 import dev.ide.ui.platform.touchInput
 import dev.ide.ui.platform.PlatformBackHandler
 import dev.ide.ui.generated.resources.home_account
@@ -242,7 +235,11 @@ fun ProjectsHomeScreen(
     // Deleting wipes the project from disk and nothing else in this flow asks first.
     var pendingDelete by remember { mutableStateOf<ProjectInfo?>(null) }
     var sheet by remember { mutableStateOf<HomeSheet?>(null) }
-    val effectiveClone = onCloneRepository ?: onCloneGit
+    // Phone agent-first Home: the prompt hero is primary; "All projects" reveals the existing list.
+    var showAllProjects by remember { mutableStateOf(false) }
+    var agentPrompt by remember { mutableStateOf("") }
+    var newProjectPrompt by remember { mutableStateOf("") }
+    var selectedStack by remember { mutableIntStateOf(0) }
     val now = remember(projects) { nowMillis() }
     val ordered = remember(projects) { projects.sortedByDescending { it.lastOpened } }
     // Rendered icons by project root. Held for the screen rather than per card: a card is recomposed every
@@ -265,6 +262,8 @@ fun ProjectsHomeScreen(
 
     PlatformBackHandler(enabled = sheet != null) { sheet = null }
     PlatformBackHandler(enabled = pendingDelete != null) { pendingDelete = null }
+    // Back from the classic list returns to the agent-first Home rather than leaving the tab.
+    PlatformBackHandler(enabled = showAllProjects) { showAllProjects = false }
 
     BoxWithConstraints(modifier.fillMaxSize()) {
     if (maxWidth >= ProjectsWideBreakpoint) {
@@ -275,9 +274,9 @@ fun ProjectsHomeScreen(
             loadIcon = loadIcon,
             loadIconImage = loadIconImage,
             onOpen = onOpen,
-            onNewProject = onNewProject,
+            onNewProject = { sheet = HomeSheet.NewProject },
             onImportProject = onImportProject,
-            onCloneRepository = effectiveClone,
+            onCloneRepository = onCloneRepository,
             onExportProject = onExportProject,
             onRequestDelete = onDeleteProject?.let { { project: ProjectInfo -> pendingDelete = project } },
             showLegacyRecovery = showLegacyRecovery,
@@ -288,6 +287,71 @@ fun ProjectsHomeScreen(
             onJoinDiscord = onJoinDiscord,
             backend = backend,
             onCloneAndOpen = onCloneAndOpen,
+        )
+    } else if (!showAllProjects) {
+        // Agent-first Home (phone width): prompt hero + Continue, with the classic project list one tap
+        // away via "All projects". New / Start opens the redesigned bottom sheet, which hands off to the
+        // existing create-project gallery.
+        val continueItems = remember(ordered, now) {
+            ordered.take(5).map { p ->
+                AgentContinueItem(
+                    id = p.rootPath,
+                    title = p.name,
+                    meta = listOfNotNull(
+                        when {
+                            p.isSwift -> "Swift & iOS"
+                            p.isPython -> "Python"
+                            p.isNode -> "Node.js"
+                            p.isAndroid -> "Android"
+                            p.compatibility -> "Gradle"
+                            p.unrecognized -> "Files"
+                            else -> "building"
+                        },
+                        if (p.moduleCount == 1) "1 module" else "${p.moduleCount} modules",
+                    ).joinToString(" · "),
+                    time = "",
+                    letter = p.name.firstOrNull()?.uppercase() ?: "?",
+                    needsAttention = false,
+                )
+            }
+        }
+        AgentHomeContent(
+            appName = "building",
+            prompt = agentPrompt,
+            onPromptChange = { agentPrompt = it },
+            onStart = {
+                if (agentPrompt.isNotBlank()) {
+                    // Carry the description into the New-project sheet so Start building keeps it.
+                    newProjectPrompt = agentPrompt
+                }
+                sheet = HomeSheet.NewProject
+            },
+            onOpenAgentSettings = onOpenAgentSettings ?: {},
+            onOpenAccount = { sheet = HomeSheet.Account },
+            onNewProject = { sheet = HomeSheet.NewProject },
+            onImportOrClone = {
+                when {
+                    onCloneGit != null -> onCloneGit()
+                    onImportProject != null -> onImportProject()
+                }
+            },
+            onDeviceLabel = "On-device",
+            continueItems = continueItems,
+            allProjectsLabel = "All projects",
+            onOpenItem = { item -> ordered.firstOrNull { it.rootPath == item.id }?.let(onOpen) },
+            onSeeAllProjects = { showAllProjects = true },
+            modifier = Modifier.fillMaxSize(),
+            trendingWidgetSlot = if (backend != null && backend.discovery.supported() && onCloneAndOpen != null) {
+                {
+                    TrendingReposWidget(
+                        backend = backend,
+                        onCloneAndOpen = onCloneAndOpen,
+                        onOpenExplorer = onCloneGit,
+                    )
+                }
+            } else {
+                null
+            },
         )
     } else
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.TopCenter) {
@@ -327,23 +391,13 @@ fun ProjectsHomeScreen(
                 HomeHeader(
                     onOpenAccount = { sheet = HomeSheet.Account },
                     onOpenHub = onOpenHub,
-                    onBack = null,
                     bell = bell,
                 )
             }
-            item("actions") {
-                HomeActions(
-                    onNewProject = onNewProject,
-                    onCloneRepository = effectiveClone,
-                    onImportProject = onImportProject,
-                )
-            }
-            if (onCloneAndOpen != null || effectiveClone != null) {
-                item("quickClone") {
-                    QuickCloneBar(
-                        onCloneUrl = { rawUrl ->
-                            dispatchQuickCloneUrl(rawUrl, onCloneAndOpen, effectiveClone)
-                        },
+            if (onImportProject != null) {
+                item("actions") {
+                    HomeActions(
+                        onImportProject = onImportProject,
                     )
                 }
             }
@@ -364,7 +418,7 @@ fun ProjectsHomeScreen(
                         project = project,
                         index = i,
                         now = now,
-                        icon = projectIconImage(project, icons, loadIcon, loadIconImage, backend),
+                        icon = projectIconImage(project, icons, loadIcon, loadIconImage),
                         onOpen = { onOpen(project) },
                         onSecondary = onExportProject?.let { export -> { export(project) } }
                             ?: onDeleteProject?.let { del -> { del(project) } },
@@ -380,17 +434,42 @@ fun ProjectsHomeScreen(
             } else {
                 item("empty") { EmptyList() }
             }
+            if (backend != null && backend.discovery.supported() && onCloneAndOpen != null) {
+                item("trending_widget") {
+                    TrendingReposWidget(
+                        backend = backend,
+                        onCloneAndOpen = onCloneAndOpen,
+                        onOpenExplorer = onCloneGit,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    )
+                }
+            }
         }
       }
     }
     }
 
     when (sheet) {
+        HomeSheet.NewProject -> NewProjectSheet(
+            prompt = newProjectPrompt,
+            onPromptChange = { newProjectPrompt = it },
+            onStartBuilding = {
+                sheet = null
+                // Existing create-project gallery owns the template picker; the prompt rides along in the
+                // sheet state so the user can copy it into the agent once a project is open.
+                onNewProject()
+            },
+            onDismiss = { sheet = null },
+            selectedStack = selectedStack,
+            onSelectStack = { selectedStack = it },
+            onCloneGit = onCloneGit?.let { { sheet = null; it() } },
+            onOpenFolder = onImportProject?.let { { sheet = null; it() } },
+            onImportPackage = onImportPackage?.let { { sheet = null; it() } }
+                ?: onImportProject?.let { { sheet = null; it() } },
+        )
         HomeSheet.Account -> AccountSheet(
             onDismiss = { sheet = null },
             storagePath = storagePath,
-            onOpenHub = onOpenHub?.let { { sheet = null; it() } },
-            onOpenAgentSettings = onOpenAgentSettings?.let { { sheet = null; it() } },
             onOpenInFiles = onOpenInFiles?.let { { sheet = null; it() } },
             onBackup = onBackup?.let { { sheet = null; it() } },
             onSubmitSuggestions = onSubmitSuggestions?.let { { sheet = null; it() } },
@@ -430,13 +509,12 @@ fun ProjectsHomeScreen(
     }
 }
 
-private enum class HomeSheet { Account }
+private enum class HomeSheet { Account, NewProject }
 
 @Composable
 private fun HomeHeader(
     onOpenAccount: () -> Unit,
     onOpenHub: (() -> Unit)? = null,
-    onBack: (() -> Unit)? = null,
     /** The notification bell, supplied by the host so this screen needs no backend of its own. */
     bell: (@Composable () -> Unit)? = null,
 ) {
@@ -446,15 +524,6 @@ private fun HomeHeader(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (onBack != null) {
-            IconButtonCa(
-                icon = CaIcons.arrowLeft,
-                contentDescription = "Back",
-                onClick = onBack,
-                iconSize = 20,
-                boxSize = 40,
-            )
-        }
         Text(
             stringResource(Res.string.home_your_projects),
             style = MaterialTheme.typography.titleLarge,
@@ -487,9 +556,7 @@ private fun HomeHeader(
  */
 @Composable
 private fun HomeActions(
-    onNewProject: () -> Unit,
-    onCloneRepository: (() -> Unit)? = null,
-    onImportProject: (() -> Unit)? = null,
+    onImportProject: () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 10.dp),
@@ -497,144 +564,12 @@ private fun HomeActions(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         HeaderButton(
-            glyph = CaSymbols.add,
-            label = stringResource(Res.string.home_new_project),
-            primary = true,
+            glyph = CaSymbols.folderOpen,
+            label = stringResource(Res.string.home_import_project),
+            primary = false,
             modifier = Modifier.weight(1f),
-            onClick = onNewProject,
+            onClick = onImportProject,
         )
-        if (onCloneRepository != null) {
-            HeaderButton(
-                glyph = CaSymbols.forkRight,
-                label = stringResource(Res.string.home_clone_repository),
-                primary = false,
-                modifier = Modifier.weight(1f),
-                onClick = onCloneRepository,
-            )
-        }
-        if (onImportProject != null) {
-            HeaderButton(
-                glyph = CaSymbols.folderOpen,
-                label = stringResource(Res.string.home_import_project),
-                primary = false,
-                modifier = Modifier.weight(1f),
-                onClick = onImportProject,
-            )
-        }
-    }
-}
-
-internal fun dispatchQuickCloneUrl(
-    rawUrl: String,
-    onCloneAndOpen: ((String, String) -> Unit)?,
-    onCloneRepository: (() -> Unit)?,
-) {
-    val clean = rawUrl.trim()
-    if (clean.isNotEmpty() && onCloneAndOpen != null) {
-        val normalizedUrl = if (
-            clean.startsWith("http://", ignoreCase = true) ||
-            clean.startsWith("https://", ignoreCase = true) ||
-            clean.startsWith("git@")
-        ) {
-            clean
-        } else {
-            "https://github.com/${clean.trim('/')}"
-        }
-        val repoName = normalizedUrl
-            .trimEnd('/')
-            .substringAfterLast('/')
-            .substringAfterLast(':')
-            .removeSuffix(".git")
-            .ifBlank { "repo" }
-        onCloneAndOpen(normalizedUrl, repoName)
-    } else {
-        onCloneRepository?.invoke()
-    }
-}
-
-/**
- * Direct Git/GitHub URL input + Paste + Clone bar right on the Projects Home screen so users can
- * paste a repository URL and clone immediately in one tap without hunting through menus.
- */
-@Composable
-internal fun QuickCloneBar(
-    onCloneUrl: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val c = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
-    var urlText by rememberSaveable { mutableStateOf("") }
-    val shape = RoundedCornerShape(10.dp)
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .padding(top = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(
-            Modifier
-                .weight(1f)
-                .height(38.dp)
-                .clip(shape)
-                .background(c.surfaceContainerLow)
-                .border(1.dp, c.outlineVariant, shape)
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Symbol(CaSymbols.forkRight, contentDescription = null, size = 16.dp, tint = c.onSurfaceVariant)
-            BasicTextField(
-                value = urlText,
-                onValueChange = { urlText = it },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = c.onSurface),
-                cursorBrush = SolidColor(c.primary),
-                modifier = Modifier.weight(1f),
-                decorationBox = { inner ->
-                    Box(contentAlignment = Alignment.CenterStart) {
-                        if (urlText.isEmpty()) {
-                            Text(
-                                "Paste GitHub URL or owner/repo to clone…",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = c.outline,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        inner()
-                    }
-                },
-            )
-            if (urlText.isNotEmpty()) {
-                IconButtonCa(CaIcons.close, stringResource(Res.string.home_clear_search), { urlText = "" }, iconSize = 14, boxSize = 24)
-            }
-        }
-        OutlinedButton(
-            onClick = {
-                val clip = clipboard.getText()?.text?.trim().orEmpty()
-                if (clip.isNotBlank()) {
-                    urlText = clip
-                }
-            },
-            shape = shape,
-            border = BorderStroke(1.dp, c.outlineVariant),
-            contentPadding = PaddingValues(horizontal = 12.dp),
-            modifier = Modifier.height(38.dp),
-        ) {
-            Text("Paste", style = MaterialTheme.typography.labelLarge)
-        }
-        Button(
-            onClick = { onCloneUrl(urlText) },
-            shape = shape,
-            contentPadding = PaddingValues(horizontal = 14.dp),
-            modifier = Modifier.height(38.dp),
-        ) {
-            Symbol(CaSymbols.forkRight, contentDescription = null, size = 16.dp)
-            Spacer(Modifier.width(6.dp))
-            Text("Clone", style = MaterialTheme.typography.labelLarge)
-        }
     }
 }
 
@@ -738,26 +673,18 @@ private fun projectIconImage(
     cache: ProjectIconCache,
     loadIcon: (suspend (ProjectInfo) -> UiProjectIcon?)?,
     loadImage: (suspend (String) -> ByteArray?)?,
-    backend: dev.ide.ui.backend.IdeBackend? = null,
 ): ImageBitmap? {
-    if (loadIcon == null && (project.ownerAvatarUrl == null || backend == null)) return null
+    if (loadIcon == null) return null
     // Keyed on the cache's generation as well as the project: a refresh empties the cache, and this is what
     // makes a card that never left the screen ask for its icon again instead of sitting blank.
-    LaunchedEffect(project.rootPath, project.ownerAvatarUrl, cache.generation, loadIcon, backend) {
+    LaunchedEffect(project.rootPath, cache.generation, loadIcon) {
         if (cache.isResolved(project.rootPath)) return@LaunchedEffect
         // Recorded even when it is null, so a project with no icon is asked about once rather than on
         // every scroll.
         cache.put(
             project.rootPath,
             runCatching {
-                val avatarUrl = project.ownerAvatarUrl
-                if (avatarUrl != null && backend != null) {
-                    val file = runCatching { backend.store.avatarFile(avatarUrl) }.getOrNull()
-                    val bytes = file?.let { runCatching { backend.projects.imageBytes(it) }.getOrNull() }
-                    val decoded = bytes?.let { withContext(Dispatchers.Default) { decodeImageBytes(it) } }
-                    if (decoded != null) return@runCatching decoded
-                }
-                val resolved = loadIcon?.invoke(project) ?: return@runCatching null
+                val resolved = loadIcon(project) ?: return@runCatching null
                 withContext(Dispatchers.Default) {
                     ProjectIconRaster.toImage(resolved, TILE_ICON_PIXELS) { path -> loadImage?.invoke(path) }
                 }
@@ -828,58 +755,18 @@ private fun LocalProjectCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                val stackName = kindLabel(project) ?: when {
-                    project.isSwift -> "Swift & iOS"
-                    project.isPython -> "Python"
-                    project.isNode -> "Node.js"
-                    project.isAndroid -> "Android"
-                    else -> "building"
-                }
-                val stackColor = projectStackColor(
-                    isAndroid = project.isAndroid,
-                    isNode = project.isNode,
-                    isPython = project.isPython,
-                    isSwift = project.isSwift,
-                    compatibility = project.compatibility,
+                Text(
+                    listOfNotNull(
+                        moduleLabel(project.moduleCount),
+                        kindLabel(project),
+                        relativeAge(project.lastOpened, now),
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 1.dp),
                 )
-                val shimmer = index == 0
-                val stackBrush = if (shimmer) rememberTextShimmerBrush(stackColor) else null
-                val metaBrush = if (shimmer) rememberTextShimmerBrush(c.onSurfaceVariant) else null
-                val tailParts = buildList {
-                    add(moduleLabel(project.moduleCount))
-                    addAll(project.tags.filter { it.isNotBlank() })
-                    relativeAge(project.lastOpened, now)?.let { add(it) }
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 1.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = buildAnnotatedString {
-                            withStyle(
-                                if (stackBrush != null) SpanStyle(brush = stackBrush, fontWeight = FontWeight.Medium)
-                                else SpanStyle(color = stackColor, fontWeight = FontWeight.Medium),
-                            ) {
-                                append(stackName)
-                            }
-                            if (tailParts.isNotEmpty()) {
-                                withStyle(
-                                    if (metaBrush != null) SpanStyle(brush = metaBrush)
-                                    else SpanStyle(color = c.onSurfaceVariant),
-                                ) {
-                                    append(" · ")
-                                    append(tailParts.joinToString(" · "))
-                                }
-                            }
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        softWrap = false,
-                    )
-                }
             }
             // Everything that is not "open this project" lives behind one control. Tapping the row opens.
             if (onDelete != null || onSecondary != null) {
@@ -1096,8 +983,6 @@ private fun NewProjectSheet(
 private fun AccountSheet(
     onDismiss: () -> Unit,
     storagePath: String?,
-    onOpenHub: (() -> Unit)? = null,
-    onOpenAgentSettings: (() -> Unit)? = null,
     onOpenInFiles: (() -> Unit)?,
     onBackup: (() -> Unit)?,
     onSubmitSuggestions: (() -> Unit)?,
@@ -1106,8 +991,6 @@ private fun AccountSheet(
     onStarOnGitHub: (() -> Unit)?,
 ) {
     SheetScaffold(onDismiss, stringResource(Res.string.home_account_title), subtitle = storagePath) {
-        if (onOpenHub != null) SheetAction(CaSymbols.settings, stringResource(Res.string.home_settings_tools), onOpenHub)
-        if (onOpenAgentSettings != null) SheetAction(CaSymbols.tune, "Agent settings", onOpenAgentSettings)
         if (onOpenInFiles != null) SheetAction(CaSymbols.folderOpen, stringResource(Res.string.home_open_in_files), onOpenInFiles)
         if (onBackup != null) SheetAction(CaSymbols.storage, stringResource(Res.string.home_backup), onBackup)
         if (onSubmitSuggestions != null) SheetAction(CaSymbols.rateReview, stringResource(Res.string.home_feedback), onSubmitSuggestions)
@@ -1132,25 +1015,7 @@ private fun SheetScaffold(
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         Column(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 28.dp)) {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    title,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButtonCa(
-                    icon = CaIcons.close,
-                    contentDescription = "Close",
-                    onClick = onDismiss,
-                    iconSize = 18,
-                    boxSize = 36,
-                )
-            }
+            Text(title, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurface)
             if (subtitle != null) {
                 Text(
                     subtitle,
@@ -1389,10 +1254,6 @@ private fun WideProjectsHome(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                HeaderButton(CaSymbols.add, stringResource(Res.string.home_new_project), primary = true, onClick = onNewProject)
-                if (onCloneRepository != null) {
-                    HeaderButton(CaSymbols.forkRight, stringResource(Res.string.home_clone_repository), primary = false, onClick = onCloneRepository)
-                }
                 if (onImportProject != null) {
                     HeaderButton(CaSymbols.folderOpen, stringResource(Res.string.home_import_project), primary = false, onClick = onImportProject)
                 }
@@ -1415,14 +1276,6 @@ private fun WideProjectsHome(
                         size = 40.dp,
                     )
                 }
-            }
-            if (onCloneAndOpen != null || onCloneRepository != null) {
-                QuickCloneBar(
-                    onCloneUrl = { rawUrl ->
-                        dispatchQuickCloneUrl(rawUrl, onCloneAndOpen, onCloneRepository)
-                    },
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
             }
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -1462,6 +1315,16 @@ private fun WideProjectsHome(
                         onShare = onExportProject?.let { export -> { export(project) } },
                         onDelete = onRequestDelete?.let { request -> { request(project) } },
                     )
+                }
+                if (backend != null && backend.discovery.supported() && onCloneAndOpen != null) {
+                    item("trending_widget") {
+                        TrendingReposWidget(
+                            backend = backend,
+                            onCloneAndOpen = onCloneAndOpen,
+                            onOpenExplorer = onCloneRepository,
+                            modifier = Modifier.padding(top = 16.dp),
+                        )
+                    }
                 }
             }
         }
@@ -1596,8 +1459,9 @@ private fun SortChooser(sort: ProjectSort, onSort: (ProjectSort) -> Unit) {
 }
 
 /**
- * One project in the wide list: icon, name over horizontally scrolling colored stack + modules + tags,
- * the last-opened time, and the actions menu.
+ * One project in the wide list: icon, name over path, then (when there is room) kind and module count, the
+ * last-opened time, and the actions menu. The row highlights on hover and opens on click; the menu shows on
+ * hover, while its menu is open, and always on touch, where there is no hover to reveal it.
  */
 @Composable
 private fun DenseProjectRow(
@@ -1614,28 +1478,6 @@ private fun DenseProjectRow(
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     var menuOpen by remember(project.rootPath) { mutableStateOf(false) }
-    val stackName = kindLabel(project) ?: when {
-        project.isSwift -> "Swift & iOS"
-        project.isPython -> "Python"
-        project.isNode -> "Node.js"
-        project.isAndroid -> "Android"
-        else -> "building"
-    }
-    val stackColor = projectStackColor(
-        isAndroid = project.isAndroid,
-        isNode = project.isNode,
-        isPython = project.isPython,
-        isSwift = project.isSwift,
-        compatibility = project.compatibility,
-    )
-    val shimmer = index == 0
-    val stackBrush = if (shimmer) rememberTextShimmerBrush(stackColor) else null
-    val metaBrush = if (shimmer) rememberTextShimmerBrush(c.onSurfaceVariant) else null
-    val tailParts = buildList {
-        add(moduleLabel(project.moduleCount))
-        addAll(project.tags.filter { it.isNotBlank() })
-        add(shortenPath(project.rootPath, maxSegments = 4))
-    }
     Row(
         Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(8.dp))
             .background(if (hovered || menuOpen) c.surfaceContainerHigh else Color.Transparent)
@@ -1660,54 +1502,21 @@ private fun DenseProjectRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = buildAnnotatedString {
-                        withStyle(
-                            if (stackBrush != null) SpanStyle(brush = stackBrush, fontWeight = FontWeight.Medium)
-                            else SpanStyle(color = stackColor, fontWeight = FontWeight.Medium),
-                        ) {
-                            append(stackName)
-                        }
-                        if (tailParts.isNotEmpty()) {
-                            withStyle(
-                                if (metaBrush != null) SpanStyle(brush = metaBrush)
-                                else SpanStyle(color = c.onSurfaceVariant),
-                            ) {
-                                append(" · ")
-                                append(tailParts.joinToString(" · "))
-                            }
-                        }
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    softWrap = false,
-                )
-            }
+            // Shortened from the front, so the project's own folder at the end of the path always shows
+            // (TextOverflow.StartEllipsis is not honoured on every target, so the cut is done here).
+            Text(
+                shortenPath(project.rootPath, maxSegments = 4),
+                style = MaterialTheme.typography.bodySmall,
+                color = c.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         if (showKind) {
             Text(
-                text = buildAnnotatedString {
-                    withStyle(
-                        if (stackBrush != null) SpanStyle(brush = stackBrush, fontWeight = FontWeight.Medium)
-                        else SpanStyle(color = stackColor, fontWeight = FontWeight.Medium),
-                    ) {
-                        append(stackName)
-                    }
-                    withStyle(
-                        if (metaBrush != null) SpanStyle(brush = metaBrush)
-                        else SpanStyle(color = c.onSurfaceVariant),
-                    ) {
-                        append(" · ")
-                        append(moduleLabel(project.moduleCount))
-                    }
-                },
+                "${kindLabel(project)} · ${moduleLabel(project.moduleCount)}",
                 style = MaterialTheme.typography.bodySmall,
+                color = c.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.width(170.dp),

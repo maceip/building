@@ -76,7 +76,11 @@ internal fun BreadcrumbBar(
             )
         }.getOrDefault(emptyList())
         crumbs = if (structure.isEmpty()) breadcrumbFor(state, active)
-        else listOfNotNull(state.backend.files.moduleNameForFile(active.path)) + structure
+        else {
+            val module = state.backend.files.moduleNameForFile(active.path)
+                ?.takeIf { !it.equals(state.backend.project.name.trim(), ignoreCase = true) }
+            listOfNotNull(module) + structure
+        }
     }
     val canPreview = isPreviewable(active.path) || isLayoutPreviewable(active.path) ||
             isMarkdownPreviewable(active.path) || hasPreview ||

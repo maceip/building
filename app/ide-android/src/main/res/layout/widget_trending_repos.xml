@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="#12161F">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/widget_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Trending on GitHub"
+            android:textColor="#F1F5F9"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/widget_lang_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="All"
+            android:textColor="#38BDF8"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="3dp"
+            android:paddingBottom="3dp"
+            android:background="#1E293B" />
+
+        <TextView
+            android:id="@+id/widget_period_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:text="Daily"
+            android:textColor="#10B981"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="3dp"
+            android:paddingBottom="3dp"
+            android:background="#1E293B" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/widget_hero_row"
+        android:layout_width="match_parent"
+        android:layout_height="72dp"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#1A2130"
+        android:padding="6dp">
+
+        <ImageView
+            android:id="@+id/widget_hero_shot"
+            android:layout_width="96dp"
+            android:layout_height="60dp"
+            android:scaleType="centerCrop"
+            android:contentDescription="App preview" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/widget_repo_1_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="owner/repo"
+                android:textColor="#F8FAFC"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:singleLine="true" />
+
+            <TextView
+                android:id="@+id/widget_repo_1_desc"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Loading trending repository..."
+                android:textColor="#94A3B8"
+                android:textSize="10sp"
+                android:maxLines="2" />
+
+            <TextView
+                android:id="@+id/widget_repo_1_meta"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="★ 0 · Built Preview"
+                android:textColor="#F59E0B"
+                android:textSize="10sp"
+                android:singleLine="true" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/widget_repo_2"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="2. —"
+        android:textColor="#CBD5E1"
+        android:textSize="11sp"
+        android:singleLine="true" />
+
+    <TextView
+        android:id="@+id/widget_repo_3"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="3dp"
+        android:text="3. —"
+        android:textColor="#CBD5E1"
+        android:textSize="11sp"
+        android:singleLine="true" />
+
+</LinearLayout>

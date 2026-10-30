@@ -118,8 +118,9 @@ object SwiftUiPreviewInterpreter {
      */
     fun interpret(sources: List<String>, session: PreviewSession = PreviewSession()): String {
         val chosen = selectSources(sources)
-        val root = parse(chosen) ?: throw SwiftUiPreviewException("No interpretible SwiftUI View/App body found")
-        val builder = ViewNodeBuilder(session)
+        val (root, allStructs) = parseWithStructs(chosen)
+            ?: throw SwiftUiPreviewException("No interpretible SwiftUI View/App body found")
+        val builder = ViewNodeBuilder(session, allStructs)
         val node = builder.buildRoot(root, session)
         return node.toString()
     }
@@ -164,13 +165,32 @@ object SwiftUiPreviewInterpreter {
                     state[binding.name] = s
                     true
                 }
+                is CallbackBinding.IntBinding -> {
+                    val i = (value as? JsonPrimitive)?.content?.toDoubleOrNull()?.toInt() ?: return false
+                    if ((state[binding.name] as? Number)?.toInt() == i) return false
+                    state[binding.name] = i
+                    true
+                }
+                is CallbackBinding.DoubleBinding -> {
+                    val d = (value as? JsonPrimitive)?.content?.toDoubleOrNull() ?: return false
+                    if ((state[binding.name] as? Number)?.toDouble() == d) return false
+                    state[binding.name] = d
+                    true
+                }
             }
         }
 
         internal fun runAction(script: String) {
-            // Assignment statements: `count += 1`, `name = "x"`, `enabled = true`, `count = count + 1`
+            // Assignment statements: `count += 1`, `name = "x"`, `enabled = true`, `showSheet.toggle()`
             val stmts = script.split(';').map { it.trim() }.filter { it.isNotEmpty() }
             for (stmt in stmts) {
+                val toggleMatch = Regex("""^([A-Za-z_]\w*)\.toggle\(\)$""").find(stmt)
+                if (toggleMatch != null) {
+                    val name = toggleMatch.groupValues[1]
+                    val cur = (state[name] as? Boolean) ?: false
+                    state[name] = !cur
+                    continue
+                }
                 val compound = Regex("""^([A-Za-z_]\w*)\s*(\+=|-=|\*=|/=)\s*(.+)$""").find(stmt)
                 if (compound != null) {
                     val (name, op, rhs) = compound.destructured
@@ -199,6 +219,14 @@ object SwiftUiPreviewInterpreter {
             val t = src.trim()
             if (t.equals("true", true)) return true
             if (t.equals("false", true)) return false
+            if (t.startsWith("!")) {
+                val inner = evalSimple(t.drop(1).trim())
+                return when (inner) {
+                    is Boolean -> !inner
+                    is Number -> inner.toDouble() == 0.0
+                    else -> false
+                }
+            }
             t.toDoubleOrNull()?.let { return normalizeNumber(it) }
             if (t.startsWith("\"") && t.endsWith("\"") && t.length >= 2) return t.substring(1, t.length - 1)
             // ternary: a ? b : c
@@ -232,6 +260,8 @@ object SwiftUiPreviewInterpreter {
         data class VoidAction(val script: String) : CallbackBinding()
         data class BoolBinding(val name: String) : CallbackBinding()
         data class StringBinding(val name: String) : CallbackBinding()
+        data class IntBinding(val name: String) : CallbackBinding()
+        data class DoubleBinding(val name: String) : CallbackBinding()
     }
 
     class SwiftUiPreviewException(message: String) : RuntimeException(message)
@@ -944,7 +974,9 @@ object SwiftUiPreviewInterpreter {
     private fun unescape(s: String): String =
         s.replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\"").replace("\\\\", "\\")
 
-    private fun parse(sources: List<String>): Ast.Struct? {
+    private fun parse(sources: List<String>): Ast.Struct? = parseWithStructs(sources)?.first
+
+    private fun parseWithStructs(sources: List<String>): Pair<Ast.Struct, List<Ast.Struct>>? {
         val structs = ArrayList<Ast.Struct>()
         for (src in sources) {
             val cleaned = src.lineSequence()
@@ -971,13 +1003,18 @@ object SwiftUiPreviewInterpreter {
         }
         structs.filter { it.superTypes.any { s -> s == "View" } && it.body != null }
             .forEach { if (it !in viewCandidates) viewCandidates += it }
-        if (viewCandidates.size <= 1) return viewCandidates.firstOrNull()
-        return viewCandidates.firstOrNull { candidate ->
-            val previewJson = runCatching {
-                ViewNodeBuilder(PreviewSession()).buildRoot(candidate, PreviewSession()).toString()
-            }.getOrDefault("")
-            previewJson.length > 80
-        } ?: viewCandidates.firstOrNull()
+        if (viewCandidates.isEmpty()) return null
+        val root = if (viewCandidates.size == 1) {
+            viewCandidates.first()
+        } else {
+            viewCandidates.firstOrNull { candidate ->
+                val previewJson = runCatching {
+                    ViewNodeBuilder(PreviewSession(), structs).buildRoot(candidate, PreviewSession()).toString()
+                }.getOrDefault("")
+                previewJson.length > 80
+            } ?: viewCandidates.first()
+        }
+        return root to structs
     }
 
     private fun extractWindowContent(body: Ast.Expr): Ast.Expr? {
@@ -1060,12 +1097,22 @@ object SwiftUiPreviewInterpreter {
     // Evaluator / ViewNode builder
     // ------------------------------------------------------------------
 
-    private class ViewNodeBuilder(private val session: PreviewSession) {
+    private class ViewNodeBuilder(
+        private val session: PreviewSession,
+        private val allStructs: List<Ast.Struct> = emptyList(),
+    ) {
         private var idSeq = 0
-        private val rootStruct: Ast.Struct? = null
+        private var recursionDepth = 0
 
         fun buildRoot(struct: Ast.Struct, session: PreviewSession): JsonElement {
-            // Seed state from @State defaults
+            // Seed state from @State defaults across all parsed structs
+            for (s in allStructs) {
+                for (p in s.stateProps) {
+                    if (p.name !in session.state) {
+                        session.state[p.name] = p.initial
+                    }
+                }
+            }
             for (p in struct.stateProps) {
                 if (p.name !in session.state) {
                     session.state[p.name] = p.initial
@@ -1112,9 +1159,6 @@ object SwiftUiPreviewInterpreter {
             // Unwrap a root body that is just a call to another View type: ContentView()
             if (core is Ast.Call && core.trailing.isEmpty() && core.args.isEmpty()) {
                 val name = calleeName(core.callee)
-                val target = struct?.let { /* self */ null }
-                // If it's a known container, fall through; if it's a View type, we can't recurse without
-                // the other struct — treat unknown Ident calls as empty containers only when known.
                 if (name in KNOWN_VIEWS) {
                     return buildKnownView(name, emptyList(), emptyList(), path, struct, modifierCalls)
                 }
@@ -1126,10 +1170,48 @@ object SwiftUiPreviewInterpreter {
                     if (name in KNOWN_VIEWS) {
                         buildKnownView(name, core.args, core.trailing, path, struct, emptyList())
                     } else if (core.callee is Ast.Ident && core.callee.name.firstOrNull()?.isUpperCase() == true) {
-                        // Unknown custom view: emit empty group so the tree still renders
-                        BuiltNode("Group", nextId(path), buildJsonObject {}, buildJsonArray {}, buildJsonArray {})
+                        val customStruct = allStructs.firstOrNull { it.name == name && it.body != null }
+                        if (customStruct != null && customStruct.body != null && recursionDepth < 8) {
+                            recursionDepth++
+                            val savedValues = LinkedHashMap<String, Any?>()
+                            val boundKeys = ArrayList<String>()
+                            for (arg in core.args) {
+                                val k = arg.label ?: continue
+                                boundKeys += k
+                                savedValues[k] = session.state[k]
+                                session.state[k] = evalArgValue(arg.value)
+                            }
+                            for (p in customStruct.stateProps) {
+                                if (p.name !in session.state) {
+                                    session.state[p.name] = p.initial
+                                }
+                            }
+                            val built = try {
+                                val innerBody = unwrapViewBody(customStruct.body)
+                                if (innerBody is Ast.Closure && innerBody.body.size > 1) {
+                                    val grpId = nextId(path)
+                                    val kids = buildJsonArray {
+                                        for (childExpr in innerBody.body) {
+                                            val c = buildView(childExpr, grpId, customStruct)
+                                            add(nodeToJsonObject(c))
+                                        }
+                                    }
+                                    BuiltNode("VStack", grpId, buildJsonObject {}, buildJsonArray {}, kids)
+                                } else {
+                                    buildView(innerBody, path, customStruct)
+                                }
+                            } finally {
+                                for (k in boundKeys) {
+                                    val prev = savedValues[k]
+                                    if (prev != null) session.state[k] = prev else session.state.remove(k)
+                                }
+                                recursionDepth--
+                            }
+                            built
+                        } else {
+                            BuiltNode("Group", nextId(path), buildJsonObject {}, buildJsonArray {}, buildJsonArray {})
+                        }
                     } else {
-                        // Text("...") already handled; other calls
                         BuiltNode("Group", nextId(path), buildJsonObject {}, buildJsonArray {}, buildJsonArray {})
                     }
                 }
@@ -1145,9 +1227,21 @@ object SwiftUiPreviewInterpreter {
             }.let { applyModifiers(it, modifierCalls, path, struct) }
         }
 
+        private fun evalArgValue(e: Ast.Expr): Any? {
+            evalToNumber(e)?.let { return normalizeNumber(it) }
+            if (e is Ast.Literal && e.value is Boolean) return e.value
+            return evalToString(e)
+        }
+
+        private fun nodeToJsonObject(c: BuiltNode): JsonObject = buildJsonObject {
+            put("type", c.type)
+            put("id", c.id)
+            put("props", c.props)
+            put("modifiers", c.modifiers)
+            put("children", c.children)
+        }
+
         private fun flattenModifiers(expr: Ast.Expr): Pair<Ast.Expr, List<Ast.Call>> {
-            // SwiftUI source uses .padding(24) postfix calls. Our parser folds those as Call(Member(...)).
-            // Collect trailing modifier calls into a list.
             val mods = ArrayList<Ast.Call>()
             var cur = expr
             while (true) {
@@ -1163,13 +1257,124 @@ object SwiftUiPreviewInterpreter {
                     }
                     cur is Ast.Call && cur.callee is Ast.Ident && (cur.callee as Ast.Ident).name in MODIFIER_NAMES -> {
                         mods += cur
-                        // no target
                         break
                     }
                     else -> break
                 }
             }
             return cur to mods.asReversed()
+        }
+
+        private fun extractTabItemMeta(expr: Ast.Expr?): Pair<String?, String?> {
+            if (expr == null) return null to null
+            var label: String? = null
+            var icon: String? = null
+            for (call in collectCalls(expr)) {
+                when (calleeName(call.callee)) {
+                    "Label" -> {
+                        if (label == null) {
+                            label = call.args.firstOrNull { it.label == null || it.label == "title" }
+                                ?.let { evalToString(it.value) }
+                        }
+                        if (icon == null) {
+                            icon = call.args.firstOrNull { it.label == "systemImage" || it.label == "image" }
+                                ?.let { evalToString(it.value) }
+                        }
+                    }
+                    "Text" -> {
+                        if (label == null) {
+                            label = call.args.firstOrNull()?.let { evalToString(it.value) }
+                        }
+                    }
+                    "Image" -> {
+                        if (icon == null) {
+                            icon = call.args.firstOrNull { it.label == "systemName" }?.let { evalToString(it.value) }
+                                ?: call.args.firstOrNull()?.let { evalToString(it.value) }
+                        }
+                    }
+                }
+            }
+            return label to icon
+        }
+
+        private fun evaluatePathClosure(closure: Ast.Closure): String {
+            val cmds = ArrayList<String>()
+            fun pointArg(call: Ast.Call, label: String? = "to"): Pair<Double, Double>? {
+                val arg = (if (label != null) call.args.firstOrNull { it.label == label } else null)
+                    ?: call.args.firstOrNull()
+                    ?: return null
+                val v = arg.value
+                if (v is Ast.Call && calleeName(v.callee) == "CGPoint") {
+                    val x = v.args.firstOrNull { it.label == "x" }?.let { evalToNumber(it.value) }
+                        ?: v.args.getOrNull(0)?.let { evalToNumber(it.value) } ?: 0.0
+                    val y = v.args.firstOrNull { it.label == "y" }?.let { evalToNumber(it.value) }
+                        ?: v.args.getOrNull(1)?.let { evalToNumber(it.value) } ?: 0.0
+                    return x to y
+                }
+                return null
+            }
+            fun rectArg(call: Ast.Call): DoubleArray? {
+                val arg = call.args.firstOrNull() ?: return null
+                val v = arg.value
+                if (v is Ast.Call && calleeName(v.callee) == "CGRect") {
+                    val x = v.args.firstOrNull { it.label == "x" }?.let { evalToNumber(it.value) } ?: 0.0
+                    val y = v.args.firstOrNull { it.label == "y" }?.let { evalToNumber(it.value) } ?: 0.0
+                    val w = v.args.firstOrNull { it.label == "width" }?.let { evalToNumber(it.value) } ?: 100.0
+                    val h = v.args.firstOrNull { it.label == "height" }?.let { evalToNumber(it.value) } ?: 100.0
+                    return doubleArrayOf(x, y, w, h)
+                }
+                return null
+            }
+            for (stmt in closure.body) {
+                for (call in collectCalls(stmt)) {
+                    when (calleeName(call.callee)) {
+                        "move" -> {
+                            val (x, y) = pointArg(call, "to") ?: continue
+                            cmds += "M $x $y"
+                        }
+                        "addLine" -> {
+                            val (x, y) = pointArg(call, "to") ?: continue
+                            cmds += "L $x $y"
+                        }
+                        "addQuadCurve" -> {
+                            val (x, y) = pointArg(call, "to") ?: continue
+                            val (cx, cy) = pointArg(call, "control") ?: continue
+                            cmds += "Q $cx $cy $x $y"
+                        }
+                        "addCurve" -> {
+                            val (x, y) = pointArg(call, "to") ?: continue
+                            val (c1x, c1y) = pointArg(call, "control1") ?: continue
+                            val (c2x, c2y) = pointArg(call, "control2") ?: continue
+                            cmds += "C $c1x $c1y $c2x $c2y $x $y"
+                        }
+                        "addRect" -> {
+                            val r = rectArg(call) ?: continue
+                            val (x, y, w, h) = r
+                            cmds += "M $x $y L ${x + w} $y L ${x + w} ${y + h} L $x ${y + h} Z"
+                        }
+                        "addEllipse" -> {
+                            val r = rectArg(call) ?: continue
+                            val (x, y, w, h) = r
+                            val cx = x + w / 2.0
+                            val cy = y + h / 2.0
+                            val rx = w / 2.0
+                            val ry = h / 2.0
+                            val k = 0.5522847498307936
+                            val ox = rx * k
+                            val oy = ry * k
+                            cmds += "M ${cx - rx} $cy " +
+                                "C ${cx - rx} ${cy - oy} ${cx - ox} ${cy - ry} $cx ${cy - ry} " +
+                                "C ${cx + ox} ${cy - ry} ${cx + rx} ${cy - oy} ${cx + rx} $cy " +
+                                "C ${cx + rx} ${cy + oy} ${cx + ox} ${cy + ry} $cx ${cy + ry} " +
+                                "C ${cx - ox} ${cy + ry} ${cx - rx} ${cy + oy} ${cx - rx} $cy Z"
+                        }
+                        "closeSubpath" -> {
+                            cmds += "Z"
+                        }
+                    }
+                }
+            }
+            return cmds.joinToString(" ")
         }
 
         private fun applyModifiers(
@@ -1179,16 +1384,60 @@ object SwiftUiPreviewInterpreter {
             struct: Ast.Struct?,
         ): BuiltNode {
             if (mods.isEmpty()) return node
+            val extraProps = LinkedHashMap<String, JsonElement>()
+            val extraChildren = ArrayList<JsonElement>()
             val arr = buildJsonArray {
-                // preserve existing
                 node.modifiers.forEach { add(it) }
                 for (m in mods) {
                     val name = calleeName(m.callee)
+                    if (name == "fill") {
+                        val colorStr = m.args.firstOrNull()?.let { evalToString(it.value) }
+                        if (!colorStr.isNullOrBlank()) extraProps["fill"] = JsonPrimitive(colorStr)
+                    } else if (name == "stroke") {
+                        val colorStr = m.args.firstOrNull { it.label == null || it.label == "content" }
+                            ?.let { evalToString(it.value) }
+                        if (!colorStr.isNullOrBlank()) extraProps["stroke"] = JsonPrimitive(colorStr)
+                        val lw = m.args.firstOrNull { it.label == "lineWidth" }?.let { evalToNumber(it.value) } ?: 1.0
+                        extraProps["strokeWidth"] = JsonPrimitive(lw)
+                    } else if (name == "sheet" || name == "fullScreenCover") {
+                        val binding = m.args.firstOrNull { it.label == "isPresented" }?.value
+                        val stateName = bindingName(binding)
+                        val isPresented = (session.state[stateName] as? Boolean) ?: false
+                        val dismissCb = session.nextCallbackId++
+                        if (stateName != null) {
+                            session.callbacks[dismissCb] = CallbackBinding.VoidAction("$stateName = false")
+                        }
+                        val sheetTrail = m.trailing.firstOrNull()
+                        val sheetChildren = buildJsonArray {
+                            if (sheetTrail is Ast.Closure) {
+                                for (ce in sheetTrail.body) {
+                                    add(nodeToJsonObject(buildView(ce, "$path/sheet", struct)))
+                                }
+                            } else if (sheetTrail != null) {
+                                add(nodeToJsonObject(buildView(sheetTrail, "$path/sheet", struct)))
+                            }
+                        }
+                        extraChildren += buildJsonObject {
+                            put("type", "Sheet")
+                            put("id", "$path/sheet")
+                            put("props", buildJsonObject {
+                                put("isPresented", isPresented)
+                                put("onDismiss", dismissCb)
+                            })
+                            put("modifiers", buildJsonArray {})
+                            put("children", sheetChildren)
+                        }
+                    }
+                    val (tabLabel, tabIcon) = if (name == "tabItem") {
+                        extractTabItemMeta(m.trailing.firstOrNull())
+                    } else null to null
                     val args = buildJsonObject {
                         for (a in m.args) {
                             val key = a.label ?: "value"
                             put(key, evalToJson(a.value))
                         }
+                        if (tabLabel != null) put("label", tabLabel)
+                        if (tabIcon != null) put("systemName", tabIcon)
                     }
                     add(buildJsonObject {
                         put("kind", name)
@@ -1196,7 +1445,23 @@ object SwiftUiPreviewInterpreter {
                     })
                 }
             }
-            return node.copy(modifiers = arr)
+            val mergedProps = if (extraProps.isEmpty()) {
+                node.props
+            } else {
+                buildJsonObject {
+                    node.props.forEach { (k, v) -> put(k, v) }
+                    extraProps.forEach { (k, v) -> put(k, v) }
+                }
+            }
+            val mergedChildren = if (extraChildren.isEmpty()) {
+                node.children
+            } else {
+                buildJsonArray {
+                    node.children.forEach { add(it) }
+                    extraChildren.forEach { add(it) }
+                }
+            }
+            return node.copy(props = mergedProps, modifiers = arr, children = mergedChildren)
         }
 
         private fun buildKnownView(
@@ -1213,6 +1478,8 @@ object SwiftUiPreviewInterpreter {
             // trailing closures are child views or action scripts
             var actionScript: String? = null
             var labelExpr: Ast.Expr? = null
+            var svgPathFromClosure: String? = null
+
             // Long form: Button(action: {...}, label: {...})
             args.firstOrNull { it.label == "action" }?.let { arg ->
                 actionScript = closureScript(arg.value)
@@ -1220,30 +1487,95 @@ object SwiftUiPreviewInterpreter {
             args.firstOrNull { it.label == "label" }?.let { arg ->
                 labelExpr = unwrapViewBody(arg.value)
             }
-            for (t in trailing) {
-                when {
-                    name == "Button" && actionScript == null && looksLikeAction(t) -> {
-                        actionScript = closureScript(t)
-                    }
-                    name == "Button" && labelExpr == null && !looksLikeAction(t) -> labelExpr = t
-                    name == "Toggle" && actionScript == null && looksLikeAction(t) -> {
-                        actionScript = closureScript(t)
-                    }
-                    t is Ast.Closure && (name != "Button" || labelExpr == null || !looksLikeAction(t)) -> {
-                        // ViewBuilder content
-                        if (name == "Button" && looksLikeAction(t)) {
-                            if (actionScript == null) actionScript = closureScript(t)
+            if (name == "Path") {
+                val pathClosure = trailing.firstOrNull { it is Ast.Closure } as? Ast.Closure
+                if (pathClosure != null) {
+                    svgPathFromClosure = evaluatePathClosure(pathClosure)
+                }
+            } else if (name == "NavigationLink") {
+                val destArg = args.firstOrNull { it.label == "destination" }?.value
+                if (destArg != null) {
+                    val destNode = buildView(unwrapViewBody(destArg), "$id/dest", struct)
+                    childrenList += destNode.copy(
+                        props = buildJsonObject {
+                            destNode.props.forEach { (k, v) -> put(k, v) }
+                            put("navigationRole", "destination")
+                        },
+                    )
+                    for (t in trailing) {
+                        if (t is Ast.Closure) {
+                            for (ce in t.body) childrenList += buildView(ce, "$id/label", struct)
                         } else {
-                            for (childExpr in t.body) {
-                                childrenList += buildView(childExpr, id, struct)
-                            }
-                            if (name == "Button" && labelExpr == null) {
-                                // children already added
-                            }
+                            childrenList += buildView(t, "$id/label", struct)
                         }
                     }
-                    else -> {
-                        childrenList += buildView(t, id, struct)
+                } else if (trailing.size >= 2) {
+                    val destClosure = trailing[0]
+                    val lblClosure = trailing[1]
+                    if (destClosure is Ast.Closure) {
+                        for (ce in destClosure.body) {
+                            val dn = buildView(ce, "$id/dest", struct)
+                            childrenList += dn.copy(
+                                props = buildJsonObject {
+                                    dn.props.forEach { (k, v) -> put(k, v) }
+                                    put("navigationRole", "destination")
+                                },
+                            )
+                        }
+                    }
+                    if (lblClosure is Ast.Closure) {
+                        for (ce in lblClosure.body) childrenList += buildView(ce, "$id/label", struct)
+                    }
+                } else if (trailing.size == 1) {
+                    val t = trailing[0]
+                    val hasStringTitle = args.any { it.label == null || it.label == "title" }
+                    val role = if (hasStringTitle) "destination" else null
+                    if (t is Ast.Closure) {
+                        for (ce in t.body) {
+                            val cn = buildView(ce, "$id/child", struct)
+                            childrenList += if (role != null) {
+                                cn.copy(
+                                    props = buildJsonObject {
+                                        cn.props.forEach { (k, v) -> put(k, v) }
+                                        put("navigationRole", role)
+                                    },
+                                )
+                            } else cn
+                        }
+                    } else {
+                        val cn = buildView(t, "$id/child", struct)
+                        childrenList += if (role != null) {
+                            cn.copy(
+                                props = buildJsonObject {
+                                    cn.props.forEach { (k, v) -> put(k, v) }
+                                    put("navigationRole", role)
+                                },
+                            )
+                        } else cn
+                    }
+                }
+            } else {
+                for (t in trailing) {
+                    when {
+                        name == "Button" && actionScript == null && looksLikeAction(t) -> {
+                            actionScript = closureScript(t)
+                        }
+                        name == "Button" && labelExpr == null && !looksLikeAction(t) -> labelExpr = t
+                        name == "Toggle" && actionScript == null && looksLikeAction(t) -> {
+                            actionScript = closureScript(t)
+                        }
+                        t is Ast.Closure && (name != "Button" || labelExpr == null || !looksLikeAction(t)) -> {
+                            if (name == "Button" && looksLikeAction(t)) {
+                                if (actionScript == null) actionScript = closureScript(t)
+                            } else {
+                                for (childExpr in t.body) {
+                                    childrenList += buildView(childExpr, id, struct)
+                                }
+                            }
+                        }
+                        else -> {
+                            childrenList += buildView(t, id, struct)
+                        }
                     }
                 }
             }
@@ -1255,18 +1587,48 @@ object SwiftUiPreviewInterpreter {
                         val text = textArg?.let { evalToString(it.value) } ?: ""
                         put("text", text)
                     }
+                    "Label" -> {
+                        val title = args.firstOrNull { it.label == null || it.label == "title" }?.let { evalToString(it.value) } ?: ""
+                        val sys = args.firstOrNull { it.label == "systemImage" || it.label == "image" }?.let { evalToString(it.value) }
+                        put("title", title)
+                        if (sys != null) put("systemName", sys)
+                    }
                     "Button" -> {
-                        // Label as first arg string or trailing label
-                        val title = args.firstOrNull()?.let { evalToString(it.value) }
-                        if (title != null && childrenList.isEmpty()) {
-                            // label is the string title
-                        }
                         val cb = session.nextCallbackId++
                         session.callbacks[cb] = CallbackBinding.VoidAction(actionScript ?: "")
                         put("onTap", cb)
-                        if (title != null) {
-                            // emit label child
+                    }
+                    "NavigationLink" -> {
+                        val title = args.firstOrNull { it.label == null || it.label == "title" }?.let { evalToString(it.value) }
+                        if (title != null) put("title", title)
+                        val valArg = args.firstOrNull { it.label == "value" }?.let { evalToString(it.value) }
+                        if (valArg != null) put("value", valArg)
+                        if (childrenList.any { (it.props["navigationRole"] as? JsonPrimitive)?.content == "destination" }) {
+                            put("hasDestination", true)
                         }
+                    }
+                    "TabView" -> {
+                        val selArg = args.firstOrNull { it.label == "selection" }?.value
+                        val stateName = bindingName(selArg)
+                        val selIndex = (session.state[stateName] as? Number)?.toInt() ?: 0
+                        put("selectedIndex", selIndex)
+                        val cb = session.nextCallbackId++
+                        if (stateName != null) {
+                            session.callbacks[cb] = CallbackBinding.IntBinding(stateName)
+                        }
+                        put("onSelect", cb)
+                    }
+                    "Path" -> {
+                        val d = svgPathFromClosure
+                            ?: args.firstOrNull { it.label == "d" || it.label == "svgPath" || it.label == null }
+                                ?.let { evalToString(it.value) }
+                            ?: ""
+                        put("d", d)
+                        put("svgPath", d)
+                    }
+                    "RoundedRectangle" -> {
+                        val cr = args.firstOrNull { it.label == "cornerRadius" }?.let { evalToNumber(it.value) } ?: 8.0
+                        put("cornerRadius", cr)
                     }
                     "Toggle" -> {
                         val title = args.firstOrNull { it.label == null || it.label == "_" }?.let { evalToString(it.value) }
@@ -1324,9 +1686,15 @@ object SwiftUiPreviewInterpreter {
                         if (c != null) put("color", c)
                     }
                     "Slider" -> {
-                        val v = args.firstOrNull { it.label == "value" }?.let { evalToNumber(it.value) } ?: 0.0
+                        val valArg = args.firstOrNull { it.label == "value" }?.value
+                        val stateName = bindingName(valArg)
+                        val v = (if (stateName != null) coerceNumber(session.state[stateName]) else null)
+                            ?: valArg?.let { evalToNumber(it) } ?: 0.0
                         put("value", v)
                         val cb = session.nextCallbackId++
+                        if (stateName != null) {
+                            session.callbacks[cb] = CallbackBinding.DoubleBinding(stateName)
+                        }
                         put("onChange", cb)
                     }
                 }
@@ -1353,13 +1721,7 @@ object SwiftUiPreviewInterpreter {
 
             val childrenJson = buildJsonArray {
                 for (c in childrenList) {
-                    add(buildJsonObject {
-                        put("type", c.type)
-                        put("id", c.id)
-                        put("props", c.props)
-                        put("modifiers", c.modifiers)
-                        put("children", c.children)
-                    })
+                    add(nodeToJsonObject(c))
                 }
             }
 
@@ -1391,13 +1753,7 @@ object SwiftUiPreviewInterpreter {
                     if (itemParam != null) session.state[itemParam] = i
                     for (childExpr in body) {
                         val n = buildView(childExpr, "$id/$i", struct)
-                        add(buildJsonObject {
-                            put("type", n.type)
-                            put("id", n.id)
-                            put("props", n.props)
-                            put("modifiers", n.modifiers)
-                            put("children", n.children)
-                        })
+                        add(nodeToJsonObject(n))
                     }
                     if (itemParam != null) {
                         if (saved != null) session.state[itemParam] = saved else session.state.remove(itemParam)
@@ -1431,6 +1787,7 @@ object SwiftUiPreviewInterpreter {
                 else -> v?.toString() ?: "nil"
             }
             is Ast.Member -> "${e.target?.let { exprToScript(it) } ?: ""}.${e.name}"
+            is Ast.Call -> "${exprToScript(e.callee)}(${e.args.joinToString(", ") { (if (it.label != null) "${it.label}: " else "") + exprToScript(it.value) }})"
             is Ast.Unary -> if (e.op == "$") "$" + exprToScript(e.expr) else "${e.op}${exprToScript(e.expr)}"
             is Ast.Ternary -> "${exprToScript(e.cond)} ? ${exprToScript(e.thenE)} : ${exprToScript(e.elseE)}"
             is Ast.StringLit -> e.parts.joinToString("") {
@@ -1582,8 +1939,9 @@ object SwiftUiPreviewInterpreter {
         "ScrollView", "TabView", "NavigationSplitView", "LazyVStack", "LazyHStack",
         "Text", "Button", "Toggle", "TextField", "SecureField", "Image", "Label",
         "Spacer", "Divider", "Color", "Circle", "Rectangle", "Capsule", "RoundedRectangle",
-        "NavigationView", "NavigationStack", "NavigationView", "ForEach", "Slider",
-        "ProgressView", "Link", "Toggle", "EmptyView", "TupleView",
+        "Path", "Shape", "Canvas", "NavigationView", "NavigationStack", "NavigationLink",
+        "ForEach", "Slider", "ProgressView", "Link", "EmptyView", "TupleView",
+        "Picker", "Stepper", "DatePicker", "DisclosureGroup", "Menu",
     )
 
     private val MODIFIER_NAMES = setOf(
@@ -1592,6 +1950,7 @@ object SwiftUiPreviewInterpreter {
         "multilineTextAlignment", "cornerRadius", "border", "shadow", "offset", "scaleEffect",
         "listStyle", "buttonStyle", "textFieldStyle", "toggleStyle", "navigationBarTitle",
         "tint", "clipped", "overlay", "zIndex", "animation", "transition", "id", "tag",
+        "tabItem", "sheet", "fullScreenCover", "alert", "fill", "stroke", "clipShape", "toolbar",
         "help", "accessibilityLabel", "keyboardType", "autocapitalization", "disableAutocorrection",
     )
 }

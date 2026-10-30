@@ -2685,6 +2685,14 @@ class IdeServices private constructor(
      * primitive ([EngineContext.parse]); the block projection service rides on it.
      */
     private fun parse(file: Path, text: String): ParsedFile? {
+        val fileName = file.fileName?.toString().orEmpty()
+        if (fileName.endsWith(".swift", ignoreCase = true)) {
+            return dev.ide.core.services.SwiftDomParser.parse(
+                store.vfs.fileFor(file),
+                docVersion.incrementAndGet(),
+                text,
+            )
+        }
         val module = moduleForFile(file) ?: return null
         val analyzer = analyzerFor(module, languageFor(file))
         return analyzer.incrementalParser.parseFull(

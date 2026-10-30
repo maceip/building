@@ -42,7 +42,7 @@ internal object JavaDialect : BlockDialect {
 
 /** The language a parsed file is in, from its extension (the DOM itself carries no language tag). */
 internal fun languageOfPath(path: String): LanguageId = when (path.substringAfterLast('.', "").lowercase()) {
-    "kt", "kts" -> LanguageId("kotlin")
+    "kt", "kts", "swift" -> LanguageId("kotlin")
     else -> LanguageId("java")
 }
 
