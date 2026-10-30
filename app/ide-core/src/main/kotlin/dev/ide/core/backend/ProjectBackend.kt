@@ -75,7 +75,22 @@ internal class ProjectBackend(private val ctx: BackendContext) : ProjectService 
      *  lists keyed by `rootPath`, where a repeat throws out of the measure pass instead of drawing twice. */
     override fun projects(): List<ProjectInfo> =
         ctx.manager?.list()
-            ?.map { ProjectInfo(it.name, it.rootPath, it.moduleCount, it.compatibility, it.isAndroid, it.lastOpened, it.unrecognized, it.isNode, it.isSwift, it.isPython) }
+            ?.map {
+                ProjectInfo(
+                    name = it.name,
+                    rootPath = it.rootPath,
+                    moduleCount = it.moduleCount,
+                    compatibility = it.compatibility,
+                    isAndroid = it.isAndroid,
+                    lastOpened = it.lastOpened,
+                    unrecognized = it.unrecognized,
+                    isNode = it.isNode,
+                    isSwift = it.isSwift,
+                    isPython = it.isPython,
+                    ownerAvatarUrl = it.ownerAvatarUrl,
+                    tags = it.tags,
+                )
+            }
             ?.distinctBy { it.rootPath }
             ?: ctx.servicesOrNull?.let {
                 listOf(ProjectInfo(it.projectDisplayName(), it.workspaceRoot.toString(), it.modules().size, runCatching { it.isCompatibilityMode() }.getOrDefault(false)))
@@ -128,7 +143,19 @@ internal class ProjectBackend(private val ctx: BackendContext) : ProjectService 
         val mgr = ctx.manager ?: return false
         return withContext(Dispatchers.IO) {
             runCatching {
-                if (Paths.get(rootPath) == ctx.servicesOrNull?.workspaceRoot) return@runCatching true
+                val target = Paths.get(rootPath).toAbsolutePath().normalize()
+                val current = ctx.servicesOrNull
+                if (current != null && current.workspaceRoot.toAbsolutePath().normalize() == target) {
+                    val libsFile = target.resolve(".platform/libraries.json")
+                    val needsReload = !java.nio.file.Files.exists(libsFile) &&
+                        current.store.workspace.libraryTable.libraries.isNotEmpty()
+                    if (needsReload) {
+                        ctx.swapEngine(mgr.open(rootPath))
+                    } else {
+                        ctx.swapEngine(current)
+                    }
+                    return@runCatching true
+                }
                 ctx.swapEngine(mgr.open(rootPath)); true
             }.getOrElse { e ->
                 // Surface the failure (console + the critical-error dialog) instead of swallowing it, so a

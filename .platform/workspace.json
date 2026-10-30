@@ -49,6 +49,11 @@
           "dir": "services/analytics-impl"
         },
         {
+          "id": "android-apk",
+          "name": "android-apk",
+          "dir": "run/android-apk"
+        },
+        {
           "id": "android-sdk-metadata",
           "name": "android-sdk-metadata",
           "dir": "android/android-sdk-metadata"
@@ -119,6 +124,21 @@
           "dir": "services/deps-impl"
         },
         {
+          "id": "developer-workbench",
+          "name": "developer-workbench",
+          "dir": "services/developer-workbench"
+        },
+        {
+          "id": "gradle-build",
+          "name": "gradle-build",
+          "dir": "build-system/gradle-build"
+        },
+        {
+          "id": "gradle-tooling",
+          "name": "gradle-tooling",
+          "dir": "build-system/gradle-tooling"
+        },
+        {
           "id": "hello-plugin",
           "name": "hello-plugin",
           "dir": "samples/hello-plugin"
@@ -137,6 +157,11 @@
           "id": "ide-desktop",
           "name": "ide-desktop",
           "dir": "app/ide-desktop"
+        },
+        {
+          "id": "ide-ios",
+          "name": "ide-ios",
+          "dir": "app/ide-ios"
         },
         {
           "id": "ide-ui",
@@ -224,9 +249,34 @@
           "dir": "run/jvm-interp"
         },
         {
+          "id": "jvm-vm",
+          "name": "jvm-vm",
+          "dir": "run/jvm-vm"
+        },
+        {
+          "id": "jvm-vm-fixtures",
+          "name": "jvm-vm-fixtures",
+          "dir": "run/jvm-vm-fixtures"
+        },
+        {
+          "id": "kotlin-classfile",
+          "name": "kotlin-classfile",
+          "dir": "lang/kotlin-classfile"
+        },
+        {
           "id": "kotlin-compiler-deps",
           "name": "kotlin-compiler-deps",
           "dir": "lang/kotlin-compiler-deps"
+        },
+        {
+          "id": "kotlin-symbols",
+          "name": "kotlin-symbols",
+          "dir": "experimental/kotlin-symbols"
+        },
+        {
+          "id": "kotlin-syntax",
+          "name": "kotlin-syntax",
+          "dir": "experimental/kotlin-syntax"
         },
         {
           "id": "lang-java",
@@ -274,9 +324,29 @@
           "dir": "android/layout-preview-impl"
         },
         {
+          "id": "model-api",
+          "name": "model-api",
+          "dir": "platform/model-api"
+        },
+        {
+          "id": "model-bridge",
+          "name": "model-bridge",
+          "dir": "app/model-bridge"
+        },
+        {
+          "id": "ndk-plugin",
+          "name": "ndk-plugin",
+          "dir": "samples/ndk-plugin"
+        },
+        {
           "id": "platform-core",
           "name": "platform-core",
           "dir": "platform/platform-core"
+        },
+        {
+          "id": "platform-json",
+          "name": "platform-json",
+          "dir": "platform/platform-json"
         },
         {
           "id": "plugin-api",
@@ -304,9 +374,34 @@
           "dir": "platform/project-model-impl"
         },
         {
+          "id": "project-templates",
+          "name": "project-templates",
+          "dir": "platform/project-templates"
+        },
+        {
+          "id": "reliability-fixture",
+          "name": "reliability-fixture",
+          "dir": "samples/reliability-fixture"
+        },
+        {
+          "id": "reliability-test-support",
+          "name": "reliability-test-support",
+          "dir": "android/reliability-test-support"
+        },
+        {
+          "id": "spi-compat",
+          "name": "spi-compat",
+          "dir": "plugins/spi-compat"
+        },
+        {
           "id": "store-api",
           "name": "store-api",
           "dir": "services/store-api"
+        },
+        {
+          "id": "store-bridge",
+          "name": "store-bridge",
+          "dir": "services/store-bridge"
         },
         {
           "id": "store-impl",

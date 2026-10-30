@@ -226,7 +226,7 @@ internal class IosProjectModel {
         val isPython = IosFiles.exists(IosFiles.join(store.root, "pyproject.toml")) ||
             IosFiles.exists(IosFiles.join(store.root, "requirements.txt")) ||
             IosFiles.exists(IosFiles.join(store.root, "setup.py"))
-        val isSwift = IosFiles.exists(IosFiles.join(store.root, "Package.swift"))
+        val isSwift = hasSwiftProjectMarker(store.root)
 
         val buildSystem = when {
             isNode -> BuildSystemId("node")
@@ -286,8 +286,38 @@ internal class IosProjectModel {
             storeFor(root)?.workspace?.projects?.any { it.buildSystemId.value == "python" } == true
 
     fun isSwift(root: String): Boolean =
-        IosFiles.exists(IosFiles.join(root, "Package.swift")) ||
+        hasSwiftProjectMarker(root) ||
             storeFor(root)?.workspace?.projects?.any { it.buildSystemId.value == "swift" } == true
+
+    private fun hasSwiftProjectMarker(root: String): Boolean {
+        if (IosFiles.exists(IosFiles.join(root, "Package.swift"))) return true
+        val topEntries = IosFiles.list(root)
+        if (topEntries.any {
+                it.endsWith(".xcodeproj") ||
+                    it.endsWith(".xcworkspace") ||
+                    it.endsWith(".swift")
+            }
+        ) {
+            return true
+        }
+        for (entry in topEntries) {
+            if (entry.startsWith(".")) continue
+            val sub = IosFiles.join(root, entry)
+            if (IosFiles.isDirectory(sub)) {
+                val subEntries = IosFiles.list(sub)
+                if (subEntries.any {
+                        it == "Package.swift" ||
+                            it.endsWith(".xcodeproj") ||
+                            it.endsWith(".xcworkspace") ||
+                            it.endsWith(".swift")
+                    }
+                ) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
 
     /** The first conventional source directory that exists under [root], or the convention itself. */
     private fun adoptedSourceDir(root: String): String =

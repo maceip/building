@@ -247,19 +247,25 @@ fun ChatDrawer(
     fun submitText(raw: String) {
         val text = raw.trim()
         if (text.isEmpty()) return
-        input = TextFieldValue("")
         if (text.startsWith("/")) {
             val name = text.removePrefix("/").substringBefore(' ').lowercase()
             val args = text.substringAfter(' ', "").trim()
             when (name) {
-                "resume", "history" -> { showHistory = true; return }
-                "model" -> { modelMenuOpen = true; return }
+                "resume", "history" -> { input = TextFieldValue(""); showHistory = true; return }
+                "model" -> { input = TextFieldValue(""); modelMenuOpen = true; return }
+                "providers", "keys" -> { input = TextFieldValue(""); showProviders = true; return }
             }
             if (backend.agent.runCommand(name, args)) {
+                input = TextFieldValue("")
                 cfg = backend.agent.config()
                 return
             }
         }
+        if (!cfg.configured) {
+            showProviders = true
+            return
+        }
+        input = TextFieldValue("")
         backend.agent.send(text)
     }
 
@@ -467,6 +473,7 @@ fun ChatDrawer(
                     onClick = {
                         if (backend.build.supported()) {
                             backend.build.runBuild()
+                            openScreen("ide.run")
                         } else {
                             backend.agent.send("Rebuild the project and verify all targets compile cleanly.")
                         }
@@ -1019,34 +1026,82 @@ private fun ChatHeader(
     onNew: () -> Unit,
     onClose: (() -> Unit)?,
 ) {
-    Row(
-        Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        SparkleBadge(size = 24)
-        Column(Modifier.weight(1f)) {
-            Text(
-                stringResource(Res.string.chat_title),
-                color = AgentUi.chrome.text,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            ModelPicker(
-                cfg = cfg,
-                models = models,
-                open = modelMenuOpen,
-                onOpen = onModelMenu,
-                onPickModel = onPickModel,
-                onManageProviders = onManage,
-            )
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val isMobileHeader = maxWidth < 520.dp
+        if (isMobileHeader) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    SparkleBadge(size = 24)
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            stringResource(Res.string.chat_title),
+                            color = AgentUi.chrome.text,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        ModelPicker(
+                            cfg = cfg,
+                            models = models,
+                            open = modelMenuOpen,
+                            onOpen = onModelMenu,
+                            onPickModel = onPickModel,
+                            onManageProviders = onManage,
+                        )
+                    }
+                    IconButtonCa(CaIcons.gear, stringResource(Res.string.chat_manage_keys), onManage, iconSize = 16, boxSize = 36)
+                    ChatMenu(onNew = onNew, onHistory = onHistory, onManage = onManage)
+                    if (onClose != null) HideToolWindowButton(onClose)
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 30.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    EffortChip(cfg.effort, onPickEffort)
+                    ModeChip(cfg.mode, onCycleMode)
+                }
+            }
+        } else {
+            Row(
+                Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                SparkleBadge(size = 24)
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(Res.string.chat_title),
+                        color = AgentUi.chrome.text,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    ModelPicker(
+                        cfg = cfg,
+                        models = models,
+                        open = modelMenuOpen,
+                        onOpen = onModelMenu,
+                        onPickModel = onPickModel,
+                        onManageProviders = onManage,
+                    )
+                }
+                EffortChip(cfg.effort, onPickEffort)
+                ModeChip(cfg.mode, onCycleMode)
+                IconButtonCa(CaIcons.gear, stringResource(Res.string.chat_manage_keys), onManage, iconSize = 16, boxSize = 36)
+                ChatMenu(onNew = onNew, onHistory = onHistory, onManage = onManage)
+                if (onClose != null) HideToolWindowButton(onClose)
+            }
         }
-        EffortChip(cfg.effort, onPickEffort)
-        ModeChip(cfg.mode, onCycleMode)
-        ChatMenu(onNew = onNew, onHistory = onHistory, onManage = onManage)
-        if (onClose != null) HideToolWindowButton(onClose)
     }
 }
 
@@ -1872,6 +1927,14 @@ private fun Composer(
     onStop: () -> Unit,
 ) {
     val chrome = AgentUi.chrome
+    // Focus lights the lime cursor and a stronger hairline on the outer pill; the pill itself never reflows.
+    val fieldInteraction = remember { MutableInteractionSource() }
+    val focused by fieldInteraction.collectIsFocusedAsState()
+    val borderColor by animateColorAsState(
+        if (focused) chrome.accentSoftLine else chrome.hairlineStrong,
+        animationSpec = CaMotion.defaultEffects(),
+        label = "composerBorder",
+    )
     // Agent-first pill composer: one 22px-radius rail holding attach, free text and a 40px lime send.
     Row(
         Modifier.fillMaxWidth().padding(12.dp),
@@ -1881,7 +1944,7 @@ private fun Composer(
             Modifier.weight(1f)
                 .clip(RoundedCornerShape(22.dp))
                 .background(chrome.surface)
-                .border(1.dp, chrome.hairlineStrong, RoundedCornerShape(22.dp))
+                .border(1.dp, borderColor, RoundedCornerShape(22.dp))
                 .drawBehind {
                     drawLine(
                         color = chrome.sheen,
@@ -1935,14 +1998,6 @@ private fun Composer(
                     }
                 }
             }
-            // Focus lights the lime cursor and a stronger hairline; the pill itself never reflows.
-            val fieldInteraction = remember { MutableInteractionSource() }
-            val focused by fieldInteraction.collectIsFocusedAsState()
-            val borderColor by animateColorAsState(
-                if (focused) chrome.accentSoftLine else chrome.hairlineStrong,
-                animationSpec = CaMotion.defaultEffects(),
-                label = "composerBorder",
-            )
             Box(
                 Modifier.weight(1f).padding(horizontal = 4.dp),
                 contentAlignment = Alignment.CenterStart,
@@ -1956,7 +2011,7 @@ private fun Composer(
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
-                    enabled = configured && !busy,
+                    enabled = !busy,
                     textStyle = TextStyle(color = chrome.text, fontSize = 15.sp),
                     cursorBrush = SolidColor(chrome.accent),
                     maxLines = 5,
@@ -1972,16 +2027,9 @@ private fun Composer(
                         }
                     },
                 )
-                // Focus ring drawn over the pill's inner edge.
-                if (focused) {
-                    Box(
-                        Modifier.matchParentSize()
-                            .border(1.dp, borderColor, RoundedCornerShape(22.dp)),
-                    )
-                }
             }
             // 40px lime send. While a turn is running it becomes the stop control.
-            val canSend = configured && value.text.isNotBlank() && !busy
+            val canSend = value.text.isNotBlank() && !busy
             AgentIconCircle(
                 icon = if (busy) CaIcons.stop else CaIcons.arrowRight,
                 contentDescription = stringResource(if (busy) Res.string.chat_stop else Res.string.chat_send),

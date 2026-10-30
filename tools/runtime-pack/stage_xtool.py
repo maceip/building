@@ -75,6 +75,56 @@ def stage(source, output, xtool_root, lock_path=HERE / "xtool-inputs.lock.json")
             if leaf.startswith(("libswift", "libFoundation", "lib_Foundation", "libTesting", "libXCTest", "lib_Testing")):
                 links["lib/swift-runtime/" + leaf] = name
                 owners["lib/swift-runtime/" + leaf] = "swift-runtime-aarch64"
+    # Stage the precompiled Android aarch64 Cupertino SwiftUI bridge SDK directly into lib/swift/android/.
+    #
+    # CRITICAL VERSION ALIGNMENT: a .swiftmodule is stamped with the compiler version that
+    # produced it. If the bridge is built with Swift X but the runtime pack's swiftc is Swift Y,
+    # every `import SwiftUI` fails with
+    #   "module compiled with Swift X cannot be imported by the Swift Y compiler"
+    # The bridge MUST match the runtime pack's Swift version (pinned in this lock file). We
+    # resolve the bridge directory, then REFUSE to bake a mismatched bridge.
+    expected_swift = next((p["version"] for p in lock["packages"] if p["name"] == "swift"), None)
+    env_bridge = os.environ.get("SWIFTUI_BRIDGE_SDK")
+    repo_bridge = HERE / "swiftui-bridge-sdk/android-aarch64"
+    home_bridge = Path.home() / ".building/swiftui-bridge-sdk/android-aarch64"
+    # Prefer an explicit env override, then the repo-canonical bridge (once built), then the
+    # legacy ~/.building location. Only a directory that actually holds the artifacts qualifies.
+    candidates = []
+    if env_bridge:
+        candidates.append(Path(env_bridge))
+    if (repo_bridge / "libSwiftUI.a").is_file():
+        candidates.append(repo_bridge)
+    candidates.append(home_bridge)
+    bridge_sdk = None
+    for cand in candidates:
+        if (cand / "libSwiftUI.a").is_file() and (cand / "SwiftUI.swiftmodule/aarch64-unknown-linux-android.swiftmodule").is_file():
+            bridge_sdk = cand
+            break
+    if bridge_sdk is not None:
+        version_file = bridge_sdk / "VERSION"
+        if version_file.is_file():
+            actual = version_file.read_text().strip()
+            if expected_swift and actual != expected_swift:
+                raise ValueError(
+                    f"SwiftUI bridge SDK at {bridge_sdk} was built with Swift {actual}, "
+                    f"but the runtime pack requires Swift {expected_swift}. "
+                    f"Rebuild the bridge with the matching toolchain "
+                    f"(tools/runtime-pack/swiftui-bridge-sdk/build-on-device.sh) before staging."
+                )
+        elif expected_swift:
+            print(f"WARNING: SwiftUI bridge SDK at {bridge_sdk} has no VERSION file; cannot verify "
+                  f"it matches Swift {expected_swift}. A mismatch breaks on-device SwiftUI compilation.",
+                  flush=True)
+        lib_bytes = (bridge_sdk / "libSwiftUI.a").read_bytes()
+        for dst in ("lib/swift/android/libSwiftUI.a", "lib/swift/android/aarch64/libSwiftUI.a"):
+            files[dst], owners[dst] = lib_bytes, "swiftui-bridge-sdk"
+        for mod in ("SwiftUI", "Combine", "CoreGraphics", "UIKit"):
+            mod_file = bridge_sdk / f"{mod}.swiftmodule/aarch64-unknown-linux-android.swiftmodule"
+            if mod_file.is_file():
+                mod_bytes = mod_file.read_bytes()
+                for target_triple in ("aarch64-unknown-linux-android", "aarch64-unknown-linux-android28"):
+                    dst = f"lib/swift/android/{mod}.swiftmodule/{target_triple}.swiftmodule"
+                    files[dst], owners[dst] = mod_bytes, "swiftui-bridge-sdk"
     paths = base_paths | set(files) | set(links)
     paths |= {str(parent) for path in list(paths) for parent in Path(path).parents if str(parent) != "."}
     for name, target_path in links.items():

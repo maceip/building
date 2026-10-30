@@ -76,7 +76,7 @@ sealed interface ConversationPart {
         val elementHandle: String? = null,
         val elementLabel: String? = null,
     ) : ConversationPart
-    data class Diff(override val id: String, val reviewId: String, val title: String, val summary: String = "") : ConversationPart
+    data class Diff(override val id: String, val reviewId: String, val title: String, val summary: String = "", val patch: String = "") : ConversationPart
     data class Question(override val id: String, val prompt: String, val options: List<ConversationQuestionOption>, val answer: String? = null) : ConversationPart
     data class Custom(override val id: String, val kind: String, val fields: Map<String, String>) : ConversationPart
 }

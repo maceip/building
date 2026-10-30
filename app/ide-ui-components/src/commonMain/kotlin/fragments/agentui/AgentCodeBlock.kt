@@ -28,7 +28,9 @@ fun AgentCodeBlock(
     palette: AgentUiPalette = AgentUiTheme.palette,
     language: String = "text",
     modifier: Modifier = Modifier,
+    softWrap: Boolean = false,
 ) {
+    val sizing = AgentUiTheme.sizing
     val normalizedLanguage = remember(language) { language.lowercase() }
     val highlighted = remember(lines, normalizedLanguage, palette) {
         buildAnnotatedString {
@@ -38,11 +40,24 @@ fun AgentCodeBlock(
             }
         }
     }
-    Box(modifier.fillMaxWidth().background(palette.background, RoundedCornerShape(6.dp))
-        .testTag("agent-code-block").padding(8.dp)) {
-        BasicText(highlighted, Modifier.horizontalScroll(rememberScrollState()),
-            style = TextStyle(color = palette.text, fontSize = 12.sp,
-                lineHeight = 20.sp, fontFamily = FontFamily.Monospace), softWrap = false)
+    Box(
+        modifier
+            .fillMaxWidth()
+            .background(palette.background, RoundedCornerShape(if (sizing.isMobile) 8.dp else 6.dp))
+            .testTag("agent-code-block")
+            .padding(if (sizing.isMobile) 10.dp else 8.dp),
+    ) {
+        BasicText(
+            highlighted,
+            if (softWrap) Modifier.fillMaxWidth() else Modifier.horizontalScroll(rememberScrollState()),
+            style = TextStyle(
+                color = palette.text,
+                fontSize = (if (sizing.isMobile) 13 else 12).sp,
+                lineHeight = 20.sp,
+                fontFamily = FontFamily.Monospace,
+            ),
+            softWrap = softWrap,
+        )
     }
 }
 

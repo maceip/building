@@ -1,5 +1,6 @@
 package dev.ide.core.services
 
+import dev.ide.android.support.AndroidFacet
 import dev.ide.android.support.AndroidVariants
 import dev.ide.android.support.NativeLibraries
 import dev.ide.android.support.gms.GoogleServices
@@ -296,6 +297,65 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
         module.dependencies.filterIsInstance<LibraryDependency>().map { it.library.name }
             .filter { unresolvedReasons.containsKey(it) }
 
+    /**
+     * True when any module in [modules] declares Maven coordinates that have not yet been resolved into
+     * `libraryTable` (or whose resolved jars are missing on disk). Used by [BuildService] to ensure the
+     * target module's build closure has its dependencies populated before constructing the build graph,
+     * even if a build is triggered before background reconciliation finishes or in a freshly opened `:build`
+     * daemon process.
+     */
+    fun needsModuleResolution(modules: Collection<Module>): Boolean =
+        modules.any { moduleNeedsResolution(it) }
+
+    private fun moduleNeedsResolution(module: Module): Boolean {
+        val declared = module.dependencies.filterIsInstance<LibraryDependency>()
+            .mapNotNull { dep -> parseInputCoordinate(dep.library.name)?.let { dep.library.name to it } }
+        if (declared.isEmpty()) return false
+        val existing = declared.mapNotNull { (name, _) -> findLibrary(name) }
+        if (existing.any { lib ->
+                lib.classesRoots.any { runCatching { !Files.exists(Paths.get(it.path)) }.getOrDefault(true) }
+            }
+        ) {
+            return true
+        }
+        val allRootPaths = existing.flatMap { lib -> lib.classesRoots.map { it.path } }
+        return declared.any { (name, coord) ->
+            findLibrary(name) == null &&
+                !unresolvedReasons.containsKey(name) &&
+                !artifactlessReasons.containsKey(name) &&
+                allRootPaths.none { path -> path.contains("/${coord.name}-") || path.contains("\\${coord.name}-") }
+        }
+    }
+
+    /**
+     * Resolve any unpopulated Maven dependencies for [modules] on demand and persist `libraries.json` when
+     * changes occur.
+     */
+    suspend fun ensureModulesResolved(
+        modules: Collection<Module>,
+        onLog: (String) -> Unit = {},
+    ) {
+        val toResolve = modules.filter { moduleNeedsResolution(it) }
+        if (toResolve.isEmpty()) return
+        var changedAny = false
+        for ((i, m) in toResolve.withIndex()) {
+            onLog("Resolving dependencies for ${m.name} (${i + 1}/${toResolve.size})…")
+            val asm = runCatching {
+                assembleModuleClasspath(m, reconcileProgress(), finalize = false)
+            }.onFailure {
+                depsLog.warn("build-time resolve ${m.name} aborted: ${it.javaClass.simpleName}: ${it.message}")
+            }.getOrNull()
+            if (asm?.changed == true) changedAny = true
+        }
+        if (changedAny) {
+            ctx.mutateSources { ctx.store.save() }
+            ctx.events.librariesChanged()
+        }
+        _depsState.update {
+            it.copy(resolving = false, message = "", unresolved = computeUnresolved(), warnings = computeWarnings())
+        }
+    }
+
     /** Every unresolved declared dependency across the workspace, with its module + best-effort reason. */
     private fun computeUnresolved(): List<UiUnresolvedDependency> = ctx.modules().flatMap { m ->
         declaredUnresolved(m).map { coord ->
@@ -367,9 +427,20 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
         if (!reconcileStarted.compareAndSet(false, true)) {
             depsLog.info("reconcile: already started this session → skip"); return
         }
-        val mods = mavenDepModules()
-        if (mods.isEmpty()) {
+        val allMods = mavenDepModules()
+        if (allMods.isEmpty()) {
             depsLog.info("reconcile: no modules with Maven deps → skip"); return
+        }
+        val mods = if (allMods.size <= 16) {
+            allMods
+        } else {
+            val primary = ctx.modules().firstOrNull { it.facets.get(AndroidFacet.KEY)?.isApplication == true }
+                ?: ctx.modules().firstOrNull()
+            val closureNames = primary?.let { ctx.moduleBuildClosure(it).mapTo(HashSet()) { m -> m.name } }
+            if (closureNames != null) allMods.filter { it.name in closureNames } else allMods
+        }
+        if (mods.isEmpty()) {
+            depsLog.info("reconcile: scoped module closure has no Maven deps → skip"); return
         }
         val fingerprint = reconcileFingerprint(mods)
         // Trust the marker only when the declared deps are ACTUALLY satisfied on disk. A marker can go stale
@@ -784,7 +855,11 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
         sanitizeCoordinate(name).split(":").let {
             when {
                 it.size == 2 && looksLikeVersion(it[1]) -> Coordinate("", it[0], it[1])
-                it.size == 2 -> Coordinate(it[0], it[1], "")
+                it.size == 2 -> Coordinate(
+                    it[0],
+                    it[1],
+                    if (it[0] == "org.jetbrains.kotlin" && it[1].startsWith("kotlin-")) KotlinVersion.CURRENT.toString() else "",
+                )
                 it.size == 3 -> Coordinate(it[0], it[1], it[2])
                 it.size == 4 && it.none(String::isBlank) -> Coordinate(it[0], it[1], it[2], it[3])
                 else -> null

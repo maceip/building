@@ -95,7 +95,10 @@ import fragments.components.signoff.CopyButton as SourceCopyButton
 import fragments.components.signoff.Revealed as SourceRevealed
 import fragments.components.signoff.Kbd as SourceKbd
 import fragments.components.UiButton
+import fragments.components.UiButtonVariant
 import fragments.components.UiText
+
+typealias AgentUiButtonVariant = UiButtonVariant
 
 /** App-facing leaves. Every default palette comes from the same Fragments theme. */
 @Composable
@@ -458,8 +461,16 @@ fun AgentIdentityCard(
 ) = SourceAgentCard(name, description, provider, version, model, endpoint,
     skills.map { SourceAgentSkill(it.name, it.description) }, connected, onConnect, modifier, palette)
 
-@Composable fun AgentUiButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, primary: Boolean = false, palette: AgentUiPalette = AgentUiTheme.palette) =
-    UiButton(label, onClick, palette, modifier, primary)
+@Composable
+fun AgentUiButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    primary: Boolean = false,
+    enabled: Boolean = true,
+    variant: AgentUiButtonVariant = if (primary) AgentUiButtonVariant.Primary else AgentUiButtonVariant.Default,
+    palette: AgentUiPalette = AgentUiTheme.palette,
+) = UiButton(label, onClick, palette, modifier, primary, enabled, variant)
 
 @Composable fun AgentLoadingIndicator(text: String? = null, modifier: Modifier = Modifier, palette: AgentUiPalette = AgentUiTheme.palette) {
     Box(modifier.semantics { contentDescription = text ?: "Loading";
@@ -495,11 +506,12 @@ fun AgentDualActionRows(
     palette: AgentUiPalette = AgentUiTheme.palette,
 ) {
     if (navigationActions.isEmpty() && taskActions.isEmpty()) return
+    val sizing = AgentUiTheme.sizing
     Column(
         modifier = modifier
             .fillMaxWidth()
             .testTag("agent-dual-action-rows"),
-        verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 5.dp else if (sizing.isMobile) 7.dp else 8.dp),
     ) {
         if (navigationActions.isNotEmpty()) {
             AgentQuickActionRow(
@@ -508,6 +520,7 @@ fun AgentDualActionRows(
                 rowTag = "agent-action-row-navigation",
                 titleTag = "agent-action-row-navigation-title",
                 compact = compact,
+                isMobile = sizing.isMobile,
                 palette = palette,
             )
         }
@@ -518,6 +531,7 @@ fun AgentDualActionRows(
                 rowTag = "agent-action-row-task",
                 titleTag = "agent-action-row-task-title",
                 compact = compact,
+                isMobile = sizing.isMobile,
                 palette = palette,
             )
         }
@@ -531,11 +545,12 @@ private fun AgentQuickActionRow(
     rowTag: String,
     titleTag: String,
     compact: Boolean,
+    isMobile: Boolean,
     palette: AgentUiPalette,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().testTag(rowTag),
-        verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 5.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else if (isMobile) 4.dp else 5.dp),
     ) {
         if (title.isNotBlank()) {
             UiText(
@@ -545,67 +560,86 @@ private fun AgentQuickActionRow(
                 muted = true,
                 size = if (compact) 10 else 11,
                 weight = FontWeight.SemiBold,
+                maxLines = 1,
             )
         }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else if (isMobile) 8.dp else 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             actions.forEach { action ->
-                val shape = RoundedCornerShape(if (compact) 8.dp else 10.dp)
-                val bgColor = when {
-                    !action.enabled -> palette.subtle.copy(alpha = 0.45f)
-                    action.primary -> palette.accent.copy(alpha = 0.16f)
-                    else -> palette.surface
-                }
-                val borderColor = when {
-                    !action.enabled -> palette.border.copy(alpha = 0.45f)
-                    action.primary -> palette.accent
-                    else -> palette.border
-                }
-                val textColor = when {
-                    !action.enabled -> palette.muted
-                    action.primary -> palette.accent
-                    else -> palette.text
-                }
-                Row(
-                    modifier = Modifier
-                        .clip(shape)
-                        .background(bgColor, shape)
-                        .border(1.dp, borderColor, shape)
-                        .clickable(
-                            enabled = action.enabled,
-                            role = Role.Button,
-                            onClick = action.onClick,
-                        )
-                        .semantics { contentDescription = action.label }
-                        .testTag("agent-quick-action-${action.id}")
-                        .padding(
-                            horizontal = if (compact) 10.dp else 12.dp,
-                            vertical = if (compact) 6.dp else 8.dp,
-                        ),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    UiText(
-                        action.label,
-                        palette.copy(text = textColor),
-                        size = if (compact) 12 else 13,
-                        weight = if (action.primary) FontWeight.SemiBold else FontWeight.Medium,
-                    )
-                    if (action.subtitle.isNotBlank() && !compact) {
-                        UiText(
-                            action.subtitle,
-                            palette,
-                            muted = true,
-                            size = 11,
-                        )
-                    }
-                }
+                AgentQuickActionChip(
+                    action = action,
+                    compact = compact,
+                    isMobile = isMobile,
+                    palette = palette,
+                )
             }
+        }
+    }
+}
+
+@Composable
+private fun AgentQuickActionChip(
+    action: ChatQuickAction,
+    compact: Boolean,
+    isMobile: Boolean,
+    palette: AgentUiPalette,
+) {
+    val shape = RoundedCornerShape(if (compact) 8.dp else if (isMobile) 12.dp else 10.dp)
+    val bgColor = when {
+        !action.enabled -> palette.subtle.copy(alpha = 0.45f)
+        action.primary -> palette.accent.copy(alpha = 0.16f)
+        else -> palette.surface
+    }
+    val borderColor = when {
+        !action.enabled -> palette.border.copy(alpha = 0.45f)
+        action.primary -> palette.accent
+        else -> palette.border
+    }
+    val textColor = when {
+        !action.enabled -> palette.muted
+        action.primary -> palette.accent
+        else -> palette.text
+    }
+    Row(
+        modifier = Modifier
+            .heightIn(min = if (compact) 32.dp else if (isMobile) 38.dp else 34.dp)
+            .clip(shape)
+            .background(bgColor, shape)
+            .border(1.dp, borderColor, shape)
+            .clickable(
+                enabled = action.enabled,
+                role = Role.Button,
+                onClick = action.onClick,
+            )
+            .semantics { contentDescription = action.label }
+            .testTag("agent-quick-action-${action.id}")
+            .padding(
+                horizontal = if (compact) 10.dp else if (isMobile) 13.dp else 12.dp,
+                vertical = if (compact) 6.dp else if (isMobile) 8.dp else 7.dp,
+            ),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        UiText(
+            action.label,
+            palette.copy(text = textColor),
+            size = if (compact) 12 else 13,
+            weight = if (action.primary) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+        )
+        if (action.subtitle.isNotBlank() && !compact) {
+            UiText(
+                action.subtitle,
+                palette,
+                muted = true,
+                size = 11,
+                maxLines = 1,
+            )
         }
     }
 }

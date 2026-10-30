@@ -61,9 +61,13 @@ fun AgentToolGroup(
         append(count).append(if (count == 1) " tool" else " tools")
         group.durationMillis?.let { append(" · ").append(it).append("ms") }
     }
+    val sizing = AgentUiTheme.sizing
     UiDisclosure(label, expanded, { expanded = !expanded }, palette,
         modifier.testTag("agent-tool-group-${group.id}")) {
-        Column(Modifier.padding(start = 14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Column(
+            Modifier.padding(start = if (sizing.isMobile) 10.dp else 14.dp),
+            verticalArrangement = Arrangement.spacedBy(if (sizing.isMobile) 6.dp else 3.dp),
+        ) {
             if (group.description.isNotBlank()) UiText(group.description, palette, muted = true, size = 12)
             group.tools.forEach { tool -> key(tool.id) {
                 AgentToolCard(tool, onApproval = { onApproval(tool.id, it) }, palette = palette,

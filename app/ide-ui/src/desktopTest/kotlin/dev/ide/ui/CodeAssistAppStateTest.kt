@@ -198,13 +198,15 @@ class CodeAssistAppStateTest {
         }
     }
 
-    /** By default a cold launch resumes into the project that was on screen last run. */
+    /** By default a cold launch resumes into the project that was on screen last run without flashing Home. */
     @Test
     fun coldLaunchReopensTheLastProject() = runTest {
         val backend = AppBackend(settledPrefs() + ("session.lastProject" to "/ws/app")).apply { analyticsConsent = false }
         val app = appState(backend)
+        assertTrue(app.resumingLastProject, "cold launch with a saved project suppresses rendering Home while resuming")
         settleResume(backend)
 
+        assertFalse(app.resumingLastProject, "resumingLastProject clears once the project opens")
         assertEquals(listOf("/ws/app"), backend.opened)
         assertEquals(Screen.Editor, app.screen)
     }

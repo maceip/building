@@ -86,18 +86,31 @@ class GitProvider(configDir: Path) : VcsProvider {
             throw VcsException(msg(VcsMessage.FOLDER_NOT_EMPTY, target.fileName))
         }
         return try {
-            val command = Git.cloneRepository()
-                .setURI(url)
-                .setDirectory(dir)
-                .setProgressMonitor(GitProgressMonitor(progress))
-                .setCredentialsProvider(auth.toJGit())
-                .setTimeout(CLONE_TIMEOUT_SECONDS)
-            if (!branch.isNullOrBlank()) command.setBranch(branch)
-            if (depth > 0) {
-                command.setDepth(depth)
-                command.setCloneAllBranches(false)
+            withTransientNetworkRetry(
+                maxAttempts = MAX_CLONE_ATTEMPTS,
+                initialDelayMs = CLONE_RETRY_BACKOFF_MS,
+                onRetry = { attempt, _ ->
+                    // Clear the partial directory left by the aborted transport stream before retrying.
+                    runCatching { dir.deleteRecursively() }
+                    progress.update("Reconnecting to remote (attempt ${attempt + 1}/$MAX_CLONE_ATTEMPTS)…", 0, -1)
+                },
+            ) {
+                if (dir.exists() && dir.list()?.isNotEmpty() == true) {
+                    runCatching { dir.deleteRecursively() }
+                }
+                val command = Git.cloneRepository()
+                    .setURI(url)
+                    .setDirectory(dir)
+                    .setProgressMonitor(GitProgressMonitor(progress))
+                    .setCredentialsProvider(auth.toJGit())
+                    .setTimeout(CLONE_TIMEOUT_SECONDS)
+                if (!branch.isNullOrBlank()) command.setBranch(branch)
+                if (depth > 0) {
+                    command.setDepth(depth)
+                    command.setCloneAllBranches(false)
+                }
+                GitRepository(command.call(), target)
             }
-            GitRepository(command.call(), target)
         } catch (e: Throwable) {
             // A failed clone leaves a partial directory behind; clearing it keeps a retry from tripping the
             // "already exists" check above.
@@ -108,4 +121,6 @@ class GitProvider(configDir: Path) : VcsProvider {
 }
 
 /** Seconds a clone may sit without the server answering before it fails, so a dead connection cannot hang it. */
-private const val CLONE_TIMEOUT_SECONDS = 60
+private const val CLONE_TIMEOUT_SECONDS = 180
+private const val MAX_CLONE_ATTEMPTS = 4
+private const val CLONE_RETRY_BACKOFF_MS = 600L

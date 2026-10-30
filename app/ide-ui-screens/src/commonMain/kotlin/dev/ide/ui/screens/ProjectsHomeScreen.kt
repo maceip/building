@@ -11,6 +11,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import dev.ide.ui.platform.touchInput
@@ -238,6 +239,8 @@ fun ProjectsHomeScreen(
     onImportPackage: (() -> Unit)? = null,
     /** Submit a project to the store for inclusion. */
     onSubmitToStore: ((ProjectInfo?) -> Unit)? = null,
+    /** Open and rebuild a project, showing its build/run output. */
+    onRebuildProject: ((ProjectInfo?) -> Unit)? = null,
 ) {
     var segment by remember { mutableStateOf(HomeSegment.Projects) }
     // Deleting wipes the project from disk and nothing else in this flow asks first.
@@ -254,20 +257,31 @@ fun ProjectsHomeScreen(
     // time it scrolls back into view, and resolving an icon means parsing a manifest and a drawable.
     val icons = remember { ProjectIconCache() }
     val mostRecent = ordered.firstOrNull { it.lastOpened > 0L } ?: ordered.firstOrNull()
-    val activeProviderLabel = remember(backend) {
-        val cfg = backend?.agent?.config()
-        val provider = cfg?.providers?.firstOrNull { it.id == cfg.selectedProvider }
-        provider?.displayName?.takeIf { it.isNotBlank() } ?: "Cloud AI"
+    val agentCfg = remember(backend) { backend?.agent?.config() }
+    val activeProvider = remember(agentCfg) {
+        agentCfg?.providers?.firstOrNull { it.id == agentCfg.selectedProvider }
+    }
+    val activeProviderLabel = remember(agentCfg, activeProvider) {
+        when {
+            agentCfg == null || !agentCfg.configured -> "Configure AI"
+            activeProvider != null -> {
+                val modelId = agentCfg.model.ifBlank { activeProvider.defaultModel }
+                if (modelId.isNotBlank()) "${activeProvider.displayName} · $modelId" else activeProvider.displayName
+            }
+            else -> "Configure AI"
+        }
     }
     val triggerRebuildMostRecent: () -> Unit = {
         val target = mostRecent ?: ordered.firstOrNull()
-        if (target != null) {
-            onOpen(target)
-            if (backend?.build?.supported() == true) {
-                backend.build.runBuild()
+        when {
+            onRebuildProject != null -> onRebuildProject(target)
+            target != null -> {
+                onOpen(target)
+                if (backend?.build?.supported() == true) {
+                    backend.build.runBuild()
+                }
             }
-        } else {
-            sheet = HomeSheet.NewProject
+            else -> sheet = HomeSheet.NewProject
         }
     }
     val triggerSubmitToStore: () -> Unit = {
@@ -333,28 +347,39 @@ fun ProjectsHomeScreen(
         // Agent-first Home (phone width): prompt hero + Continue, with the classic project list one tap
         // away via "All projects". New / Start opens the redesigned bottom sheet, which hands off to the
         // existing create-project gallery.
-        val continueItems = remember(ordered, now) {
-            ordered.take(5).map { p ->
-                AgentContinueItem(
-                    id = p.rootPath,
-                    title = p.name,
-                    meta = listOfNotNull(
-                        when {
-                            p.isSwift -> "Swift & iOS"
-                            p.isPython -> "Python"
-                            p.isNode -> "Node.js"
-                            p.isAndroid -> "Android"
-                            p.compatibility -> "Gradle"
-                            p.unrecognized -> "Files"
-                            else -> "building"
-                        },
-                        if (p.moduleCount == 1) "1 module" else "${p.moduleCount} modules",
-                    ).joinToString(" · "),
-                    time = "",
-                    letter = p.name.firstOrNull()?.uppercase() ?: "?",
-                    needsAttention = false,
-                )
+        val visibleProjects = remember(ordered) { ordered.take(5) }
+        val continueItems = visibleProjects.mapIndexed { idx, p ->
+            val stackLabel = when {
+                p.isSwift -> "Swift & iOS"
+                p.isPython -> "Python"
+                p.isNode -> "Node.js"
+                p.isAndroid -> "Android"
+                p.compatibility -> "Gradle"
+                p.unrecognized -> "Files"
+                else -> "building"
             }
+            val modulesLabel = if (p.moduleCount == 1) "1 module" else "${p.moduleCount} modules"
+            val avatarImg = projectIconImage(p, icons, loadIcon, loadIconImage)
+            AgentContinueItem(
+                id = p.rootPath,
+                title = p.name,
+                meta = (listOf(stackLabel, modulesLabel) + p.tags).joinToString(" · "),
+                time = "",
+                letter = p.name.firstOrNull()?.uppercase() ?: "?",
+                needsAttention = false,
+                stackLabel = stackLabel,
+                stackColor = projectStackColor(
+                    isAndroid = p.isAndroid,
+                    isNode = p.isNode,
+                    isPython = p.isPython,
+                    isSwift = p.isSwift,
+                    compatibility = p.compatibility,
+                ),
+                modulesLabel = modulesLabel,
+                tags = p.tags,
+                avatar = avatarImg,
+                shimmerSubtitle = idx == 0,
+            )
         }
         AgentHomeContent(
             appName = "building",
@@ -368,6 +393,7 @@ fun ProjectsHomeScreen(
                 sheet = HomeSheet.NewProject
             },
             onOpenAgentSettings = onOpenAgentSettings ?: {},
+            onOpenSettings = onOpenHub,
             onOpenAccount = { sheet = HomeSheet.Account },
             onNewProject = { sheet = HomeSheet.NewProject },
             onImportOrClone = {
@@ -377,6 +403,7 @@ fun ProjectsHomeScreen(
                 }
             },
             onDeviceLabel = activeProviderLabel,
+            providerConfigured = agentCfg?.configured == true,
             continueItems = continueItems,
             allProjectsLabel = "All projects",
             onOpenItem = { item -> ordered.firstOrNull { it.rootPath == item.id }?.let(onOpen) },
@@ -384,6 +411,17 @@ fun ProjectsHomeScreen(
             onRebuildProject = triggerRebuildMostRecent,
             onSubmitToStore = triggerSubmitToStore,
             modifier = Modifier.fillMaxSize(),
+            trendingWidgetSlot = if (backend != null && backend.discovery.supported() && onCloneAndOpen != null) {
+                {
+                    TrendingReposWidget(
+                        backend = backend,
+                        onCloneAndOpen = onCloneAndOpen,
+                        onOpenExplorer = onCloneGit,
+                    )
+                }
+            } else {
+                null
+            },
         )
     } else
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.TopCenter) {
@@ -433,6 +471,15 @@ fun ProjectsHomeScreen(
                     )
                 }
             }
+            if (onCloneAndOpen != null || onCloneRepository != null || onCloneGit != null) {
+                item("quickClone") {
+                    QuickCloneBar(
+                        onCloneUrl = { rawUrl ->
+                            dispatchQuickCloneUrl(rawUrl, onCloneAndOpen, onCloneRepository ?: onCloneGit)
+                        },
+                    )
+                }
+            }
             item("segments") {
                 SegmentRow(
                     segment = segment,
@@ -466,6 +513,16 @@ fun ProjectsHomeScreen(
             } else {
                 item("empty") { EmptyList() }
             }
+            if (backend != null && backend.discovery.supported() && onCloneAndOpen != null) {
+                item("trending_widget") {
+                    TrendingReposWidget(
+                        backend = backend,
+                        onCloneAndOpen = onCloneAndOpen,
+                        onOpenExplorer = onCloneGit,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    )
+                }
+            }
         }
       }
     }
@@ -485,6 +542,10 @@ fun ProjectsHomeScreen(
             selectedStack = selectedStack,
             onSelectStack = { selectedStack = it },
             onCloneGit = onCloneGit?.let { { sheet = null; it() } },
+            onCloneUrl = { url ->
+                sheet = null
+                dispatchQuickCloneUrl(url, onCloneAndOpen, onCloneRepository ?: onCloneGit)
+            },
             onOpenFolder = onImportProject?.let { { sheet = null; it() } },
             onImportPackage = onImportPackage?.let { { sheet = null; it() } }
                 ?: onImportProject?.let { { sheet = null; it() } },
@@ -592,6 +653,120 @@ private fun HomeActions(
             modifier = Modifier.weight(1f),
             onClick = onImportProject,
         )
+    }
+}
+
+internal fun dispatchQuickCloneUrl(
+    rawUrl: String,
+    onCloneAndOpen: ((String, String) -> Unit)?,
+    onCloneRepository: (() -> Unit)?,
+) {
+    val clean = rawUrl.trim()
+    if (clean.isNotEmpty() && onCloneAndOpen != null) {
+        val normalizedUrl = if (
+            clean.startsWith("http://", ignoreCase = true) ||
+            clean.startsWith("https://", ignoreCase = true) ||
+            clean.startsWith("git@")
+        ) {
+            clean
+        } else {
+            "https://github.com/${clean.trim('/')}"
+        }
+        val repoName = normalizedUrl
+            .trimEnd('/')
+            .substringAfterLast('/')
+            .substringAfterLast(':')
+            .removeSuffix(".git")
+            .ifBlank { "repo" }
+        onCloneAndOpen(normalizedUrl, repoName)
+    } else {
+        onCloneRepository?.invoke()
+    }
+}
+
+/**
+ * Direct Git/GitHub URL input + Paste + Clone bar right on the Projects Home screen so users can
+ * paste a repository URL and clone immediately in one tap without hunting through menus.
+ */
+@Composable
+internal fun QuickCloneBar(
+    onCloneUrl: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = MaterialTheme.colorScheme
+    val clipboard = LocalClipboardManager.current
+    var urlText by rememberSaveable { mutableStateOf("") }
+    val shape = RoundedCornerShape(10.dp)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            Modifier
+                .weight(1f)
+                .height(38.dp)
+                .clip(shape)
+                .background(c.surfaceContainerLow)
+                .border(1.dp, c.outlineVariant, shape)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Symbol(CaSymbols.forkRight, contentDescription = null, size = 16.dp, tint = c.onSurfaceVariant)
+            BasicTextField(
+                value = urlText,
+                onValueChange = { urlText = it },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = c.onSurface),
+                cursorBrush = SolidColor(c.primary),
+                modifier = Modifier.weight(1f),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (urlText.isEmpty()) {
+                            Text(
+                                "Paste GitHub URL or owner/repo to clone…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = c.outline,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        inner()
+                    }
+                },
+            )
+            if (urlText.isNotEmpty()) {
+                IconButtonCa(CaIcons.close, stringResource(Res.string.home_clear_search), { urlText = "" }, iconSize = 14, boxSize = 24)
+            }
+        }
+        OutlinedButton(
+            onClick = {
+                val clip = clipboard.getText()?.text?.trim().orEmpty()
+                if (clip.isNotBlank()) {
+                    urlText = clip
+                }
+            },
+            shape = shape,
+            border = BorderStroke(1.dp, c.outlineVariant),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            modifier = Modifier.height(38.dp),
+        ) {
+            Text("Paste", style = MaterialTheme.typography.labelLarge)
+        }
+        Button(
+            onClick = { onCloneUrl(urlText) },
+            shape = shape,
+            contentPadding = PaddingValues(horizontal = 14.dp),
+            modifier = Modifier.height(38.dp),
+        ) {
+            Symbol(CaSymbols.forkRight, contentDescription = null, size = 16.dp)
+            Spacer(Modifier.width(6.dp))
+            Text("Clone", style = MaterialTheme.typography.labelLarge)
+        }
     }
 }
 
@@ -976,6 +1151,7 @@ private fun NewProjectSheet(
     selectedStack: Int = 0,
     onSelectStack: (Int) -> Unit = {},
     onCloneGit: (() -> Unit)? = null,
+    onCloneUrl: (String) -> Unit = {},
     onOpenFolder: (() -> Unit)? = null,
     onImportPackage: (() -> Unit)? = null,
 ) {
@@ -993,6 +1169,7 @@ private fun NewProjectSheet(
             onClose = onDismiss,
             selectedStack = selectedStack,
             onSelectStack = onSelectStack,
+            onCloneUrl = { url -> onCloneUrl(url) },
             onCloneGit = onCloneGit ?: {},
             onOpenFolder = onOpenFolder ?: {},
             onImportPackage = onImportPackage ?: {},
@@ -1435,6 +1612,16 @@ private fun WideProjectsHome(
                         onShare = onExportProject?.let { export -> { export(project) } },
                         onDelete = onRequestDelete?.let { request -> { request(project) } },
                     )
+                }
+                if (backend != null && backend.discovery.supported() && onCloneAndOpen != null) {
+                    item("trending_widget") {
+                        TrendingReposWidget(
+                            backend = backend,
+                            onCloneAndOpen = onCloneAndOpen,
+                            onOpenExplorer = onCloneRepository,
+                            modifier = Modifier.padding(top = 16.dp),
+                        )
+                    }
                 }
             }
         }

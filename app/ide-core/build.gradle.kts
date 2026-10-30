@@ -84,6 +84,7 @@ dependencies {
     testImplementation(project(":bench-support"))
     // Bouncy Castle: the keystore-registry test creates a real keystore (KeystoreCrypto.create needs BC at runtime).
     testImplementation(libs.bouncycastle.pkix)
+    testImplementation("com.google.ai.edge.litertlm:litertlm-jvm:0.17.1")
 }
 
 // Several tests boot a real IdeServices and build the full library index (android.jar, the JDK, the Android
@@ -114,5 +115,18 @@ dependencies { swingApiStubs(project(mapOf("path" to ":awt-toolkit", "configurat
 
 tasks.named<ProcessResources>("processResources") {
     from(swingApiStubs) { into("swing") }
+    from(rootProject.file("README.md")) { into("discovery") }
 }
+
+tasks.register<JavaExec>("generateBundledTrendingCatalog") {
+    group = "discovery"
+    description = "Crawls live GitHub daily/weekly/monthly trending lists for all phone-supported languages, builds/fetches/synthesizes app screenshots, crawls 2-hop author social networks, and bundles them into src/main/resources/discovery."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("dev.ide.core.discovery.BundledTrendingGenerator")
+    args(
+        layout.projectDirectory.dir("src/main/resources").asFile.absolutePath,
+        project.findProperty("trendingItemsPerBucket")?.toString() ?: "4"
+    )
+}
+
 

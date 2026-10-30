@@ -1,0 +1,15 @@
+version = 2
+
+[module]
+type = "java-lib"
+name = "gradle-tooling"
+languageLevel = "JAVA_17"
+output = "build/codeassist/classes"
+
+[sourceSets.main]
+scope = "IMPLEMENTATION"
+java = ["src/main/java"]
+resources = ["src/main/resources"]
+
+[dependencies]
+implementation = ["org.gradle:gradle-tooling-api:9.5.1", "org.slf4j:slf4j-api:2.0.16", "org.slf4j:slf4j-nop:2.0.16"]

@@ -34,6 +34,8 @@ import dev.ide.core.project.ProjectManager
 import dev.ide.core.settings.BuiltInSettingsPages
 import dev.ide.platform.log.Log
 import dev.ide.platform.log.Log.addSink
+import dev.ide.platform.log.SnortLogSink
+import io.github.oshai.kotlinlogging.KotlinLogging
 import java.io.File
 import java.io.IOException
 import java.nio.file.Path
@@ -57,9 +59,31 @@ import java.util.concurrent.atomic.AtomicReference
  */
 object AndroidIde {
 
+    private val klogger = KotlinLogging.logger("dev.ide.android.AndroidIde")
+    private val snortSinkRef = AtomicReference<SnortLogSink?>(null)
+
+    fun ensureSnortConnected(context: Context): SnortLogSink {
+        snortSinkRef.get()?.let { return it }
+        val home = appHomeDir(context).apply { mkdirs() }
+        val hostTag = "${Build.MANUFACTURER ?: "android"}-${Build.MODEL ?: "device"}"
+        val created = Log.connectSnort(
+            endpointBaseUrl = "http://127.0.0.1:8788",
+            serviceName = "codeassist-android",
+            hostName = hostTag,
+            walFilePath = File(home, "snort-wal.jsonl").absolutePath,
+            shipImmediately = true,
+        )
+        if (snortSinkRef.compareAndSet(null, created)) {
+            return created
+        }
+        Log.disconnectSnort(created)
+        return snortSinkRef.get()!!
+    }
+
     /** Heavy (file copy + project gen + JDT init) — call off the main thread. */
     fun bootstrap(context: Context): Session {
         val startNs = System.nanoTime()
+        val snortSink = ensureSnortConnected(context)
 
         // Pin the process word-size BEFORE any engine is created. On a 32-bit ARM process the engine collapses
         // background index concurrency to stop provoking the 32-bit-ART torn-reference SIGSEGV (see RuntimeInfo).
@@ -67,8 +91,27 @@ object AndroidIde {
         dev.ide.platform.RuntimeInfo.set32Bit(!android.os.Process.is64Bit())
 
         // App-specific EXTERNAL storage (Android/data/<pkg>/files/codeassist)
+        dev.ide.android.litert.AndroidAiCoreBridge.install(context)
         val home = appHomeDir(context).apply { mkdirs() }
-        val manager = createProjectManager(context)
+        val manager = Log.logger("dev.ide.android.AndroidIde").traceSpan(
+            operation = "android.ide.createProjectManager",
+            initialAttributes = mapOf(
+                "device.manufacturer" to (Build.MANUFACTURER ?: ""),
+                "device.model" to (Build.MODEL ?: ""),
+                "os.sdk_int" to Build.VERSION.SDK_INT.toString(),
+            ),
+        ) {
+            klogger.atInfo {
+                message = "Provisioning on-device Android IDE ProjectManager"
+                payload = mapOf(
+                    "device.manufacturer" to (Build.MANUFACTURER ?: ""),
+                    "device.model" to (Build.MODEL ?: ""),
+                    "os.sdk_int" to Build.VERSION.SDK_INT,
+                    "is_64_bit" to android.os.Process.is64Bit(),
+                )
+            }
+            createProjectManager(context)
+        }
 
         // Measure the forked-VM R8 heap ceiling once per app version, in the background, and cache it. The
         // Build Runtime settings use it as the heap slider's MAX (user scales down from the real device
@@ -150,11 +193,31 @@ object AndroidIde {
             notificationsAllowed = {
                 NotificationManagerCompat.from(appContext).areNotificationsEnabled()
             },
+            // The built-in Kotlin AgentBackend (supporting Anthropic, OpenAI, Gemini, OpenRouter, etc.)
+            // is the default Android agent; ZCodeAgentService is used when explicitly selected
+            // in AI settings (settings.ai.engine = "zcode").
+            agentServiceFactory = { backend ->
+                // Null return keeps the built-in Kotlin AgentBackend (engine = "kotlin").
+                if ((backend.agentEnginePreference() ?: "kotlin") == "kotlin") {
+                    null
+                } else {
+                    dev.ide.android.agent.ZCodeAgentService(
+                        appContext,
+                        workspaceRoot = { backend.agentWorkspaceRoot() },
+                        legacyPreference = { key -> backend.agentAiPreference(key) },
+                        mcpPort = { backend.agentMcpPort() },
+                        hostAgent = { backend.hostAgentService() },
+                    )
+                }
+            },
         )
         // Process-wide uncaught-exception handler: report app_crash + surface the non-fatal dialog + keep the
         // app alive (the MainActivity main-thread guard handles the UI looper). See IdeServicesBackend.
         backend.installCrashReporting()
         AndroidMemory.registerTrimHandler(appContext, backend)
+        // Promote the IDE process to a foreground service with CPU/Wi-Fi locks whenever a Git clone/sync is
+        // active so switching focused Android apps mid-clone never triggers OS socket termination (ECONNABORTED).
+        dev.ide.android.vcs.VcsForegroundService.bindToVcsActivity(appContext, backend.vcs.activity)
         // Plugins load once per process, so applying an installed plugin's change means starting again. Both
         // halves of that are wired here, and only in the UI process: the restart itself, and the watch that
         // notices a plugin app being installed, updated or uninstalled while the IDE is running (the `:build`
@@ -175,6 +238,16 @@ object AndroidIde {
                 mapOf("duration_ms" to ((System.nanoTime() - startNs) / 1_000_000).toString())
             )
         }
+        val durationMs = (System.nanoTime() - startNs) / 1_000_000
+        klogger.atInfo {
+            message = "AndroidIde bootstrap completed on physical device"
+            payload = mapOf(
+                "duration_ms" to durationMs,
+                "device.model" to (Build.MODEL ?: ""),
+                "snort.shipped_logs" to snortSink.shippedLogCount,
+                "snort.shipped_spans" to snortSink.shippedSpanCount,
+            )
+        }
 
         return Session(backend)
     }
@@ -192,6 +265,7 @@ object AndroidIde {
         // Classify the device first, in every process that stands up a manager, so caches sized at
         // construction already see the tier.
         AndroidMemory.detect(context)
+        dev.ide.android.litert.AndroidAiCoreBridge.install(context)
         val home = appHomeDir(context).apply { mkdirs() }
         val androidJar = copyAsset(context, "android.jar", File(home, "android.jar"))
         // The Java 9+ desugar stubs (`java.lang.invoke.StringConcatFactory`/`LambdaMetafactory`): `android.jar`

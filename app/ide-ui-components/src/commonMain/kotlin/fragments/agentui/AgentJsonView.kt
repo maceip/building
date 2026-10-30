@@ -19,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -49,25 +50,46 @@ fun AgentJsonView(
         (if (showAll || lines.size <= collapseAfter) lines else lines.take(collapseAfter)).joinToString("\n")
     }
     val highlighted = remember(shown, palette) { colorJson(shown, palette) }
+    val sizing = AgentUiTheme.sizing
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             UiText(label, palette, muted = true, size = 12)
             AgentCopyButton(json, label = "Copy $label", palette = palette)
         }
-        Box(Modifier.fillMaxWidth().heightIn(max = 320.dp)
-            .border(1.dp, palette.border, RoundedCornerShape(palette.toolRadius))
-            .background(palette.surface, RoundedCornerShape(palette.toolRadius))
-            .verticalScroll(rememberScrollState())
-            .semantics { contentDescription = "$label output" }
-            .testTag("agent-json-output")
-            .padding(10.dp)) {
-            BasicText(highlighted, Modifier.horizontalScroll(rememberScrollState()),
-                style = TextStyle(color = palette.text, fontSize = 12.sp,
-                    lineHeight = 20.sp, fontFamily = FontFamily.Monospace), softWrap = false)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 320.dp)
+                .border(1.dp, palette.border, RoundedCornerShape(palette.toolRadius))
+                .background(palette.surface, RoundedCornerShape(palette.toolRadius))
+                .verticalScroll(rememberScrollState())
+                .semantics { contentDescription = "$label output" }
+                .testTag("agent-json-output")
+                .padding(10.dp),
+        ) {
+            BasicText(
+                highlighted,
+                Modifier.horizontalScroll(rememberScrollState()),
+                style = TextStyle(
+                    color = palette.text,
+                    fontSize = (if (sizing.isMobile) 13 else 12).sp,
+                    lineHeight = 20.sp,
+                    fontFamily = FontFamily.Monospace,
+                ),
+                softWrap = false,
+            )
         }
         if (lines.size > collapseAfter) {
-            UiButton(if (showAll) "Show less" else "Show all ${lines.size} lines",
-                { showAll = !showAll }, palette)
+            UiButton(
+                if (showAll) "Show less" else "Show all ${lines.size} lines",
+                { showAll = !showAll },
+                palette,
+                modifier = if (sizing.isMobile) Modifier.fillMaxWidth() else Modifier,
+            )
         }
     }
 }

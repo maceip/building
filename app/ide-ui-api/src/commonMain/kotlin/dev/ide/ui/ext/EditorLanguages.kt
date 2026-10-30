@@ -62,7 +62,7 @@ class EditorLanguageProfile(
     /** Lowest wins when two profiles claim the same suffix, matching `FileTypeMapping.order`. */
     val order: Int = 1000,
 ) {
-    fun matches(fileName: String): Boolean = suffixes.any { fileName.endsWith(it) }
+    fun matches(fileName: String): Boolean = suffixes.any { fileName.endsWith(it, ignoreCase = true) }
 }
 
 /**

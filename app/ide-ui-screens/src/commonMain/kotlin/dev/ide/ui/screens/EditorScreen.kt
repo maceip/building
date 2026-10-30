@@ -94,8 +94,9 @@ fun EditorScreen(
     val haptics = rememberIdeHaptics()
     // The project is open now — kick off any deferred template-dependency resolution (e.g. the Compose AAR
     // graph of a freshly-created project). Idempotent + a no-op for an opened existing project; progress
-    // streams on depsState so the user can work elsewhere while it resolves.
-    LaunchedEffect(state.backend) { state.backend.deps.startPendingDependencyResolution() }
+    // streams on depsState so the user can work elsewhere while it resolves. Keyed on `state` (which is
+    // recreated on every projectEpoch bump) so switching or re-opening a project always triggers reconciliation.
+    LaunchedEffect(state) { state.backend.deps.startPendingDependencyResolution() }
     // Immediately expand the bottom build sheet/dock to show streaming build log output when a build starts,
     // and trigger distinct multitasking haptics for build start, step transitions, success, and failure.
     var prevBuildStatus by remember { mutableStateOf(buildState.status) }

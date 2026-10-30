@@ -1738,7 +1738,15 @@ internal class BuildService(private val ctx: EngineContext) : Disposable, BuildC
     /** A build-blocking message when [module] (or a module it depends on) has unresolved declared dependencies,
      *  else null. A build can't succeed against a missing classpath, so we refuse with a clear, actionable why. */
     private fun unresolvedBlocker(module: Module): String? {
-        val bad = ctx.moduleBuildClosure(module)
+        val closure = ctx.moduleBuildClosure(module)
+        if (ctx.dependencies.needsModuleResolution(closure)) {
+            kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+                ctx.dependencies.ensureModulesResolved(closure) { msg ->
+                    memLog.info("build-deps: $msg")
+                }
+            }
+        }
+        val bad = closure
             .flatMap { m -> ctx.dependencies.declaredUnresolved(m).map { m.name to it } }
         if (bad.isEmpty()) return null
         val lines = bad.joinToString("\n") { (mod, coord) -> "  • $coord  ($mod)" }

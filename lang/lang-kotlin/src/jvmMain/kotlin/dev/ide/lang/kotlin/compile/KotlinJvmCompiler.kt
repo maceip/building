@@ -3,6 +3,7 @@ package dev.ide.lang.kotlin.compile
 import com.intellij.openapi.util.Disposer
 import org.jetbrains.kotlin.cli.common.ExitCode
 import org.jetbrains.kotlin.cli.common.arguments.K2JVMCompilerArguments
+import org.jetbrains.kotlin.cli.common.arguments.parseCommandLineArguments
 import org.jetbrains.kotlin.cli.common.diagnosticsCollector
 import org.jetbrains.kotlin.cli.common.fir.FirDiagnosticsCompilerResultsReporter
 import org.jetbrains.kotlin.cli.common.messages.CompilerMessageSeverity
@@ -258,6 +259,7 @@ class KotlinJvmCompiler(
         friendPaths: List<Path>,
         commonSources: List<Path> = emptyList(),
     ): K2JVMCompilerArguments = K2JVMCompilerArguments().apply {
+        parseCommandLineArguments(listOf("-XXLanguage:+CustomEqualsInValueClasses"), this)
         freeArgs = sourcePaths
         destination = outputDir.toString()
         if (fullClasspath.isNotEmpty()) classpath = fullClasspath.joinToString(File.pathSeparator) { it.toString() }

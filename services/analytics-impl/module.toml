@@ -16,4 +16,4 @@ java = ["src/test/kotlin"]
 
 [dependencies]
 implementation = [{ module = "analytics-api" }, { module = "platform-core" }, "kotlin-stdlib"]
-testImplementation = [{ platform = "org.junit:junit-bom:5.11.4" }, "org.jetbrains.kotlin:kotlin-test:2.4.0", { module = "test-support" }]
+testImplementation = [{ platform = "org.junit:junit-bom:5.11.4" }, "org.jetbrains.kotlin:kotlin-test:2.5.0-Beta2", { module = "test-support" }]

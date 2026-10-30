@@ -899,6 +899,230 @@ data class UiAgentPermissionRequest(
 
 enum class UiAgentPermissionDecision { DENY, ALLOW_ONCE, ALLOW_SESSION }
 
+/** Hardware execution delegate for on-device LiteRT-LM inference (`CPU`, `GPU`, `NPU`). */
+enum class UiLiteRtDelegate(val id: String, val label: String) {
+    CPU("CPU", "CPU (XNNPACK)"),
+    GPU("GPU", "GPU (OpenCL/Vulkan)"),
+    NPU("NPU", "NPU (Tensor/QNN)"),
+}
+
+/** On-device LiteRT-LM model lifecycle state. */
+enum class UiLiteRtModelStatus {
+    NOT_INSTALLED,
+    DOWNLOADING,
+    INSTALLED,
+    ACTIVE,
+    ERROR,
+}
+
+/** Guest-app SDK target language for local LiteRT-LM inference building blocks. */
+enum class UiLiteRtGuestLanguage(val id: String, val label: String, val relativeFilePath: String) {
+    KOTLIN_ANDROID("kotlin", "Kotlin / Android", "src/main/kotlin/litert/LiteRtLocalClient.kt"),
+    SWIFT("swift", "Swift / iOS", "Sources/LiteRtLocalClient.swift"),
+    NODE_JS("node", "Node.js", "src/litertClient.mjs"),
+    PYTHON("python", "Python", "litert_client.py"),
+}
+
+/** Hardware capability and storage state for the Self-Serve LiteRT-LM Corner. */
+data class UiLiteRtHardwareInfo(
+    val socName: String = "Local Host Runtime",
+    val availableDelegates: List<UiLiteRtDelegate> = listOf(UiLiteRtDelegate.CPU),
+    val recommendedDelegate: UiLiteRtDelegate = UiLiteRtDelegate.CPU,
+    val selectedDelegate: UiLiteRtDelegate = UiLiteRtDelegate.CPU,
+    val freeStorageBytes: Long = 0L,
+    val usedModelStorageBytes: Long = 0L,
+    val modelsDirectoryPath: String = "",
+)
+
+/** One model entry in the Self-Serve LiteRT-LM Catalog. */
+data class UiLiteRtModelEntry(
+    val id: String,
+    val displayName: String,
+    val family: String,
+    val parameterCount: String,
+    val quantization: String,
+    val description: String,
+    val estimatedSizeBytes: Long,
+    val downloadedBytes: Long = 0L,
+    val sizeOnDiskBytes: Long = 0L,
+    val contextLength: Int = 32_768,
+    val supportedDelegates: List<UiLiteRtDelegate> = listOf(UiLiteRtDelegate.CPU),
+    val supportsToolCalling: Boolean = false,
+    val supportsThinking: Boolean = false,
+    val status: UiLiteRtModelStatus = UiLiteRtModelStatus.NOT_INSTALLED,
+    val localFilePath: String = "",
+    val sha256: String = "",
+    val errorMessage: String = "",
+    val isSystemAiCore: Boolean = false,
+    val isBundled: Boolean = false,
+)
+
+/** Operating mode for the Universal LLM Corner (`cc-switch` control plane). */
+enum class UiLlmSwitchMode(val id: String, val label: String, val summary: String) {
+    DIRECT("direct", "Direct", "Direct connection to the active provider endpoint."),
+    ROUTING("routing", "Routing (Proxy)", "Local loopback proxy (127.0.0.1) with protocol translation, circuit breaker & auto-failover."),
+    AGGREGATION("aggregation", "Aggregation (Stack)", "Unified model stack (ccs-<provider>/<model>) across stack-enabled providers."),
+}
+
+/** Wire protocol format for a provider profile in the Universal LLM Corner. */
+enum class UiLlmApiFormat(val id: String, val label: String) {
+    ANTHROPIC_MESSAGES("anthropic", "Anthropic Messages"),
+    OPENAI_CHAT("openai_chat", "OpenAI Chat"),
+    OPENAI_RESPONSES("openai_responses", "OpenAI Responses"),
+    GEMINI_NATIVE("gemini_native", "Gemini Native"),
+    LITERT_ON_DEVICE("litert_on_device", "LiteRT On-Device"),
+}
+
+/** Provider category badge in the Universal LLM Corner. */
+enum class UiLlmProviderCategory(val id: String, val label: String) {
+    OFFICIAL("official", "Official"),
+    CN_OFFICIAL("cn_official", "Model Labs"),
+    AGGREGATOR("aggregator", "Aggregator"),
+    THIRD_PARTY("third_party", "Third-Party"),
+    ON_DEVICE("on_device", "On-Device / Local"),
+    CUSTOM("custom", "Custom"),
+}
+
+/** Circuit breaker health state for a provider profile. */
+enum class UiLlmCircuitState(val id: String, val label: String) {
+    CLOSED("closed", "Healthy"),
+    OPEN("open", "Tripped (Open)"),
+    HALF_OPEN("half_open", "Probing"),
+}
+
+/** Tier-based model mapping per provider (`haiku`, `sonnet`, `opus`, `default`, `reasoningEffort`). */
+data class UiLlmModelMapping(
+    val defaultModel: String = "",
+    val haikuModel: String = "",
+    val sonnetModel: String = "",
+    val opusModel: String = "",
+    val reasoningEffort: String = "",
+)
+
+/** Live health and circuit breaker snapshot for a provider profile. */
+data class UiLlmCircuitBreakerInfo(
+    val state: UiLlmCircuitState = UiLlmCircuitState.CLOSED,
+    val consecutiveFailures: Int = 0,
+    val totalRequests: Long = 0L,
+    val failedRequests: Long = 0L,
+    val lastLatencyMs: Long = 0L,
+    val lastError: String = "",
+)
+
+/** Universal provider profile in the LLM Corner (`cc-switch` baseline). */
+data class UiLlmSwitchProviderProfile(
+    val id: String,
+    val providerKey: String = id,
+    val name: String,
+    val presetId: String = id,
+    val category: UiLlmProviderCategory = UiLlmProviderCategory.OFFICIAL,
+    val apiFormat: UiLlmApiFormat = UiLlmApiFormat.OPENAI_CHAT,
+    val baseUrl: String = "",
+    val endpointCandidates: List<String> = emptyList(),
+    val apiKey: String = "",
+    val caCertificatePem: String = "",
+    val defaultModel: String = "",
+    val models: List<UiAgentModel> = emptyList(),
+    val modelMapping: UiLlmModelMapping = UiLlmModelMapping(),
+    val inFailoverQueue: Boolean = false,
+    val failoverPriority: Int = 100,
+    val inAggregationStack: Boolean = false,
+    val requiresApiKey: Boolean = true,
+    val configured: Boolean = false,
+    val active: Boolean = false,
+    val websiteUrl: String = "",
+    val notes: String = "",
+    val circuitBreaker: UiLlmCircuitBreakerInfo = UiLlmCircuitBreakerInfo(),
+)
+
+/** Input payload for adding or updating a universal provider profile from the UI. */
+data class UiLlmSwitchProviderInput(
+    val id: String,
+    val name: String,
+    val presetId: String = id,
+    val category: UiLlmProviderCategory = UiLlmProviderCategory.CUSTOM,
+    val apiFormat: UiLlmApiFormat = UiLlmApiFormat.OPENAI_CHAT,
+    val baseUrl: String,
+    val apiKey: String = "",
+    val caCertificatePem: String = "",
+    val defaultModel: String,
+    val haikuModel: String = "",
+    val sonnetModel: String = "",
+    val opusModel: String = "",
+    val reasoningEffort: String = "",
+    val inFailoverQueue: Boolean = true,
+    val inAggregationStack: Boolean = true,
+    val requiresApiKey: Boolean = true,
+)
+
+/** Built-in provider preset entry for one-tap provisioning in the LLM Corner. */
+data class UiLlmProviderPreset(
+    val presetId: String,
+    val defaultProviderId: String,
+    val name: String,
+    val category: UiLlmProviderCategory,
+    val apiFormat: UiLlmApiFormat,
+    val baseUrl: String,
+    val endpointCandidates: List<String> = emptyList(),
+    val defaultModel: String,
+    val models: List<UiAgentModel> = emptyList(),
+    val modelMapping: UiLlmModelMapping = UiLlmModelMapping(),
+    val description: String = "",
+    val requiresApiKey: Boolean = true,
+)
+
+/** Live CLI config sync target status (`.claude/settings.json`, `.codex/config.toml`, `.gemini/.env`). */
+data class UiLlmLiveConfigTarget(
+    val toolId: String,
+    val displayName: String,
+    val configFilePath: String,
+    val backupFilePath: String = "",
+    val hasBackup: Boolean = false,
+    val syncedMode: String = "Direct",
+    val syncedProviderId: String = "",
+    val syncedEndpoint: String = "",
+    val syncedModel: String = "",
+    val lastSyncedEpochMs: Long = 0L,
+)
+
+/** Status and live metrics for the local loopback + Android IPC LiteRT-LM & CC-Switch inference server. */
+data class UiLiteRtServerStatus(
+    val enabled: Boolean = false,
+    val running: Boolean = false,
+    val port: Int = 8781,
+    val openAiEndpoint: String = "http://127.0.0.1:8781/v1/chat/completions",
+    val anthropicEndpoint: String = "http://127.0.0.1:8781/v1/messages",
+    val responsesEndpoint: String = "http://127.0.0.1:8781/v1/responses",
+    val geminiEndpoint: String = "http://127.0.0.1:8781/v1beta/models",
+    val nativeEndpoint: String = "http://127.0.0.1:8781/v1/litert/generate",
+    val ipcUri: String = "content://dev.ide.android.litertlm",
+    val requestsServed: Long = 0L,
+    val tokensGenerated: Long = 0L,
+    val lastLatencyMs: Long = 0L,
+)
+
+/** Complete UI state for the Universal LLM Corner (Self-Serve LiteRT-LM + CC-Switch Provider Hub). */
+data class UiLiteRtCornerState(
+    val hardware: UiLiteRtHardwareInfo = UiLiteRtHardwareInfo(),
+    val models: List<UiLiteRtModelEntry> = emptyList(),
+    val activeModelId: String = "",
+    val server: UiLiteRtServerStatus = UiLiteRtServerStatus(),
+    val selectedGuestLanguage: UiLiteRtGuestLanguage = UiLiteRtGuestLanguage.KOTLIN_ANDROID,
+    val guestSnippet: String = "",
+    val lastSmokeTestPrompt: String = "",
+    val lastSmokeTestResponse: String = "",
+    val lastSmokeTestBusy: Boolean = false,
+    val statusBanner: String = "",
+    val switchMode: UiLlmSwitchMode = UiLlmSwitchMode.DIRECT,
+    val activeProviderId: String = "litert",
+    val autoFailoverEnabled: Boolean = true,
+    val circuitBreakerEnabled: Boolean = true,
+    val universalProviders: List<UiLlmSwitchProviderProfile> = emptyList(),
+    val providerPresets: List<UiLlmProviderPreset> = emptyList(),
+    val aggregatedModels: List<UiAgentModel> = emptyList(),
+    val liveConfigTargets: List<UiLlmLiveConfigTarget> = emptyList(),
+)
+
 /**
  * An unexpected error surfaced as a non-fatal dialog (IntelliJ "Internal Error" style). [title] is a short
  * heading (the exception type), [message] a one-line summary, [detail] the full stack trace text for the
@@ -1260,6 +1484,10 @@ data class ProjectInfo(
     val isNode: Boolean = false,
     val isSwift: Boolean = false,
     val isPython: Boolean = false,
+    /** GitHub repository owner's avatar URL (`https://avatars.githubusercontent.com/<owner>?s=96`), when cloned from GitHub. */
+    val ownerAvatarUrl: String? = null,
+    /** Concise repository/project tags shown inline on the Home project row. */
+    val tags: List<String> = emptyList(),
 )
 
 /** Options chosen in the Export-project screen (see [ProjectService.exportProject]). */

@@ -59,20 +59,20 @@ internal class ExportDocumentContract : ActivityResultContract<String, android.n
         intent.takeIf { resultCode == Activity.RESULT_OK }?.data
 }
 
-/** Minimal dark splash shown while the engine boots (before the themed UI is available). */
+/** Minimal olive splash shown while the engine boots (before the themed UI is available). */
 @Composable
 internal fun Splash(message: String) {
     Box(
-        Modifier.fillMaxSize().background(Color(0xFF0E0E12)),
+        Modifier.fillMaxSize().background(Color(0xFF191A17)),
         contentAlignment = Alignment.Center,
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            CircularProgressIndicator(color = Color(0xFF8B7BF0))
+            CircularProgressIndicator(color = Color(0xFFC8F169))
             Text(
-                message, color = Color(0xFFB9B9C6), fontSize = 14.sp, textAlign = TextAlign.Center,
+                message, color = Color(0xFFA3A49B), fontSize = 14.sp, textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 32.dp),
             )
         }

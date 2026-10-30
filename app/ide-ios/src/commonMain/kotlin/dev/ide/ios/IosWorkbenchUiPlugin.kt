@@ -44,18 +44,5 @@ object IosWorkbenchUiPlugin : UiPlugin {
                 context.backend.build.runBuild()
             },
         )
-
-        scope.action(
-            SimpleUiAction(
-                id = "ui.runtimeDiagnostics",
-                text = "Diagnostics",
-                places = setOf(palette, more),
-                description = "Review local incidents and project checks",
-                iconId = "logs",
-                order = 75,
-            ) { context ->
-                context.backend.build.runBuild()
-            },
-        )
     }
 }

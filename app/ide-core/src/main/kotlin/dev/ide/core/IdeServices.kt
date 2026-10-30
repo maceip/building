@@ -88,6 +88,7 @@ import dev.ide.core.completion.MemberUsageIndex
 import dev.ide.core.completion.PostfixContributor
 import dev.ide.core.gradle.GradleImport
 import dev.ide.core.gradle.GradleKmp
+import dev.ide.core.gradle.GradleModelImporter
 import dev.ide.core.perf.MB_BYTES
 import dev.ide.core.perf.MEM_SAMPLE_INTERVAL_MS
 import dev.ide.core.perf.MemSample
@@ -1029,11 +1030,31 @@ class IdeServices private constructor(
         store.workspaceContainer.registerService(ENGINE_CONTEXT) { this@IdeServices.engineContext }
     }
 
+    /**
+     * Modules included in the eager workspace index pass. On large multi-module repositories (> 16 modules,
+     * such as `maceip/building` with 85 modules), indexing every module's source roots and creating per-module
+     * analyzers simultaneously exceeds a mobile device's 512MB heap limit. Scope eager indexing to the primary
+     * runnable application module's build closure plus any module with open editor documents.
+     */
+    private fun scopedIndexModules(): List<Module> {
+        val all = modules()
+        if (all.size <= MAX_EAGER_INDEX_MODULES) return all
+        val primary = all.firstOrNull { it.facets.get(AndroidFacet.KEY)?.isApplication == true }
+            ?: all.firstOrNull()
+            ?: return all
+        val closure = LinkedHashSet(moduleBuildClosure(primary))
+        for (doc in openDocuments.keys) {
+            moduleForEditableFile(doc)?.let { closure.addAll(moduleBuildClosure(it)) }
+        }
+        return closure.toList()
+    }
+
     /** The MODULE-scoped analyzer service key for [language]. */
     private fun buildIndexScope(): IndexScope {
+        val targetModules = scopedIndexModules()
         // Read the index roots through the neutral JvmIndexScopeProvider, not a concrete analyzer type, so the
         // scope survives swapping the .java editor backend (JDT ↔ IntelliJ-PSI); both analyzers implement it.
-        val jdt = modules().map { analyzerFor(it) }.filterIsInstance<JvmIndexScopeProvider>()
+        val jdt = targetModules.map { analyzerFor(it) }.filterIsInstance<JvmIndexScopeProvider>()
         val libraryJars =
             (jdt.flatMap { it.classpathJarPaths } + listOfNotNull(BundledKotlinStdlib.jar())).distinct()
         return IndexScope(
@@ -1057,7 +1078,7 @@ class IdeServices private constructor(
             // (editable); immutable dependency/AAR res goes to disk segments ([libraryResourceRoots]) so a
             // Material/AndroidX resource set (a ~600 KB merged values.xml + hundreds of files) is parsed once
             // and read on demand rather than re-scanned into the heap every launch.
-            resourceRoots = modules().flatMap { m ->
+            resourceRoots = targetModules.flatMap { m ->
                 if (m.facets.get(AndroidFacet.KEY) != null) runCatching {
                     AndroidResources.projectResourceDirs(
                         m, store.workspace
@@ -1065,7 +1086,7 @@ class IdeServices private constructor(
                 }.getOrDefault(emptyList())
                 else resourceRoots(m)
             }.distinct(),
-            libraryResourceRoots = modules().flatMap { m ->
+            libraryResourceRoots = targetModules.flatMap { m ->
                 if (m.facets.get(AndroidFacet.KEY) != null) runCatching {
                     AndroidResources.libraryResourceDirs(
                         m, store.workspace
@@ -1222,6 +1243,14 @@ class IdeServices private constructor(
         runCatching { store.save() }
     }
 
+    private val jdkCompatStubsJar: Path? =
+        androidTools?.androidJar?.let { jar ->
+            CorePlatformProvider.ensureJdkCompatStubs(
+                jar,
+                (sharedCachesRoot ?: store.rootPath).resolve(".platform/caches/core-platform"),
+            )
+        }
+
     /**
      * The compile bootclasspath. On-device ([androidTools] non-null) ecj has no readable JRE, so every compile
      * (and the analyzer + Kotlin warm-up) must be handed the bundled `android.jar` as the platform library; on
@@ -1229,7 +1258,7 @@ class IdeServices private constructor(
      * the Kotlin compiler warm-up all read it, so it stays engine-owned and is reached via [EngineContext].
      */
     val compileBootClasspath: List<Path> =
-        listOfNotNull(androidTools?.androidJar) + (androidTools?.desugarStubs ?: emptyList())
+        listOfNotNull(jdkCompatStubsJar, androidTools?.androidJar) + (androidTools?.desugarStubs ?: emptyList())
 
     /**
      * The compile boot classpath for a SINGLE module — its resolved platform SDK ([SdkResolution]) rather
@@ -1240,9 +1269,11 @@ class IdeServices private constructor(
      * the build falls back to the host JRE — byte-for-byte the pre-change desktop behavior.
      */
     fun bootClasspathFor(module: Module): List<Path> =
-        (SdkResolution.sdkFor(store.workspace, module)?.bootClasspath ?: emptyList())
-            .map { Paths.get(it.path) }
+        (listOfNotNull(jdkCompatStubsJar) +
+            (SdkResolution.sdkFor(store.workspace, module)?.bootClasspath ?: emptyList())
+                .map { Paths.get(it.path) })
             .filter { Files.isRegularFile(it) }
+            .distinct()
 
     /**
      * Provision the bundled kotlin-stdlib as a real project dependency for every module with `.kt` sources
@@ -1351,7 +1382,7 @@ class IdeServices private constructor(
 
     /** [module] plus its transitive module-dependency closure (within its project) — the modules a build of
      *  [module] actually compiles/links against, so a dep module's unresolved library blocks it too. */
-    private fun moduleBuildClosure(module: Module): List<Module> {
+    internal fun moduleBuildClosure(module: Module): List<Module> {
         val project = projectOf(module) ?: return listOf(module)
         val byId = project.modules.associateBy { it.id }
         val seen = LinkedHashSet<ModuleId>()
@@ -2654,6 +2685,14 @@ class IdeServices private constructor(
      * primitive ([EngineContext.parse]); the block projection service rides on it.
      */
     private fun parse(file: Path, text: String): ParsedFile? {
+        val fileName = file.fileName?.toString().orEmpty()
+        if (fileName.endsWith(".swift", ignoreCase = true)) {
+            return dev.ide.core.services.SwiftDomParser.parse(
+                store.vfs.fileFor(file),
+                docVersion.incrementAndGet(),
+                text,
+            )
+        }
         val module = moduleForFile(file) ?: return null
         val analyzer = analyzerFor(module, languageFor(file))
         return analyzer.incrementalParser.parseFull(
@@ -4876,6 +4915,9 @@ class IdeServices private constructor(
          *  instead. */
         private const val COMPILER_WARMUP_MIN_FREE_BYTES = 224L * 1024 * 1024
 
+        /** Maximum module count before eager workspace indexing scopes itself to the active runnable module closure. */
+        private const val MAX_EAGER_INDEX_MODULES = 16
+
 
         /** Java reserved words + literals, rejected as rename targets (a valid identifier can't be one). */
         private val JAVA_RESERVED = setOf(
@@ -5057,11 +5099,11 @@ class IdeServices private constructor(
         private fun ensureSdks(store: ProjectModelStore, primary: SdkData?, baseDir: Path) {
             val current = store.data.sdks.toMutableList()
             if (current.isEmpty()) primary?.let { current.add(it) }
-            if (current.none { it.kind == PlatformKind.JVM }) {
-                val androidLike = current.firstOrNull { it.kind == PlatformKind.ANDROID } ?: primary
-                coreJavaSdkFor(androidLike, baseDir)?.let { core ->
-                    if (current.none { it.name == core.name }) current.add(core)
-                }
+            val androidLike = current.firstOrNull { it.kind == PlatformKind.ANDROID } ?: primary
+            coreJavaSdkFor(androidLike, baseDir)?.let { core ->
+                val idx = current.indexOfFirst { it.kind == PlatformKind.JVM || it.name == core.name }
+                if (idx < 0) current.add(core)
+                else if (current[idx].bootClasspath != core.bootClasspath) current[idx] = core
             }
             if (current != store.data.sdks) store.replaceSdks(current)
         }
@@ -5185,6 +5227,9 @@ class IdeServices private constructor(
         ): IdeServices {
             val (platform, store) = openStore(root, env)
             ensureSdks(store, sdk, sharedCachesRoot ?: root)
+            if (reconcileStaleExportedModelIfNeeded(root, store, env)) {
+                ensureSdks(store, sdk, sharedCachesRoot ?: root)
+            }
             return IdeServices(
                 platform,
                 store,
@@ -5193,6 +5238,42 @@ class IdeServices private constructor(
                 env = env,
             )
         }
+
+        /**
+         * When a self-hosted workspace carrying `.platform/gradle-model.json` has modules whose persisted
+         * source roots no longer exist on disk (e.g. a JVM module converted to KMP before `generateNativeModel`
+         * was re-exported), heal the workspace model from [GradleModelImporter] so builds succeed out of the box.
+         */
+        private fun reconcileStaleExportedModelIfNeeded(
+            root: Path,
+            store: ProjectModelStore,
+            env: ApplicationEnvironment,
+        ): Boolean = runCatching {
+            if (!Files.isRegularFile(root.resolve(GradleModelImporter.DUMP_PATH))) return false
+            val staleModules = store.workspace.projects.flatMap { it.modules }.filter { m ->
+                val declaredSources = m.contentRootsFor(ContentRole.SOURCE)
+                    .filterNot { it.toString().replace('\\', '/').contains("/build/") }
+                declaredSources.isNotEmpty() && declaredSources.none { Files.isDirectory(it) }
+            }.mapTo(HashSet()) { it.name }
+            if (staleModules.isEmpty()) return false
+            val importer = GradleModelImporter()
+            val request = SyncRequest(root, NoSyncProgress, SyncReason.IMPORT)
+            val rawModel = runSync { importer.resolve(request) }.model ?: return false
+            val model = ProjectSyncService.contributeTo(env.platform.extensions, importer, request, rawModel)
+            val langLevel = store.workspace.projects.flatMap { it.modules }.firstOrNull()?.languageLevel
+                ?: LanguageLevel.JAVA_17
+            ExternalModelApplier(store).apply(model, langLevel, removeAbsent = false, recreate = staleModules)
+            store.save()
+            val reposFile = root.resolve(".platform/repositories.txt")
+            if (Files.isRegularFile(reposFile)) {
+                val filtered = Files.readAllLines(reposFile).filterNot { line ->
+                    "bytedance.com/repository/pangle" in line || "mintegral.com" in line
+                }
+                reposFile.writeText(filtered.joinToString("\n") + "\n")
+            }
+            ExternalRepositories.merge(root, model.repositories)
+            true
+        }.getOrDefault(false)
 
         /**
          * Import the foreign-build-system project at [root] into a workspace written there (so it lists and

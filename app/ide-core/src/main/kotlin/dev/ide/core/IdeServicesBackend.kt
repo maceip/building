@@ -118,7 +118,33 @@ class IdeServicesBackend(
      * `true` (desktop / tests, where it's not gated); the on-device host injects the live check.
      */
     private val notificationsAllowed: () -> Boolean = { true },
+    /**
+     * Host-injected agent service factory (Android: the ZCode-backed agent). Null → the
+     * built-in Kotlin [AgentBackend]. The host decides; this class only applies the
+     * plugin-enabled gate identically for either engine.
+     */
+    private val agentServiceFactory: ((IdeServicesBackend) -> dev.ide.ui.backend.AgentService?)? = null,
 ) : IdeBackend, LayoutPreviewBackend, BackendContext {
+
+    /** Public host seam for the injected agent factory: the open project's workspace root. */
+    fun agentWorkspaceRoot(): java.nio.file.Path? = servicesOrNull?.workspaceRoot
+
+    /** Public host seam for the injected agent factory: the AI engine preference (`settings.ai.engine`). */
+    fun agentEnginePreference(): String? = manager?.preference("settings.ai.engine")
+
+    /** Public host seam for the injected agent factory: a raw `settings.ai.*` preference value. */
+    fun agentAiPreference(key: String): String? = manager?.preference("settings.ai.$key")
+
+    /** Tool-host instance kept alive solely to serve the workspace MCP server to an
+     *  external agent engine (ZCode); never used for chat in that configuration. */
+    private val mcpToolHost: AgentBackend by lazy { AgentBackend(this) }
+
+    /** Public host seam: bound workspace MCP port for the injected agent engine, or null. */
+    fun agentMcpPort(): Int? =
+        if (agentServiceFactory != null) mcpToolHost.ensureMcpServerForHost() else null
+
+    /** Public host seam: the host Kotlin [AgentBackend] so an external agent wrapper can delegate LiteRT-LM Corner calls. */
+    fun hostAgentService(): dev.ide.ui.backend.AgentService = mcpToolHost
 
     /** Opt-in usage analytics, resolved from the application service container (the on-device host registers a
      *  Supabase-backed [dev.ide.analytics.impl.DefaultAnalyticsService]); absent (desktop / tests) → the no-op
@@ -556,8 +582,11 @@ class IdeServicesBackend(
     // sparkle toggle, and the agent loop all disappear (the UI keys these surfaces off this being Unsupported).
     // A manager-less backend (tests / single-project) has no catalog, so the agent stays wired.
     override val agent: dev.ide.ui.backend.AgentService =
-        if (manager?.env?.pluginCatalog?.isEnabled(AgentPlugin.ID) != false) AgentBackend(this)
-        else dev.ide.ui.backend.AgentService.Unsupported
+        if (manager?.env?.pluginCatalog?.isEnabled(AgentPlugin.ID) != false) {
+            agentServiceFactory?.invoke(this) ?: AgentBackend(this)
+        } else {
+            dev.ide.ui.backend.AgentService.Unsupported
+        }
 
     // Version control is a disablable, non-essential plugin ([VcsPlugin.ID]). When it is off the plugin isn't
     // loaded, so the UI is handed the no-op service and every Git surface disappears. A manager-less backend
@@ -801,6 +830,7 @@ class IdeServicesBackend(
      * exits — an honest, reported crash rather than a silently-resumed corrupt state.
      */
     fun installCrashReporting() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, t ->
             runCatching { Log.logger("uncaught").warn("Uncaught exception on ${thread.name}", t) } // ring/console only
             runCatching { showError("Application error", t.message ?: t.javaClass.simpleName, stackTraceString(t)) }
@@ -815,6 +845,9 @@ class IdeServicesBackend(
                     )
                 )
                 analytics.flush()
+            }
+            if (previous != null && previous !== Thread.getDefaultUncaughtExceptionHandler()) {
+                runCatching { previous.uncaughtException(thread, t) }
             }
         }
     }

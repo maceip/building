@@ -151,7 +151,7 @@ fun selfExtendingTools(
                 string("language", "Runtime language for the script.", enum = listOf("node", "python", "shell"))
                 string("script", "Source code of the tool script.")
                 string("parameters_schema", "Optional JSON Schema object string for the tool's parameters.", required = false)
-                boolean("mutating", "Whether calling this tool modifies project files (default false).", required = false)
+                boolean("mutating", "Whether calling this tool modifies project files (default true).", required = false)
             },
         )
         override val mutating: Boolean = true
@@ -165,7 +165,7 @@ fun selfExtendingTools(
                 script = args.string("script"),
                 parametersSchema = args.optString("parameters_schema")?.takeIf { it.isNotBlank() }
                     ?: ScriptToolDefinition.DEFAULT_SCHEMA,
-                mutating = args.optBoolean("mutating") ?: false,
+                mutating = args.optBoolean("mutating") ?: true,
             )
             val registered = registry.registerScriptTool(def, persist = true)
             return ToolExecutionResult.ok(

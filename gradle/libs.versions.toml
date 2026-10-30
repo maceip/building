@@ -1,5 +1,5 @@
 [versions]
-kotlin = "2.4.20"
+kotlin = "2.5.0-Beta2"
 # The unshaded compiler (`-for-ide` artifacts) and the IntelliJ platform version it is built against (Kotlin
 # 2.4.0's gradle.properties pins versions.intellijSdk to the same 251.27812.49). This pair must move together,
 # and matches what KSP2 main pins. Consumed by :kotlin-compiler-deps. Served from packages.jetbrains.team
@@ -60,7 +60,7 @@ cfr = "0.152"               # org.benf:cfr — single-jar Java decompiler for th
 # its bundled Analysis API / IntelliJ platform, so it coexists on a classpath with :kotlin-compiler-deps'
 # unshaded `-for-ide` compiler without a name clash. Standalone entry: KotlinSymbolProcessing(KSPJvmConfig,
 # providers, logger).execute(). See docs/kotlin-compiler-plugins-and-codegen.md.
-ksp = "2.3.10"
+ksp = "2.3.12"
 # Room is the reference bundled KSP processor. 2.8.x is the KSP2-based line (drops KSP1/kapt), so it pairs
 # with the KSP2 runner above; room-runtime/-common go on the compile classpath, room-compiler on the
 # processor classpath.
@@ -80,6 +80,19 @@ dagger = "2.60.1"  # com.google.dagger — Hilt/Dagger; hilt-compiler is the KSP
 # the version is whatever the matching Kotlin revision pins in its own libs.versions.toml.
 jetbrains-syntax-api = "0.3.376"
 jetbrains-annotations = "26.0.2"
+# Build & governance toolchain plugins/libraries:
+dependencyAnalysis = "2.19.0"           # com.autonomousapps.dependency-analysis — catches unused/misdeclared api vs implementation deps
+licensee = "1.13.0"                     # app.cash.licensee — SPDX license allowlist verification across dependency graphs
+versionCatalogUpdate = "1.0.0"          # nl.littlerobots.version-catalog-update — keeps gradle/libs.versions.toml sorted and pinned
+benManesVersions = "0.52.0"             # com.github.ben-manes.versions — dependencyUpdates report for outdated coordinates
+binaryCompatibilityValidator = "0.18.1" # org.jetbrains.kotlinx.binary-compatibility-validator — public ABI dump & check
+spotless = "7.0.4"                      # com.diffplug.spotless — deterministic formatting & license header enforcement
+detekt = "1.23.8"                       # io.gitlab.arturbosch.detekt — static analysis + Compose rules
+composeRulesDetekt = "0.4.22"           # io.nlopez.compose.rules:detekt — Twitter/Slack Compose rules for Detekt
+burst = "2.11.0"                        # app.cash.burst — Cash App Burst KMP parameterized test matrix runner
+owaspDependencyCheck = "12.1.1"         # org.owasp.dependencycheck — CVE / NVD vulnerability scanner for bundled jars
+vanniktechMavenPublish = "0.32.0"       # com.vanniktech.maven.publish — Maven Central / POM / Javadoc publishing
+composeLintChecks = "1.4.2"             # com.slack.lint.compose:compose-lint-checks — Compose static lint checks
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -243,6 +256,10 @@ hilt-core = { module = "com.google.dagger:hilt-core", version.ref = "dagger" }
 # reason that parser can be built for iOS here when upstream builds it only for the JVM and wasm.
 jetbrains-syntax-api = { module = "org.jetbrains:syntax-api", version.ref = "jetbrains-syntax-api" }
 jetbrains-annotations = { module = "org.jetbrains:annotations", version.ref = "jetbrains-annotations" }
+burst-coroutines = { module = "app.cash.burst:burst-coroutines", version.ref = "burst" }
+burst-runtime = { module = "app.cash.burst:burst", version.ref = "burst" }
+detekt-compose-rules = { module = "io.nlopez.compose.rules:detekt", version.ref = "composeRulesDetekt" }
+slack-compose-lint-checks = { module = "com.slack.lint.compose:compose-lint-checks", version.ref = "composeLintChecks" }
 
 [plugins]
 # Reads google-services.json into resources. Applied conditionally by :ide-android — a build without that
@@ -259,3 +276,14 @@ compose = { id = "org.jetbrains.compose", version.ref = "compose" }
 android-application = { id = "com.android.application", version.ref = "agp" }
 # AGP 9's KMP library plugin: configures a Kotlin Multiplatform module's Android target inside `kotlin {}`.
 android-kmp-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+# 10 build & quality governance plugins:
+dependency-analysis = { id = "com.autonomousapps.dependency-analysis", version.ref = "dependencyAnalysis" }
+licensee = { id = "app.cash.licensee", version.ref = "licensee" }
+version-catalog-update = { id = "nl.littlerobots.version-catalog-update", version.ref = "versionCatalogUpdate" }
+ben-manes-versions = { id = "com.github.ben-manes.versions", version.ref = "benManesVersions" }
+binary-compatibility-validator = { id = "org.jetbrains.kotlinx.binary-compatibility-validator", version.ref = "binaryCompatibilityValidator" }
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
+burst = { id = "app.cash.burst", version.ref = "burst" }
+owasp-dependencycheck = { id = "org.owasp.dependencycheck", version.ref = "owaspDependencyCheck" }
+vanniktech-maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "vanniktechMavenPublish" }

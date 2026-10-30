@@ -90,7 +90,15 @@ class BuildDaemonService : Service() {
     // on-disk module.toml changed (e.g. minifyEnabled toggled) — reload rather than reuse the stale model.
     @Volatile
     private var currentGeneration: Int = -1
+
+    @Volatile
+    private var currentLibsMtime: Long = -2L
     private var streamJob: Job? = null
+
+    private fun librariesMtime(dir: String): Long = runCatching {
+        val libs = java.nio.file.Paths.get(dir, ".platform", "libraries.json")
+        if (java.nio.file.Files.exists(libs)) java.nio.file.Files.getLastModifiedTime(libs).toMillis() else -1L
+    }.getOrDefault(-1L)
 
     // Serializes open() requests — see the comment inside it. One engine open at a time, ever.
     private val openMutex = Mutex()
@@ -111,11 +119,12 @@ class BuildDaemonService : Service() {
                 // later one closing the earlier (possibly mid-build) engine. Under the mutex the duplicate
                 // just waits, hits the idempotent fast path below, and still gets its own onOpened reply.
                 openMutex.withLock {
+                    val libsMtime = librariesMtime(dir)
                     // Idempotent: re-opening the already-open project is a fast no-op — never pay the engine
                     // re-create (model load + index). Lets the UI safely open-then-build on every Run. BUT only
-                    // when the model is also unchanged: a higher [modelGeneration] means the UI committed a
-                    // config edit (and saved module.toml), so the cached model is stale and must be reloaded.
-                    if (dir == currentDir && modelGeneration == currentGeneration && services != null) {
+                    // when the model and resolved libraries.json are also unchanged: a higher [modelGeneration]
+                    // or a newly written `.platform/libraries.json` means the cached model is stale and must reload.
+                    if (dir == currentDir && modelGeneration == currentGeneration && libsMtime == currentLibsMtime && services != null) {
                         runCatching { callback?.onOpened(requestId, true, null) }
                         return@withLock
                     }
@@ -134,6 +143,7 @@ class BuildDaemonService : Service() {
                             services = it
                             currentDir = dir
                             currentGeneration = modelGeneration
+                            currentLibsMtime = librariesMtime(dir)
                             startStreaming(it)
                         }
                     }.onSuccess {

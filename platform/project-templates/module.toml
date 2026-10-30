@@ -1,0 +1,27 @@
+version = 2
+
+[module]
+type = "java-lib"
+name = "project-templates"
+languageLevel = "JAVA_17"
+output = "build/codeassist/classes"
+
+[sourceSets.commonMain]
+scope = "IMPLEMENTATION"
+java = ["src/commonMain/kotlin"]
+
+[sourceSets.commonTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/commonTest/kotlin"]
+
+[sourceSets.jvmTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/jvmTest/kotlin"]
+
+[dependencies]
+api = [{ module = "project-model-api" }]
+implementation = ["kotlin-stdlib"]
+testImplementation = [{ module = "project-model-impl" }, { platform = "org.junit:junit-bom:5.11.4" }]
+
+[kotlin]
+commonSourceRoots = ["src/commonMain/kotlin"]

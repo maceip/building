@@ -1857,6 +1857,85 @@ interface AgentService {
     /** Start or stop the local FTP asset server (persisted under `settings.ai.ftpServer`). */
     fun setFtpServerEnabled(enabled: Boolean) {}
 
+    /** Reactive state of the Self-Serve LiteRT-LM Corner (model catalog, hardware delegates, loopback server, guest SDK). */
+    val liteRtCornerState: StateFlow<UiLiteRtCornerState>
+        get() = Unsupported.liteRtCornerState
+
+    /** Snapshot of the current Self-Serve LiteRT-LM Corner state. */
+    fun liteRtCorner(): UiLiteRtCornerState = liteRtCornerState.value
+
+    /** Select the hardware execution delegate (`CPU`, `GPU`, `NPU`) for local LiteRT-LM inference. */
+    fun selectLiteRtDelegate(delegate: UiLiteRtDelegate) {}
+
+    /** Start downloading / provisioning a `.litertlm` model from the catalog into shared app storage. */
+    fun downloadLiteRtModel(modelId: String) {}
+
+    /** Cancel an in-progress `.litertlm` model download. */
+    fun cancelLiteRtDownload(modelId: String) {}
+
+    /** Delete an installed `.litertlm` model artifact from shared app storage. */
+    fun deleteLiteRtModel(modelId: String) {}
+
+    /** Set an installed `.litertlm` model as the active on-device model. */
+    fun activateLiteRtModel(modelId: String) {}
+
+    /** Activate an installed `.litertlm` model and switch the IDE coding agent to use it via the `"litert"` provider. */
+    fun useLiteRtInIdeAgent(modelId: String) {}
+
+    /** Enable or disable the local loopback (`127.0.0.1:<port>`) LiteRT-LM HTTP inference server for guest apps. */
+    fun setLiteRtServerEnabled(enabled: Boolean) {}
+
+    /** Update the TCP port used by the local loopback LiteRT-LM HTTP inference server. */
+    fun setLiteRtServerPort(port: Int) {}
+
+    /** Select the target language (`Kotlin / Android`, `Swift / iOS`, `Node.js`, `Python`) for the guest-app SDK snippet. */
+    fun selectLiteRtGuestLanguage(language: UiLiteRtGuestLanguage) {}
+
+    /** Run a local inference smoke test against the active on-device LiteRT-LM model. */
+    fun runLiteRtSmokeTest(prompt: String) {}
+
+    /** Write the selected guest-app LiteRT-LM client file into the currently open workspace project. */
+    fun scaffoldLiteRtGuestClient(language: UiLiteRtGuestLanguage = UiLiteRtGuestLanguage.KOTLIN_ANDROID): String = ""
+
+    /** Select the Universal LLM Corner operating mode (`DIRECT`, `ROUTING`, `AGGREGATION`). */
+    fun selectLlmSwitchMode(mode: UiLlmSwitchMode) {}
+
+    /** Switch the active universal provider in one click (updating both the LLM Corner and IDE Agent). */
+    fun switchUniversalProvider(providerId: String) {}
+
+    /** Add or update a universal provider profile (API key, base URL, protocol format, default model, tier mappings). */
+    fun saveUniversalProvider(input: UiLlmSwitchProviderInput) {}
+
+    /** Provision a built-in provider preset into the Universal LLM Corner. */
+    fun addPresetProvider(presetId: String, apiKey: String = "") {}
+
+    /** Delete a non-active custom universal provider profile. */
+    fun deleteUniversalProvider(providerId: String) {}
+
+    /** Enable or disable automatic failover queue routing in `ROUTING` mode. */
+    fun setAutoFailoverEnabled(enabled: Boolean) {}
+
+    /** Enable or disable per-provider circuit breaker health protection. */
+    fun setCircuitBreakerEnabled(enabled: Boolean) {}
+
+    /** Add or remove a provider profile from the ordered failover queue. */
+    fun toggleProviderFailover(providerId: String, enabled: Boolean) {}
+
+    /** Move a provider profile up (`delta < 0`) or down (`delta > 0`) in the failover priority queue. */
+    fun moveProviderInFailoverQueue(providerId: String, delta: Int) {}
+
+    /** Add or remove a provider profile from the `AGGREGATION` (Stack) model catalog. */
+    fun toggleProviderAggregation(providerId: String, enabled: Boolean) {}
+
+    /** Reset a provider's circuit breaker back to `CLOSED` (Healthy). */
+    fun resetProviderCircuitBreaker(providerId: String) {}
+
+    /** Run a live connectivity & latency health probe against a provider profile. */
+    fun probeProviderHealth(providerId: String) {}
+
+    /** Sync the active provider / proxy contract to Claude Code, Codex, and Gemini CLI config files. */
+    fun syncLiveToolConfigs() {}
+
     /** A no-op agent for backends that wire none. */
     object Unsupported : AgentService {
         override val chatState: StateFlow<UiAgentChatState> =
@@ -1865,6 +1944,8 @@ interface AgentService {
             kotlinx.coroutines.flow.MutableStateFlow(null)
         override fun config(): UiAgentConfig = UiAgentConfig()
         override val models: StateFlow<List<UiAgentModel>> = kotlinx.coroutines.flow.MutableStateFlow(emptyList())
+        override val liteRtCornerState: StateFlow<UiLiteRtCornerState> =
+            kotlinx.coroutines.flow.MutableStateFlow(UiLiteRtCornerState())
         override fun refreshModels() {}
         override fun setModel(model: String) {}
         override fun selectProvider(id: String) {}

@@ -11,6 +11,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -53,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import fragments.agentui.AgentUiTheme
 import fragments.components.ReactUiPalette
 import fragments.components.ReactUiPalettes
 import fragments.components.UiButton
@@ -193,8 +196,14 @@ fun InputBar(
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
     Column(Modifier.widthIn(max = 420.dp).fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (suggestions.isNotEmpty()) Suggestions(suggestions, { onValueChange(it.value) }, palette = palette)
-        if (attachments.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            attachments.forEach { FileAttachment(it, { onRemoveAttachment(it.id) }, palette = palette) }
+        if (attachments.isNotEmpty()) {
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                attachments.forEach { FileAttachment(it, { onRemoveAttachment(it.id) }, palette = palette) }
+            }
         }
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (onAttach != null) AttachmentButton(onAttach, palette = palette)
@@ -262,9 +271,14 @@ fun SpiralLoader(modifier: Modifier = Modifier, palette: ReactUiPalette = ReactU
     Canvas(modifier.size(20.dp)) { drawArc(palette.accent, rotation, 270f, false, style = Stroke(width = 2.dp.toPx())) }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Suggestions(items: List<SuggestionItem>, onSelect: (SuggestionItem) -> Unit, modifier: Modifier = Modifier, palette: ReactUiPalette = ReactUiPalettes.AgentElementsDark) {
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    FlowRow(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         items.forEach { item -> UiButton(item.label, { onSelect(item) }, palette) }
     }
 }
@@ -289,12 +303,25 @@ fun SendButton(status: AgentChatStatus, enabled: Boolean, onClick: () -> Unit, p
 @Immutable
 data class QuestionOption(val id: String, val label: String)
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun QuestionPrompt(question: String, options: List<QuestionOption>, selected: String?, onSelect: (String) -> Unit, palette: ReactUiPalette = ReactUiPalettes.AgentElementsDark) {
+    val isMobile = AgentUiTheme.sizing.isMobile
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         UiText(question, palette, weight = FontWeight.Medium)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            options.forEach { option -> UiButton(option.label, { onSelect(option.id) }, palette, primary = selected == option.id) }
+        if (isMobile) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                options.forEach { option ->
+                    UiButton(option.label, { onSelect(option.id) }, palette, modifier = Modifier.fillMaxWidth(), primary = selected == option.id)
+                }
+            }
+        } else {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                options.forEach { option -> UiButton(option.label, { onSelect(option.id) }, palette, primary = selected == option.id) }
+            }
         }
     }
 }

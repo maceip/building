@@ -13,7 +13,7 @@ resources = ["build/compose-resources/resources"]
 
 [dependencies]
 api = ["org.jetbrains.compose.components:components-resources:1.11.1"]
-implementation = ["org.jetbrains.compose.runtime:runtime:1.11.1", "kotlin-stdlib"]
+implementation = ["org.jetbrains.compose.runtime:runtime:1.11.1"]
 
 [composeResources]
 package = "dev.ide.ui.generated.resources"

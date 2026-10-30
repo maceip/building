@@ -27,6 +27,7 @@ import dev.ide.lang.kotlin.KotlinSignatureHelpService
 import dev.ide.lang.kotlin.NavKind
 import dev.ide.lang.kotlin.NavTarget
 import dev.ide.lang.kotlin.completion.KotlinCompletion
+import dev.ide.kotlin.syntax.psi.KtClassOrObject
 import dev.ide.kotlin.syntax.psi.KtNamedFunction
 import dev.ide.lang.kotlin.index.KotlinBuiltinCallableIndex
 import dev.ide.lang.kotlin.index.KotlinBuiltinsIndex
@@ -98,24 +99,35 @@ internal class IosKotlinAnalysis(
      * lookups, and without them completion offers nothing from a library and the checks cannot honestly
      * call a name unresolved. Null when there is no classpath to index yet.
      */
+    private val sharedBundleCache: Boolean = classpathJars.any { "/preview-runtime/" in it }
+
     private val index: ClasspathIndex? = classpathJars.takeIf { it.isNotEmpty() }?.let { jars ->
+        val indexCacheDir = if (sharedBundleCache) {
+            IosFiles.join(IosFiles.supportDir(), "caches/index")
+        } else {
+            IosFiles.join(projectRoot, ".platform/caches/index")
+        }
         runCatching {
             ClasspathIndex.build(
                 jars,
                 INDEXES,
-                IosFiles.join(projectRoot, ".platform/caches/index"),
+                indexCacheDir,
                 onProgress = onIndexProgress,
             )
         }.getOrNull()
     }
 
     private val service = KotlinSymbolService(
-        sourceRoots = listOf<VirtualFile>(IosVirtualFile(projectRoot)),
+        sourceRoots = initialSourceRootsFor(projectRoot),
         classpathJars = classpathJars,
         index = index,
         // Persist the classpath extension scan, so a second open reuses it instead of re-reading every
         // class in every jar. Its own directory, beside the resolver's cache rather than inside it.
-        cacheDir = IosFiles.join(projectRoot, ".platform/caches/kotlin-ext"),
+        cacheDir = if (sharedBundleCache) {
+            IosFiles.join(IosFiles.supportDir(), "caches/kotlin-ext")
+        } else {
+            IosFiles.join(projectRoot, ".platform/caches/kotlin-ext")
+        },
     )
 
     private val completion = KotlinCompletion(service)
@@ -298,6 +310,15 @@ internal class IosKotlinAnalysis(
      */
     private fun parsed(path: String, text: String): KotlinParsedFile {
         lastByFile[path]?.let { if (it.ktFile.text.contentEquals(text)) return it }
+        if (lastByFile.size > 12) {
+            val openKeys = buffers.keys
+            lastByFile.keys.retainAll(openKeys)
+            cachesBySnapshot.keys.retainAll(openKeys)
+            if (lastByFile.size > 12) {
+                lastByFile.clear()
+                cachesBySnapshot.clear()
+            }
+        }
         val ktFile = KotlinParserHost.parse(IosFiles.nameOf(path), text)
         return KotlinParsedFile(ktFile, IosVirtualFile(path), ++documentVersion)
             .also { lastByFile[path] = it }
@@ -323,19 +344,29 @@ internal class IosKotlinAnalysis(
         } else {
             val file = parsed(path, text)
             val scopedRoots = scopedSourceRootsFor(projectRoot, path)
+            var tempService: KotlinSymbolService? = null
             val activeLowering = if (scopedRoots != null) {
                 val scopedService = KotlinSymbolService(
                     sourceRoots = scopedRoots,
                     classpathJars = classpathJars,
                     index = index,
-                    cacheDir = IosFiles.join(projectRoot, ".platform/caches/kotlin-ext"),
+                    cacheDir = if (sharedBundleCache) {
+                        IosFiles.join(IosFiles.supportDir(), "caches/kotlin-ext")
+                    } else {
+                        IosFiles.join(projectRoot, ".platform/caches/kotlin-ext")
+                    },
                 )
+                tempService = scopedService
                 KotlinPreviewLowering(scopedService)
             } else {
                 previewLowering
             }
-            val computed = activeLowering.crossFileModel(file)
-            if (modelCache.size > 32) modelCache.clear()
+            val computed = try {
+                activeLowering.crossFileModel(file)
+            } finally {
+                tempService?.close()
+            }
+            if (modelCache.size > 6) modelCache.clear()
             modelCache[path] = textHash to computed
             computed
         }
@@ -386,10 +417,13 @@ internal class IosKotlinAnalysis(
         }
     }
 
+    private fun initialSourceRootsFor(root: String): List<VirtualFile> = listOf(IosVirtualFile(root))
+
     /**
-     * For large multi-module repositories (> 80 `.kt` files), returns a scoped list of source roots centered on
-     * [targetFilePath]'s directory plus sibling UI/theme/design/component directories so `crossFileModel` does not
-     * parse thousands of unrelated module files. Returns `null` for normal projects so the shared [service] is used.
+     * For large multi-module repositories (> 250 `.kt` files), returns a scoped list of source roots centered on
+     * [targetFilePath]'s module plus full UI/theme/design/component and data/domain/model/feature directories so
+     * `crossFileModel` does not parse thousands of unrelated module files while retaining complete domain symbols.
+     * Returns `null` for normal projects so the shared [service] covering the full project is used.
      */
     private fun scopedSourceRootsFor(root: String, targetFilePath: String): List<VirtualFile>? {
         var totalKt = 0
@@ -406,8 +440,8 @@ internal class IosKotlinAnalysis(
                 }
             }
         }
-        countUpTo(root, 80)
-        if (totalKt <= 80) return null
+        countUpTo(root, 250)
+        if (totalKt <= 250) return null
 
         val targetDir = IosFiles.parentOf(targetFilePath) ?: return null
         val selectedRoots = LinkedHashSet<String>()
@@ -415,30 +449,44 @@ internal class IosKotlinAnalysis(
         val targetDirKtFiles = IosFiles.list(targetDir)
             .filter { it.endsWith(".kt") }
             .map { IosFiles.join(targetDir, it) }
-        if (targetDirKtFiles.size <= 12) {
-            selectedRoots.add(targetDir)
-        } else {
-            selectedRoots.add(targetFilePath)
-            targetDirKtFiles
-                .filter { it != targetFilePath }
-                .sortedBy { IosFiles.size(it) }
-                .take(8)
-                .forEach { selectedRoots.add(it) }
+        selectedRoots.add(targetDir)
+        targetDirKtFiles.forEach { selectedRoots.add(it) }
+
+        var curr: String? = targetDir
+        var sourceBase: String? = null
+        while (curr != null && curr.length >= root.length) {
+            if (curr.endsWith("/kotlin") || curr.endsWith("/java") || curr.endsWith("/src")) {
+                sourceBase = curr
+                break
+            }
+            curr = IosFiles.parentOf(curr)
         }
 
+        val searchBases = mutableListOf<String>()
         val parent1 = IosFiles.parentOf(targetDir)
         val parent2 = parent1?.let { IosFiles.parentOf(it) }
-        val searchBases = listOfNotNull(parent1, parent2)
-        val uiDirNames = setOf("theme", "design", "components", "component", "common", "preview", "icons", "shimmer")
+        val parent3 = parent2?.let { IosFiles.parentOf(it) }
+        listOfNotNull(sourceBase, parent1, parent2, parent3).forEach {
+            if (it !in searchBases) searchBases.add(it)
+        }
+
+        val includedDirNames = setOf(
+            "theme", "design", "components", "component", "common", "preview", "icons", "shimmer",
+            "data", "domain", "model", "models", "feature", "features", "ui", "presentation",
+            "repository", "repositories", "network", "api", "core", "util", "utils", "state",
+        )
         for (base in searchBases) {
             if (!IosFiles.isDirectory(base)) continue
             for (entry in IosFiles.list(base)) {
                 val full = IosFiles.join(base, entry)
                 val lower = entry.lowercase()
-                if (IosFiles.isDirectory(full) && lower in uiDirNames) {
-                    val siblingKtFiles = IosFiles.list(full).count { it.endsWith(".kt") }
-                    if (lower == "theme" || siblingKtFiles <= 15) {
-                        selectedRoots.add(full)
+                if (IosFiles.isDirectory(full) && (lower in includedDirNames || lower == "src" || lower == "main")) {
+                    selectedRoots.add(full)
+                    for (sub in IosFiles.list(full)) {
+                        val subFull = IosFiles.join(full, sub)
+                        if (IosFiles.isDirectory(subFull)) {
+                            selectedRoots.add(subFull)
+                        }
                     }
                 }
             }
@@ -452,14 +500,33 @@ internal class IosKotlinAnalysis(
     /** The `@Preview` functions [path] declares, by name. */
     fun previewNames(path: String, text: String): List<String> = previews(path, text).map { it.functionName }.distinct()
 
+    /** Whether [path] declares a top-level `fun main()` or `fun main(args: Array<String>)` entry point. */
+    fun hasMainFunction(path: String, text: String): Boolean {
+        val file = parsed(path, text)
+        val topFns = file.ktFile.declarations.filterIsInstance<KtNamedFunction>()
+        return topFns.any { fn ->
+            if (fn.name != "main") return@any false
+            val isComposable = fn.annotationEntries.any {
+                it.shortName?.asString() == "Composable"
+            }
+            if (isComposable) return@any false
+            val params = fn.valueParameters
+            params.isEmpty() || (params.size == 1 && params[0].typeReference?.text.orEmpty().let { "Array" in it && "String" in it })
+        }
+    }
+
     /**
-     * Top-level `@Composable` functions declared in [path] that can be invoked as a preview entrypoint
-     * (either 0 required parameters or parameters with default/primitive/String/Modifier/lambda types),
+     * `@Composable` functions declared in [path] (both top-level and inside classes) that can be invoked as a
+     * preview entrypoint (either 0 required parameters or parameters with default/primitive/String/Modifier/lambda types),
      * ordered by suitability for standalone rendering.
      */
     fun composableNames(path: String, text: String): List<String> {
         val file = parsed(path, text)
-        val fns = file.ktFile.declarations.filterIsInstance<KtNamedFunction>()
+        val topFns = file.ktFile.declarations.filterIsInstance<KtNamedFunction>()
+        val classFns = file.ktFile.declarations.filterIsInstance<KtClassOrObject>().flatMap {
+            it.declarations.filterIsInstance<KtNamedFunction>()
+        }
+        val fns = (topFns + classFns).distinct()
         val candidates = mutableListOf<Pair<String, Int>>()
         for (fn in fns) {
             val name = fn.name ?: continue
@@ -483,12 +550,69 @@ internal class IosKotlinAnalysis(
             if (params.isEmpty()) score += 20
             val uiPrimitives = listOf("Text(", "Column(", "Row(", "Box(", "Spacer(", "Surface(", "Card(", "Icon(", "Button(", "Switch(", "OutlinedTextField(")
             score += uiPrimitives.count { it in bodyText } * 10
-            if ("LocalContext" in bodyText || "HazeState" in bodyText || "hiltViewModel" in bodyText || "collectAsState" in bodyText) {
+            if ("HazeState" in bodyText || "hiltViewModel" in bodyText || "collectAsState" in bodyText) {
                 score -= 80
             }
             candidates.add(name to score)
         }
         return candidates.sortedByDescending { it.second }.map { it.first }.distinct()
+    }
+
+    /**
+     * Extracts candidate root @Composable function names passed to `setContent { ... }` in
+     * an Activity (e.g. `MainActivity.onCreate`).
+     */
+    fun extractActivitySetContentComposables(path: String, text: String): List<String> {
+        val candidates = mutableListOf<String>()
+
+        val file = parsed(path, text)
+        fun inspectExpression(e: dev.ide.kotlin.syntax.psi.KtElement) {
+            if (e is dev.ide.kotlin.syntax.psi.KtCallExpression) {
+                val callee = e.calleeExpression?.text
+                if (callee != null && callee !in setOf("setContent", "enableEdgeToEdge", "super", "remember")) {
+                    if (callee.endsWith("Theme") || callee in setOf("MaterialTheme", "Surface", "Box", "Scaffold")) {
+                        for (arg in e.valueArguments) {
+                            arg.getArgumentExpression()?.let { inspectExpression(it) }
+                        }
+                    } else if (callee.firstOrNull()?.isUpperCase() == true) {
+                        candidates.add(callee)
+                    }
+                }
+            }
+            for (child in e.children) {
+                inspectExpression(child)
+            }
+        }
+
+        fun walkForSetContent(element: dev.ide.kotlin.syntax.psi.KtElement) {
+            if (element is dev.ide.kotlin.syntax.psi.KtCallExpression && element.calleeExpression?.text == "setContent") {
+                for (arg in element.valueArguments) {
+                    arg.getArgumentExpression()?.let { inspectExpression(it) }
+                }
+            }
+            for (child in element.children) {
+                walkForSetContent(child)
+            }
+        }
+
+        walkForSetContent(file.ktFile)
+
+        val setContentRegex = Regex("""setContent\s*\{\s*([A-Za-z0-9_]+)""")
+        for (match in setContentRegex.findAll(text)) {
+            val name = match.groupValues[1]
+            if (name.firstOrNull()?.isUpperCase() == true && name !in setOf("Surface", "Box", "Scaffold")) {
+                candidates.add(name)
+            }
+        }
+        val innerCallRegex = Regex("""setContent\s*\{[^}]*?([A-Z][A-Za-z0-9_]+)\s*\(""")
+        for (match in innerCallRegex.findAll(text)) {
+            val name = match.groupValues[1]
+            if (name !in setOf("Surface", "Box", "Scaffold")) {
+                candidates.add(name)
+            }
+        }
+
+        return candidates.distinct()
     }
 
     private fun isSupportedEntryParamType(typeText: String): Boolean {

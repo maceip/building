@@ -49,6 +49,7 @@ class MultiRuntimeBuildSystemTest {
         Files.createDirectories(binDir)
         val fakeXtool = binDir.resolve("xtool").apply { writeText("#!/bin/sh\n") }
         val fakeSwift = binDir.resolve("swift").apply { writeText("#!/bin/sh\n") }
+        Files.createDirectories(root.resolve("home/.config/xtool/sdk/iPhoneOS.sdk"))
 
         val recordedCommands = ArrayList<List<String>>()
         val previousHost = RuntimeBuildEnvironment.host
@@ -134,6 +135,75 @@ class MultiRuntimeBuildSystemTest {
                 assertTrue(
                     finalState.log.any { "IceCubesApp.ipa" in it.message },
                     "Build console must report the produced .ipa artifact: ${finalState.log.map { it.message }}",
+                )
+            }
+        } finally {
+            RuntimeBuildEnvironment.host = previousHost
+        }
+    }
+
+    @Test
+    fun ipaExportFailsHonestlyWhenDarwinSdkIsMissingAndNeverPackagesFakeLinuxElfIpa() = withTempDir("swiftui-no-darwin-sdk") { root ->
+        val fakePrefix = root.resolve("fake-prefix")
+        val binDir = fakePrefix.resolve("bin")
+        Files.createDirectories(binDir)
+        val fakeXtool = binDir.resolve("xtool").apply { writeText("#!/bin/sh\n") }
+        val fakeSwift = binDir.resolve("swift").apply { writeText("#!/bin/sh\n") }
+
+        val previousHost = RuntimeBuildEnvironment.host
+        RuntimeBuildEnvironment.host = object : RuntimeHost {
+            override val workspaceCache: Path = root.resolve("ws-cache")
+            override suspend fun prepare(): RuntimeInstallation = RuntimeInstallation(
+                packId = "test-pack",
+                abi = "arm64-v8a",
+                prefix = fakePrefix,
+                node = null,
+                npmCli = null,
+                python = null,
+                shell = null,
+                environment = mapOf("HOME" to root.resolve("empty-home").toString()),
+                xtool = fakeXtool,
+            )
+
+            override fun start(
+                command: List<String>,
+                workingDirectory: Path,
+                environment: Map<String, String>,
+            ): RuntimeChild = FakeRuntimeChild(stdoutText = "", exitCode = 0)
+        }
+
+        try {
+            val manager = ProjectManager.desktop(root.resolve("projects"))
+            val cloned = manager.projectsRoot.resolve("NoSdkApp")
+            Files.createDirectories(cloned.resolve("NoSdkApp.xcodeproj"))
+            write(
+                cloned,
+                "NoSdkApp/App.swift",
+                """
+                import SwiftUI
+                @main
+                struct NoSdkApp: App {
+                    var body: some Scene { WindowGroup { Text("Hi") } }
+                }
+                """,
+            )
+            manager.adoptFolderInPlace(cloned)
+            manager.open(cloned.toString()).use { ide ->
+                val backend = IdeServicesBackend(ide, manager)
+                val beforeIpa = backend.build.buildState.value
+                backend.build.runTask(SwiftBuildSystem.TASK_IPA)
+                val finalState = runBlocking {
+                    withTimeout(30_000) {
+                        backend.build.buildState.first {
+                            it !== beforeIpa && it.status != RunStatus.Running && it.log.isNotEmpty()
+                        }
+                    }
+                }
+                assertEquals(RunStatus.Failed, finalState.status, "Export IPA without darwin.xtoolsdk must fail honestly")
+                assertFalse(cloned.resolve("xtool/NoSdkApp.ipa").exists(), "Must NEVER package a fake Linux ELF .ipa")
+                assertTrue(
+                    finalState.log.any { "darwin.xtoolsdk" in it.message },
+                    "Error log must explain darwin.xtoolsdk requirement: ${finalState.log.map { it.message }}",
                 )
             }
         } finally {

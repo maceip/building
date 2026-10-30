@@ -48,6 +48,7 @@ dependencies {
     // compileOnly; the device app bundles them the same way). See BundledAndroidToolchain.
     implementation(libs.android.r8)
     implementation(libs.android.apksig)
+    implementation("com.google.ai.edge.litertlm:litertlm-jvm:0.17.1")
 }
 
 // --- The bundled Android toolchain ----------------------------------------------------------------------------

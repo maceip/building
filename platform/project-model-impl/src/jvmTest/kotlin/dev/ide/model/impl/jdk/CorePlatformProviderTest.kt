@@ -94,4 +94,50 @@ class CorePlatformProviderTest {
             assertEquals(stub.toAbsolutePath().normalize().toString(), sdk.bootClasspath[1])
         }
     }
+
+    @Test
+    fun patchesClassLoaderWithGetClassLoadingLock() {
+        // Minimal valid classfile for DummyClass without getClassLoadingLock
+        val baos = java.io.ByteArrayOutputStream()
+        java.io.DataOutputStream(baos).use { dos ->
+            dos.writeInt(0xCAFEBABE.toInt())
+            dos.writeShort(0) // minor
+            dos.writeShort(52) // major (Java 8)
+            dos.writeShort(5) // cpCount = 5 (indices 1..4)
+            dos.writeByte(1); dos.writeUTF("java/lang/ClassLoader") // #1
+            dos.writeByte(7); dos.writeShort(1) // #2 Class(#1)
+            dos.writeByte(1); dos.writeUTF("java/lang/Object") // #3
+            dos.writeByte(7); dos.writeShort(3) // #4 Class(#3)
+            dos.writeShort(0x0421) // ACC_PUBLIC | ACC_SUPER | ACC_ABSTRACT
+            dos.writeShort(2) // this_class = #2
+            dos.writeShort(4) // super_class = #4
+            dos.writeShort(0) // interfaces_count = 0
+            dos.writeShort(0) // fields_count = 0
+            dos.writeShort(0) // methods_count = 0
+            dos.writeShort(0) // attributes_count = 0
+        }
+        val raw = baos.toByteArray()
+        val patched = CorePlatformProvider.patchClassLoaderBytecode(raw)
+        assertTrue(patched.size > raw.size, "patched bytecode should be larger than original")
+        assertTrue(String(patched, Charsets.ISO_8859_1).contains("getClassLoadingLock"))
+        // Idempotent when called a second time
+        val second = CorePlatformProvider.patchClassLoaderBytecode(patched)
+        assertEquals(patched.size, second.size)
+
+        withTempDir("jdk-compat-stubs") { dir ->
+            val androidJar = dir.resolve("android.jar")
+            ZipOutputStream(Files.newOutputStream(androidJar)).use { zos ->
+                zos.putNextEntry(ZipEntry("java/lang/ClassLoader.class"))
+                zos.write(raw)
+                zos.closeEntry()
+            }
+            val stubJar = CorePlatformProvider.ensureJdkCompatStubs(androidJar, dir.resolve("cache"))
+            assertNotNull(stubJar)
+            assertEquals(setOf("java/lang/ClassLoader.class"), entryNames(stubJar))
+            val stubBytes = ZipFile(stubJar.toFile()).use { z ->
+                z.getInputStream(z.getEntry("java/lang/ClassLoader.class")).use { it.readBytes() }
+            }
+            assertTrue(String(stubBytes, Charsets.ISO_8859_1).contains("getClassLoadingLock"))
+        }
+    }
 }

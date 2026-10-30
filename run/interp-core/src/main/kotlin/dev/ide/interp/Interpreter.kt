@@ -1563,6 +1563,21 @@ class Interpreter(
         fun receiver(): Any? =
             eval(call.receiver ?: throw InterpreterException("`$name` has no receiver"), env)
         return when {
+            // `println()` / `println(message)` / `print(message)` — `@InlineOnly` in `kotlin.io.ConsoleKt`
+            // (inlines to `System.out.println` / `System.out.print`). Gated to non-source callees so a
+            // user's own `fun println(...)` is not hijacked.
+            name == "println" && call.dispatch == DispatchKind.TOP_LEVEL && call.callee !is ResolvedCallable.Source && args.size <= 1 -> {
+                if (args.isEmpty()) {
+                    System.out.println()
+                } else {
+                    System.out.println(eval(args[0].value, env))
+                }
+                Handled(Unit)
+            }
+            name == "print" && call.dispatch == DispatchKind.TOP_LEVEL && call.callee !is ResolvedCallable.Source && args.size == 1 -> {
+                System.out.print(eval(args[0].value, env))
+                Handled(Unit)
+            }
             // repeat(times) { index -> … }
             name == "repeat" && call.dispatch == DispatchKind.TOP_LEVEL && args.size == 2 -> {
                 val times = (eval(args[0].value, env) as? Number)?.toInt()
@@ -3913,7 +3928,7 @@ class Interpreter(
          *  suspend function with no reflectable synchronous form — modeled as an interruptible sleep under the
          *  coroutine [SuspendBridge]). */
         val INLINE_INTRINSIC_FACADES = setOf(
-            "kotlin.StandardKt", "kotlin.text.StringsKt", "kotlin.collections.CollectionsKt",
+            "kotlin.StandardKt", "kotlin.io.ConsoleKt", "kotlin.text.StringsKt", "kotlin.collections.CollectionsKt",
             "kotlin.collections.MapsKt", // MutableMap `+=`/`-=` (plusAssign/minusAssign) are @InlineOnly here
             // Arrays carry the SAME @InlineOnly HOFs (`find`/`sumOf`/`flatMapIndexed`/…) on their own facade; the
             // intrinsics dispatch by receiver shape ([forEachElement]/[elementListOrNull]), so an array receiver is

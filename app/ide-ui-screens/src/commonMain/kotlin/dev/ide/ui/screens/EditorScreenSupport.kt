@@ -8,12 +8,67 @@ import dev.ide.ui.backend.UiProjectResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-/** Breadcrumb fallback: module › the last few path segments, used when the caret isn't inside a declaration. */
+/**
+ * Breadcrumb fallback when the caret isn't inside an analyzer-resolved declaration:
+ * omits the project root title (already shown in [EditorTopBar]) and active tab filename (already shown
+ * in [TabsStrip]), and includes relative directory context plus the primary declaration/symbol in the file.
+ */
 internal fun breadcrumbFor(state: IdeUiState, file: OpenFile): List<String> {
+    val projectName = state.backend.project.name.trim()
     val module = state.backend.files.moduleNameForFile(file.path)
-    val segs = file.path.replace('\\', '/').split('/').filter { it.isNotEmpty() }
-    val tail = segs.takeLast(3)
-    return (listOfNotNull(module) + tail).distinct()
+        ?.takeIf { it.isNotBlank() && !it.equals(projectName, ignoreCase = true) }
+
+    val rootDir = state.tree.dirPath?.replace('\\', '/')?.trimEnd('/').orEmpty()
+    val fullPath = file.path.replace('\\', '/')
+    val relPath = if (rootDir.isNotEmpty() && fullPath.startsWith("$rootDir/")) {
+        fullPath.removePrefix("$rootDir/")
+    } else {
+        fullPath
+    }
+    val parentDirs = relPath.split('/')
+        .dropLast(1)
+        .filter { seg ->
+            seg.isNotEmpty() &&
+                !seg.equals(projectName, ignoreCase = true) &&
+                !seg.equals(module, ignoreCase = true) &&
+                seg !in setOf("src", "main", "kotlin", "java", "projects", "files", "0", "user", "data")
+        }
+        .takeLast(2)
+
+    val symbolCrumbs = extractPrimarySymbolCrumbs(file.text)
+    val combined = (listOfNotNull(module) + parentDirs + symbolCrumbs).distinct()
+    if (combined.isNotEmpty()) return combined
+
+    val fallbackParent = fullPath.split('/').dropLast(1).lastOrNull()
+        ?.takeIf { it.isNotEmpty() && !it.equals(projectName, ignoreCase = true) }
+    return listOfNotNull(
+        fallbackParent
+            ?: file.name.substringAfterLast('.', file.name).uppercase().takeIf { it.isNotBlank() }
+            ?: file.name
+    )
+}
+
+private val PRIMARY_TYPE_REGEX = Regex(
+    "(?:^|\\n)\\s*(?:@[\\w.]+(?:\\([^)]*\\))?\\s*)*(?:(?:public|private|internal|protected|open|abstract|final|sealed|data|value|inline|actual|expect)\\s+)*(?:class|struct|interface|object|enum|protocol|extension|actor|record)\\s+`?([A-Za-z_][\\w]*)`?",
+)
+private val PRIMARY_FUNC_REGEX = Regex(
+    "(?:^|\\n)\\s*(?:@[\\w.]+(?:\\([^)]*\\))?\\s*)*(?:(?:public|private|internal|protected|open|override|suspend|inline|static|mutating)\\s+)*(?:fun|func|def)\\s+`?([A-Za-z_][\\w]*)`?",
+)
+private val SWIFT_BODY_PROP_REGEX = Regex(
+    "(?:^|\\n)\\s*var\\s+(body)\\s*:\\s*some\\s+\\w+",
+)
+
+internal fun extractPrimarySymbolCrumbs(text: String): List<String> {
+    if (text.isBlank()) return emptyList()
+    val typeName = PRIMARY_TYPE_REGEX.find(text)?.groupValues?.getOrNull(1)
+    val swiftBody = SWIFT_BODY_PROP_REGEX.find(text)?.groupValues?.getOrNull(1)
+    val funcName = PRIMARY_FUNC_REGEX.find(text)?.groupValues?.getOrNull(1)
+    return when {
+        typeName != null && swiftBody != null && funcName == null -> listOf(typeName, swiftBody)
+        typeName != null -> listOf(typeName)
+        funcName != null -> listOf(funcName)
+        else -> emptyList()
+    }
 }
 
 /** The first Java/Kotlin source root's directory in the tree (depth-first), or null if there is none. */

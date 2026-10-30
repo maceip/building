@@ -2,6 +2,7 @@ package fragments.components.agentelements
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -26,6 +27,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import fragments.agentui.AgentUiTheme
 import fragments.components.ReactUiPalette
 import fragments.components.ReactUiPalettes
 import fragments.components.UiButton
@@ -108,9 +110,13 @@ fun ToolRowBase(
 
 @Composable
 fun ToolApprovalFooter(onApprove: () -> Unit, onDeny: () -> Unit, palette: ReactUiPalette = ReactUiPalettes.AgentElementsDark) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        UiButton("Approve", onApprove, palette, primary = true)
-        UiButton("Deny", onDeny, palette)
+    val isMobile = AgentUiTheme.sizing.isMobile
+    Row(
+        modifier = if (isMobile) Modifier.fillMaxWidth() else Modifier,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        UiButton("Approve", onApprove, palette, modifier = if (isMobile) Modifier.weight(1f) else Modifier, primary = true)
+        UiButton("Deny", onDeny, palette, modifier = if (isMobile) Modifier.weight(1f) else Modifier)
     }
 }
 
@@ -131,7 +137,13 @@ fun BashTool(tool: AgentToolCall.Bash, onApproval: (Boolean) -> Unit = {}, palet
 
 @Composable
 fun BashToolTerminalCard(command: String, output: String, exitCode: Int?, palette: ReactUiPalette = ReactUiPalettes.AgentElementsDark) {
-    Column(Modifier.fillMaxWidth().background(palette.background, RoundedCornerShape(6.dp)).padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(
+        Modifier.fillMaxWidth()
+            .background(palette.background, RoundedCornerShape(6.dp))
+            .horizontalScroll(rememberScrollState())
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         UiText("$ $command", palette, mono = true, size = 12)
         if (output.isNotBlank()) UiText(output, palette, mono = true, size = 12)
         if (exitCode != null) UiText("Exit $exitCode", palette.copy(text = if (exitCode == 0) palette.success else palette.danger), size = 11)
@@ -155,7 +167,12 @@ fun EditTool(tool: AgentToolCall.Edit, onApproval: (Boolean) -> Unit = {}, palet
 
 @Composable
 fun EditToolDiffCard(lines: List<String>, palette: ReactUiPalette = ReactUiPalettes.AgentElementsDark) {
-    Column(Modifier.fillMaxWidth().background(palette.background, RoundedCornerShape(6.dp)).padding(vertical = 4.dp)) {
+    Column(
+        Modifier.fillMaxWidth()
+            .background(palette.background, RoundedCornerShape(6.dp))
+            .horizontalScroll(rememberScrollState())
+            .padding(vertical = 4.dp),
+    ) {
         lines.forEach { line ->
             val tint = when {
                 line.startsWith("+") -> palette.success.copy(alpha = 0.16f)
@@ -263,10 +280,16 @@ fun PlanTool(tool: AgentToolCall.Plan, onApproval: (Boolean) -> Unit = {},
                     overflow = TextOverflow.Ellipsis,
                     style = TextStyle(color = palette.muted, fontSize = 13.sp, lineHeight = 19.sp))
                 if (approved) UiText("Approved", palette.copy(text = palette.success), size = 12)
-                else UiButton(document.approveLabel, {
-                    approvedLocally = true
-                    onApproval(true)
-                }, palette, primary = true)
+                else UiButton(
+                    document.approveLabel,
+                    {
+                        approvedLocally = true
+                        onApproval(true)
+                    },
+                    palette,
+                    modifier = if (AgentUiTheme.sizing.isMobile) Modifier.fillMaxWidth() else Modifier,
+                    primary = true,
+                )
             }
         }
         return

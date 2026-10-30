@@ -26,6 +26,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
+import fragments.chrome.AgentUiBaseTokens
+import fragments.components.cossInputElevation
+import fragments.components.cossSurfaceElevation
 
 /** A host-defined slash action edited as a durable conversation part before it is sent. */
 @Immutable
@@ -60,13 +63,20 @@ fun AgentStructuredCommandCard(
     modifier: Modifier = Modifier,
     palette: AgentUiPalette = AgentUiTheme.palette,
 ) {
+    val sizing = AgentUiTheme.sizing
     var agentMenuOpen by remember(draft.command) { mutableStateOf(false) }
     val targetName = agents.firstOrNull { it.id == draft.agentId }?.name ?: draft.agentId.value
     val canSend = draft.fields.isNotEmpty() && draft.fields.all { !it.required || it.value.isNotBlank() }
     Column(
-        modifier.fillMaxWidth().background(palette.surface)
+        modifier
+            .fillMaxWidth()
+            .cossSurfaceElevation(
+                palette = palette,
+                radius = if (sizing.isMobile) 16.dp else palette.toolRadius,
+            )
+            .padding(if (sizing.isMobile) 14.dp else 12.dp)
             .testTag("agent-structured-command-${draft.command}"),
-        verticalArrangement = Arrangement.spacedBy(9.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             StructuredText(draft.title, palette, Modifier.weight(1f), 15, FontWeight.SemiBold)
@@ -74,34 +84,81 @@ fun AgentStructuredCommandCard(
         }
         draft.fields.forEachIndexed { index, field ->
             Box(Modifier.fillMaxWidth().height(1.dp).background(palette.border))
-            Column(Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                StructuredText(field.label, palette.copy(text = palette.muted), size = 11)
-                Box(Modifier.fillMaxWidth()) {
-                    if (field.value.isEmpty()) StructuredText(field.hint, palette.copy(text = palette.muted),
-                        Modifier.padding(vertical = 2.dp), size = 13)
-                    BasicTextField(field.value, { value ->
-                        onChange(draft.copy(fields = draft.fields.toMutableList().also {
-                            it[index] = field.copy(value = value)
-                        }))
-                    }, Modifier.fillMaxWidth().testTag("agent-structured-field-${field.id}"),
-                        textStyle = TextStyle(color = palette.text, fontSize = 13.sp),
-                        cursorBrush = SolidColor(palette.accent), singleLine = false)
+            Column(
+                Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                StructuredText(field.label, palette.copy(text = palette.muted), size = 11, weight = FontWeight.Medium)
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (sizing.isMobile) {
+                                Modifier
+                                    .cossInputElevation(palette = palette, radius = AgentUiBaseTokens.RadiusControl)
+                                    .padding(horizontal = 10.dp, vertical = 9.dp)
+                            } else {
+                                Modifier
+                            },
+                        ),
+                ) {
+                    if (field.value.isEmpty()) {
+                        StructuredText(
+                            field.hint,
+                            palette.copy(text = palette.muted),
+                            Modifier.padding(vertical = if (sizing.isMobile) 0.dp else 2.dp),
+                            size = 13,
+                        )
+                    }
+                    BasicTextField(
+                        field.value,
+                        { value ->
+                            onChange(
+                                draft.copy(
+                                    fields = draft.fields.toMutableList().also {
+                                        it[index] = field.copy(value = value)
+                                    },
+                                ),
+                            )
+                        },
+                        Modifier.fillMaxWidth().testTag("agent-structured-field-${field.id}"),
+                        textStyle = TextStyle(color = palette.text, fontSize = (if (sizing.isMobile) 14 else 13).sp),
+                        cursorBrush = SolidColor(palette.accent),
+                        singleLine = false,
+                    )
                 }
             }
         }
-        Box {
-            AgentUiButton("To: $targetName ▾", { agentMenuOpen = true },
-                Modifier.testTag("agent-structured-target"), palette = palette)
+        Box(if (sizing.isMobile) Modifier.fillMaxWidth() else Modifier) {
+            AgentUiButton(
+                "To: $targetName ▾",
+                { agentMenuOpen = true },
+                Modifier
+                    .then(if (sizing.isMobile) Modifier.fillMaxWidth() else Modifier)
+                    .testTag("agent-structured-target"),
+                palette = palette,
+            )
             if (agentMenuOpen) Popup(onDismissRequest = { agentMenuOpen = false }) {
-                Column(Modifier.background(palette.surface).padding(6.dp)
-                    .testTag("agent-structured-target-menu")) {
+                Column(
+                    Modifier
+                        .cossSurfaceElevation(palette = palette, radius = AgentUiBaseTokens.RadiusCard)
+                        .padding(6.dp)
+                        .testTag("agent-structured-target-menu"),
+                ) {
                     agents.forEach { agent ->
-                        StructuredText(agent.name, palette,
-                            Modifier.fillMaxWidth().clickable {
-                                onChange(draft.copy(agentId = agent.id))
-                                agentMenuOpen = false
-                            }.padding(8.dp).testTag("agent-structured-target-${agent.id.value}"), size = 12)
+                        StructuredText(
+                            agent.name,
+                            palette,
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onChange(draft.copy(agentId = agent.id))
+                                    agentMenuOpen = false
+                                }
+                                .padding(horizontal = 10.dp, vertical = 9.dp)
+                                .testTag("agent-structured-target-${agent.id.value}"),
+                            size = 13,
+                        )
                     }
                 }
             }
@@ -109,13 +166,24 @@ fun AgentStructuredCommandCard(
         when {
             sending -> StructuredText("Sending…", palette.copy(text = palette.muted), size = 12)
             submitted -> StructuredText("Sent to $targetName", palette.copy(text = palette.success), size = 12)
-            canSend -> AgentUiButton("Send request", { onSend(draft) },
-                Modifier.testTag("agent-structured-send"), primary = true, palette = palette)
+            canSend -> AgentUiButton(
+                "Send request",
+                { onSend(draft) },
+                Modifier
+                    .then(if (sizing.isMobile) Modifier.fillMaxWidth() else Modifier)
+                    .testTag("agent-structured-send"),
+                primary = true,
+                palette = palette,
+            )
         }
     }
 }
 
 @Composable
-private fun StructuredText(value: String, palette: AgentUiPalette, modifier: Modifier = Modifier,
-    size: Int = 13, weight: FontWeight = FontWeight.Normal) =
-    BasicText(value, modifier, style = TextStyle(color = palette.text, fontSize = size.sp, fontWeight = weight))
+private fun StructuredText(
+    value: String,
+    palette: AgentUiPalette,
+    modifier: Modifier = Modifier,
+    size: Int = 13,
+    weight: FontWeight = FontWeight.Normal,
+) = BasicText(value, modifier, style = TextStyle(color = palette.text, fontSize = size.sp, fontWeight = weight))

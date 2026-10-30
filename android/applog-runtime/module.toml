@@ -10,5 +10,10 @@ output = "build/codeassist/classes"
 scope = "IMPLEMENTATION"
 java = ["src/main/java"]
 
+[sourceSets.test]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/test/java"]
+
 [dependencies]
 compileOnly = ["com.google.android:android:4.1.1.4"]
+testImplementation = [{ platform = "org.junit:junit-bom:5.11.4" }, "org.json:json:20080701", "com.google.android:android:4.1.1.4"]

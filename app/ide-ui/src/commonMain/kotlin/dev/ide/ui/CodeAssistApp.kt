@@ -10,6 +10,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
@@ -163,12 +164,16 @@ fun CodeAssistApp(
                     Modifier.fillMaxSize().onPreviewKeyEvent(AppKeys::onPreviewKey).onKeyEvent(AppKeys::onKey),
                     color = MaterialTheme.colorScheme.background,
                 ) {
+                    val rootInsets = if (dev.ide.ui.platform.LocalWindowTitleBar.current != null) {
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
+                    } else {
+                        WindowInsets.safeDrawing
+                    }
                     Column(
                         Modifier
                             .fillMaxSize()
-                            .windowInsetsPadding(
-                                WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
-                            )
+                            .windowInsetsPadding(rootInsets)
+                            .consumeWindowInsets(rootInsets)
                     ) {
                         // Desktop with a custom title bar: the title strip for screens that draw none of their own.
                         WindowTitleStrip(title = "building")

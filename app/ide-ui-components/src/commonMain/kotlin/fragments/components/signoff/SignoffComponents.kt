@@ -9,6 +9,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,6 +39,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import fragments.agentui.AgentUiTheme
 import fragments.components.ReactUiPalette
 import fragments.components.ReactUiPalettes
 import fragments.components.UiButton
@@ -154,23 +157,55 @@ fun ApprovalCard(
             if (editable) UiInput(editedInput, { editedInput = it }, "Arguments", palette)
             else if (input.isNotBlank()) JsonView(input, palette)
             if (current == ApprovalStatus.Pending) {
+                val isMobile = AgentUiTheme.sizing.isMobile
                 UiInput(reason, { reason = it }, "Reason for denying (optional)", palette)
-                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    decisions.forEach { choice ->
-                        val allowed = choice.startsWith("allow")
-                        val label = when (choice) {
-                            "allow-once" -> "Approve once"
-                            "allow-session" -> "Approve for session"
-                            "allow-always" -> "Always approve"
-                            "deny-always" -> "Always deny"
-                            else -> "Deny"
-                        }
-                        UiButton(label, {
-                            if (localStatus == ApprovalStatus.Pending) {
-                                localStatus = if (allowed) ApprovalStatus.Approved else ApprovalStatus.Denied
-                                onDecide(ApprovalChoice(choice, if (allowed) null else reason.ifBlank { null }, if (allowed) editedInput else null))
+                if (isMobile) {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        decisions.forEach { choice ->
+                            val allowed = choice.startsWith("allow")
+                            val label = when (choice) {
+                                "allow-once" -> "Approve once"
+                                "allow-session" -> "Approve for session"
+                                "allow-always" -> "Always approve"
+                                "deny-always" -> "Always deny"
+                                else -> "Deny"
                             }
-                        }, palette, primary = allowed && choice == "allow-once")
+                            UiButton(
+                                label,
+                                {
+                                    if (localStatus == ApprovalStatus.Pending) {
+                                        localStatus = if (allowed) ApprovalStatus.Approved else ApprovalStatus.Denied
+                                        onDecide(ApprovalChoice(choice, if (allowed) null else reason.ifBlank { null }, if (allowed) editedInput else null))
+                                    }
+                                },
+                                palette,
+                                modifier = Modifier.fillMaxWidth(),
+                                primary = allowed && choice == "allow-once",
+                            )
+                        }
+                    }
+                } else {
+                    @OptIn(ExperimentalLayoutApi::class)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp),
+                    ) {
+                        decisions.forEach { choice ->
+                            val allowed = choice.startsWith("allow")
+                            val label = when (choice) {
+                                "allow-once" -> "Approve once"
+                                "allow-session" -> "Approve for session"
+                                "allow-always" -> "Always approve"
+                                "deny-always" -> "Always deny"
+                                else -> "Deny"
+                            }
+                            UiButton(label, {
+                                if (localStatus == ApprovalStatus.Pending) {
+                                    localStatus = if (allowed) ApprovalStatus.Approved else ApprovalStatus.Denied
+                                    onDecide(ApprovalChoice(choice, if (allowed) null else reason.ifBlank { null }, if (allowed) editedInput else null))
+                                }
+                            }, palette, primary = allowed && choice == "allow-once")
+                        }
                     }
                 }
             } else UiText(if (current == ApprovalStatus.Approved) "Approved" else "Denied", palette.copy(text = if (current == ApprovalStatus.Approved) palette.success else palette.danger))
@@ -217,10 +252,14 @@ fun ReasoningBase(text: String, defaultExpanded: Boolean = false, palette: React
     UiDisclosure("Reasoning", expanded, { expanded = !expanded }, palette) { UiText(text, palette, Modifier.padding(start = 16.dp), muted = true) }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Sources(items: List<SignoffSource>, onOpen: (SignoffSource) -> Unit = {},
     palette: ReactUiPalette = ReactUiPalettes.AgentElementsDark, startIndex: Int = 1) {
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         items.forEachIndexed { index, source -> UiButton("${startIndex + index} ${source.title}", { onOpen(source) }, palette) }
     }
 }
@@ -281,7 +320,11 @@ fun RunMeter(
                 if (live) append(" · Live")
             }
             UiText(heading, palette, weight = FontWeight.SemiBold)
-            Row(horizontalArrangement = Arrangement.spacedBy(15.dp)) { items.forEach { UiText(it, palette, mono = true, size = 12) } }
+            @OptIn(ExperimentalLayoutApi::class)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(15.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) { items.forEach { UiText(it, palette, mono = true, size = 12) } }
             if (input != null && output != null && input + output > 0) {
                 val fraction = (input.toFloat() / (input + output)).coerceIn(0.001f, 0.999f)
                 Row(Modifier.fillMaxWidth().background(palette.subtle, RoundedCornerShape(4.dp))) {
@@ -293,7 +336,13 @@ fun RunMeter(
             if (usage?.cacheReadTokens != null && input != null && input > 0) UiText("Cache hit ${(usage.cacheReadTokens * 100 / input)}%", palette, muted = true, size = 12)
             if (usage?.reasoningTokens != null) UiText("Reasoning ${usage.reasoningTokens} tokens", palette, muted = true, size = 12)
         }
-    } else Row(horizontalArrangement = Arrangement.spacedBy(11.dp)) { items.forEach { UiText(it, palette, mono = true, size = 12) } }
+    } else {
+        @OptIn(ExperimentalLayoutApi::class)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(11.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) { items.forEach { UiText(it, palette, mono = true, size = 12) } }
+    }
 }
 
 @Composable

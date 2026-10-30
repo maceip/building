@@ -6,11 +6,17 @@ name = "project-model-api"
 languageLevel = "JAVA_17"
 output = "build/codeassist/classes"
 
-[sourceSets.main]
+[sourceSets.commonMain]
 scope = "IMPLEMENTATION"
-java = ["src/main/kotlin"]
+java = ["src/commonMain/kotlin"]
+
+[sourceSets.jvmMain]
+scope = "IMPLEMENTATION"
+java = ["src/jvmMain/kotlin"]
 
 [dependencies]
-api = [{ module = "vfs-api" }, { module = "platform-core" }]
+api = [{ module = "model-api" }, { module = "vfs-api" }, { module = "platform-core" }]
 implementation = ["kotlin-stdlib"]
-testImplementation = [{ platform = "org.junit:junit-bom:5.11.4" }, "org.jetbrains.kotlin:kotlin-test:2.4.0", { module = "test-support" }]
+
+[kotlin]
+commonSourceRoots = ["src/commonMain/kotlin"]

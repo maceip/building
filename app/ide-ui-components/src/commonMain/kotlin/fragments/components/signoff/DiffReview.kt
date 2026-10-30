@@ -65,6 +65,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import fragments.agentui.AgentUiTheme
 import fragments.components.ReactUiPalette
 import fragments.components.ReactUiPalettes
 import fragments.components.UiButton
@@ -740,7 +741,10 @@ fun DiffReview(
                             else if (viewed) UiText("Viewed", palette, muted = true, size = 12)
                         }
                         if (!readOnly || (collapseViewed && viewed)) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                verticalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
                                 if (!readOnly && reviewItemIds(row.file).isNotEmpty()) {
                                     UiButton("Reject file", { decideFile(row.file, HunkDecision.Rejected) }, palette)
                                     UiButton("Accept file", { decideFile(row.file, HunkDecision.Accepted) }, palette)
@@ -801,7 +805,10 @@ fun DiffReview(
                                 }.semantics { selected = activeItemId == row.hunk.id }
                                     .testTag("diff-review-hunk-${row.hunk.id}"),
                                 muted = true, size = 12, mono = true)
-                            if (!readOnly) Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (!readOnly) FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
                                 UiButton("Comment hunk", {
                                     beginComment(CommentDraft(row.fileId,
                                         document?.files?.firstOrNull { it.id == row.fileId }?.newPath ?: row.fileId,
@@ -816,8 +823,11 @@ fun DiffReview(
                                     modifier = Modifier.semantics { selected = decision == HunkDecision.Rejected },
                                     primary = decision == HunkDecision.Rejected)
                             }
-                            if (!readOnly && activeSelection != null) Row(horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                verticalAlignment = Alignment.CenterVertically) {
+                            if (!readOnly && activeSelection != null) FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                itemVerticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 UiText("${activeSelection.to - activeSelection.from + 1} ${if (activeSelection.to == activeSelection.from) "line" else "lines"} selected",
                                     palette, muted = true, size = 12)
                                 UiButton("Comment selected lines", {
@@ -928,15 +938,19 @@ fun DiffReview(
             }
         }
         if (submissionError != null) UiText(submissionError!!, palette, size = 12)
-        if (!readOnly) UiButton(
-            if (document == null) "Comparing…" else if (submitting) "Submitting…" else
-                "Apply ${document.files.sumOf { file -> reviewItemIds(file).count { currentDecisions[it] == HunkDecision.Accepted } }} of ${document.files.sumOf { reviewItemIds(it).size }}",
-            ::submitReview,
-            palette,
-            primary = true,
-            enabled = document != null && !submitted && !submitting &&
-                (onSubmit != null || onSubmitAsync != null),
-        )
+        if (!readOnly) {
+            val isMobile = AgentUiTheme.sizing.isMobile
+            UiButton(
+                if (document == null) "Comparing…" else if (submitting) "Submitting…" else
+                    "Apply ${document.files.sumOf { file -> reviewItemIds(file).count { currentDecisions[it] == HunkDecision.Accepted } }} of ${document.files.sumOf { reviewItemIds(it).size }}",
+                ::submitReview,
+                palette,
+                modifier = if (isMobile) Modifier.fillMaxWidth() else Modifier,
+                primary = true,
+                enabled = document != null && !submitted && !submitting &&
+                    (onSubmit != null || onSubmitAsync != null),
+            )
+        }
     }
 }
 
@@ -944,6 +958,7 @@ fun DiffReview(
 private fun DiffReviewLine(line: DiffLine, palette: ReactUiPalette, onComment: (() -> Unit)? = null,
     onSelect: ((Boolean) -> Unit)? = null, selected: Boolean = false,
     selectionSide: DiffCommentSide = DiffCommentSide.New) {
+    val sizing = AgentUiTheme.sizing
     val tint = when (line.type) {
         DiffLineType.Added -> palette.success.copy(alpha = 0.15f)
         DiffLineType.Deleted -> palette.danger.copy(alpha = 0.15f)
@@ -954,7 +969,7 @@ private fun DiffReviewLine(line: DiffLine, palette: ReactUiPalette, onComment: (
     var commentFocused by remember { mutableStateOf(false) }
     val selectionFocusRequester = remember(line.id, selectionSide) { FocusRequester() }
     fun selectModifier(side: DiffCommentSide, number: Int?): Modifier {
-        val base = Modifier.width(30.dp)
+        val base = Modifier.width(if (sizing.isMobile) 34.dp else 30.dp)
         if (onSelect == null || side != selectionSide || number == null) return base
         fun select(extend: Boolean) {
             onSelect(extend)
@@ -983,7 +998,7 @@ private fun DiffReviewLine(line: DiffLine, palette: ReactUiPalette, onComment: (
         }
     }
     Row(Modifier.fillMaxWidth().background(if (selected) palette.accent.copy(alpha = 0.19f) else tint).hoverable(interaction)
-        .padding(horizontal = 6.dp, vertical = 2.dp),
+        .padding(horizontal = 6.dp, vertical = if (sizing.isMobile) 4.dp else 2.dp),
         verticalAlignment = Alignment.CenterVertically) {
         UiText("${line.oldLineNumber ?: " "}", palette, selectModifier(DiffCommentSide.Old, line.oldLineNumber),
             muted = true, mono = true, size = 12)
@@ -992,7 +1007,8 @@ private fun DiffReviewLine(line: DiffLine, palette: ReactUiPalette, onComment: (
         UiText(line.text, palette, Modifier.weight(1f), mono = true, size = 12)
         if (line.noNewline) UiText("no newline", palette, muted = true, size = 10)
         if (onComment != null) Box(
-            Modifier.size(22.dp).alpha(if (hovered || commentFocused) 1f else 0f)
+            Modifier.size(if (sizing.isMobile) 28.dp else 22.dp)
+                .alpha(if (sizing.isMobile || selected || hovered || commentFocused) 1f else 0f)
                 .onFocusChanged { commentFocused = it.isFocused }
                 .semantics {
                     contentDescription = "Comment on ${line.newLineNumber?.let { "new line $it" } ?: "old line ${line.oldLineNumber}"}"

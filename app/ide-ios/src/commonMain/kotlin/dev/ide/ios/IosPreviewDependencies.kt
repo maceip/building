@@ -32,7 +32,7 @@ internal class IosPreviewDependencies(
     projectRoot: String,
     private val fetcher: ArtifactFetcher = HttpArtifactFetcher(),
 ) {
-    private val cache = ResolverCache(projectRoot)
+    private val cache = ResolverCache(IosFiles.supportDir())
     private val resolver by lazy {
         MavenDependencyResolver(cache, ::IosVirtualFile, fetcher, variantRequest = VariantRequest.JVM)
     }

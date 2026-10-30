@@ -5,10 +5,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.ide.ui.StubBackend
@@ -17,15 +20,64 @@ import dev.ide.ui.backend.UiDiscoveredRepo
 import dev.ide.ui.backend.UiDiscoveryFeed
 import dev.ide.ui.backend.UiNorthStarBenchmark
 import dev.ide.ui.backend.UiPeerProject
+import dev.ide.ui.backend.UiScreenshotSourceTier
+import dev.ide.ui.backend.UiTrendingPeriod
 import dev.ide.ui.theme.CodeAssistTheme
 import org.jetbrains.skia.EncodedImageFormat
 import java.io.File
 import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
- * Snapshot test rendering the GitHub Explorer feed off-screen in both Dark and Light modes.
+ * Snapshot + interactive `runComposeUiTest` suite for `GitHubExplorerFeed` and `TrendingReposWidget`.
  */
 class GitHubExplorerSnapshot {
+
+    private val samplePeers = listOf(
+        UiPeerProject(
+            slug = "torvalds/subsurface",
+            name = "subsurface",
+            owner = "torvalds",
+            description = "Divelog program with native mobile support",
+            stars = 2400,
+            language = "C",
+            attributionText = "Created by @torvalds, whom @Chethan616 follows",
+            htmlUrl = "https://github.com/torvalds/subsurface",
+            relationKind = "FOLLOWED_PEER",
+            socialPathText = "Created by @torvalds, whom @Chethan616 follows",
+            relevanceScore = 92,
+            relevanceReason = "1st-hop followed peer"
+        ),
+        UiPeerProject(
+            slug = "coil-kt/coil",
+            name = "coil",
+            owner = "coil-kt",
+            description = "Image loading for Android and Compose Multiplatform",
+            stars = 10900,
+            language = "Kotlin",
+            attributionText = "Starred by @Chethan616",
+            htmlUrl = "https://github.com/coil-kt/coil",
+            relationKind = "AUTHOR_STARRED",
+            socialPathText = "Starred by @Chethan616",
+            relevanceScore = 96,
+            relevanceReason = "Starred by @Chethan616 · Same language (Kotlin)"
+        ),
+        UiPeerProject(
+            slug = "chrisbanes/haze",
+            name = "haze",
+            owner = "chrisbanes",
+            description = "Glassmorphism blur effect for Jetpack Compose",
+            stars = 3100,
+            language = "Kotlin",
+            attributionText = "2-hop network (@Chethan616 → @JakeWharton → @chrisbanes)",
+            htmlUrl = "https://github.com/chrisbanes/haze",
+            relationKind = "SECOND_DEGREE_PEER",
+            socialPathText = "2-hop network (@Chethan616 → @JakeWharton → @chrisbanes)",
+            relevanceScore = 89,
+            relevanceReason = "2-hop peer network"
+        )
+    )
 
     private val sampleFeed = UiDiscoveryFeed(
         trendingHero = listOf(
@@ -38,7 +90,11 @@ class GitHubExplorerSnapshot {
                 forks = 310,
                 language = "Kotlin",
                 htmlUrl = "https://github.com/Chethan616/ClearPDF",
+                homepageUrl = "https://clearpdf.app",
                 screenshotUrl = "https://raw.githubusercontent.com/Chethan616/ClearPDF/main/fastlane/metadata/android/en-US/images/phoneScreenshots/1.jpg",
+                screenshotSourceTier = UiScreenshotSourceTier.BUNDLED_BUILD_TIME,
+                starsInPeriod = 185,
+                trendingPeriod = UiTrendingPeriod.DAILY,
                 isZeroCloud = true,
                 isOfflineFirst = true,
                 usesCompose = true,
@@ -56,6 +112,9 @@ class GitHubExplorerSnapshot {
                 language = "Kotlin",
                 htmlUrl = "https://github.com/kushagrasinghx/BitChord",
                 screenshotUrl = "https://raw.githubusercontent.com/kushagrasinghx/BitChord/main/Banner.png",
+                screenshotSourceTier = UiScreenshotSourceTier.REPO_OR_WEBPAGE_SCREENSHOT,
+                starsInPeriod = 240,
+                trendingPeriod = UiTrendingPeriod.DAILY,
                 isZeroCloud = false,
                 isOfflineFirst = false,
                 usesCompose = true,
@@ -75,21 +134,18 @@ class GitHubExplorerSnapshot {
                 northStarUrl = "https://github.com/KRTirtho/Spotube"
             )
         ),
-        authorPeerPicks = listOf(
-            UiPeerProject(
-                slug = "torvalds/subsurface",
-                name = "subsurface",
-                owner = "torvalds",
-                description = "Divelog program with native mobile support",
-                stars = 2400,
-                language = "C",
-                attributionText = "Created by @torvalds, whom @antirez follows",
-                htmlUrl = "https://github.com/torvalds/subsurface"
-            )
-        )
+        authorPeerPicks = samplePeers,
+        period = UiTrendingPeriod.DAILY,
+        selectedLanguage = "kotlin",
+        isFromBuildBundle = true
     )
 
     private class DiscoveryStubBackend(val feedData: UiDiscoveryFeed) : StubBackend() {
+        var lastRequestedLanguage: String = "all"
+        var lastRequestedPeriod: UiTrendingPeriod = UiTrendingPeriod.DAILY
+        var localBuildPreviewCount: Int = 0
+        var crawledRelatedForOwner: String? = null
+
         private val mockScreenshotBytes: ByteArray by lazy {
             val surf = org.jetbrains.skia.Surface.makeRasterN32Premul(280, 130)
             val canvas = surf.canvas
@@ -100,11 +156,36 @@ class GitHubExplorerSnapshot {
 
         override val discovery: GitHubDiscoveryService = object : GitHubDiscoveryService {
             override suspend fun getFeed(topic: String, language: String, refresh: Boolean): UiDiscoveryFeed = feedData
+            override suspend fun getTrendingFeed(
+                language: String,
+                period: UiTrendingPeriod,
+                refresh: Boolean
+            ): UiDiscoveryFeed {
+                lastRequestedLanguage = language
+                lastRequestedPeriod = period
+                return feedData.copy(period = period, selectedLanguage = language)
+            }
+
+            override suspend fun getRelatedAndAuthorNetwork(
+                repo: UiDiscoveredRepo,
+                refresh: Boolean
+            ): List<UiPeerProject> {
+                crawledRelatedForOwner = repo.owner
+                return feedData.authorPeerPicks
+            }
+
+            override suspend fun resolveOrGenerateAppImage(
+                repo: UiDiscoveredRepo,
+                forceLocalBuild: Boolean
+            ): Pair<String, UiScreenshotSourceTier>? {
+                if (forceLocalBuild) localBuildPreviewCount++
+                return "local://built/${repo.slug}.png" to UiScreenshotSourceTier.LOCAL_BUILD_PREVIEW
+            }
+
             override suspend fun search(query: String): List<UiDiscoveredRepo> = feedData.trendingHero
             override suspend fun downloadScreenshot(url: String): String? = null
             override suspend fun loadScreenshotBytes(url: String): ByteArray? {
-                // Return bitmap for BitChord to test dynamic image decoding, null for others to test fallback
-                return if (url.contains("BitChord")) mockScreenshotBytes else null
+                return if (url.contains("BitChord") || url.startsWith("local://built/")) mockScreenshotBytes else null
             }
             override fun supported(): Boolean = true
         }
@@ -115,6 +196,94 @@ class GitHubExplorerSnapshot {
 
     @Test
     fun renderLight() = snapshot("github-explorer-light.png", dark = false)
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun testExplorerPeriodLanguageBuildPreviewAnd2HopNetworkControls() = runComposeUiTest {
+        val backend = DiscoveryStubBackend(sampleFeed)
+        var clonedRepoName: String? = null
+
+        setContent {
+            CodeAssistTheme(dark = true) {
+                GitHubExplorerFeed(
+                    backend = backend,
+                    onCloneAndOpen = { _, name -> clonedRepoName = name },
+                    initialFeed = sampleFeed
+                )
+            }
+        }
+
+        waitForIdle()
+
+        // Switch period to Weekly and Monthly and assert backend state transitions
+        onNodeWithTag("trending_period_weekly").performClick()
+        waitForIdle()
+        assertEquals(UiTrendingPeriod.WEEKLY, backend.lastRequestedPeriod)
+
+        onNodeWithTag("trending_period_monthly").performClick()
+        waitForIdle()
+        assertEquals(UiTrendingPeriod.MONTHLY, backend.lastRequestedPeriod)
+
+        // Switch language to Swift and assert backend state transition
+        onNodeWithTag("trending_lang_swift").performClick()
+        waitForIdle()
+        assertEquals("swift", backend.lastRequestedLanguage)
+
+        // Click on-demand "Build Preview" on the first hero card and assert Tier-1 local build is invoked
+        onNodeWithTag("hero_build_preview_chethan616-clearpdf").performClick()
+        waitForIdle()
+        assertTrue(backend.localBuildPreviewCount >= 1, "Clicking Build Preview must invoke resolveOrGenerateAppImage(forceLocalBuild = true)")
+
+        // Verify integrated README.md card and modal dialog
+        onNodeWithTag("readme_card_toggle_expand").performClick()
+        waitForIdle()
+        onNodeWithTag("hero_readme_chethan616-clearpdf").performClick()
+        waitForIdle()
+        onNodeWithTag("readme_dialog_close").performClick()
+        waitForIdle()
+        onNodeWithTag("explorer_app_readme_button").performClick()
+        waitForIdle()
+        onNodeWithTag("readme_dialog_close").performClick()
+        waitForIdle()
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun testTrendingReposWidgetPeriodLanguageAndCloneActions() = runComposeUiTest {
+        val backend = DiscoveryStubBackend(sampleFeed)
+        var clonedUrl: String? = null
+        var clonedName: String? = null
+
+        setContent {
+            CodeAssistTheme(dark = true) {
+                TrendingReposWidget(
+                    backend = backend,
+                    onCloneAndOpen = { url, name ->
+                        clonedUrl = url
+                        clonedName = name
+                    }
+                )
+            }
+        }
+
+        waitForIdle()
+
+        // Switch period to Weekly inside the widget
+        onNodeWithTag("widget_period_weekly").performClick()
+        waitForIdle()
+        assertEquals(UiTrendingPeriod.WEEKLY, backend.lastRequestedPeriod)
+
+        // Switch language to Python inside the widget
+        onNodeWithTag("widget_lang_python").performClick()
+        waitForIdle()
+        assertEquals("python", backend.lastRequestedLanguage)
+
+        // Click the first trending repo's Clone button in the widget
+        onNodeWithTag("widget_clone_chethan616-clearpdf").performClick()
+        waitForIdle()
+        assertEquals("ClearPDF", clonedName)
+        assertEquals("https://github.com/Chethan616/ClearPDF", clonedUrl)
+    }
 
     @OptIn(ExperimentalComposeUiApi::class)
     private fun snapshot(name: String, dark: Boolean) {

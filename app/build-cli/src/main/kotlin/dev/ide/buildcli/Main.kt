@@ -77,7 +77,7 @@ private fun assemble(options: Options): Int {
             ?: return report.noSuchTask(engine)
 
         report.start(taskId)
-        val unresolved = runBlocking { engine.resolveDependencies(options.resolveTimeoutMs) }
+        val unresolved = runBlocking { engine.resolveDependencies(options.resolveTimeoutMs, taskId) }
         if (unresolved.isNotEmpty()) {
             report.unresolved(unresolved)
             return EXIT_BUILD_FAILED

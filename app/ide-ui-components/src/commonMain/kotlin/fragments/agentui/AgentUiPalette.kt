@@ -24,4 +24,16 @@ data class AgentUiPalette(
     val userBubble: Color = accent,
     val userBubbleText: Color = accentText,
     val warning: Color = AgentUiBaseTokens.Dark.statusOrange,
-)
+) {
+    /** True when this palette represents a dark surface hierarchy. */
+    val isDark: Boolean
+        get() = (0.2126f * background.red + 0.7152f * background.green + 0.0722f * background.blue) < 0.35f
+
+    /** Theme-aware terminal/code block surface replacing legacy hardcoded hex colors. */
+    val codeBackground: Color
+        get() = if (isDark) Color(0xFF141517) else Color(0xFFF3F4F6)
+
+    /** Theme-aware terminal/code foreground text with WCAG AA contrast. */
+    val codeText: Color
+        get() = if (isDark) Color(0xFFE6E8EC) else Color(0xFF1F2124)
+}

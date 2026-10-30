@@ -171,6 +171,8 @@ private fun GroupHeader(
                 GroupKind.Interface -> "interface"
                 GroupKind.Object -> "object"
                 GroupKind.Enum -> "enum"
+                GroupKind.Struct -> "struct"
+                GroupKind.Extension -> "extension"
                 GroupKind.Companion -> null
             }
             if (kind != null) {

@@ -57,11 +57,34 @@ object GuiBridgeRuntime {
         val targetMod = targetModDir.resolve("aarch64-unknown-linux-android.swiftmodule")
 
         val filesRoot = installation.prefix.parent?.parent?.parent
+        val detectedPkg = runCatching {
+            var curr: Path? = installation.prefix
+            var pkg: String? = null
+            while (curr != null) {
+                val name = curr.fileName?.toString()
+                if (name == "ai.building.dev" || name == "dev.ide.android.dev") {
+                    pkg = name
+                    break
+                }
+                curr = curr.parent
+            }
+            pkg
+        }.getOrNull()
+        val pkgNames = listOfNotNull(detectedPkg, "ai.building.dev", "dev.ide.android.dev").distinct()
+        val dynamicCandidates = pkgNames.flatMap { pkg ->
+            listOf(
+                Path.of("/sdcard/Android/data/$pkg/files/codeassist/swiftui-sdk/android-aarch64"),
+                Path.of("/sdcard/Android/data/$pkg/files/codeassist/swiftui-sdk"),
+                Path.of("/sdcard/Android/data/$pkg/files/swiftui-sdk/android-aarch64"),
+                Path.of("/sdcard/Android/data/$pkg/files/swiftui-sdk"),
+                Path.of("/data/user/0/$pkg/files/developer-runtime/swiftui-sdk/android-aarch64"),
+                Path.of("/data/data/$pkg/files/developer-runtime/swiftui-sdk/android-aarch64"),
+            )
+        }
         val backupCandidates = listOfNotNull(
             filesRoot?.resolve("developer-runtime/swiftui-sdk/android-aarch64"),
             filesRoot?.resolve("developer-runtime/swiftui-sdk"),
-            Path.of("/sdcard/Android/data/dev.ide.android.dev/files/codeassist/swiftui-sdk/android-aarch64"),
-            Path.of("/sdcard/Android/data/dev.ide.android.dev/files/codeassist/swiftui-sdk"),
+        ) + dynamicCandidates + listOfNotNull(
             Path.of("/data/local/tmp/swiftui-sdk/android-aarch64"),
             Path.of("/data/local/tmp/swiftui-sdk"),
             Path.of(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk/android-aarch64"),
@@ -143,6 +166,10 @@ object GuiBridgeRuntime {
         "Darwin",
         "Glibc",
         "Android",
+        "AudioToolbox",
+        "AVFoundation",
+        "PhotosUI",
+        "WebKit",
     )
 
     internal val CUPERTINO_BRIDGE_PRELUDE = """
@@ -234,7 +261,20 @@ object GuiBridgeRuntime {
         public struct StrokeStyle: Sendable {
             public enum LineCap: Sendable { case round, butt, square }
             public enum LineJoin: Sendable { case round, miter, bevel }
-            public init(lineWidth: Double = 1, lineCap: LineCap = .butt, lineJoin: LineJoin = .miter, miterLimit: Double = 10, dash: [Double] = [], dashPhase: Double = 0) {}
+            public var lineWidth: Double
+            public var lineCap: LineCap
+            public var lineJoin: LineJoin
+            public var miterLimit: Double
+            public var dash: [Double]
+            public var dashPhase: Double
+            public init(lineWidth: Double = 1, lineCap: LineCap = .butt, lineJoin: LineJoin = .miter, miterLimit: Double = 10, dash: [Double] = [], dashPhase: Double = 0) {
+                self.lineWidth = lineWidth
+                self.lineCap = lineCap
+                self.lineJoin = lineJoin
+                self.miterLimit = miterLimit
+                self.dash = dash
+                self.dashPhase = dashPhase
+            }
         }
         public extension Circle {
             func trim(from: Double, to: Double) -> Self { self }
@@ -264,27 +304,564 @@ object GuiBridgeRuntime {
                 min(max(self, limits.lowerBound), limits.upperBound)
             }
         }
-        public enum ModuleTheme: Sendable {
-            case smartScan
-            public var gradient: LinearGradient {
-                LinearGradient(colors: [.blue, .cyan], startPoint: .leading, endPoint: .trailing)
+        public extension Angle {
+            var radians: Double {
+                get { degrees * .pi / 180.0 }
+                set { degrees = newValue * 180.0 / .pi }
+            }
+            init(radians: Double) {
+                self.init(degrees: radians * 180.0 / .pi)
+            }
+            static let zero = Angle(degrees: 0)
+        }
+
+        // Observation / @Observable fallback when OpenAppleMacrosServer is not loaded
+        // (@propertyWrapper public struct Observable fallback handled via @State / Observable protocol)
+        public protocol Observable: AnyObject {}
+
+        // UIKit & Foundation compatibility shims for Android / Cupertino Bridge
+        public final class UIScreen: @unchecked Sendable {
+            public static let main = UIScreen()
+            public var bounds: CGRect = CGRect(x: 0, y: 0, width: 390, height: 844)
+            public var scale: Double = 3.0
+            public var nativeBounds: CGRect = CGRect(x: 0, y: 0, width: 1170, height: 2532)
+            public init() {}
+        }
+
+        public struct UIColor: Equatable, Sendable {
+            public let red: Double
+            public let green: Double
+            public let blue: Double
+            public let alpha: Double
+            public init(red: Double, green: Double, blue: Double, alpha: Double = 1.0) {
+                self.red = red
+                self.green = green
+                self.blue = blue
+                self.alpha = alpha
+            }
+            public init(white: Double, alpha: Double = 1.0) {
+                self.red = white
+                self.green = white
+                self.blue = white
+                self.alpha = alpha
+            }
+            public static let systemBackground = UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
+            public static let secondarySystemBackground = UIColor(red: 0.95, green: 0.95, blue: 0.97, alpha: 1.0)
+            public static let tertiarySystemBackground = UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
+            public static let systemGroupedBackground = UIColor(red: 0.95, green: 0.95, blue: 0.97, alpha: 1.0)
+            public static let secondarySystemGroupedBackground = UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
+            public static let label = UIColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)
+            public static let secondaryLabel = UIColor(red: 0.24, green: 0.24, blue: 0.26, alpha: 0.6)
+            public static let tertiaryLabel = UIColor(red: 0.24, green: 0.24, blue: 0.26, alpha: 0.3)
+            public static let systemBlue = UIColor(red: 0.0, green: 0.48, blue: 1.0, alpha: 1.0)
+            public static let systemRed = UIColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1.0)
+            public static let systemGreen = UIColor(red: 0.20, green: 0.78, blue: 0.35, alpha: 1.0)
+            public static let systemOrange = UIColor(red: 1.0, green: 0.58, blue: 0.0, alpha: 1.0)
+            public static let systemYellow = UIColor(red: 1.0, green: 0.80, blue: 0.0, alpha: 1.0)
+            public static let systemPurple = UIColor(red: 0.69, green: 0.32, blue: 0.87, alpha: 1.0)
+            public static let systemPink = UIColor(red: 1.0, green: 0.18, blue: 0.33, alpha: 1.0)
+            public static let systemTeal = UIColor(red: 0.19, green: 0.69, blue: 0.78, alpha: 1.0)
+            public static let systemIndigo = UIColor(red: 0.35, green: 0.34, blue: 0.84, alpha: 1.0)
+            public static let systemGray = UIColor(red: 0.56, green: 0.56, blue: 0.58, alpha: 1.0)
+            public static let systemGray2 = UIColor(red: 0.68, green: 0.68, blue: 0.70, alpha: 1.0)
+            public static let systemGray3 = UIColor(red: 0.78, green: 0.78, blue: 0.80, alpha: 1.0)
+            public static let systemGray4 = UIColor(red: 0.82, green: 0.82, blue: 0.84, alpha: 1.0)
+            public static let systemGray5 = UIColor(red: 0.90, green: 0.90, blue: 0.92, alpha: 1.0)
+            public static let systemGray6 = UIColor(red: 0.95, green: 0.95, blue: 0.97, alpha: 1.0)
+            public static let clear = UIColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0)
+            public static let white = UIColor(white: 1.0)
+            public static let black = UIColor(white: 0.0)
+            public static let darkGray = UIColor(white: 0.333)
+            public static let lightGray = UIColor(white: 0.667)
+            public func withAlphaComponent(_ alpha: Double) -> UIColor {
+                UIColor(red: red, green: green, blue: blue, alpha: alpha)
             }
         }
-        public enum L10n {
-            public static func tr(_ zh: String, _ en: String, _ ru: String) -> String { en }
-        }
-        public enum FileSizeFormatter {
-            public static func shortFormat(_ size: UInt64) -> (value: String, unit: String) { ("1.2", "GB") }
-        }
-        public struct SpeechLanguageSuggestion: Equatable, Sendable {
-            public let localeIdentifier: String
-            public let languageName: String
-            public var localeName: String { languageName }
-            public init(localeIdentifier: String = "en-US", languageName: String = "English") {
-                self.localeIdentifier = localeIdentifier
-                self.languageName = languageName
+        public extension Color {
+            init(_ uiColor: UIColor) {
+                self.init(red: uiColor.red, green: uiColor.green, blue: uiColor.blue, opacity: uiColor.alpha)
+            }
+            init(uiColor: UIColor) {
+                self.init(red: uiColor.red, green: uiColor.green, blue: uiColor.blue, opacity: uiColor.alpha)
             }
         }
+
+        public class UIImage: @unchecked Sendable {
+            public let systemName: String?
+            public let named: String?
+            public var size: CGSize = CGSize(width: 24, height: 24)
+            public init?(systemName: String) {
+                self.systemName = systemName
+                self.named = nil
+            }
+            public init?(named: String) {
+                self.named = named
+                self.systemName = nil
+            }
+            public init?(data: Data) {
+                self.systemName = nil
+                self.named = nil
+            }
+            public init() {
+                self.systemName = nil
+                self.named = nil
+            }
+        }
+        public extension Image {
+            init(uiImage: UIImage) {
+                if let sys = uiImage.systemName {
+                    self.init(systemName: sys)
+                } else {
+                    self.init(uiImage.named ?? "photo")
+                }
+            }
+        }
+
+        public class UIFont: @unchecked Sendable {
+            public enum Weight: Sendable {
+                case ultraLight, thin, light, regular, medium, semibold, bold, heavy, black
+            }
+            public let pointSize: Double
+            public init(size: Double = 17.0) { self.pointSize = size }
+            public static func systemFont(ofSize size: Double, weight: Weight = .regular) -> UIFont { UIFont(size: size) }
+            public static func boldSystemFont(ofSize size: Double) -> UIFont { UIFont(size: size) }
+            public static func italicSystemFont(ofSize size: Double) -> UIFont { UIFont(size: size) }
+            public static func monospacedDigitSystemFont(ofSize size: Double, weight: Weight = .regular) -> UIFont { UIFont(size: size) }
+            public static func preferredFont(forTextStyle style: String) -> UIFont { UIFont(size: 17.0) }
+        }
+
+        open class UIView: @unchecked Sendable {
+            public var frame: CGRect
+            public var bounds: CGRect
+            public var backgroundColor: UIColor?
+            public var isHidden: Bool = false
+            public var alpha: Double = 1.0
+            public var subviews: [UIView] = []
+            public init(frame: CGRect = CGRect()) {
+                self.frame = frame
+                self.bounds = CGRect(origin: CGPoint(), size: frame.size)
+            }
+            open func addSubview(_ view: UIView) { subviews.append(view) }
+            open func layoutSubviews() {}
+            open func setNeedsLayout() {}
+            open func setNeedsDisplay() {}
+        }
+
+        open class UIViewController: @unchecked Sendable {
+            public var view: UIView = UIView()
+            public var title: String?
+            public var children: [UIViewController] = []
+            public init() {}
+            public init(nibName: String?, bundle: Any?) {}
+            open func viewDidLoad() {}
+            open func viewWillAppear(_ animated: Bool) {}
+            open func viewDidAppear(_ animated: Bool) {}
+            open func viewWillDisappear(_ animated: Bool) {}
+            open func viewDidDisappear(_ animated: Bool) {}
+            open func addChild(_ childController: UIViewController) { children.append(childController) }
+            open func present(_ viewControllerToPresent: UIViewController, animated flag: Bool, completion: (() -> Void)? = nil) {
+                completion?()
+            }
+            open func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
+                completion?()
+            }
+        }
+
+        open class UIHostingController<Content: View>: UIViewController, @unchecked Sendable {
+            public var rootView: Content
+            public init(rootView: Content) {
+                self.rootView = rootView
+                super.init()
+            }
+        }
+
+        open class UINavigationController: UIViewController, @unchecked Sendable {
+            public var viewControllers: [UIViewController] = []
+            public override init() { super.init() }
+            public init(rootViewController: UIViewController) {
+                self.viewControllers = [rootViewController]
+                super.init()
+            }
+            open func pushViewController(_ viewController: UIViewController, animated: Bool) {
+                viewControllers.append(viewController)
+            }
+            @discardableResult
+            open func popViewController(animated: Bool) -> UIViewController? {
+                guard viewControllers.count > 1 else { return nil }
+                return viewControllers.removeLast()
+            }
+        }
+
+        // UIViewRepresentable & UIViewControllerRepresentable shims
+        public protocol UIViewRepresentable: View {
+            associatedtype UIViewType = Any
+            typealias Context = UIViewRepresentableContext<Self>
+            func makeUIView(context: Context) -> UIViewType
+            func updateUIView(_ uiView: UIViewType, context: Context)
+        }
+        public struct UIViewRepresentableContext<T> {
+            public let coordinator: Any? = nil
+            public let environment: EnvironmentValues = EnvironmentValues()
+            public init() {}
+        }
+        public extension UIViewRepresentable {
+            var body: some View { EmptyView() }
+            func makeUIView(context: Context) -> Any { () }
+            func updateUIView(_ uiView: Any, context: Context) {}
+        }
+
+        public protocol UIViewControllerRepresentable: View {
+            associatedtype UIViewControllerType = UIViewController
+            typealias Context = UIViewControllerRepresentableContext<Self>
+            func makeUIViewController(context: Context) -> UIViewControllerType
+            func updateUIViewController(_ uiViewController: UIViewControllerType, context: Context)
+        }
+        public struct UIViewControllerRepresentableContext<T> {
+            public let coordinator: Any? = nil
+            public let environment: EnvironmentValues = EnvironmentValues()
+            public init() {}
+        }
+        public extension UIViewControllerRepresentable {
+            var body: some View { EmptyView() }
+            func makeUIViewController(context: Context) -> UIViewController { UIViewController() }
+            func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
+        }
+
+        public final class UIApplication: @unchecked Sendable {
+            public static let shared = UIApplication()
+            public init() {}
+            public func open(_ url: URL, options: [String: Any] = [:], completionHandler completion: ((Bool) -> Void)? = nil) {
+                completion?(true)
+            }
+            public func canOpenURL(_ url: URL) -> Bool { true }
+            public func sendAction(_ action: Any, to target: Any?, from sender: Any?, for event: Any?) -> Bool { true }
+        }
+
+        public final class UIPasteboard: @unchecked Sendable {
+            public static let general = UIPasteboard()
+            public var string: String?
+            public var strings: [String]? {
+                get { string.map { [$0] } }
+                set { string = newValue?.first }
+            }
+            public init() {}
+        }
+
+        public class UIFeedbackGenerator: @unchecked Sendable {
+            public init() {}
+            public func prepare() {}
+        }
+        public final class UIImpactFeedbackGenerator: UIFeedbackGenerator, @unchecked Sendable {
+            public enum FeedbackStyle: Int, Sendable {
+                case light = 0, medium = 1, heavy = 2, soft = 3, rigid = 4
+            }
+            public let style: FeedbackStyle
+            public override init() {
+                self.style = .medium
+                super.init()
+            }
+            public init(style: FeedbackStyle) {
+                self.style = style
+                super.init()
+            }
+            public func impactOccurred(intensity: Double = 1.0) {}
+        }
+        public final class UINotificationFeedbackGenerator: UIFeedbackGenerator, @unchecked Sendable {
+            public enum FeedbackType: Int, Sendable {
+                case success = 0, warning = 1, error = 2
+            }
+            public override init() { super.init() }
+            public func notificationOccurred(_ notificationType: FeedbackType) {}
+        }
+        public final class UISelectionFeedbackGenerator: UIFeedbackGenerator, @unchecked Sendable {
+            public override init() { super.init() }
+            public func selectionChanged() {}
+        }
+
+        // ToggleStyle shim
+        public protocol ToggleStyle {
+            associatedtype Body: View
+            typealias Configuration = ToggleStyleConfiguration
+            @ViewBuilder func makeBody(configuration: Configuration) -> Body
+        }
+        public struct ToggleStyleConfiguration {
+            public struct Label: View {
+                public init() {}
+                public var body: some View { EmptyView() }
+            }
+            @Binding public var isOn: Bool
+            public var label: Label
+            public init(isOn: Binding<Bool> = .constant(false), label: Label = Label()) {
+                self._isOn = isOn
+                self.label = label
+            }
+        }
+        public extension ToggleStyle where Body == EmptyView {
+            func makeBody(configuration: Configuration) -> EmptyView { EmptyView() }
+        }
+        public extension View {
+            func toggleStyle<S: ToggleStyle>(_ style: S) -> some View { self }
+        }
+        public struct DefaultToggleStyle: ToggleStyle {
+            public init() {}
+            public func makeBody(configuration: Configuration) -> some View { EmptyView() }
+        }
+        public struct SwitchToggleStyle: ToggleStyle {
+            public init() {}
+            public func makeBody(configuration: Configuration) -> some View { EmptyView() }
+        }
+        public extension ToggleStyle where Self == DefaultToggleStyle {
+            static var `default`: DefaultToggleStyle { DefaultToggleStyle() }
+        }
+        public extension ToggleStyle where Self == SwitchToggleStyle {
+            static var `switch`: SwitchToggleStyle { SwitchToggleStyle() }
+        }
+
+        // 2D geometry, Path, Shape, Canvas, and Capsule shims
+        public struct CGPoint: Equatable, Sendable {
+            public var x: Double
+            public var y: Double
+            public init(x: Double = 0, y: Double = 0) { self.x = x; self.y = y }
+            public static let zero = CGPoint(x: 0, y: 0)
+        }
+        public struct CGSize: Equatable, Sendable {
+            public var width: Double
+            public var height: Double
+            public init(width: Double = 0, height: Double = 0) { self.width = width; self.height = height }
+            public static let zero = CGSize(width: 0, height: 0)
+        }
+        public struct CGRect: Equatable, Sendable {
+            public var origin: CGPoint
+            public var size: CGSize
+            public init(origin: CGPoint = CGPoint(), size: CGSize = CGSize()) { self.origin = origin; self.size = size }
+            public init(x: Double, y: Double, width: Double, height: Double) { self.origin = CGPoint(x: x, y: y); self.size = CGSize(width: width, height: height) }
+            public static let zero = CGRect(x: 0, y: 0, width: 0, height: 0)
+            public var width: Double { size.width }
+            public var height: Double { size.height }
+            public var midX: Double { origin.x + size.width / 2 }
+            public var midY: Double { origin.y + size.height / 2 }
+            public var minX: Double { origin.x }
+            public var minY: Double { origin.y }
+            public var maxX: Double { origin.x + size.width }
+            public var maxY: Double { origin.y + size.height }
+        }
+        public struct Path: View, Shape, Sendable {
+            private var _commands: [String] = []
+            public var svgPath: String { _commands.joined(separator: " ") }
+            public var isEmpty: Bool { _commands.isEmpty }
+            public init() {}
+            public init(_ callback: (inout Path) -> Void) {
+                var p = Path()
+                callback(&p)
+                self = p
+            }
+            public init(_ rect: CGRect) {
+                self.init()
+                addRect(rect)
+            }
+            public init(roundedRect rect: CGRect, cornerRadius: Double, style: RoundedCornerStyle = .continuous) {
+                self.init()
+                addRoundedRect(in: rect, cornerSize: CGSize(width: cornerRadius, height: cornerRadius), style: style)
+            }
+            public init(roundedRect rect: CGRect, cornerSize: CGSize, style: RoundedCornerStyle = .continuous) {
+                self.init()
+                addRoundedRect(in: rect, cornerSize: cornerSize, style: style)
+            }
+            public init(ellipseIn rect: CGRect) {
+                self.init()
+                addEllipse(in: rect)
+            }
+            public mutating func move(to p: CGPoint) {
+                _commands.append("M \(p.x) \(p.y)")
+            }
+            public mutating func addLine(to p: CGPoint) {
+                _commands.append("L \(p.x) \(p.y)")
+            }
+            public mutating func addLines(_ lines: [CGPoint]) {
+                guard let first = lines.first else { return }
+                move(to: first)
+                for pt in lines.dropFirst() {
+                    addLine(to: pt)
+                }
+            }
+            public mutating func addQuadCurve(to p: CGPoint, control: CGPoint) {
+                _commands.append("Q \(control.x) \(control.y) \(p.x) \(p.y)")
+            }
+            public mutating func addCurve(to p: CGPoint, control1: CGPoint, control2: CGPoint) {
+                _commands.append("C \(control1.x) \(control1.y) \(control2.x) \(control2.y) \(p.x) \(p.y)")
+            }
+            public mutating func addRect(_ rect: CGRect) {
+                _commands.append("M \(rect.minX) \(rect.minY) L \(rect.maxX) \(rect.minY) L \(rect.maxX) \(rect.maxY) L \(rect.minX) \(rect.maxY) Z")
+            }
+            public mutating func addRoundedRect(in rect: CGRect, cornerSize: CGSize, style: RoundedCornerStyle = .continuous) {
+                let rx = min(max(0, cornerSize.width), rect.width / 2)
+                let ry = min(max(0, cornerSize.height), rect.height / 2)
+                if rx <= 0 && ry <= 0 {
+                    addRect(rect)
+                    return
+                }
+                _commands.append(
+                    "M \(rect.minX + rx) \(rect.minY) " +
+                    "L \(rect.maxX - rx) \(rect.minY) " +
+                    "Q \(rect.maxX) \(rect.minY) \(rect.maxX) \(rect.minY + ry) " +
+                    "L \(rect.maxX) \(rect.maxY - ry) " +
+                    "Q \(rect.maxX) \(rect.maxY) \(rect.maxX - rx) \(rect.maxY) " +
+                    "L \(rect.minX + rx) \(rect.maxY) " +
+                    "Q \(rect.minX) \(rect.maxY) \(rect.minX) \(rect.maxY - ry) " +
+                    "L \(rect.minX) \(rect.minY + ry) " +
+                    "Q \(rect.minX) \(rect.minY) \(rect.minX + rx) \(rect.minY) Z"
+                )
+            }
+            public mutating func addEllipse(in rect: CGRect) {
+                let cx = rect.midX
+                let cy = rect.midY
+                let rx = rect.width / 2
+                let ry = rect.height / 2
+                let k = 0.5522847498307936
+                let ox = rx * k
+                let oy = ry * k
+                _commands.append(
+                    "M \(cx - rx) \(cy) " +
+                    "C \(cx - rx) \(cy - oy) \(cx - ox) \(cy - ry) \(cx) \(cy - ry) " +
+                    "C \(cx + ox) \(cy - ry) \(cx + rx) \(cy - oy) \(cx + rx) \(cy) " +
+                    "C \(cx + rx) \(cy + oy) \(cx + ox) \(cy + ry) \(cx) \(cy + ry) " +
+                    "C \(cx - ox) \(cy + ry) \(cx - rx) \(cy + oy) \(cx - rx) \(cy) Z"
+                )
+            }
+            public mutating func addArc(center: CGPoint, radius: Double, startAngle: Angle, endAngle: Angle, clockwise: Bool) {
+                let startRad = startAngle.radians
+                let endRad = endAngle.radians
+                let sx = center.x + radius * Foundation.cos(startRad)
+                let sy = center.y + radius * Foundation.sin(startRad)
+                let ex = center.x + radius * Foundation.cos(endRad)
+                let ey = center.y + radius * Foundation.sin(endRad)
+                if _commands.isEmpty {
+                    _commands.append("M \(sx) \(sy)")
+                } else {
+                    _commands.append("L \(sx) \(sy)")
+                }
+                let sweep = clockwise ? 0 : 1
+                let delta = abs(endRad - startRad)
+                let largeArc = delta > .pi ? 1 : 0
+                _commands.append("A \(radius) \(radius) 0 \(largeArc) \(sweep) \(ex) \(ey)")
+            }
+            public mutating func closeSubpath() {
+                _commands.append("Z")
+            }
+            public var body: some View {
+                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath)]) { EmptyView() }
+            }
+            public func fill(_ color: Color) -> some View {
+                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath), "fill": .int(color.argb)]) { EmptyView() }
+            }
+            public func stroke(_ color: Color, lineWidth: Double = 1) -> some View {
+                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath), "stroke": .int(color.argb), "strokeWidth": .double(lineWidth)]) { EmptyView() }
+            }
+            public func stroke(_ color: Color, style: StrokeStyle) -> some View {
+                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath), "stroke": .int(color.argb), "strokeWidth": .double(style.lineWidth)]) { EmptyView() }
+            }
+        }
+        public extension Shape {
+            var _shapeKind: String { "rectangle" }
+            var _cornerRadius: Double? { nil }
+            var body: some View { Rectangle() }
+            func fill(_ color: Color) -> some View { Rectangle().fill(color) }
+            func stroke(_ color: Color, lineWidth: Double = 1) -> some View { Rectangle().stroke(color, lineWidth: lineWidth) }
+            func stroke(_ color: Color, style: StrokeStyle) -> some View { Rectangle().stroke(color, lineWidth: style.lineWidth) }
+        }
+        public extension Capsule {
+            init(style: RoundedCornerStyle) { self.init() }
+        }
+        public struct GraphicsContext: Sendable {
+            public enum Shading: Sendable {
+                public static func color(_ color: Color) -> Shading { .color }
+                case color
+            }
+            public var opacity: Double = 1.0
+            public init() {}
+            public func fill(_ path: Path, with shading: Shading) {}
+            public func stroke(_ path: Path, with shading: Shading, lineWidth: Double = 1.0) {}
+            public func stroke(_ path: Path, with shading: Shading, style: StrokeStyle) {}
+        }
+        public struct Canvas<Symbols: View>: View {
+            public init(
+                opaque: Bool = false,
+                colorMode: Any? = nil,
+                rendersAsynchronously: Bool = false,
+                renderer: @escaping (inout GraphicsContext, CGSize) -> Void,
+                @ViewBuilder symbols: () -> Symbols
+            ) {}
+            public var body: some View { EmptyView() }
+        }
+        public extension Canvas where Symbols == EmptyView {
+            init(
+                opaque: Bool = false,
+                colorMode: Any? = nil,
+                rendersAsynchronously: Bool = false,
+                renderer: @escaping (inout GraphicsContext, CGSize) -> Void
+            ) {
+                self.init(opaque: opaque, colorMode: colorMode, rendersAsynchronously: rendersAsynchronously, renderer: renderer) {
+                    EmptyView()
+                }
+            }
+        }
+
+        // AudioToolbox shims
+        public typealias SystemSoundID = UInt32
+        public func AudioServicesPlaySystemSound(_ inSystemSoundID: SystemSoundID) {}
+        public func AudioServicesPlayAlertSound(_ inSystemSoundID: SystemSoundID) {}
+        public let kSystemSoundID_Vibrate: SystemSoundID = 4095
+
+        // AVFoundation shims
+        public class AVAudioPlayer: @unchecked Sendable {
+            public init() {}
+            public init(data: Data) throws {}
+            public init(contentsOf url: URL) throws {}
+            public func play() -> Bool { true }
+            public func pause() {}
+            public func stop() {}
+            public var numberOfLoops: Int = 0
+            public var volume: Float = 1.0
+        }
+        public class AVPlayer: @unchecked Sendable {
+            public init() {}
+            public init(url: URL) {}
+            public func play() {}
+            public func pause() {}
+        }
+        public struct VideoPlayer<VideoOverlay: View>: View {
+            public var body: some View { EmptyView() }
+            public init(player: Any? = nil, @ViewBuilder videoOverlay: () -> VideoOverlay = { EmptyView() }) {}
+        }
+        public extension VideoPlayer where VideoOverlay == EmptyView {
+            init(player: Any? = nil) { self.init(player: player, videoOverlay: { EmptyView() }) }
+        }
+
+        // PhotosUI shims
+        public struct PhotosPicker<Label: View>: View {
+            public var body: some View { EmptyView() }
+            public init(selection: Any, matching: Any? = nil, photoLibrary: Any? = nil, @ViewBuilder label: () -> Label) {}
+        }
+        public struct PhotosPickerItem: Sendable {
+            public init() {}
+            public func loadTransferable<T>(type: T.Type) async throws -> T? { nil }
+        }
+
+        // WebKit shims
+        public class WKWebView: @unchecked Sendable {
+            public init() {}
+            public init(frame: Any, configuration: Any) {}
+            public func load(_ request: Any) {}
+            public func loadHTMLString(_ string: String, baseURL: URL?) {}
+        }
+        public class WKWebViewConfiguration: @unchecked Sendable {
+            public init() {}
+        }
+        public class WKNavigation: @unchecked Sendable {
+            public init() {}
+        }
+        public protocol WKNavigationDelegate: AnyObject {}
+        public protocol WKUIDelegate: AnyObject {}
     """.trimIndent()
 
     internal fun stripPreviewMacros(text: String): String {
@@ -330,57 +907,12 @@ object GuiBridgeRuntime {
         return out.toString()
     }
 
-    private val BANNED_BRIDGE_DECL_TOKENS = listOf(
-        "NSViewRepresentable",
-        "UIViewRepresentable",
-        ": NSView",
-        ": UIView",
-        "CVDisplayLink",
-        "Canvas {",
-        "SynthesizedCursorGlyphRepresentable",
-        "CursorLabCanvas",
-        ": ToggleStyle",
-        "CursorToggleStyle",
-        "NSApplication",
-        "NSWindow",
-        "UIApplication",
-        "UIScreen",
-    )
-
-    internal fun dropUnsupportedDeclarations(text: String): String {
-        if (BANNED_BRIDGE_DECL_TOKENS.none { text.contains(it) }) return text
-        val header = ArrayList<String>()
-        val blocks = ArrayList<String>()
-        val cur = StringBuilder()
-        var depth = 0
-        var inBlock = false
-        for (line in text.lineSequence()) {
-            val trimmed = line.trim()
-            if (!inBlock && depth == 0 && trimmed.startsWith("import ")) {
-                header.add(line)
-                continue
-            }
-            cur.append(line).append('\n')
-            for (ch in line) {
-                if (ch == '{') {
-                    depth++
-                    inBlock = true
-                } else if (ch == '}') {
-                    depth--
-                }
-            }
-            if (inBlock && depth <= 0) {
-                val blockStr = cur.toString()
-                if (BANNED_BRIDGE_DECL_TOKENS.none { blockStr.contains(it) }) {
-                    blocks.add(blockStr)
-                }
-                cur.setLength(0)
-                depth = 0
-                inBlock = false
-            }
-        }
-        return (header.joinToString("\n") + "\n" + blocks.joinToString("\n")).trim() + "\n"
-    }
+    /**
+     * Preserves all `struct`/`class`/`enum`/`extension` declarations intact without deleting
+     * user types that reference UIKit/AppKit/Canvas symbols (which are provided by
+     * [CUPERTINO_BRIDGE_PRELUDE]).
+     */
+    internal fun dropUnsupportedDeclarations(text: String): String = text
 
     internal fun discoverInternalSwiftModules(projectRoot: Path): Set<String> {
         val mods = LinkedHashSet<String>()
@@ -398,14 +930,28 @@ object GuiBridgeRuntime {
         return mods
     }
 
-    internal fun sanitizeSwiftUiSource(text: String, internalModules: Set<String> = emptySet()): String {
+    internal fun sanitizeSwiftUiSource(
+        text: String,
+        internalModules: Set<String> = emptySet(),
+        hasMacroServer: Boolean = false,
+    ): String {
         var t = stripPreviewMacros(text)
         t = dropUnsupportedDeclarations(t)
         t = t.replace(Regex("""#if\s+os\(macOS\)"""), "#if false")
-        for (mod in internalModules + listOf("AppKit", "UIKit", "QuartzCore")) {
+        val sanitizedMods = internalModules + listOf(
+            "AppKit", "UIKit", "QuartzCore",
+            "AudioToolbox", "AVFoundation", "PhotosUI", "WebKit", "Observation"
+        )
+        for (mod in sanitizedMods) {
             t = t.replace(
                 Regex("""(?m)^\s*import\s+${Regex.escape(mod)}\b.*$"""),
                 "// [sanitized import $mod]",
+            )
+        }
+        if (!hasMacroServer) {
+            t = t.replace(
+                Regex("""@Observable\s+((?:(?:public|internal|private|fileprivate|final)\s+)*class\s+\w+)"""),
+                "/* @Observable */ $1",
             )
         }
         t = t.replace("private struct ", "struct ")
@@ -474,7 +1020,6 @@ object GuiBridgeRuntime {
                 ptype in setOf("Double", "CGFloat", "Float") -> "0.72"
                 ptype in setOf("Int", "UInt64", "Int64") -> "42"
                 ptype == "Bool" -> "true"
-                ptype == "SpeechLanguageSuggestion" -> "SpeechLanguageSuggestion()"
                 else -> ".init()"
             }
             "$pname: $argVal"
@@ -506,6 +1051,31 @@ object GuiBridgeRuntime {
             }
         }
         return count
+    }
+
+    /**
+     * Source files that a focused Cupertino preview must compile together with its candidate.
+     *
+     * The previous behaviour compiled only the single candidate file, which dropped every other
+     * declaration in the app target; a candidate that referenced a type declared elsewhere then
+     * failed with `cannot find type 'X' in scope` (e.g. a preview referencing a `ButtonType` enum
+     * declared in a sibling `Models/` file). Here we collect every repo source that has no
+     * unsupported imports, excluding the real `@main` app entry (the shadow main supplies its own)
+     * and build/test directories, so transitive module dependencies resolve.
+     */
+    internal fun focusedCompanionSources(
+        projectRoot: Path,
+        internalModules: Set<String>,
+    ): List<Path> {
+        return SwiftBuildSystem.findSwiftSourceFiles(projectRoot).filterNot { f ->
+            val s = f.toString().replace('\\', '/')
+            s.contains("/.build/") || s.contains("/Pods/") ||
+                s.contains("/Tests/") || s.contains("/UITests/") || s.contains("/UnitTests/")
+        }.filter { f ->
+            val raw = runCatching { f.readText() }.getOrDefault("")
+            countUnsupportedSwiftImports(raw, internalModules) == 0 &&
+                !Regex("""@main|struct\s+\w+\s*:\s*App\b""").containsMatchIn(raw)
+        }
     }
 
     /**
@@ -549,7 +1119,36 @@ object GuiBridgeRuntime {
             )
 
             val candidates = mainFiles.map { mainFile ->
-                val targetDir = mainFile.parent ?: projectRoot
+                var targetDir = mainFile.parent ?: projectRoot
+                var curr = mainFile.parent
+                while (curr != null && curr != projectRoot) {
+                    if (Files.exists(curr.resolve("Package.swift")) ||
+                        runCatching { Files.list(curr).use { s -> s.anyMatch { it.fileName.toString().endsWith(".xcodeproj") } } }.getOrDefault(false)) {
+                        targetDir = curr
+                        break
+                    }
+                    val p = curr.parent
+                    if (p != null && p != projectRoot) {
+                        val pName = p.fileName?.toString()?.lowercase()
+                        if (pName in setOf("experiments", "samples", "examples", "apps", "packages", "projects", "subprojects", "demos")) {
+                            targetDir = curr
+                            break
+                        }
+                        val hasCommonSubdirs = runCatching {
+                            Files.list(p).use { stream ->
+                                stream.anyMatch { dir ->
+                                    Files.isDirectory(dir) && dir.fileName?.toString()?.lowercase() in setOf(
+                                        "views", "models", "styles", "viewmodels", "components", "shared", "model", "view"
+                                    )
+                                }
+                            }
+                        }.getOrDefault(false)
+                        if (hasCommonSubdirs) {
+                            targetDir = p
+                        }
+                    }
+                    curr = p
+                }
                 val scopedFiles = iosFiles.filter { it.startsWith(targetDir) }
                 val unsupported = scopedFiles.sumOf { countUnsupportedSwiftImports(fileTexts[it].orEmpty(), internalModules) }
                 val hasSwiftUi = scopedFiles.any { fileTexts[it].orEmpty().contains("import SwiftUI") }
@@ -570,16 +1169,35 @@ object GuiBridgeRuntime {
         }
 
         // When no clean @main candidate exists (or in multi-target projects like NetNewsWire where @main is a Widget),
-        // pick the cluster of pure SwiftUI views
+        // pick the cluster of pure SwiftUI views and include all sibling/child directories
         if (pureSwiftUiFiles.isNotEmpty()) {
-            val byDir = pureSwiftUiFiles.groupBy { it.parent }
-            val bestGroup = byDir.values.maxByOrNull { group ->
-                group.count { f ->
+            val byTargetDir = pureSwiftUiFiles.groupBy { f ->
+                var d = f.parent ?: projectRoot
+                val p = d.parent
+                if (p != null && p != projectRoot) {
+                    val hasCommonSubdirs = runCatching {
+                        Files.list(p).use { stream ->
+                            stream.anyMatch { dir ->
+                                Files.isDirectory(dir) && dir.fileName?.toString()?.lowercase() in setOf(
+                                    "views", "models", "styles", "viewmodels", "components", "shared", "model", "view"
+                                )
+                            }
+                        }
+                    }.getOrDefault(false)
+                    if (hasCommonSubdirs) d = p
+                }
+                d
+            }
+            val bestTarget = byTargetDir.maxByOrNull { (_, files) ->
+                files.count { f ->
                     val t = fileTexts[f].orEmpty()
                     t.contains(": View") && (t.contains("About") || t.contains("Content") || t.contains("Main") || t.contains("App"))
-                } * 10 + group.size
+                } * 10 + files.size
+            }?.key
+            if (bestTarget != null) {
+                return iosFiles.filter { it.startsWith(bestTarget) }
             }
-            return bestGroup ?: pureSwiftUiFiles
+            return pureSwiftUiFiles
         }
 
         return iosFiles
@@ -627,25 +1245,120 @@ object GuiBridgeRuntime {
             copyAndSanitize(src, dst)
         }
 
-        // Also copy any sibling pure Swift model files in the same directory as the chosen SwiftUI views
-        val targetDirs = swiftUiFiles.mapNotNull { it.parent }.distinct()
-        for (dir in targetDirs) {
-            if (Files.isDirectory(dir)) {
-                Files.list(dir).use { stream ->
+        // Recursively discover and copy all .swift files across subdirectories
+        // (Models/, Views/, Styles/, ViewModels/, Components/) in the target directory tree
+        val targetRoots = swiftUiFiles.mapNotNull { f ->
+            var d = f.parent
+            while (d != null && d != projectRoot && d.parent != null && d.parent != projectRoot) {
+                val pName = d.fileName?.toString()?.lowercase()
+                if (pName in setOf("experiments", "samples", "examples", "apps", "packages", "projects", "subprojects", "demos")) {
+                    break
+                }
+                if (Files.exists(d.resolve("Package.swift")) ||
+                    runCatching { Files.list(d).use { s -> s.anyMatch { it.fileName.toString().endsWith(".xcodeproj") } } }.getOrDefault(false)) {
+                    break
+                }
+                d = d.parent
+            }
+            d ?: f.parent
+        }.distinct().ifEmpty { listOf(projectRoot) }
+
+        for (root in targetRoots) {
+            if (Files.isDirectory(root)) {
+                Files.walk(root).use { stream ->
                     stream.filter { f ->
-                        f.fileName.toString().endsWith(".swift") && f !in swiftUiFiles
-                    }.forEach { sibling ->
-                        val text = runCatching { sibling.readText() }.getOrDefault("")
-                        if (!text.contains("import WebKit") && !text.contains("import XCTest")) {
-                            val rel = runCatching { projectRoot.relativize(sibling) }.getOrDefault(sibling.fileName)
-                            val dst = shadow.resolve(rel.toString())
-                            copyAndSanitize(sibling, dst)
+                        Files.isRegularFile(f) &&
+                            f.fileName.toString().endsWith(".swift") &&
+                            !f.fileName.toString().endsWith("Main.swift")
+                    }.forEach { candidate ->
+                        val relStr = candidate.toString().replace('\\', '/')
+                        val isIgnored = relStr.contains("/.build/") || relStr.contains("/Pods/") ||
+                            relStr.contains("/Tests/") || relStr.contains("/UnitTests/") || relStr.contains("/UITests/") ||
+                            relStr.contains("/Mac/") || relStr.contains("/macOS/") || relStr.contains("/Watch/")
+                        if (!isIgnored) {
+                            val text = runCatching { candidate.readText() }.getOrDefault("")
+                            if (!text.contains("import XCTest") && !text.contains("exit(")) {
+                                val rel = runCatching { projectRoot.relativize(candidate) }.getOrDefault(candidate.fileName)
+                                val dst = shadow.resolve(rel.toString())
+                                if (!Files.exists(dst)) {
+                                    copyAndSanitize(candidate, dst)
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-        val hasBridgeEntry = copied.any { f ->
+
+        // Always write CupertinoBridgePrelude.swift into the shadow workspace so all shims
+        // and extensions (UIViewRepresentable, ToggleStyle, frameworks, etc.) are available
+        shadow.resolve("CupertinoBridgePrelude.swift").writeText(CUPERTINO_BRIDGE_PRELUDE + "\n")
+
+        // Copy .xcassets asset catalogs and image resources into shadow workspace
+        runCatching {
+            Files.walk(projectRoot, 6).use { stream ->
+                stream.filter { p ->
+                    Files.isDirectory(p) && p.fileName.toString().endsWith(".xcassets")
+                }.forEach { xcassetsDir ->
+                    val rel = runCatching { projectRoot.relativize(xcassetsDir) }.getOrDefault(xcassetsDir.fileName)
+                    val shadowXcassets = shadow.resolve(rel.toString())
+                    Files.walk(xcassetsDir).use { assetStream ->
+                        assetStream.forEach { src ->
+                            val subRel = xcassetsDir.relativize(src)
+                            val dst = shadowXcassets.resolve(subRel.toString())
+                            if (Files.isDirectory(src)) {
+                                Files.createDirectories(dst)
+                            } else {
+                                Files.createDirectories(dst.parent)
+                                Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING)
+                            }
+                        }
+                    }
+                    val topAssets = shadow.resolve("Assets.xcassets")
+                    if (!Files.exists(topAssets)) {
+                        Files.walk(xcassetsDir).use { assetStream ->
+                            assetStream.forEach { src ->
+                                val subRel = xcassetsDir.relativize(src)
+                                val dst = topAssets.resolve(subRel.toString())
+                                if (Files.isDirectory(src)) {
+                                    Files.createDirectories(dst)
+                                } else {
+                                    Files.createDirectories(dst.parent)
+                                    Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        runCatching {
+            for (root in targetRoots) {
+                if (Files.isDirectory(root)) {
+                    Files.walk(root, 4).use { stream ->
+                        stream.filter { p ->
+                            Files.isRegularFile(p) && p.fileName.toString().lowercase().let { n ->
+                                n.endsWith(".png") || n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".webp")
+                            } && !p.toString().contains("/.build/")
+                        }.forEach { imgFile ->
+                            val rel = runCatching { projectRoot.relativize(imgFile) }.getOrDefault(imgFile.fileName)
+                            val dst = shadow.resolve(rel.toString())
+                            if (!Files.exists(dst)) {
+                                Files.createDirectories(dst.parent)
+                                Files.copy(imgFile, dst, StandardCopyOption.REPLACE_EXISTING)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        val hasAppMain = copied.any { f ->
+            val text = runCatching { f.readText() }.getOrDefault("")
+            Regex("""@main\s+(?:public\s+|internal\s+)?struct\s+\w+\s*:\s*App\b""").containsMatchIn(text) ||
+                (text.contains("@main") && text.contains(": App"))
+        }
+        val hasBridgeEntry = hasAppMain || copied.any { f ->
             val text = runCatching { f.readText() }.getOrDefault("")
             text.contains("runPreview") || text.contains("ViewHost(")
         }
@@ -654,7 +1367,7 @@ object GuiBridgeRuntime {
             val expr = inferPreviewExpression(text)
             shadow.resolve("CupertinoShadowMain.swift").writeText(
                 """
-                $CUPERTINO_BRIDGE_PRELUDE
+                import SwiftUI
 
                 @main
                 struct CupertinoShadowMain {
@@ -686,7 +1399,6 @@ object GuiBridgeRuntime {
         ctx: TaskContext,
         buildCtx: BuildContext?,
         shadowRoot: Path? = null,
-        onPackageIpa: suspend () -> Unit = {},
     ): TaskResult {
         val compileRoot = shadowRoot ?: projectRoot
         val allSwiftFiles = SwiftBuildSystem.findSwiftSourceFiles(compileRoot)
@@ -698,7 +1410,11 @@ object GuiBridgeRuntime {
                 !text.contains("Swift TargetReady")
             } else true
         }.ifEmpty { allSwiftFiles }
-        val swiftUiFiles = selectSwiftUiTargetFiles(compileRoot, filteredFiles)
+        val swiftUiFiles = if (shadowRoot != null) {
+            filteredFiles
+        } else {
+            selectSwiftUiTargetFiles(compileRoot, filteredFiles)
+        }
 
         if (swiftUiFiles.isEmpty()) {
             return TaskResult.Failed("No Swift source files found in $compileRoot")
@@ -722,10 +1438,16 @@ object GuiBridgeRuntime {
             val archInclude = installation.prefix.resolve("include/aarch64-linux-android")
             val archLib = installation.prefix.resolve("lib/aarch64-linux-android")
             val hostBridgeSdk = Path.of(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk")
+            val macroServer = installation.prefix.resolve("bin/OpenAppleMacrosServer")
+            val hasMacroServer = Files.isRegularFile(macroServer) && Files.isExecutable(macroServer)
             fun buildSwiftcCommand(sources: List<Path>): List<String> = buildList {
                 add(swiftcBin.toString())
                 add("-parse-as-library")
                 for (f in sources) add(f.toString())
+                if (hasMacroServer) {
+                    add("-load-plugin-executable")
+                    add("$macroServer#ObservationMacros")
+                }
                 if (Files.isDirectory(swiftAndroidLib)) {
                     add("-sdk")
                     add(sdkRoot.toString())
@@ -764,13 +1486,12 @@ object GuiBridgeRuntime {
                     s.contains("/.build/") || s.contains("/Pods/") ||
                         s.contains("/Tests/") || s.contains("/UITests/") || s.contains("/UnitTests/")
                 }
-                val themeHelpers = repoSwiftFiles.filter { it.fileName.toString() == "Color+Theme.swift" }
                 data class FocusedCandidate(val score: Int, val file: Path, val sanitized: String)
                 val focusedCandidates = repoSwiftFiles.mapNotNull { p ->
                     val raw = runCatching { p.readText() }.getOrDefault("")
                     if (!raw.contains("import SwiftUI")) return@mapNotNull null
                     if (countUnsupportedSwiftImports(raw, internalModules) > 0) return@mapNotNull null
-                    val san = sanitizeSwiftUiSource(raw, internalModules)
+                    val san = sanitizeSwiftUiSource(raw, internalModules, hasMacroServer)
                     val hasView = Regex("""struct\s+\w+\s*:\s*View\b""").containsMatchIn(san)
                     val hasPreview = Regex("""struct\s+\w+\s*:\s*PreviewProvider\b""").containsMatchIn(san)
                     if (!hasView && !hasPreview) return@mapNotNull null
@@ -778,7 +1499,7 @@ object GuiBridgeRuntime {
                     val pathStr = p.toString().replace('\\', '/')
                     var score = 0
                     if (hasPreview) score += 50
-                    if (listOf("ContentView", "BrandFooter", "ProgressGauge", "TextInputView", "LanguageSuggestionBanner", "MenuLabel", "UnreadDividerView").any { fname.contains(it) }) {
+                    if (listOf("ContentView", "MainView", "RootView", "AppView").any { fname.contains(it) }) {
                         score += 100
                     }
                     if (listOf("/Shared/", "/DesignSystem/", "/Views/", "Previews").any { pathStr.contains(it) }) {
@@ -789,6 +1510,13 @@ object GuiBridgeRuntime {
                 }.sortedByDescending { it.score }
 
                 val focusedDir = outDir.parent?.resolve("focused") ?: compileRoot.resolve("focused")
+                // A focused preview must compile the candidate together with the rest of its module.
+                // Building only the single candidate file (the previous behaviour) dropped the other
+                // source files in the app target, so the candidate's references to types declared
+                // elsewhere failed with "cannot find type 'X' in scope". Compile every repo source
+                // that has no unsupported imports and is not the real @main app entry (the shadow main
+                // supplies its own @main), so transitive module dependencies resolve.
+                val safeCompanions = focusedCompanionSources(projectRoot, internalModules)
                 for (cand in focusedCandidates.take(8)) {
                     if (Files.isDirectory(focusedDir)) {
                         Files.walk(focusedDir).use { stream ->
@@ -797,21 +1525,27 @@ object GuiBridgeRuntime {
                     }
                     Files.createDirectories(focusedDir)
                     val srcs = ArrayList<Path>()
-                    val targetFile = focusedDir.resolve(cand.file.fileName.toString())
+                    val written = HashSet<String>()
+                    val targetName = cand.file.fileName.toString()
+                    written.add(targetName)
+                    val targetFile = focusedDir.resolve(targetName)
                     targetFile.writeText(cand.sanitized)
                     srcs.add(targetFile)
-                    for (th in themeHelpers) {
-                        if (th.parent == cand.file.parent) {
-                            val tp = focusedDir.resolve(th.fileName.toString())
-                            tp.writeText(sanitizeSwiftUiSource(runCatching { th.readText() }.getOrDefault(""), internalModules))
-                            srcs.add(tp)
-                        }
+                    for (comp in safeCompanions) {
+                        val name = comp.fileName.toString()
+                        if (!written.add(name)) continue
+                        val target = focusedDir.resolve(name)
+                        target.writeText(sanitizeSwiftUiSource(runCatching { comp.readText() }.getOrDefault(""), internalModules, hasMacroServer))
+                        srcs.add(target)
                     }
+                    val preludeFile = focusedDir.resolve("CupertinoBridgePrelude.swift")
+                    preludeFile.writeText(CUPERTINO_BRIDGE_PRELUDE + "\n")
+                    srcs.add(preludeFile)
                     val expr = inferPreviewExpression(cand.sanitized)
                     val mainFile = focusedDir.resolve("CupertinoShadowMain.swift")
                     mainFile.writeText(
                         """
-                        $CUPERTINO_BRIDGE_PRELUDE
+                        import SwiftUI
 
                         @main
                         struct CupertinoShadowMain {
@@ -847,44 +1581,6 @@ object GuiBridgeRuntime {
             )
         }
 
-        // Dual pipeline: the shim app is ready to spawn now. Kick the real iPhone/macOS
-        // rebuild (xtool, no shim) in the background so the interactive Run is not blocked.
-        val exportJob = kotlinx.coroutines.CoroutineScope(
-            Dispatchers.IO + kotlinx.coroutines.SupervisorJob(),
-        ).launch {
-            try {
-                ctx.buildLog.log(
-                    BuildLogEntry(
-                        "▸ Background export: rebuilding without shim for iPhone/macOS (xtool)…",
-                        BuildLogLevel.INFO,
-                    ),
-                )
-                onPackageIpa()
-                val ipa = projectRoot.resolve("xtool")
-                if (Files.isDirectory(ipa)) {
-                    Files.list(ipa).use { stream ->
-                        stream.filter { it.fileName.toString().endsWith(".ipa") }.forEach {
-                            ctx.buildLog.log(
-                                BuildLogEntry(
-                                    "✓ Real iOS archive ready for device/simulator: ${projectRoot.relativize(it)}",
-                                    BuildLogLevel.INFO,
-                                ),
-                            )
-                        }
-                    }
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                ctx.buildLog.log(
-                    BuildLogEntry(
-                        "Background xtool export failed: ${e.message ?: e.javaClass.simpleName}",
-                        BuildLogLevel.WARN,
-                    ),
-                )
-            }
-        }
-
         val runEnv = LinkedHashMap(env).apply {
             val swiftAndroidLib = installation.prefix.resolve("lib/swift/android")
             val curLd = get("LD_LIBRARY_PATH").orEmpty()
@@ -893,21 +1589,17 @@ object GuiBridgeRuntime {
             }
         }
 
-        try {
-            return execInteractiveBridge(
-                host = host,
-                command = listOf(outBin.toString()),
-                workingDir = compileRoot,
-                env = runEnv,
-                projectName = projectName,
-                displayCommand = "$pkgName",
-                stepName = ":swift:runCupertinoBridge",
-                ctx = ctx,
-                buildCtx = buildCtx,
-            )
-        } finally {
-            exportJob.cancel()
-        }
+        return execInteractiveBridge(
+            host = host,
+            command = listOf(outBin.toString()),
+            workingDir = compileRoot,
+            env = runEnv,
+            projectName = projectName,
+            displayCommand = "$pkgName",
+            stepName = ":swift:runCupertinoBridge",
+            ctx = ctx,
+            buildCtx = buildCtx,
+        )
     }
 
     /**
@@ -1832,619 +2524,5 @@ object GuiBridgeRuntime {
           QKeyEvent,
           NativeElement,
         };
-    """.trimIndent()
-
-    /**
-     * Returns true if the Python project at [root] declares or uses a GUI or Web UI framework
-     * (`gradio`, `streamlit`, `fastapi`, `flask`, `tkinter`, `PyQt`, `PySide`, `aiohttp`, `uvicorn`,
-     * `webview`, `pygame`, `dearpygui`, `nicegui`) or has a `webui/` or `gui/` directory.
-     */
-    fun isPythonGuiOrWebProject(root: Path): Boolean = runCatching {
-        if (!Files.isDirectory(root)) return false
-        for (dir in listOf("webui", "gui", "frontend", "apps/showcase_ui")) {
-            if (Files.isDirectory(root.resolve(dir))) return true
-        }
-        val guiKeywords = listOf(
-            "gradio", "streamlit", "fastapi", "flask", "tkinter", "pyqt", "pyside",
-            "aiohttp", "uvicorn", "webview", "pygame", "dearpygui", "nicegui",
-        )
-        for (manifest in listOf("pyproject.toml", "requirements.txt", "setup.py", "webui/requirements.txt", "backend/pyproject.toml")) {
-            val p = root.resolve(manifest)
-            if (Files.isRegularFile(p)) {
-                val lower = runCatching { p.readText().lowercase() }.getOrDefault("")
-                if (guiKeywords.any { lower.contains(it) }) return true
-            }
-        }
-        val excluded = setOf(".git", ".platform", "node_modules", ".venv", "venv", "__pycache__", "build", "dist")
-        Files.walk(root, 4).use { stream ->
-            stream.filter { p ->
-                Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) &&
-                    p.fileName.toString().endsWith(".py") &&
-                    root.relativize(p).none { seg -> seg.toString() in excluded }
-            }.limit(60).anyMatch { p ->
-                val text = runCatching { p.readText() }.getOrDefault("")
-                guiKeywords.any { kw -> text.contains(kw, ignoreCase = true) }
-            }
-        }
-    }.getOrDefault(false)
-
-    /**
-     * Launches the interactive Python GUI & Web UI Bridge for [root], starting a real loopback HTTP
-     * preview server, verifying HTTP 200 OK, and streaming a live interactive `ViewNode` window to `RunScreen`.
-     */
-    suspend fun execPythonGuiBridge(
-        host: RuntimeHost,
-        pythonBin: Path,
-        root: Path,
-        env: Map<String, String>,
-        projectName: String,
-        targetScript: String,
-        stepName: String,
-        ctx: TaskContext,
-        buildCtx: BuildContext?,
-    ): TaskResult {
-        val bridgeDir = root.resolve(".building")
-        runCatching {
-            Files.createDirectories(bridgeDir)
-            bridgeDir.resolve("python_gui_bridge_runner.py").writeText(PYTHON_GUI_BRIDGE_RUNNER_PY)
-        }
-        val runnerPath = bridgeDir.resolve("python_gui_bridge_runner.py")
-        return execInteractiveBridge(
-            host = host,
-            command = listOf(pythonBin.toString(), "-u", runnerPath.toString(), targetScript),
-            workingDir = root,
-            env = env,
-            projectName = projectName,
-            displayCommand = "python3 -u $targetScript (Python GUI & Web Bridge)",
-            stepName = stepName,
-            ctx = ctx,
-            buildCtx = buildCtx,
-        )
-    }
-
-    /**
-     * Returns true if the Node.js / TypeScript project at [root] has a browser UI component
-     * (`react`, `vue`, `svelte`, `solid`, `astro`, `next`, `vite`, `electron`, `express`, `hono`,
-     * `fastify`, `@nestjs`, `openui`) or is a TypeScript workspace.
-     */
-    fun isNodeBrowserOrTsProject(root: Path): Boolean = runCatching {
-        if (!Files.isDirectory(root)) return false
-        val pkg = root.resolve("package.json")
-        if (Files.isRegularFile(pkg)) {
-            val lower = runCatching { pkg.readText().lowercase() }.getOrDefault("")
-            val keywords = listOf(
-                "react", "vue", "svelte", "solid", "astro", "next", "vite", "electron",
-                "express", "hono", "fastify", "nestjs", "openui", "tailwind", "typescript",
-                "tsdown", "tsx", "vitest", "workspaces",
-            )
-            if (keywords.any { lower.contains(it) }) return true
-        }
-        val excluded = setOf(".git", ".platform", "node_modules", ".venv", "venv", "build", "dist")
-        Files.walk(root, 3).use { stream ->
-            stream.filter { p ->
-                Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) &&
-                    root.relativize(p).none { seg -> seg.toString() in excluded }
-            }.limit(80).anyMatch { p ->
-                val name = p.fileName.toString()
-                name == "tsconfig.json" || name.endsWith(".ts") || name.endsWith(".tsx")
-            }
-        }
-    }.getOrDefault(false)
-
-    /**
-     * Launches the interactive Node.js / TypeScript Browser Component & Runtime Bridge for [root],
-     * performing a TypeScript/JavaScript build check, starting a real loopback HTTP browser component
-     * server (`http://127.0.0.1:<port>/`), verifying HTTP 200 OK, and streaming a live interactive
-     * `ViewNode` window to `RunScreen`.
-     */
-    suspend fun execNodeBrowserBridge(
-        host: RuntimeHost,
-        nodeBin: Path,
-        root: Path,
-        env: Map<String, String>,
-        projectName: String,
-        targetDesc: String,
-        stepName: String,
-        ctx: TaskContext,
-        buildCtx: BuildContext?,
-    ): TaskResult {
-        val bridgeDir = root.resolve(".building")
-        runCatching {
-            Files.createDirectories(bridgeDir)
-            bridgeDir.resolve("node_browser_bridge_runner.cjs").writeText(NODE_BROWSER_BRIDGE_RUNNER_JS)
-        }
-        val runnerPath = bridgeDir.resolve("node_browser_bridge_runner.cjs")
-        return execInteractiveBridge(
-            host = host,
-            command = listOf(nodeBin.toString(), runnerPath.toString(), targetDesc),
-            workingDir = root,
-            env = env,
-            projectName = projectName,
-            displayCommand = "$targetDesc (Node Browser & TypeScript Runtime Bridge)",
-            stepName = stepName,
-            ctx = ctx,
-            buildCtx = buildCtx,
-        )
-    }
-
-    private val PYTHON_GUI_BRIDGE_RUNNER_PY = """
-        import ast
-        import http.server
-        import json
-        import os
-        import socketserver
-        import sys
-        import threading
-        import urllib.request
-
-        root = os.getcwd()
-        project_name = os.path.basename(root)
-        target_script = sys.argv[1] if len(sys.argv) > 1 else "main.py"
-
-        excluded = {".git", ".platform", ".building", "__pycache__", "node_modules", ".venv", "venv", "build", "dist"}
-        py_files = []
-        classes = 0
-        funcs = 0
-        loc = 0
-        detected_frameworks = set()
-        routes_or_views = []
-
-        framework_keywords = {
-            "gradio": "Gradio WebUI",
-            "streamlit": "Streamlit UI",
-            "fastapi": "FastAPI Web Server",
-            "flask": "Flask WebUI",
-            "tkinter": "Tkinter Desktop GUI",
-            "PyQt": "PyQt Desktop GUI",
-            "PySide": "PySide Desktop GUI",
-            "aiohttp": "aiohttp Web Server",
-            "uvicorn": "Uvicorn ASGI",
-            "webview": "PyWebView Window",
-        }
-
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in excluded]
-            if len(py_files) >= 200:
-                break
-            for f in sorted(filenames):
-                if f.endswith(".py"):
-                    rel = os.path.relpath(os.path.join(dirpath, f), root).replace("\\", "/")
-                    py_files.append(rel)
-                    if len(py_files) <= 40:
-                        try:
-                            src = open(os.path.join(dirpath, f), "r", encoding="utf-8", errors="ignore").read()
-                            loc += len(src.splitlines())
-                            for kw, label in framework_keywords.items():
-                                if kw in src:
-                                    detected_frameworks.add(label)
-                            tree = ast.parse(src)
-                            for node in ast.walk(tree):
-                                if isinstance(node, ast.ClassDef):
-                                    classes += 1
-                                    if len(routes_or_views) < 6:
-                                        routes_or_views.append(f"class {node.name} ({rel})")
-                                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                                    funcs += 1
-                        except Exception:
-                            pass
-
-        if os.path.basename(root).lower() == "comfyui":
-            detected_frameworks.add("ComfyUI Graph/Nodes GUI")
-        if not detected_frameworks:
-            detected_frameworks.add("Python Runtime UI")
-
-        fw_summary = " · ".join(sorted(detected_frameworks)[:3])
-        if not routes_or_views:
-            routes_or_views = [f"module {m}" for m in py_files[:5]] or ["main.py"]
-
-        html_body = f'''<!doctype html>
-        <html>
-        <head><meta charset="utf-8"><title>{project_name} — {fw_summary}</title></head>
-        <body style="font-family:system-ui;background:#0f172a;color:#f8fafc;padding:24px;">
-          <h1>{project_name}</h1>
-          <p>{fw_summary} · Python {sys.version.split()[0]}</p>
-          <p>Entrypoint: <code>{target_script}</code> · Modules: {len(py_files)} ({loc} LOC)</p>
-        </body>
-        </html>'''
-
-        class PreviewHandler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(html_body.encode("utf-8"))
-            def log_message(self, format, *args):
-                pass
-
-        server = socketserver.TCPServer(("127.0.0.1", 0), PreviewHandler)
-        port = server.server_address[1]
-        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        server_thread.start()
-
-        preview_url = f"http://127.0.0.1:{port}/"
-        http_status = 200
-        try:
-            with urllib.request.urlopen(preview_url, timeout=2) as resp:
-                http_status = resp.status
-        except Exception:
-            pass
-
-        sys.stderr.write(f"Python {sys.version.split()[0]} GUI & Web Runtime · {project_name} ({fw_summary})\n")
-        sys.stderr.write(f"✓ Verified {len(py_files)} Python modules ({loc} LOC · {classes} classes · {funcs} functions)\n")
-        sys.stderr.write(f"✓ Loopback GUI/Web component ready at {preview_url} (HTTP {http_status})\n")
-        sys.stderr.write(f"Preview: {preview_url}\n")
-        sys.stderr.flush()
-
-        state = {"interactions": 0, "filter": "", "status": f"Live · HTTP {http_status} on :{port}"}
-
-        def emit_frame():
-            items = [item for item in routes_or_views if state["filter"].lower() in item.lower()][:5]
-            children = [
-                {
-                    "type": "Composable",
-                    "id": "root/header",
-                    "props": {
-                        "name": "CupertinoText",
-                        "text": f"{project_name} · {fw_summary}",
-                        "style": {"fontSize": 18, "fontWeight": "bold", "color": 0xFF111827},
-                    },
-                    "modifiers": [],
-                    "children": [],
-                },
-                {
-                    "type": "Composable",
-                    "id": "root/subtitle",
-                    "props": {
-                        "name": "CupertinoText",
-                        "text": f"Entry: {target_script} · {len(py_files)} py files · {classes} classes · {funcs} funcs",
-                        "style": {"fontSize": 13, "color": 0xFF4B5563},
-                    },
-                    "modifiers": [],
-                    "children": [],
-                },
-                {
-                    "type": "Composable",
-                    "id": "root/status",
-                    "props": {
-                        "name": "CupertinoText",
-                        "text": f"GUI Server: {preview_url} ({state['status']}) · Actions: {state['interactions']}",
-                        "style": {"fontSize": 13, "fontWeight": "semibold", "color": 0xFF2563EB},
-                    },
-                    "modifiers": [],
-                    "children": [],
-                },
-                {
-                    "type": "Composable",
-                    "id": "root/refresh_btn",
-                    "props": {
-                        "name": "CupertinoButton",
-                        "onClick": 1,
-                        "containerColor": 0xFF2563EB,
-                        "contentColor": 0xFFFFFFFF,
-                    },
-                    "modifiers": [{"kind": "frame", "args": {"fillWidth": True}}],
-                    "children": [
-                        {
-                            "type": "CupertinoSlot",
-                            "id": "root/refresh_btn/slot",
-                            "props": {"name": "content"},
-                            "modifiers": [],
-                            "children": [
-                                {
-                                    "type": "Composable",
-                                    "id": "root/refresh_btn/text",
-                                    "props": {
-                                        "name": "CupertinoText",
-                                        "text": "Run GUI Action / Refresh Preview",
-                                        "style": {"color": 0xFFFFFFFF, "fontSize": 15, "fontWeight": "semibold"},
-                                    },
-                                    "modifiers": [],
-                                    "children": [],
-                                }
-                            ],
-                        }
-                    ],
-                },
-            ]
-            for idx, item in enumerate(items):
-                children.append({
-                    "type": "Composable",
-                    "id": f"root/item_{idx}",
-                    "props": {
-                        "name": "CupertinoText",
-                        "text": f"• {item}",
-                        "style": {"fontSize": 13, "color": 0xFF1F2937},
-                    },
-                    "modifiers": [],
-                    "children": [],
-                })
-            tree = {
-                "type": "ScrollView",
-                "id": "root",
-                "props": {"windowTitle": f"{project_name} ({fw_summary})", "windowBackground": "#F2F2F7"},
-                "modifiers": [{"kind": "frame", "args": {"fillWidth": True}}],
-                "children": [
-                    {
-                        "type": "VStack",
-                        "id": "root/vstack",
-                        "props": {"spacing": 8, "alignment": "leading"},
-                        "modifiers": [
-                            {"kind": "frame", "args": {"fillWidth": True}},
-                            {"kind": "padding", "args": {"top": 10, "bottom": 10, "leading": 12, "trailing": 12}},
-                        ],
-                        "children": children,
-                    }
-                ],
-            }
-            sys.stdout.write(json.dumps(tree) + "\n")
-            sys.stdout.flush()
-
-        emit_frame()
-
-        def auto_exit():
-            try:
-                server.shutdown()
-            except Exception:
-                pass
-            os._exit(0)
-
-        timer = threading.Timer(0.6, auto_exit)
-        timer.daemon = True
-        timer.start()
-
-        try:
-            for line in sys.stdin:
-                line = line.strip()
-                if line.startswith("{"):
-                    state["interactions"] += 1
-                    emit_frame()
-        except Exception:
-            pass
-        auto_exit()
-    """.trimIndent()
-
-    private val NODE_BROWSER_BRIDGE_RUNNER_JS = """
-        'use strict';
-        const fs = require('fs');
-        const path = require('path');
-        const http = require('http');
-        const readline = require('readline');
-
-        const root = process.cwd();
-        const targetDesc = process.argv[2] || 'npm run dev';
-        let pkg = {};
-        try {
-          const pkgPath = path.join(root, 'package.json');
-          if (fs.existsSync(pkgPath)) {
-            pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-          }
-        } catch (_) {}
-
-        const projectName = pkg.name || path.basename(root);
-        const version = pkg.version ? 'v' + pkg.version : '';
-        const scripts = Object.keys(pkg.scripts || {});
-        const allDeps = Object.assign({}, pkg.dependencies || {}, pkg.devDependencies || {});
-        const depNames = Object.keys(allDeps);
-
-        const stackBadges = [];
-        const stackChecks = [
-          ['electron', 'Electron'],
-          ['react', 'React'],
-          ['vite', 'Vite'],
-          ['astro', 'Astro CMS'],
-          ['next', 'Next.js'],
-          ['solid-js', 'SolidJS'],
-          ['hono', 'Hono'],
-          ['express', 'Express'],
-          ['@nestjs', 'NestJS'],
-          ['tailwindcss', 'Tailwind'],
-        ];
-        for (const [dep, label] of stackChecks) {
-          if (depNames.some(d => d.includes(dep))) stackBadges.push(label);
-        }
-
-        const excluded = new Set(['node_modules', '.git', '.platform', '.building', 'dist', 'build', '.next']);
-        let tsFiles = 0, jsFiles = 0, loc = 0;
-        const sampleModules = [];
-
-        function walk(dir, depth) {
-          if (depth > 4 || tsFiles + jsFiles > 400) return;
-          let entries = [];
-          try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-          for (const entry of entries) {
-            if (excluded.has(entry.name)) continue;
-            const full = path.join(dir, entry.name);
-            if (entry.isDirectory()) {
-              walk(full, depth + 1);
-            } else if (/\.(c?m?[jt]sx?)$/.test(entry.name) && !entry.name.endsWith('.d.ts')) {
-              const rel = path.relative(root, full).replace(/\\/g, '/');
-              if (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx') || entry.name.endsWith('.mts')) tsFiles++;
-              else jsFiles++;
-              if (sampleModules.length < 6) sampleModules.push(rel);
-              if (tsFiles + jsFiles <= 120) {
-                try { loc += fs.readFileSync(full, 'utf8').split('\n').length; } catch {}
-              }
-            }
-          }
-        }
-        walk(root, 0);
-
-        if (tsFiles > 0 && !stackBadges.includes('TypeScript')) stackBadges.unshift('TypeScript');
-        if (stackBadges.length === 0) stackBadges.push('Node.js Web Runtime');
-        const stackSummary = stackBadges.slice(0, 4).join(' + ');
-
-        try {
-          const outDir = path.join(root, '.building', 'dist');
-          fs.mkdirSync(outDir, { recursive: true });
-          fs.writeFileSync(
-            path.join(outDir, 'bundle-manifest.json'),
-            JSON.stringify({
-              project: projectName,
-              version: pkg.version || '0.0.0',
-              stack: stackBadges,
-              tsFiles,
-              jsFiles,
-              loc,
-              scripts,
-              builtAt: new Date().toISOString(),
-            }, null, 2)
-          );
-        } catch (_) {}
-
-        const htmlPage = `<!doctype html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>${'$'}{projectName} — Browser Component</title>
-        </head>
-        <body style="font-family:system-ui;background:#0f172a;color:#f8fafc;padding:24px;">
-          <h1>${'$'}{projectName} ${'$'}{version}</h1>
-          <p>${'$'}{stackSummary} · Node ${'$'}{process.version}</p>
-          <p>Verified ${'$'}{tsFiles} TypeScript files + ${'$'}{jsFiles} JS files (${'$'}{loc} LOC)</p>
-        </body>
-        </html>`;
-
-        let interactions = 0;
-        let port = 0;
-
-        function emitFrame(statusText) {
-          const items = (scripts.length > 0 ? scripts.slice(0, 4).map(s => `npm run ${'$'}{s}`) : sampleModules.slice(0, 4));
-          const children = [
-            {
-              type: 'Composable',
-              id: 'root/title',
-              props: {
-                name: 'CupertinoText',
-                text: `${'$'}{projectName} ${'$'}{version} · ${'$'}{stackSummary}`.trim(),
-                style: { fontSize: 18, fontWeight: 'bold', color: 0xFF111827 },
-              },
-              modifiers: [],
-              children: [],
-            },
-            {
-              type: 'Composable',
-              id: 'root/metrics',
-              props: {
-                name: 'CupertinoText',
-                text: `Target: ${'$'}{targetDesc} · ${'$'}{tsFiles} TS / ${'$'}{jsFiles} JS files (${'$'}{loc} LOC)`,
-                style: { fontSize: 13, color: 0xFF4B5563 },
-              },
-              modifiers: [],
-              children: [],
-            },
-            {
-              type: 'Composable',
-              id: 'root/status',
-              props: {
-                name: 'CupertinoText',
-                text: `Browser Component: http://127.0.0.1:${'$'}{port}/ (${'$'}{statusText}) · Events: ${'$'}{interactions}`,
-                style: { fontSize: 13, fontWeight: 'semibold', color: 0xFF2563EB },
-              },
-              modifiers: [],
-              children: [],
-            },
-            {
-              type: 'Composable',
-              id: 'root/action_btn',
-              props: {
-                name: 'CupertinoButton',
-                onClick: 1,
-                containerColor: 0xFF2563EB,
-                contentColor: 0xFFFFFFFF,
-              },
-              modifiers: [{ kind: 'frame', args: { fillWidth: true } }],
-              children: [
-                {
-                  type: 'CupertinoSlot',
-                  id: 'root/action_btn/slot',
-                  props: { name: 'content' },
-                  modifiers: [],
-                  children: [
-                    {
-                      type: 'Composable',
-                      id: 'root/action_btn/label',
-                      props: {
-                        name: 'CupertinoText',
-                        text: 'Reload Browser Component & Verify Routes',
-                        style: { color: 0xFFFFFFFF, fontSize: 15, fontWeight: 'semibold' },
-                      },
-                      modifiers: [],
-                      children: [],
-                    },
-                  ],
-                },
-              ],
-            },
-          ];
-          items.forEach((item, idx) => {
-            children.push({
-              type: 'Composable',
-              id: 'root/item_' + idx,
-              props: {
-                name: 'CupertinoText',
-                text: '• ' + item,
-                style: { fontSize: 13, color: 0xFF1F2937 },
-              },
-              modifiers: [],
-              children: [],
-            });
-          });
-          const tree = {
-            type: 'ScrollView',
-            id: 'root',
-            props: {
-              windowTitle: `${'$'}{projectName} (${'$'}{stackSummary})`,
-              windowBackground: '#F2F2F7',
-            },
-            modifiers: [{ kind: 'frame', args: { fillWidth: true } }],
-            children: [
-              {
-                type: 'VStack',
-                id: 'root/vstack',
-                props: { spacing: 8, alignment: 'leading' },
-                modifiers: [
-                  { kind: 'frame', args: { fillWidth: true } },
-                  { kind: 'padding', args: { top: 10, bottom: 10, leading: 12, trailing: 12 } },
-                ],
-                children: children,
-              },
-            ],
-          };
-          process.stdout.write(JSON.stringify(tree) + '\n');
-        }
-
-        const server = http.createServer((req, res) => {
-          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(htmlPage);
-        });
-
-        server.listen(0, '127.0.0.1', () => {
-          port = server.address().port;
-          const previewUrl = `http://127.0.0.1:${'$'}{port}/`;
-          http.get(previewUrl, (res) => {
-            res.resume();
-            process.stderr.write(`Node.js ${'$'}{process.version} · ${'$'}{projectName} ${'$'}{version} (${'$'}{stackSummary})\n`);
-            process.stderr.write(`✓ Built & verified ${'$'}{tsFiles} TypeScript + ${'$'}{jsFiles} JS files (${'$'}{loc} LOC)\n`);
-            process.stderr.write(`✓ Browser component server active at ${'$'}{previewUrl} (HTTP ${'$'}{res.statusCode})\n`);
-            process.stderr.write(`Preview: ${'$'}{previewUrl}\n`);
-            emitFrame(`HTTP ${'$'}{res.statusCode} OK`);
-            setTimeout(() => {
-              try { server.close(); } catch (_) {}
-              process.exit(0);
-            }, 600).unref();
-          }).on('error', () => {
-            emitFrame('Ready');
-            setTimeout(() => process.exit(0), 600).unref();
-          });
-        });
-
-        const rl = readline.createInterface({ input: process.stdin, terminal: false });
-        rl.on('line', (line) => {
-          if (line.trim().startsWith('{')) {
-            interactions++;
-            emitFrame('Updated');
-          }
-        });
     """.trimIndent()
 }

@@ -42,6 +42,8 @@ class AndroidIosCrossRunDeviceTest {
         IosRepoSpec("MacSai", "https://github.com/iliyami/MacSai.git", isSwiftUi = true),
         IosRepoSpec("swift-syntax", "https://github.com/swiftlang/swift-syntax.git", isSwiftUi = false),
         IosRepoSpec("UTM", "https://github.com/utmapp/UTM.git", isSwiftUi = true),
+        IosRepoSpec("SwiftUI-Calculator", "https://github.com/AfrazCodes/SwiftUI-Calculator.git", isSwiftUi = true),
+        IosRepoSpec("Calculator", "https://github.com/ricardomongza99/Calculator.git", isSwiftUi = true),
         IosRepoSpec("kumone", "https://github.com/missuo/kumone.git", isSwiftUi = true),
         IosRepoSpec("sim-use", "https://github.com/lycorp-jp/sim-use.git", isSwiftUi = true),
     )
@@ -98,6 +100,10 @@ class AndroidIosCrossRunDeviceTest {
                 assertTrue(
                     "Expected ViewNode JSON tree for ${repo.dirName}, got: ${frameJson.take(200)}",
                     frameJson.contains("\"type\":") && frameJson.contains("\"children\":"),
+                )
+                org.junit.Assert.assertFalse(
+                    "Must not produce synthetic fallback mock card for ${repo.dirName}",
+                    frameJson.contains("_IdeRepoPreviewView") || frameJson.contains("Inspect Active Target"),
                 )
 
                 // Close interactive stdin so the Cupertino bridge process exits cleanly with code 0

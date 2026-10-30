@@ -114,6 +114,27 @@ internal class LanguageFeatureService(private val ctx: EngineContext) {
     /** Enclosing declarations (type/method names, outer→inner) at [offset] in [file]'s buffer — for the
      *  cursor-tracking breadcrumb. Empty if the file is outside the project or not JDT-backed. */
     fun breadcrumbAt(file: Path, text: String, offset: Int): List<String> {
+        val fileName = file.fileName?.toString().orEmpty()
+        if (fileName.endsWith(".swift", ignoreCase = true)) {
+            val structure = SwiftDomParser.fileStructure(ctx.store.vfs.fileFor(file), text)
+            val atOffset = structure
+                .filter { it.kind in BREADCRUMB_KINDS && offset in it.nameOffset..it.endOffset }
+                .sortedBy { it.depth }
+                .map { it.name }
+            if (atOffset.isNotEmpty()) return atOffset
+            // When caret is at initial offset 0 (on `import SwiftUI` before the primary struct/view),
+            // surface the primary type and `body` if present so the breadcrumb is immediately meaningful.
+            val topType = structure.firstOrNull { it.depth == 0 && it.kind in BREADCRUMB_KINDS }
+            if (topType != null) {
+                val methods = structure.filter {
+                    it.depth == 1 && it.kind == SymbolKind.METHOD &&
+                        it.nameOffset >= topType.nameOffset && it.endOffset <= topType.endOffset
+                }
+                val bodyMethod = methods.singleOrNull() ?: methods.firstOrNull { it.name == "body" }
+                return if (bodyMethod != null) listOf(topType.name, bodyMethod.name) else listOf(topType.name)
+            }
+            return emptyList()
+        }
         val module = ctx.moduleForFile(file) ?: return emptyList()
         ctx.updateDocument(file, text)
         // Backend-neutral: derive the enclosing type/method chain from the SPI `fileStructure` (both the JDT
@@ -130,6 +151,10 @@ internal class LanguageFeatureService(private val ctx: EngineContext) {
     /** The file's declarations (for the structure/outline view + sticky scroll headers), via the language
      *  analyzer's structure walk. Empty if the file is outside the project or the backend doesn't support it. */
     fun fileStructure(file: Path, text: String): List<StructureItem> {
+        val fileName = file.fileName?.toString().orEmpty()
+        if (fileName.endsWith(".swift", ignoreCase = true)) {
+            return SwiftDomParser.fileStructure(ctx.store.vfs.fileFor(file), text)
+        }
         val module = ctx.moduleForEditableFile(file) ?: return emptyList()
         val analyzer = ctx.analyzerFor(module, ctx.languageFor(file))
         val vf = ctx.store.vfs.fileFor(file)

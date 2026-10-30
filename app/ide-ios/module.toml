@@ -1,0 +1,23 @@
+version = 2
+
+[module]
+type = "java-lib"
+name = "ide-ios"
+languageLevel = "JAVA_17"
+output = "build/codeassist/classes"
+
+[sourceSets.commonMain]
+scope = "IMPLEMENTATION"
+java = ["src/commonMain/kotlin"]
+
+[sourceSets.commonTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/commonTest/kotlin"]
+
+[dependencies]
+api = [{ module = "ide-ui" }, { module = "ide-ui-testing" }]
+implementation = [{ module = "kotlin-classfile" }, { module = "vcs-ui" }, { module = "agent-ui" }, { module = "store-api" }, { module = "store-impl" }, { module = "store-bridge" }, { module = "platform-json" }, { module = "kotlin-syntax" }, { module = "lang-kotlin" }, { module = "deps-api" }, { module = "deps-impl" }, { module = "index-impl" }, { module = "project-model-api" }, { module = "project-model-impl" }, { module = "project-templates" }, { module = "model-bridge" }, { module = "jvm-vm" }, { module = "android-apk" }, "kotlin-stdlib"]
+testImplementation = ["org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0", { module = "kotlin-classfile" }]
+
+[kotlin]
+commonSourceRoots = ["src/commonMain/kotlin"]

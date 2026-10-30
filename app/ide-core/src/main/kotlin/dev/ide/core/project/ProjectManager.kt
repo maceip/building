@@ -107,6 +107,8 @@ data class ProjectSummary(
     val isNode: Boolean = false,
     val isSwift: Boolean = false,
     val isPython: Boolean = false,
+    val ownerAvatarUrl: String? = null,
+    val tags: List<String> = emptyList(),
 )
 
 /** What [ProjectManager.inspectFolder] found in a folder offered for import. */
@@ -332,26 +334,124 @@ class ProjectManager private constructor(
             .filter { runCatching { Files.isDirectory(it) && ModelPersistence.exists(it.toString()) }.getOrDefault(false) }
             .map { dir ->
                 val proj = runCatching { ModelPersistence.load(dir.toString()) }.getOrNull()?.projects?.firstOrNull()
+                val isAndroid = proj?.modules?.any { m -> m.facets.any { it.tomlTable == AndroidFacetCodec.tomlTable } } ?: false
+                val isNode = proj?.buildSystemId == NodeModuleType.BUILD_SYSTEM.value
+                val isSwift = proj?.buildSystemId == SwiftModuleType.BUILD_SYSTEM.value
+                val isPython = proj?.buildSystemId == PythonModuleType.BUILD_SYSTEM.value
+                val compatibility = ExternalProjectMarker.exists(dir) && proj?.buildSystemId !in setOf(
+                    NodeModuleType.BUILD_SYSTEM.value,
+                    SwiftModuleType.BUILD_SYSTEM.value,
+                    PythonModuleType.BUILD_SYSTEM.value,
+                )
                 ProjectSummary(
                     proj?.name ?: dir.fileName.toString(),
                     dir.toString(),
                     proj?.modules?.size ?: 0,
-                    compatibility = ExternalProjectMarker.exists(dir) && proj?.buildSystemId !in setOf(
-                        NodeModuleType.BUILD_SYSTEM.value,
-                        SwiftModuleType.BUILD_SYSTEM.value,
-                        PythonModuleType.BUILD_SYSTEM.value,
-                    ),
-                    isAndroid = proj?.modules?.any { m -> m.facets.any { it.tomlTable == AndroidFacetCodec.tomlTable } } ?: false,
+                    compatibility = compatibility,
+                    isAndroid = isAndroid,
                     lastOpened = prefs.getProperty(openedKey(dir))?.toLongOrNull() ?: 0L,
                     // Same two conditions as IdeServices.isUnrecognizedProject, read without opening the engine.
                     unrecognized = proj?.modules.isNullOrEmpty() && UnrecognizedProjectMarker.exists(dir),
-                    isNode = proj?.buildSystemId == NodeModuleType.BUILD_SYSTEM.value,
-                    isSwift = proj?.buildSystemId == SwiftModuleType.BUILD_SYSTEM.value,
-                    isPython = proj?.buildSystemId == PythonModuleType.BUILD_SYSTEM.value,
+                    isNode = isNode,
+                    isSwift = isSwift,
+                    isPython = isPython,
+                    ownerAvatarUrl = resolveGitHubOwnerAvatar(dir),
+                    tags = resolveProjectTags(dir, isAndroid, isNode, isSwift, isPython, compatibility),
                 )
             }
             .sortedWith(compareByDescending<ProjectSummary> { it.lastOpened }.thenBy { it.name.lowercase() })
     }
+
+    private fun resolveGitHubOwnerAvatar(dir: Path): String? = runCatching {
+        val gitConfig = dir.resolve(".git/config")
+        if (!Files.isRegularFile(gitConfig)) return null
+        val text = Files.newBufferedReader(gitConfig).use { reader ->
+            val buf = CharArray(16_384)
+            val n = reader.read(buf)
+            if (n <= 0) "" else String(buf, 0, n)
+        }
+        val match = GITHUB_REMOTE_REGEX.find(text) ?: return null
+        val owner = match.groupValues[1].trim()
+        if (owner.isNotEmpty()) "https://avatars.githubusercontent.com/$owner?s=96" else null
+    }.getOrNull()
+
+    private fun resolveProjectTags(
+        dir: Path,
+        isAndroid: Boolean,
+        isNode: Boolean,
+        isSwift: Boolean,
+        isPython: Boolean,
+        compatibility: Boolean,
+    ): List<String> = runCatching {
+        val found = LinkedHashSet<String>()
+        val gitConfig = dir.resolve(".git/config")
+        if (Files.isRegularFile(gitConfig)) {
+            val text = Files.newBufferedReader(gitConfig).use { reader ->
+                val buf = CharArray(8_192)
+                val n = reader.read(buf)
+                if (n <= 0) "" else String(buf, 0, n)
+            }
+            GITHUB_REMOTE_REGEX.find(text)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { owner ->
+                found += owner.lowercase()
+            }
+        }
+        val pkgJson = dir.resolve("package.json")
+        if (Files.isRegularFile(pkgJson)) {
+            val text = Files.newBufferedReader(pkgJson).use { r ->
+                val buf = CharArray(16_384)
+                val n = r.read(buf)
+                if (n <= 0) "" else String(buf, 0, n)
+            }
+            KEYWORDS_ARRAY_REGEX.find(text)?.groupValues?.getOrNull(1)?.let { arr ->
+                QUOTED_STRING_REGEX.findAll(arr).forEach { m ->
+                    val kw = m.groupValues[1].trim().lowercase()
+                    if (kw.length in 2..20) found += kw
+                }
+            }
+            for (token in listOf("typescript", "react", "vite", "next", "tailwind", "electron", "hono", "express")) {
+                if (text.contains("\"$token", ignoreCase = true)) found += token
+            }
+        }
+        if (isSwift || Files.isRegularFile(dir.resolve("Package.swift"))) {
+            found += "swift"
+            val pkgSwift = dir.resolve("Package.swift")
+            if (Files.isRegularFile(pkgSwift)) {
+                val text = runCatching { Files.readString(pkgSwift) }.getOrDefault("")
+                if (text.contains("SwiftUI", ignoreCase = true)) found += "swiftui"
+                if (text.contains(".iOS", ignoreCase = true)) found += "ios"
+                if (text.contains(".macOS", ignoreCase = true)) found += "macos"
+            }
+        }
+        if (isPython || Files.isRegularFile(dir.resolve("pyproject.toml")) || Files.isRegularFile(dir.resolve("requirements.txt"))) {
+            for (f in listOf("pyproject.toml", "requirements.txt")) {
+                val p = dir.resolve(f)
+                if (Files.isRegularFile(p)) {
+                    val text = runCatching { Files.readString(p) }.getOrDefault("")
+                    for (token in listOf("fastapi", "gradio", "streamlit", "torch", "flask", "django", "cli")) {
+                        if (text.contains(token, ignoreCase = true)) found += token
+                    }
+                }
+            }
+        }
+        if (isAndroid || compatibility) {
+            for (f in listOf("app/build.gradle.kts", "app/build.gradle", "build.gradle.kts", "build.gradle")) {
+                val p = dir.resolve(f)
+                if (Files.isRegularFile(p)) {
+                    val text = runCatching { Files.readString(p) }.getOrDefault("")
+                    if (text.contains("compose", ignoreCase = true)) found += "compose"
+                    if (text.contains("material3", ignoreCase = true)) found += "material3"
+                    if (text.contains("kotlin", ignoreCase = true)) found += "kotlin"
+                    if (text.contains("room", ignoreCase = true)) found += "room"
+                    if (text.contains("hilt", ignoreCase = true)) found += "hilt"
+                }
+            }
+            if (found.isEmpty() && isAndroid) {
+                found += "kotlin"
+                found += "android-sdk"
+            }
+        }
+        found.take(5).toList()
+    }.getOrDefault(emptyList())
 
     /** Prefs key holding a project's last-opened timestamp (keyed by its unique workspace directory name). */
     private fun openedKey(dir: Path): String =
@@ -1154,5 +1254,12 @@ class ProjectManager private constructor(
                 permittedInPlaceRoots = permittedInPlaceRoots,
             )
         }
+
+        private val GITHUB_REMOTE_REGEX =
+            Regex("""url\s*=\s*(?:https?://github\.com/|git@github\.com:)([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?\s*""", RegexOption.MULTILINE)
+        private val KEYWORDS_ARRAY_REGEX =
+            Regex(""""keywords"\s*:\s*\[([^\]]*)]""")
+        private val QUOTED_STRING_REGEX =
+            Regex(""""([^"]+)"""")
     }
 }

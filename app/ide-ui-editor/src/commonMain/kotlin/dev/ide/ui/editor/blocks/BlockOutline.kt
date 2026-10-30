@@ -13,7 +13,7 @@ import dev.ide.ui.backend.UiBlockPart
 
 enum class FunctionKind { Function, Constructor, Init, Accessor }
 
-enum class GroupKind { TopLevel, Class, Interface, Object, Enum, Companion }
+enum class GroupKind { TopLevel, Class, Interface, Object, Enum, Companion, Struct, Extension }
 
 class OutlineFunction(
     val node: UiBlockNode,
@@ -129,17 +129,19 @@ fun declName(node: UiBlockNode, source: String): String? {
 
 private fun classIdentity(cls: UiBlockNode, source: String, kotlin: Boolean): Pair<GroupKind, String> {
     val header = signatureText(cls, source)
-    val kw = Regex("\\b(class|interface|object|enum|record)\\b").find(header)?.value ?: "class"
+    val kw = Regex("\\b(class|interface|object|enum|record|struct|extension|protocol|actor)\\b").find(header)?.value ?: "class"
     val name = cls.parts.firstNotNullOfOrNull { (it as? UiBlockPart.Field)?.takeIf { f -> f.role == "declname" }?.text }
         ?: cls.parts.filterIsInstance<UiBlockPart.Slot>().firstNotNullOfOrNull { s -> s.children.firstOrNull { it.kind == "name_ref" } }
             ?.let { source.substring(it.start, it.end) }
-        ?: Regex("\\b(?:class|interface|object|enum|record)\\s+([A-Za-z_$][\\w$]*)").find(header)?.groupValues?.get(1)
+        ?: Regex("\\b(?:class|interface|object|enum|record|struct|extension|protocol|actor)\\s+([A-Za-z_$][\\w$]*)").find(header)?.groupValues?.get(1)
         ?: ""
     val kind = when {
         kotlin && "companion" in header && kw == "object" -> GroupKind.Companion
         kw == "object" -> GroupKind.Object
-        kw == "interface" -> GroupKind.Interface
+        kw == "interface" || kw == "protocol" -> GroupKind.Interface
         kw == "enum" || "enum class" in header -> GroupKind.Enum
+        kw == "struct" -> GroupKind.Struct
+        kw == "extension" -> GroupKind.Extension
         else -> GroupKind.Class
     }
     return kind to name

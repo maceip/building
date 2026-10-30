@@ -433,7 +433,7 @@ class IdeUiState(
     // External file writes (e.g. an agent edit, or an "Open with" import the UI didn't drive) re-read the tree
     // AND re-sync any clean open editor tab whose file changed on disk.
     private suspend fun syncExternalWrites() {
-        backend.files.fileSystemEpoch.collect { fsEpoch ->
+        backend.files.fileSystemEpoch.drop(1).collect { fsEpoch ->
             if (fsEpoch > 0) {
                 refreshTree()
                 syncOpenTabsFromDisk()
@@ -1159,7 +1159,8 @@ class IdeUiState(
         val mode = treeMode
         val token = ++treeToken
         val built = withContext(ioDispatcher) { backend.files.fileTree(mode) }
-        if (token != treeToken || mode != treeMode) return // superseded by a later build
+        if (mode != treeMode) return
+        if (token != treeToken && treeEverLoaded) return // superseded by a later build
         tree = built
         treeEverLoaded = true
         if (seedExpansionIfDefault && backend.files.expandedTreeState(mode) == null) seedDefaultExpansion()

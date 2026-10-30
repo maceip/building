@@ -6,8 +6,10 @@ import dev.ide.ui.icons.CaSymbols
 import dev.ide.ui.screens.HomeSidebarItem
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
@@ -262,14 +264,18 @@ private fun AppRoute(
 ) {
     val backend = app.backend
     when (s) {
-        Screen.Projects -> HomeRoute(app, fileActions)
+        Screen.Projects -> if (app.resumingLastProject) {
+            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
+        } else {
+            HomeRoute(app, fileActions)
+        }
 
         Screen.CreateProject -> CreateProjectScreen(
             backend = backend,
             onCancel = { app.navigateTo(Screen.Projects) },
             onCreated = { app.navigateTo(Screen.Editor) },
             initialTemplateId = app.createTemplateId,
-            onCloneRepository = null,
+            onCloneRepository = { app.openPluginScreen(VcsService.SCREEN_CLONE) },
             onImportProject = if (fileActions.canPickDirectory || fileActions.canPickFile) app::requestProjectImport else null,
         )
 
@@ -503,7 +509,9 @@ private fun AppRoute(
                         override val fileActions = fileActions
                         override val argument = shownArgument
                         override fun back() = app.navigateBack()
-                        override fun openScreen(id: String) = app.openPluginScreen(id)
+                        override fun openScreen(id: String) {
+                            if (id == "__hub__") app.openHub(Screen.Projects) else app.openPluginScreen(id)
+                        }
                         override fun openFile(path: String, offset: Int) = openInEditor(path, offset)
                     }
                 }
@@ -745,7 +753,7 @@ private fun ProjectPickerRoute(
         onDeleteProject = app::deleteProject,
         // One "Import project" entry for both sources; it asks which when the host can do both.
         onImportProject = if (fileActions.canPickDirectory || fileActions.canPickFile) app::requestProjectImport else null,
-        onCloneRepository = null,
+        onCloneRepository = { app.openPluginScreen(VcsService.SCREEN_CLONE) },
         onExportProject = if (fileActions.canShare || fileActions.canExport || fileActions.canReveal) {
             app::startExport
         } else null,
@@ -784,6 +792,10 @@ private fun ProjectPickerRoute(
         onSubmitToStore = { project ->
             dev.ide.ui.ext.ScreenArgumentHandoff.pending = project
             app.openPluginScreen("store.submit")
+        },
+        onRebuildProject = { project ->
+            dev.ide.ui.ext.ScreenArgumentHandoff.pending = project
+            app.openPluginScreen("ide.rebuild")
         },
     )
     if (notificationsVisible) {

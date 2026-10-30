@@ -59,7 +59,20 @@ class HeadlessEngine private constructor(private val ide: IdeServices) : AutoClo
      * Downloads land in the resolved-dependency cache under the shared caches root (see [open]), so a
      * second run with the same cache is offline.
      */
-    suspend fun resolveDependencies(timeoutMs: Long = DEFAULT_RESOLVE_TIMEOUT_MS): Map<String, List<String>> {
+    suspend fun resolveDependencies(
+        timeoutMs: Long = DEFAULT_RESOLVE_TIMEOUT_MS,
+        taskId: String? = null,
+    ): Map<String, List<String>> {
+        val targetModule = taskId?.split(':')?.getOrNull(1)?.let { name ->
+            ide.modules().firstOrNull { it.name == name }
+        }
+        if (targetModule != null) {
+            val closure = ide.moduleBuildClosure(targetModule)
+            withTimeout(timeoutMs) { ide.dependencies.ensureModulesResolved(closure) }
+            return closure
+                .associate { it.name to ide.dependencies.declaredUnresolved(it) }
+                .filterValues { it.isNotEmpty() }
+        }
         withTimeout(timeoutMs) { ide.dependencies.retryDependencyResolution() }
         return ide.modules()
             .associate { it.name to ide.dependencies.declaredUnresolved(it) }

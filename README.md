@@ -50,8 +50,39 @@ It ships with a Compose Multiplatform UI and both desktop and Android launchers.
 - 📦 **Real APK builds on device** — resolve, compile, dex, package, sign, and install — no laptop.
 - 🌱 **Git, on device** — stage, commit, branch, merge, stash, and push without a laptop; sign in to GitHub
   to clone private repositories and open pull requests. [How it works →](docs/version-control.md)
+- 🚀 **Smart GitHub Trending & 2-Hop Social Graph Explorer** — bundles `Daily`, `Weekly`, and `Monthly`
+  trending lists at build time across all 9 supported phone languages (`All`, `Kotlin`, `Swift`, `Python`,
+  `TypeScript`, `JavaScript`, `Java`, `Rust`, `C++`) with 82 pre-rendered app screenshots, live GitHub
+  Trending refresh, 3-tier Just-In-Time (JIT) app preview generation, 2-hop author social graph traversal,
+  in-app `README.md` Markdown rendering, and both in-app and Android home-screen Trending Widgets.
 - 🔌 **Extensible everywhere** — module types, build systems, language backends, analyzers, quick-fixes,
   and more all plug in through extension points.
+
+## Smart GitHub Trending & 2-Hop Discovery Service
+
+CodeAssist includes a built-in GitHub Trending and developer social graph engine (`GitHubDiscoveryClient`,
+`SmartAppImageGenerator`, `DeveloperGraphEngine`, and `BundledTrendingCatalog`):
+
+1. **Build-Time Bundled + Live Trending (`Daily` / `Weekly` / `Monthly`)** — ships 27 `(language, period)`
+   trending lists (`discovery/bundled-trending-catalog.json`) and 82 PNG app screenshots (`discovery/shots/`)
+   for instant zero-latency startup, with live HTML/REST refresh against `https://github.com/trending/{lang}?since={period}`.
+2. **3-Tier Just-In-Time (JIT) App Screenshot Generation (`SmartAppImageGenerator`)**:
+   - **Tier 1 (`LOCAL_BUILD_PREVIEW`, Preferred)**: Builds or interprets the app locally on demand via
+     `SwiftUiPreviewInterpreter` (`ViewNode` GUI tree for SwiftUI/Cupertino), NodeGUI widget tree, or
+     Jetpack Compose `@Preview` / Android XML layout renderer.
+   - **Tier 2 (`REPO_OR_WEBPAGE_SCREENSHOT`, Fallback 1)**: Searches the GitHub repository (Fastlane
+     `phoneScreenshots`, `README.md` images, `/screenshots`, `/assets`) **and** crawls the repository's
+     linked external webpage (`homepageUrl`) for real app screenshots.
+   - **Tier 3 (`DYNAMIC_SOURCE_SYNTHESIS`, Last-Ditch Effort)**: Inspects actual repository source files
+     to extract declared classes/functions, routes, CLI flags, and AST tokens, synthesizing a live IDE/terminal preview PNG.
+3. **Deep 2-Hop Author Social Graph & Starred Network (`DeveloperGraphEngine`)** — inspects the selected
+   repository's `@author` (or top human contributors for organization-owned repos), their other repositories
+   (`SAME_AUTHOR`), their starred repositories (`AUTHOR_STARRED`), who `@author` follows (`1st-hop @peer1`
+   repos `FOLLOWED_PEER` & stars `PEER_STARRED`), and who `@peer1` follows (`2nd-hop @peer2` repos
+   `SECOND_DEGREE_PEER` & stars `SECOND_DEGREE_STARRED`), ranking all candidates by architectural relevance.
+4. **Trending Widgets & Integrated `README.md` Viewer** — includes the in-app `TrendingReposWidget` on the
+   Projects Home screen, the Android home-screen `TrendingReposAppWidgetProvider`, and native Markdown
+   rendering of both the app's own `README.md` and any trending repository's `README.md`.
 
 ## Screenshots
 

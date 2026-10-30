@@ -132,6 +132,7 @@ import dev.ide.ui.generated.resources.edchrome_show_resolution_details
 import dev.ide.ui.generated.resources.edchrome_show_unresolved_dependencies
 import dev.ide.ui.generated.resources.edchrome_toggle_inlay_hints
 import dev.ide.ui.generated.resources.edchrome_toggle_navigator
+import dev.ide.ui.generated.resources.edchrome_settings_and_tools
 import dev.ide.ui.generated.resources.action_close_project
 import dev.ide.ui.generated.resources.edchrome_unresolved_dependencies
 import dev.ide.ui.generated.resources.edview_no_file_open_hint
@@ -174,6 +175,8 @@ fun EditorTopBar(
     onToggleNav: () -> Unit,
     /** Leaves the project for the project list. Null hides the back arrow. */
     onBack: (() -> Unit)? = null,
+    /** Opens the Settings & Tools hub directly from the editor top bar. */
+    onOpenSettings: (() -> Unit)? = null,
     /** Live navigator-open fraction (0 closed → 1 open) driving the sidebar icon's miniature-screen
      *  animation — the drawer's gesture fraction on phone, an eased toggle on desktop. Deferred read. */
     navFraction: () -> Float = { 0f },
@@ -278,9 +281,8 @@ fun EditorTopBar(
                 IconButtonCa(CaIcons.save, stringResource(Res.string.save), onSave, active = hasUnsavedChanges)
             }
             if (compact) {
-                // Save · Undo · Redo · Run are the prioritized inline actions even on a phone — one tap away,
-                // never buried. Everything else (find, reformat, palette, inlay hints, console, preview, the AI
-                // panel, and the build-variant switcher) collapses into the single ⋯ overflow menu.
+                // Save · Undo · Redo · Run · Agent · Settings are the prioritized inline actions on a phone —
+                // one tap away, never buried. Everything else collapses into the single ⋯ overflow menu.
                 if (hasActiveFile && canUndo) {
                     IconButtonCa(CaIcons.undo, stringResource(Res.string.undo), onUndo)
                 }
@@ -289,6 +291,12 @@ fun EditorTopBar(
                 }
                 PluginToolbarActions(pluginActions, dim, onPluginAction)
                 RunControl(runTasks, onPickTask, onRun = onRun, selectedTaskId = selectedTaskId, compact = true)
+                if (rightToolIconId != null) {
+                    IconButtonCa(actionIcon(rightToolIconId), rightToolTitle, onToggleRightTool, active = rightToolOpen)
+                }
+                if (onOpenSettings != null) {
+                    IconButtonCa(CaIcons.gear, stringResource(Res.string.edchrome_settings_and_tools), onOpenSettings)
+                }
                 EditorOverflowMenu(
                     onOpenPalette = onOpenPalette,
                     hasActiveFile = hasActiveFile,
@@ -308,6 +316,7 @@ fun EditorTopBar(
                     activeVariant = activeVariant,
                     variants = variants,
                     onPickVariant = onPickVariant,
+                    onOpenSettings = onOpenSettings,
                     onCloseProject = onBack,
                 )
             } else {
@@ -345,6 +354,7 @@ fun EditorTopBar(
                         variants = variants,
                         onPickVariant = onPickVariant,
                         editOnly = true,
+                        onOpenSettings = onOpenSettings,
                         onCloseProject = onBack,
                     )
                 }
@@ -471,6 +481,7 @@ private fun EditorOverflowMenu(
     /** The wide bar's menu: only the file's edit actions and inlay hints, since everything else is inline there
      *  or has its own place (the stripe's console toggle, the breadcrumb row's view switch). */
     editOnly: Boolean = false,
+    onOpenSettings: (() -> Unit)? = null,
     onCloseProject: (() -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -491,6 +502,11 @@ private fun EditorOverflowMenu(
             if (rightToolIconId != null) {
                 OverflowItem(actionIcon(rightToolIconId), rightToolTitle, active = rightToolOpen) {
                     open = false; onToggleRightTool()
+                }
+            }
+            if (onOpenSettings != null) {
+                OverflowItem(CaIcons.gear, stringResource(Res.string.edchrome_settings_and_tools)) {
+                    open = false; onOpenSettings()
                 }
             }
             OverflowItem(

@@ -583,4 +583,41 @@ class GitRepositoryTest {
             }
         }
     }
+
+    @Test
+    fun `withTransientNetworkRetry recovers from Android ECONNABORTED Software caused connection abort`() {
+        var attempts = 0
+        val retriedAttempts = mutableListOf<Int>()
+        val result = withTransientNetworkRetry(
+            maxAttempts = 4,
+            initialDelayMs = 1L,
+            onRetry = { attempt, _ -> retriedAttempts += attempt },
+        ) { attempt ->
+            attempts = attempt
+            if (attempt < 3) {
+                throw org.eclipse.jgit.api.errors.TransportException(
+                    "https://github.com/maceip/building.git: Software caused connection abort",
+                    java.net.SocketException("Software caused connection abort"),
+                )
+            }
+            "cloned-ok"
+        }
+        assertEquals("cloned-ok", result)
+        assertEquals(3, attempts)
+        assertEquals(listOf(1, 2), retriedAttempts)
+    }
+
+    @Test
+    fun `withTransientNetworkRetry does not retry authentication failures`() {
+        var attempts = 0
+        assertFailsWith<org.eclipse.jgit.api.errors.TransportException> {
+            withTransientNetworkRetry(maxAttempts = 4, initialDelayMs = 1L) { attempt ->
+                attempts = attempt
+                throw org.eclipse.jgit.api.errors.TransportException(
+                    "https://github.com/maceip/private.git: 401 Unauthorized - authentication is required",
+                )
+            }
+        }
+        assertEquals(1, attempts)
+    }
 }

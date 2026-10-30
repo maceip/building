@@ -1,0 +1,21 @@
+version = 2
+
+[module]
+type = "java-lib"
+name = "android-apk"
+languageLevel = "JAVA_17"
+output = "build/codeassist/classes"
+
+[sourceSets.commonMain]
+scope = "IMPLEMENTATION"
+java = ["src/commonMain/kotlin"]
+
+[sourceSets.commonTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/commonTest/kotlin"]
+
+[dependencies]
+implementation = [{ module = "kotlin-classfile" }, "kotlin-stdlib"]
+
+[kotlin]
+commonSourceRoots = ["src/commonMain/kotlin"]

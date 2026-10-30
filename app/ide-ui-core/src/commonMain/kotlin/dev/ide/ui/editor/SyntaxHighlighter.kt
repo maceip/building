@@ -53,20 +53,26 @@ class CodeLanguage(val profile: EditorLanguageProfile) {
         )
         val Python = CodeLanguage(
             EditorLanguageProfile(
-                id = "python", suffixes = listOf(".py", ".pyw"), syntax = SyntaxFamily.HASH_COMMENT,
+                id = "python",
+                suffixes = listOf(".py", ".pyw", ".pyi", ".sh", ".bash", ".zsh", ".yaml", ".yml", ".toml", ".conf", ".ini", ".env"),
+                syntax = SyntaxFamily.HASH_COMMENT,
                 keywords = PYTHON_KEYWORDS, lineComment = "#",
             )
         )
         val TypeScript = CodeLanguage(
             EditorLanguageProfile(
-                id = "typescript", suffixes = listOf(".ts", ".tsx", ".js", ".jsx"), syntax = SyntaxFamily.C_FAMILY,
+                id = "typescript",
+                suffixes = listOf(".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".json", ".jsonc"),
+                syntax = SyntaxFamily.C_FAMILY,
                 keywords = TYPESCRIPT_KEYWORDS, lineComment = "//",
                 blockCommentOpen = "/*", blockCommentClose = "*/",
             )
         )
         val Swift = CodeLanguage(
             EditorLanguageProfile(
-                id = "swift", suffixes = listOf(".swift"), syntax = SyntaxFamily.C_FAMILY,
+                id = "swift",
+                suffixes = listOf(".swift", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".m", ".mm", ".rs", ".go", ".cs", ".css", ".scss", ".gradle"),
+                syntax = SyntaxFamily.C_FAMILY,
                 keywords = SWIFT_KEYWORDS, lineComment = "//",
                 blockCommentOpen = "/*", blockCommentClose = "*/",
                 directivePrefix = "#",
@@ -74,7 +80,9 @@ class CodeLanguage(val profile: EditorLanguageProfile) {
         )
         val Xml = CodeLanguage(
             EditorLanguageProfile(
-                id = "xml", suffixes = listOf(".xml"), syntax = SyntaxFamily.XML,
+                id = "xml",
+                suffixes = listOf(".xml", ".html", ".htm", ".svg", ".vue", ".svelte", ".plist"),
+                syntax = SyntaxFamily.XML,
                 blockCommentOpen = "<!--", blockCommentClose = "-->",
             )
         )

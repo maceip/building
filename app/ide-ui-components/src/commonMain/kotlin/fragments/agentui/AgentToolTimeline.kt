@@ -449,26 +449,67 @@ private fun TimelineCallRow(
             if (index != count - 1) Box(Modifier.width(1.dp).height(connectorHeight)
                 .padding(top = 2.dp)) { Canvas(Modifier.matchParentSize()) { drawRect(palette.border) } }
         }
-        Spacer(Modifier.width(10.dp))
+        val sizing = AgentUiTheme.sizing
+        Spacer(Modifier.width(if (sizing.isMobile) 8.dp else 10.dp))
         Column(Modifier.weight(1f)) {
-            Row(Modifier.fillMaxWidth().focusRequester(focus)
-                .onPreviewKeyEvent { event ->
-                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                    navigate("call:${call.id}", event.key)
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focus)
+                    .onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        navigate("call:${call.id}", event.key)
+                    }
+                    .clickable(role = Role.Button) { toggle(call.id) }
+                    .semantics {
+                        role = Role.Button
+                        stateDescription = if (expanded) "Expanded" else "Collapsed"
+                        contentDescription = "${call.name}, $phaseText${if (call.summary.isBlank()) "" else ", ${call.summary}"}"
+                    }
+                    .focusable()
+                    .testTag("agent-timeline-call-${call.id}")
+                    .padding(vertical = if (sizing.isMobile) 9.dp else 6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    UiText(call.name, palette, Modifier.weight(1f), size = 13, maxLines = if (sizing.isMobile) 2 else 1)
+                    UiText(phaseText, palette, muted = true, size = 12, maxLines = 1)
+                    if (!sizing.isMobile && waterfall && timing != null && spanStart != null && spanEnd != null && spanEnd > spanStart) {
+                        TimelineWaterfall(timing, end, spanStart, spanEnd, accent, palette)
+                    }
+                    if (duration != null || !sizing.isMobile) {
+                        UiText(
+                            duration?.let(::formatDuration) ?: "",
+                            palette,
+                            if (sizing.isMobile) Modifier else Modifier.width(42.dp),
+                            muted = true,
+                            size = 11,
+                            mono = true,
+                            maxLines = 1,
+                        )
+                    }
+                    AgentIcon(
+                        AgentIconId.Chevron,
+                        modifier = Modifier.rotate(chevronRotation),
+                        size = 14.dp,
+                        color = palette.muted,
+                    )
                 }
-                .clickable(role = Role.Button) { toggle(call.id) }
-                .semantics { role = Role.Button; stateDescription = if (expanded) "Expanded" else "Collapsed"
-                    contentDescription = "${call.name}, $phaseText${if (call.summary.isBlank()) "" else ", ${call.summary}"}" }
-                .focusable().testTag("agent-timeline-call-${call.id}")
-                .padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                UiText(call.name, palette, Modifier.weight(1f), size = 13)
-                UiText(phaseText, palette, muted = true, size = 12)
-                if (waterfall && timing != null && spanStart != null && spanEnd != null && spanEnd > spanStart)
-                    TimelineWaterfall(timing, end, spanStart, spanEnd, accent, palette)
-                UiText(duration?.let(::formatDuration) ?: "", palette, Modifier.width(42.dp), muted = true, size = 11, mono = true)
-                AgentIcon(AgentIconId.Chevron, modifier = Modifier.rotate(chevronRotation),
-                    size = 14.dp, color = palette.muted)
+                if (sizing.isMobile && waterfall && timing != null && spanStart != null && spanEnd != null && spanEnd > spanStart) {
+                    TimelineWaterfall(
+                        timing = timing,
+                        end = end,
+                        spanStart = spanStart,
+                        spanEnd = spanEnd,
+                        color = accent,
+                        palette = palette,
+                        modifier = Modifier.fillMaxWidth().height(3.dp),
+                    )
+                }
             }
             if (call.phase == ChatTimelinePhase.Error && !expanded && !call.error.isNullOrBlank())
                 UiText(call.error, palette, muted = true, size = 12)
@@ -566,6 +607,7 @@ private fun TimelineSubagentRow(
         "Running" -> palette.accent
         else -> palette.muted
     }
+    val sizing = AgentUiTheme.sizing
     val chevronRotation by animateFloatAsState(if (expanded) 90f else 0f,
         tween(if (motionEnabled) 200 else 0), label = "subagent chevron")
     Row(Modifier.fillMaxWidth().padding(top = 4.dp)) {
@@ -574,7 +616,7 @@ private fun TimelineSubagentRow(
             "Running" -> TimelineStatusMotion.Spin
             else -> TimelineStatusMotion.None
         }, motionEnabled)
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(if (sizing.isMobile) 8.dp else 10.dp))
         Column(Modifier.weight(1f)) {
             val rowModifier = if (subagent.calls.isEmpty()) Modifier.fillMaxWidth() else
                 Modifier.fillMaxWidth().focusRequester(focusById.getValue("subagent:${subagent.id}"))
@@ -588,11 +630,11 @@ private fun TimelineSubagentRow(
                         contentDescription = "${subagent.name}, ${subagent.calls.size} ${if (subagent.calls.size == 1) "call" else "calls"}, $status"
                     }
                     .focusable().testTag("agent-timeline-subagent-${subagent.id}")
-            Row(rowModifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
+            Row(rowModifier.padding(vertical = if (sizing.isMobile) 9.dp else 6.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                UiText(subagent.name, palette, Modifier.weight(1f), size = 13)
-                UiText("${subagent.calls.size} ${if (subagent.calls.size == 1) "call" else "calls"}", palette, muted = true, size = 12)
-                UiText(status, palette, muted = true, size = 12)
+                UiText(subagent.name, palette, Modifier.weight(1f), size = 13, maxLines = 1)
+                UiText("${subagent.calls.size} ${if (subagent.calls.size == 1) "call" else "calls"}", palette, muted = true, size = 12, maxLines = 1)
+                UiText(status, palette, muted = true, size = 12, maxLines = 1)
                 if (subagent.calls.isNotEmpty()) AgentIcon(AgentIconId.Chevron,
                     modifier = Modifier.rotate(chevronRotation), size = 14.dp, color = palette.muted)
             }
@@ -635,8 +677,9 @@ private fun TimelineWaterfall(
     spanEnd: Long,
     color: Color,
     palette: AgentUiPalette,
+    modifier: Modifier = Modifier.width(64.dp).height(4.dp),
 ) {
-    Canvas(Modifier.width(64.dp).height(4.dp).testTag("agent-timeline-waterfall")) {
+    Canvas(modifier.testTag("agent-timeline-waterfall")) {
         drawRoundRect(palette.subtle, cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2))
         if (end != null) {
             val span = (spanEnd - spanStart).toFloat()

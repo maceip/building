@@ -13,6 +13,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -53,6 +55,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import fragments.agentui.AgentUiTheme
 import fragments.components.ReactUiPalette
 import fragments.components.ReactUiPalettes
 import fragments.components.UiButton
@@ -224,11 +227,18 @@ fun PromptInput(
             change("")
         }
     }
+    val sizing = AgentUiTheme.sizing
     UiSurface(palette, modifier.fillMaxWidth(), palette.radius) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (attachments.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                attachments.forEach { attachment ->
-                    UiButton(attachment.name + " ×", { onRemoveAttachment(attachment.id) }, palette)
+            if (attachments.isNotEmpty()) {
+                @OptIn(ExperimentalLayoutApi::class)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    attachments.forEach { attachment ->
+                        UiButton(attachment.name + " ×", { onRemoveAttachment(attachment.id) }, palette)
+                    }
                 }
             }
             UiInput(draft, ::change, placeholder, palette, Modifier.fillMaxWidth().onPreviewKeyEvent {
@@ -238,11 +248,13 @@ fun PromptInput(
                 } else false
             })
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (onAttach != null) UiButton("+", {
                         chooseCreanceFiles().takeIf { it.isNotEmpty() }?.let(onAttach)
                     }, palette, enabled = !disabled)
-                    UiText("Enter to send · Shift+Enter for a new line", palette, muted = true, size = 12)
+                    if (!sizing.isMobile) {
+                        UiText("Enter to send · Shift+Enter for a new line", palette, muted = true, size = 12)
+                    }
                 }
                 UiButton(if (status == ChatStatus.Working) "Stop" else "Send", {
                     if (status == ChatStatus.Working) onStop?.invoke() else submit()
@@ -288,9 +300,14 @@ fun Avatar(name: String, modifier: Modifier = Modifier, palette: ReactUiPalette 
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Suggestions(items: List<String>, onSelect: (String) -> Unit, modifier: Modifier = Modifier, palette: ReactUiPalette = ReactUiPalettes.CreanceDark) {
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(7.dp)) { items.forEach { UiButton(it, { onSelect(it) }, palette) } }
+    FlowRow(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) { items.forEach { UiButton(it, { onSelect(it) }, palette) } }
 }
 
 @Composable
