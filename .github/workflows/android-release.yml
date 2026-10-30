@@ -1,0 +1,143 @@
+name: Android Debug Release
+
+# Publishes the debug APK as a GitHub Release (visible + downloadable from the
+# repository main page). Debug builds are debug-key signed and install directly;
+# no release signing is involved. Rolling cap: max 3 releases/hour; pushes past
+# the cap are not lost - the 5-minute sweeper builds the newest unreleased
+# commit as soon as capacity opens (same pattern as muse-code-desktop).
+on:
+  push:
+    branches: [main, "feat/unified-ios-crawler-llm-corner"]
+    tags: ["android-v*"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  JAVA_VERSION: "25"
+
+jobs:
+  rate-cap:
+    name: Rolling release cap (max 3 releases/hour, deferred build)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.cap.outputs.allowed }}
+    steps:
+      - name: Rolling-window capacity check
+        id: cap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* || "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "allowed=true" >> "${GITHUB_OUTPUT}"; echo "cap bypass: tag/manual"; exit 0
+          fi
+          SINCE_EPOCH="$(date -u -d '1 hour ago' +%s)"
+          COUNT="$(gh release list --limit 30 --json publishedAt,tagName \
+            --jq "[.[] | select(.tagName | startswith(\"android-\")) | select((.publishedAt | fromdateiso8601) > ${SINCE_EPOCH})] | length")"
+          echo "android releases published in last 60 minutes: ${COUNT} (max 3)"
+          if [[ "${COUNT}" -ge 3 ]]; then
+            echo "allowed=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Rolling hourly cap reached. The 5-minute sweeper will build the newest commit when capacity opens."
+            exit 0
+          fi
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+            LATEST_TAG="$(gh release list --limit 30 --json tagName --jq '[.[] | select(.tagName | startswith("android-"))][0].tagName // empty')"
+            RELEASED_SHA=""
+            if [[ -n "${LATEST_TAG}" ]]; then
+              RELEASED_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${LATEST_TAG}" --jq '.object.sha')"
+            fi
+            echo "main HEAD=${HEAD_SHA} newest android release ${LATEST_TAG}=${RELEASED_SHA}"
+            if [[ "${HEAD_SHA}" == "${RELEASED_SHA}" ]]; then
+              echo "allowed=false" >> "${GITHUB_OUTPUT}"; echo "sweeper idle"; exit 0
+            fi
+          fi
+          echo "allowed=true" >> "${GITHUB_OUTPUT}"
+
+  build-and-release:
+    name: Build debug APK and publish release
+    needs: rate-cap
+    if: needs.rate-cap.outputs.allowed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-36 platforms;android-36.1 build-tools;36.0.0 ndk;27.3.13750724"
+
+      - name: Disable Kotlin incremental compilation (CI)
+        run: |
+          mkdir -p ~/.gradle
+          echo "kotlin.incremental=false" >> ~/.gradle/gradle.properties
+
+      - name: Determine release tag
+        id: meta
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/android-v* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          else
+            LAST_SEQ="$(gh release list --limit 30 --json tagName --jq '[.[] | .tagName | capture("^android-dev\\.(?<n>[0-9]+)$") | .n | tonumber] | max // 0')"
+            TAG_NAME="android-dev.$((LAST_SEQ + 1))"
+          fi
+          echo "tag_name=${TAG_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "short_sha=${GITHUB_SHA::7}" >> "${GITHUB_OUTPUT}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build debug APK
+        run: |
+          START=$(date +%s)
+          ./gradlew :ide-android:assembleDebug -Dorg.gradle.jvmargs="-Xmx4g -Dfile.encoding=UTF-8" --console=plain
+          echo "build_seconds=$(( $(date +%s) - START ))" >> "${GITHUB_ENV}"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(ls app/ide-android/build/outputs/apk/debug/*.apk | head -n 1)
+          SIZE_MB=$(( $(stat -c%s "${APK}") / 1048576 ))
+          cp "${APK}" "codeassist-debug-${{ steps.meta.outputs.short_sha }}.apk"
+          gh release create "${{ steps.meta.outputs.tag_name }}" \
+            "codeassist-debug-${{ steps.meta.outputs.short_sha }}.apk" \
+            --title "CodeAssist Android debug ${{ steps.meta.outputs.tag_name }} (${{ steps.meta.outputs.short_sha }})" \
+            --notes "Debug-key signed Android APK (arm64 debug variant, ${SIZE_MB} MB), built from ${GITHUB_SHA}. Installs directly; not a Play Store build. Source commit: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}" \
+            --prerelease
+          echo "apk_size_mb=${SIZE_MB}" >> "${GITHUB_ENV}"
+
+      # Cheap-stack analytics (fail-open: telemetry loss never fails a release).
+      - name: Report analytics to cheap stack
+        if: always()
+        continue-on-error: true
+        env:
+          INGEST_TOKEN: ${{ secrets.CHEAP_STACK_TOKEN }}
+        run: |
+          if [[ -z "${INGEST_TOKEN}" ]]; then echo "no CHEAP_STACK_TOKEN secret; skipping analytics"; exit 0; fi
+          curl -fsS -m 15 -X POST https://cheap-stack-api-4mvkrnysdq-uc.a.run.app/api/events/building \
+            -H "Authorization: Bearer ${INGEST_TOKEN}" -H 'Content-Type: application/json' \
+            -d "{\"kind\":\"android-release\",\"detail\":\"{\\\"tag\\\":\\\"${{ steps.meta.outputs.tag_name }}\\\",\\\"apkMB\\\":${apk_size_mb:-0},\\\"buildS\\\":${build_seconds:-0},\\\"sha\\\":\\\"${GITHUB_SHA::7}\\\"}\"}" \
+            || echo 'WARN: cheap-stack ingest unavailable - continuing (fail-open)'
