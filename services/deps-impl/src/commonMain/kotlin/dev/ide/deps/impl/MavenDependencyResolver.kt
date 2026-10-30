@@ -1289,8 +1289,13 @@ const val AAR_EXPLODE_VERSION = "5"
  * takes the managed one, so a managed `provided`/`test` entry (com.google.zxing:android-core's
  * `com.google.android:android`, a 2012 API-16 android.jar plus the seven legacy jars behind it)
  * stops resolving as `compile` onto the classpath.
+ *
+ * 3:
+ * Multi-module workspaces populate each shared `libraryTable` entry with its full reachable transitive
+ * closure (`DependencyPartition.reachablePerDeclarer`) so one module's declaration order never strips
+ * shared transitives from another module's library entry.
  */
-const val RESOLVER_GRAPH_VERSION = "2"
+const val RESOLVER_GRAPH_VERSION = "3"
 
 /**
  * Maven Central's search hosts, in the order [MavenDependencyResolver] tries them.

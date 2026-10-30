@@ -101,6 +101,35 @@ class DependencyPartitionTest {
         assertEquals(setOf("a", "orphan"), out.values.flatten().map { it.coordinate.name }.toSet())
     }
 
+    @Test
+    fun reachablePerDeclarerRetainsSharedTransitivesForEveryDirectDeclarer() {
+        // Multi-module scenario (e.g. Mochy-Music): `:app` declares `retrofit` -> `okhttp`, while
+        // `:providers:musixmatch` declares only `ktor-client-okhttp` -> `okhttp`. Both direct declarers
+        // must retain `okhttp` in their per-declarer reachable closure so `:providers:musixmatch` has
+        // `okhttp3.*` on its compile classpath.
+        val resolved = listOf(
+            art("retrofit", listOf("okhttp")),
+            art("ktor-client-okhttp", listOf("okhttp", "ktor-client-core")),
+            art("okhttp", listOf("okio")),
+            art("okio"),
+            art("ktor-client-core"),
+        )
+        val out = DependencyPartition.reachablePerDeclarer(
+            listOf(
+                "g:retrofit:1.0" to coord("retrofit"),
+                "g:ktor-client-okhttp:1.0" to coord("ktor-client-okhttp"),
+            ),
+            resolved,
+        )
+        assertEquals(
+            mapOf(
+                "g:retrofit:1.0" to listOf("okhttp", "okio", "retrofit"),
+                "g:ktor-client-okhttp:1.0" to listOf("ktor-client-core", "ktor-client-okhttp", "okhttp", "okio"),
+            ),
+            names(out),
+        )
+    }
+
     private class FakeFile(override val path: String) : VirtualFile {
         override val name get() = path.substringAfterLast('/')
         override val isDirectory = false

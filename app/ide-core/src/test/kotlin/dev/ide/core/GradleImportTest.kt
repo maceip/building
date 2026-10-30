@@ -881,4 +881,68 @@ class GradleImportTest {
             assertFalse(Files.exists(dest.resolve(".platform/gradle-backup")), "backup dir removed after revert")
         }
     }
+
+    @Test
+    fun parsesConfigureApplicationExtensionFlavorsAndBuildConfigFields() {
+        withTempDir("gradle-configure-ext") { dir ->
+            fun w(rel: String, text: String) {
+                val f = dir.resolve(rel)
+                Files.createDirectories(f.parent)
+                f.writeText(text.trimIndent())
+            }
+            w("settings.gradle.kts", """
+                rootProject.name = "MochyMusic"
+                include(":app")
+            """)
+            w("build.gradle.kts", "// root")
+            w("app/build.gradle.kts", """
+                import com.android.build.api.dsl.ApplicationExtension
+
+                plugins {
+                    id("com.android.application")
+                }
+
+                extensions.configure<ApplicationExtension> {
+                    namespace = "com.craftworks.music"
+                    compileSdk = 36
+
+                    defaultConfig {
+                        applicationId = "com.craftworks.music"
+                        minSdk = 28
+                        targetSdk = 36
+                        versionCode = 76
+                        versionName = "2.2.1"
+                        val discordRedirectScheme = providers.gradleProperty("DISCORD_REDIRECT_SCHEME").orNull
+                        manifestPlaceholders["discordRedirectScheme"] =
+                            if (!discordRedirectScheme.isNullOrBlank()) "mochy-discord" else "mochy-discord-unset"
+                        buildConfigField("String", "DISCORD_CLIENT_ID", "\"\"")
+                    }
+
+                    flavorDimensions += "version"
+                    productFlavors {
+                        create("proprietary") {
+                            dimension = "version"
+                            buildConfigField("boolean", "ENABLE_CAST", "true")
+                        }
+                        create("foss") {
+                            dimension = "version"
+                            isDefault = true
+                            buildConfigField("boolean", "ENABLE_CAST", "false")
+                        }
+                    }
+                }
+            """)
+            Files.createDirectories(dir.resolve("app/src/main/java"))
+
+            val app = assertNotNull(GradleImport.parse(dir)).modules.single()
+            assertEquals("com.craftworks.music", app.namespace)
+            assertEquals(36, app.compileSdk)
+            assertEquals(28, app.minSdk)
+            assertEquals(36, app.targetSdk)
+            assertEquals(76, app.versionCode)
+            assertEquals("2.2.1", app.versionName)
+            assertEquals("mochy-discord-unset", app.manifestPlaceholders["discordRedirectScheme"])
+            assertEquals(listOf("foss", "proprietary"), app.productFlavors.map { it.name }, "isDefault=true flavor must be sorted first")
+        }
+    }
 }

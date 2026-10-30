@@ -164,20 +164,32 @@ class DependencyModelBridge(private val store: ProjectModelStore) {
     fun attach(module: Module, result: ResolutionResult): Boolean {
         val directs = declared(module).map { it.coordinate.toString() to it.coordinate }
         if (directs.isEmpty()) return false
-        val partition = DependencyPartition.partition(directs, result.resolved)
+        val isMultiModule = store.workspace.projects.sumOf { it.modules.size } > 1
+        val partition = if (isMultiModule) {
+            DependencyPartition.reachablePerDeclarer(directs, result.resolved)
+        } else {
+            DependencyPartition.partition(directs, result.resolved)
+        }
         val byCoordinate = result.resolved.associateBy { it.coordinate }
         var changed = false
         for ((libraryName, coordinate) in directs) {
             val artifacts = partition[libraryName].orEmpty()
             if (artifacts.isEmpty()) continue
-            val classes = artifacts
-                .flatMap { listOf(it.classesRoot.path) + it.extraClassesRoots.map { r -> r.path } }
-                .toSet()
-            val sources = artifacts.mapNotNull { it.sourcesRoot?.path }.toSet()
             val existing = library(libraryName)
+            val classesMap = LinkedHashMap<String, dev.ide.vfs.VirtualFile>()
+            val sourcesMap = LinkedHashMap<String, dev.ide.vfs.VirtualFile>()
+            if (isMultiModule && existing != null) {
+                existing.classesRoots.forEach { classesMap[it.path] = it }
+                existing.sourcesRoots.forEach { sourcesMap[it.path] = it }
+            }
+            artifacts.forEach { artifact ->
+                classesMap[artifact.classesRoot.path] = artifact.classesRoot
+                artifact.extraClassesRoots.forEach { r -> classesMap[r.path] = r }
+                artifact.sourcesRoot?.let { s -> sourcesMap[s.path] = s }
+            }
             if (existing != null &&
-                existing.classesRoots.map { it.path }.toSet() == classes &&
-                existing.sourcesRoots.map { it.path }.toSet() == sources
+                existing.classesRoots.map { it.path }.toSet() == classesMap.keys &&
+                existing.sourcesRoots.map { it.path }.toSet() == sourcesMap.keys
             ) continue
             val primary = byCoordinate[coordinate]
                 ?: result.resolved.firstOrNull {
@@ -185,11 +197,8 @@ class DependencyModelBridge(private val store: ProjectModelStore) {
                 }
             store.workspace.libraryTable.create(libraryName).apply {
                 kind = if (primary?.kind == ArtifactKind.AAR) LibraryKind.AAR else LibraryKind.JAR
-                artifacts.forEach { artifact ->
-                    addClassesRoot(artifact.classesRoot)
-                    artifact.extraClassesRoots.forEach { addClassesRoot(it) }
-                    artifact.sourcesRoot?.let { addSourcesRoot(it) }
-                }
+                classesMap.values.forEach { addClassesRoot(it) }
+                sourcesMap.values.forEach { addSourcesRoot(it) }
                 commit()
             }
             changed = true

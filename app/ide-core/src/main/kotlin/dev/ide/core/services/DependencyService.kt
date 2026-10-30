@@ -327,6 +327,15 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
         }
     }
 
+    private fun scopedReconcileModules(): List<Module> {
+        val allMods = mavenDepModules()
+        if (allMods.size <= 16) return allMods
+        val primary = ctx.modules().firstOrNull { it.facets.get(AndroidFacet.KEY)?.isApplication == true }
+            ?: ctx.modules().firstOrNull()
+        val closureNames = primary?.let { ctx.moduleBuildClosure(it).mapTo(HashSet()) { m -> m.name } }
+        return if (closureNames != null) allMods.filter { it.name in closureNames } else allMods
+    }
+
     /**
      * Resolve any unpopulated Maven dependencies for [modules] on demand and persist `libraries.json` when
      * changes occur.
@@ -335,9 +344,18 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
         modules: Collection<Module>,
         onLog: (String) -> Unit = {},
     ) {
-        val toResolve = modules.filter { moduleNeedsResolution(it) }
+        val reconcileMods = scopedReconcileModules()
+        val expectedFingerprint = if (reconcileMods.isNotEmpty()) reconcileFingerprint(reconcileMods) else null
+        val reconcileOutdated = ctx.modules().size > 1 &&
+            expectedFingerprint != null &&
+            runCatching { reconcileMarker.readText() }.getOrNull() != expectedFingerprint
+        val toResolve = modules.filter { m ->
+            moduleNeedsResolution(m) ||
+                (reconcileOutdated && m.dependencies.any { dep -> dep is LibraryDependency && parseInputCoordinate(dep.library.name) != null })
+        }
         if (toResolve.isEmpty()) return
         var changedAny = false
+        var allComplete = true
         for ((i, m) in toResolve.withIndex()) {
             onLog("Resolving dependencies for ${m.name} (${i + 1}/${toResolve.size})…")
             val asm = runCatching {
@@ -345,11 +363,18 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
             }.onFailure {
                 depsLog.warn("build-time resolve ${m.name} aborted: ${it.javaClass.simpleName}: ${it.message}")
             }.getOrNull()
+            if (asm == null || asm.unresolved.isNotEmpty()) allComplete = false
             if (asm?.changed == true) changedAny = true
         }
         if (changedAny) {
             ctx.mutateSources { ctx.store.save() }
             ctx.events.librariesChanged()
+        }
+        if (reconcileOutdated && allComplete && expectedFingerprint != null) {
+            val resolvedNames = toResolve.mapTo(HashSet()) { it.name }
+            if (reconcileMods.all { it.name in resolvedNames }) {
+                markReconciled(expectedFingerprint)
+            }
         }
         _depsState.update {
             it.copy(resolving = false, message = "", unresolved = computeUnresolved(), warnings = computeWarnings())
@@ -570,7 +595,12 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
         // reads its own kind rather than a sibling classifier's.
         val byCoordinate = result.resolved.associateBy { it.coordinate }
         val byGa = result.resolved.associateBy { it.coordinate.group to it.coordinate.name }
-        val partition = DependencyPartition.partition(directs, result.resolved)
+        val isMultiModule = ctx.modules().size > 1
+        val partition = if (isMultiModule) {
+            DependencyPartition.reachablePerDeclarer(directs, result.resolved)
+        } else {
+            DependencyPartition.partition(directs, result.resolved)
+        }
         // Stamp a why-it-failed on each declared coordinate that didn't resolve (cleared if it did), so the
         // project error state can explain itself; keyed by the declared library name.
         recordResolveReasons(directs, result)
@@ -587,25 +617,26 @@ internal class DependencyService(private val ctx: EngineContext) : Disposable {
         for ((libName, coord) in directs) {
             val artifacts = partition[libName].orEmpty()
             if (artifacts.isEmpty()) continue   // primary didn't resolve (offline) → keep any existing closure
-            val freshClasses = artifacts.flatMap { listOf(it.classesRoot.path) + it.extraClassesRoots.map { r -> r.path } }.toSet()
-            // The whole closure's `-sources.jar`s — direct AND transitive — so go-to-source, real parameter
-            // names, and javadoc/KDoc resolve for every type the library can reach, not just the declared
-            // coordinate. (`sourceAttachments` → JdtSourceAnalyzer's resolver + the source-doc index.) Included
-            // in the up-to-date check so an existing library whose classes already match but is missing the
-            // transitive sources (the prior behavior, or an offline first resolve) heals on reconcile.
-            val freshSources = artifacts.mapNotNull { it.sourcesRoot?.path }.toSet()
+            val freshClassesRoots = LinkedHashMap<String, VirtualFile>()
+            val freshSourcesRoots = LinkedHashMap<String, VirtualFile>()
             val existing = findLibrary(libName)
+            if (isMultiModule && existing != null) {
+                existing.classesRoots.forEach { freshClassesRoots[it.path] = it }
+                existing.sourcesRoots.forEach { freshSourcesRoots[it.path] = it }
+            }
+            artifacts.forEach { a ->
+                freshClassesRoots[a.classesRoot.path] = a.classesRoot
+                a.extraClassesRoots.forEach { r -> freshClassesRoots[r.path] = r }
+                a.sourcesRoot?.let { s -> freshSourcesRoots[s.path] = s }
+            }
             if (existing?.classesRoots?.map { it.path }
-                    ?.toSet() == freshClasses && existing.sourcesRoots.map { it.path }
-                    .toSet() == freshSources) continue // already correct
+                    ?.toSet() == freshClassesRoots.keys && existing.sourcesRoots.map { it.path }
+                    .toSet() == freshSourcesRoots.keys) continue // already correct
             val primary = byCoordinate[coord] ?: byGa[coord.group to coord.name]
             ctx.store.workspace.libraryTable.create(libName).apply {
                 kind = if (primary?.kind == ArtifactKind.AAR) LibraryKind.AAR else LibraryKind.JAR
-                artifacts.forEach { a ->
-                    addClassesRoot(a.classesRoot)
-                    a.extraClassesRoots.forEach { addClassesRoot(it) }
-                    a.sourcesRoot?.let { addSourcesRoot(it) }
-                }
+                freshClassesRoots.values.forEach { addClassesRoot(it) }
+                freshSourcesRoots.values.forEach { addSourcesRoot(it) }
                 commit()
             }
             changed = true

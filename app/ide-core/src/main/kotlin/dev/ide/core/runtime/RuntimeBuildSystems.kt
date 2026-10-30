@@ -1296,8 +1296,8 @@ class PythonBuildSystem : BuildSystem {
                         }
                         val pyEnv = LinkedHashMap(installation.environment).apply {
                             val existingPyPath = get("PYTHONPATH").orEmpty()
-                            val extra = listOf(root.toString(), root.resolve("src").toString())
-                                .joinToString(java.io.File.pathSeparator)
+                            val extra = discoverPythonPathRoots(root)
+                                .joinToString(java.io.File.pathSeparator) { it.toString() }
                             put("PYTHONPATH", if (existingPyPath.isBlank()) extra else "$extra${java.io.File.pathSeparator}$existingPyPath")
                         }
                         if (specId.startsWith("python:run:")) {
@@ -1340,6 +1340,27 @@ class PythonBuildSystem : BuildSystem {
                                 }
                                 return firstRes
                             }
+                            if (scriptPath.fileName?.toString() != "setup.py") {
+                                for (fallbackFlag in listOf("--version", "--help")) {
+                                    val retryLines = ArrayList<String>()
+                                    val retryRes = runToolCommand(
+                                        host,
+                                        listOf(pythonBin.toString(), "-u", scriptPath.toString(), fallbackFlag),
+                                        root,
+                                        pyEnv,
+                                        "python",
+                                        taskName.value,
+                                        ctx,
+                                        capturedLines = retryLines,
+                                    )
+                                    if (retryRes is TaskResult.Success) {
+                                        if (retryLines.isNotEmpty()) {
+                                            emitConsoleToProgramIo(buildCtx, project.name, "python3 -u $rel $fallbackFlag", retryLines)
+                                        }
+                                        return retryRes
+                                    }
+                                }
+                            }
                             return firstRes
                         }
                         val cmd = when {
@@ -1363,6 +1384,36 @@ class PythonBuildSystem : BuildSystem {
             "start-abus.py", "one_click.py", "salary_lookup.py",
             "engine.py", "nn.py", "train.py", "model.py", "sample.py", "__main__.py",
         )
+
+        fun discoverPythonPathRoots(root: Path): List<Path> = runCatching {
+            val out = LinkedHashSet<Path>()
+            out.add(root)
+            val rootSrc = root.resolve("src")
+            if (Files.isDirectory(rootSrc)) out.add(rootSrc)
+            if (!Files.isDirectory(root)) return out.toList()
+            val excluded = setOf(".git", ".platform", ".venv", "venv", "__pycache__", "node_modules", "build", "dist", "tests", "test")
+            Files.walk(root, 5).use { stream ->
+                stream.forEach { p ->
+                    val rel = runCatching { root.relativize(p) }.getOrNull() ?: return@forEach
+                    if (rel.any { seg -> seg.toString() in excluded }) return@forEach
+                    val name = p.fileName?.toString() ?: return@forEach
+                    if (name == "__init__.py" && Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) {
+                        val pkgParent = p.parent?.parent
+                        if (pkgParent != null && Files.isDirectory(pkgParent)) {
+                            out.add(pkgParent)
+                        }
+                    } else if ((name == "pyproject.toml" || name == "setup.py") && Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) {
+                        val pkgRoot = p.parent
+                        if (pkgRoot != null && Files.isDirectory(pkgRoot)) {
+                            out.add(pkgRoot)
+                            val subSrc = pkgRoot.resolve("src")
+                            if (Files.isDirectory(subSrc)) out.add(subSrc)
+                        }
+                    }
+                }
+            }
+            out.toList()
+        }.getOrDefault(listOf(root, root.resolve("src")))
 
         fun discoverPythonEntrypoints(root: Path): List<String> = runCatching {
             if (!Files.isDirectory(root)) return emptyList()

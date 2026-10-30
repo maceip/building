@@ -325,7 +325,7 @@ object GradleImport {
         val androidTexts = ArrayList<String>()
         val depBodies = ArrayList<String>()
         val conventionTexts = ArrayList<String>()
-        GradleScript.blockBody(build, "android")?.let { androidTexts.add(it) }
+        androidTexts.addAll(GradleScript.androidBlockBodies(build))
         run {
             val visited = HashSet<String>()
             val queue = ArrayDeque(plugins.toList())
@@ -339,7 +339,7 @@ object GradleImport {
                     continue
                 }
                 for (p in collectPluginIds(conv.text, catalog)) { plugins.add(p); queue.add(p) }
-                GradleScript.blockBody(conv.text, "android")?.let { androidTexts.add(it) }
+                androidTexts.addAll(GradleScript.androidBlockBodies(conv.text))
                 GradleScript.blockBody(conv.text, "dependencies")?.let { depBodies.add(it) }
                 conventionTexts.add(conv.text)
             }
@@ -885,7 +885,11 @@ object GradleImport {
 
     private fun parseProductFlavors(android: String, vars: Map<String, String>): List<FlavorSpec> {
         val body = GradleScript.blockBody(android, "productFlavors") ?: return emptyList()
-        return GradleScript.childBlocks(body).filter { it.name !in RESERVED_CONFIG_BLOCKS }.map { b ->
+        val blocks = GradleScript.childBlocks(body).filter { it.name !in RESERVED_CONFIG_BLOCKS }
+        val sorted = blocks.sortedByDescending { b ->
+            Regex("""\bisDefault\s*=\s*true\b""").containsMatchIn(b.body)
+        }
+        return sorted.map { b ->
             FlavorSpec(
                 b.name,
                 firstGroup(b.body, """dimension\s*=?\s*['"]([\w.\-]+)['"]"""),
@@ -935,6 +939,9 @@ object GradleImport {
     private val NO_COMPRESS_STATEMENT = Regex("""^noCompress\b""")
     private val STRING_LITERAL = Regex("""(['"])([^'"]*)\1""")
 
+    private val PLACEHOLDER_INDEXED_KEY =
+        Regex("""manifestPlaceholders\s*\[\s*['"]([^'"]+)['"]\s*]\s*=\s*(.+)$""")
+
     private fun parseManifestPlaceholders(body: String, vars: Map<String, String>): Map<String, String> {
         val out = LinkedHashMap<String, String>()
         for (st in GradleScript.statements(body)) {
@@ -945,6 +952,17 @@ object GradleImport {
                 perKey = true
             }
             if (perKey) continue
+            val indexedExpr = PLACEHOLDER_INDEXED_KEY.find(st)
+            if (indexedExpr != null) {
+                val key = indexedExpr.groupValues[1]
+                val rhs = indexedExpr.groupValues[2]
+                val candidates = STRING_LITERAL.findAll(rhs).map { interpolate(it.groupValues[2], vars) }.toList()
+                val chosen = candidates.lastOrNull { '$' !in it } ?: candidates.lastOrNull()
+                if (chosen != null) {
+                    out[key] = chosen
+                    continue
+                }
+            }
             // Only what follows the `=` / `+=`, so `manifestPlaceholders` itself can't be read as an entry key.
             val literal = st.substringAfter('=', "")
             for (m in PLACEHOLDER_ENTRY.findAll(literal)) out[m.groupValues[1]] = interpolate(m.groupValues[2], vars)

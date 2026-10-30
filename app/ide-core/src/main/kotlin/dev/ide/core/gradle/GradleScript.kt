@@ -44,6 +44,23 @@ internal object GradleScript {
     fun allBlockBodies(text: String, name: String): List<String> =
         blockBodyRanges(text, name).map { text.substring(it.first, it.last + 1) }
 
+    private val ANDROID_CONFIGURE_RE = Regex(
+        """(?:extensions\s*\.\s*)?configure\s*(?:<\s*[\w.]*(?:Application|Library|Common|Base|Tested|Android)\w*Extension[\w.<>,\s]*>\s*(?:\(\s*\))?|\(\s*[\w.]*(?:Application|Library|Common|Base|Tested|Android)\w*Extension[\w.:\s,()]*\))\s*\{"""
+    )
+
+    /** Every `android { … }` or `(extensions.)configure<…Extension> { … }` block body in [text]. */
+    fun androidBlockBodies(text: String): List<String> {
+        val out = ArrayList<String>(allBlockBodies(text, "android"))
+        for (m in ANDROID_CONFIGURE_RE.findAll(text)) {
+            val openBrace = m.range.last
+            if (text.getOrNull(openBrace) == '{') {
+                val close = matching(text, openBrace, '{', '}')
+                if (close > openBrace) out.add(text.substring(openBrace + 1, close))
+            }
+        }
+        return out
+    }
+
     /**
      * The body of the first `name { … }` block as a range into [text] (the braces excluded), or null. Ranges
      * rather than substrings are what an edit needs: pass [maskComments] output to locate the block and the
@@ -119,7 +136,15 @@ internal object GradleScript {
                 c == '"' || c == '\'' -> { val e = literalEnd(text, i); cur.append(text, i, e); i = e; continue }
                 c == '{' || c == '(' || c == '[' -> { depth++; cur.append(c) }
                 c == '}' || c == ')' || c == ']' -> { if (depth > 0) depth--; cur.append(c) }
-                (c == '\n' || c == ';') && depth == 0 -> flush()
+                c == '\n' && depth == 0 -> {
+                    val trimmed = cur.toString().trimEnd()
+                    val nextIdx = skipSpaces(text, i + 1)
+                    val continuesOnNextLine = trimmed.endsWith("=") ||
+                        trimmed.endsWith("else") ||
+                        (nextIdx < text.length && text.startsWith("else", nextIdx) && !isIdentPart(text.getOrNull(nextIdx + 4) ?: ' '))
+                    if (continuesOnNextLine) cur.append(' ') else flush()
+                }
+                c == ';' && depth == 0 -> flush()
                 else -> cur.append(c)
             }
             i++

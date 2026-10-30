@@ -68,4 +68,48 @@ object DependencyPartition {
             ?.let { leftover -> out.values.firstOrNull()?.addAll(leftover) }
         return out
     }
+
+    /**
+     * Multi-module safe variant of [partition]: each direct dependency receives its full reachable
+     * transitive closure within [resolved] (deduplicated per declarer rather than globally across declarers).
+     *
+     * Why this matters in multi-module workspaces: `workspace.libraryTable` is shared by library name across
+     * all modules in the workspace. If module A declares `[ktor-client-core, ktor-client-okhttp]` and module B
+     * declares only `[ktor-client-okhttp]`, partitioning module A with a cross-declarer `claimed` set strips
+     * `kotlinx-coroutines-core` and `ktor-client-core` out of the shared `ktor-client-okhttp` library entry,
+     * leaving module B without its transitive dependencies at compile time.
+     */
+    fun reachablePerDeclarer(
+        directs: List<Pair<String, Coordinate>>,
+        resolved: List<ResolvedArtifact>,
+    ): LinkedHashMap<String, MutableList<ResolvedArtifact>> {
+        val byGa = HashMap<Ga, MutableList<ResolvedArtifact>>()
+        resolved.forEach { byGa.getOrPut(it.ga) { ArrayList() }.add(it) }
+
+        val claimedAny = HashSet<ArtifactId>()
+        val out = LinkedHashMap<String, MutableList<ResolvedArtifact>>()
+        for ((libName, coord) in directs) {
+            val bucket = out.getOrPut(libName) { ArrayList() }
+            val claimedInBucket = bucket.mapTo(HashSet()) { it.artifactId }
+            val root: Ga = coord.group to coord.name
+            val queue = ArrayDeque<Ga>()
+            if (byGa.containsKey(root)) queue.add(root)
+            val seen = HashSet<Ga>()
+            while (queue.isNotEmpty()) {
+                val ga = queue.removeFirst()
+                if (!seen.add(ga)) continue
+                val candidates = byGa[ga] ?: continue
+                val exact = if (ga == root) candidates.filter { it.coordinate.classifier == coord.classifier } else emptyList()
+                for (art in exact.ifEmpty { candidates }) {
+                    claimedAny.add(art.artifactId)
+                    if (claimedInBucket.add(art.artifactId)) bucket.add(art)
+                }
+                candidates.flatMap { it.dependsOn }.forEach { queue.add(it.group to it.name) }
+            }
+        }
+        resolved.filter { it.artifactId !in claimedAny }
+            .takeIf { it.isNotEmpty() }
+            ?.let { leftover -> out.values.firstOrNull()?.addAll(leftover) }
+        return out
+    }
 }

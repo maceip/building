@@ -38,16 +38,19 @@ class GenerateSourcesTask(
      *  Supplied by the build system that builds this task, which is the layer that can read the module's
      *  facet; the engine only forwards it. */
     private val acceptedWarnings: Set<String> = emptySet(),
+    /** Optional explicit source roots (e.g. variant-active roots + generated BuildConfig) supplied by the
+     *  build system when the module's active variant selects conventional roots not listed on `module.sourceSets`. */
+    private val explicitSourceRoots: List<Path>? = null,
 ) : Task {
 
     /** The module's `ContentRole.SOURCE` root directories (excludes the generated root, so a generator never
      *  sees its own output as an input and can't ping-pong the up-to-date check). */
-    private fun sourceRootDirs(): List<Path> = module.sourceSets
+    private fun sourceRootDirs(): List<Path> = (explicitSourceRoots ?: module.sourceSets
         .filter { it.scope.onCompile || it.scope.onRuntime }   // never a test-only set; see sourceRootDirs
         .flatMap { it.contentRoots }
         .filter { ContentRole.SOURCE in it.roles }
-        .map { Paths.get(it.dir.path) }
-        .filter { Files.isDirectory(it) }
+        .map { Paths.get(it.dir.path) })
+        .filter { it != outputDir && Files.isDirectory(it) }
 
     /** The module's hand-written source files of [ext] (SOURCE roots only; excludes the generated root). */
     private fun handWritten(ext: String): List<Path> = sourceRootDirs()

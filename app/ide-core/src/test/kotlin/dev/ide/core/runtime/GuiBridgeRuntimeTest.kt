@@ -113,9 +113,9 @@ class GuiBridgeRuntimeTest {
         assertTrue(prelude.contains("public final class UIScreen"), "Prelude must shim UIScreen")
         assertTrue(prelude.contains("public struct UIColor"), "Prelude must shim UIColor")
         assertTrue(prelude.contains("public struct UIImage"), "Prelude must shim UIImage")
-        assertTrue(prelude.contains("public open class UIViewController"), "Prelude must shim UIViewController")
-        assertTrue(prelude.contains("public open class UIHostingController"), "Prelude must shim UIHostingController")
-        assertTrue(prelude.contains("public open class UINavigationController"), "Prelude must shim UINavigationController")
+        assertTrue(prelude.contains("open class UIViewController"), "Prelude must shim UIViewController")
+        assertTrue(prelude.contains("open class UIHostingController"), "Prelude must shim UIHostingController")
+        assertTrue(prelude.contains("open class UINavigationController"), "Prelude must shim UINavigationController")
         assertTrue(prelude.contains("public protocol UIViewControllerRepresentable"), "Prelude must shim UIViewControllerRepresentable")
         assertTrue(prelude.contains("public final class UIPasteboard"), "Prelude must shim UIPasteboard")
         assertTrue(prelude.contains("public final class UIImpactFeedbackGenerator"), "Prelude must shim UIImpactFeedbackGenerator")
@@ -332,5 +332,107 @@ class GuiBridgeRuntimeTest {
 
         assertTrue(sources.contains("Good.swift"), "Safe file must be a focused companion")
         assertFalse(sources.contains("Unsupported.swift"), "Files with unsupported imports must be dropped")
+    }
+
+    @Test
+    fun clickyMacOsSwiftUiPanelCompilesAndEmitsViewNodeTree() {
+        val clickyScratch = java.nio.file.Path.of(
+            "/Users/mac/.gemini/antigravity/brain/3b9b0b45-1a86-4ebb-8e55-ac862d896016/scratch/clicky"
+        )
+        val projectRoot = if (Files.isDirectory(clickyScratch.resolve("leanring-buddy"))) {
+            clickyScratch
+        } else {
+            val tmp = Files.createTempDirectory("clicky-test-repo")
+            val dir = tmp.resolve("leanring-buddy")
+            Files.createDirectories(dir)
+            dir.resolve("DesignSystem.swift").writeText(
+                """
+                import SwiftUI
+                import Foundation
+                import AppKit
+
+                enum DS {
+                    enum Colors {
+                        static let background = Color(NSColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1.0))
+                        static let textPrimary = Color.white
+                        static let textSecondary = Color.gray
+                        static let textTertiary = Color.gray
+                        static let textOnAccent = Color.white
+                        static let borderSubtle = Color.gray
+                        static let accent = Color.blue
+                        static let success = Color.green
+                        static let warning = Color.orange
+                        static let blue400 = Color.blue
+                    }
+                    enum CornerRadius {
+                        static let medium: CGFloat = 8
+                        static let large: CGFloat = 10
+                    }
+                }
+                extension View {
+                    func pointerCursor(isEnabled: Bool = true) -> some View { self }
+                    func dsTooltip(_ text: String) -> some View {
+                        self.overlay(Group { Text(text) })
+                    }
+                }
+                """.trimIndent(),
+            )
+            dir.resolve("CompanionPanelView.swift").writeText(
+                """
+                import AVFoundation
+                import SwiftUI
+
+                struct CompanionPanelView: View {
+                    @ObservedObject var companionManager: CompanionManager
+                    var body: some View {
+                        VStack {
+                            Text("Clicky")
+                            Text("PERMISSIONS")
+                        }
+                    }
+                }
+                """.trimIndent(),
+            )
+            tmp
+        }
+
+        val scratch = Files.createTempDirectory("clicky-shadow-scratch")
+        val shadow = GuiBridgeRuntime.prepareCupertinoShadow(projectRoot, scratch)
+        assertTrue(Files.isRegularFile(shadow.resolve("FocusedCompanionShims.swift")), "FocusedCompanionShims.swift must be emitted")
+        assertTrue(Files.isRegularFile(shadow.resolve("CupertinoShadowMain.swift")), "CupertinoShadowMain.swift must be emitted")
+        val mainText = Files.readString(shadow.resolve("CupertinoShadowMain.swift"))
+        assertTrue(
+            mainText.contains("CompanionPanelView(companionManager: .init())"),
+            "CupertinoShadowMain must instantiate CompanionPanelView(companionManager: .init()), got: $mainText",
+        )
+
+        val hostBridgeSdk = java.nio.file.Path.of(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk")
+        if (Files.isDirectory(hostBridgeSdk) && Files.isRegularFile(hostBridgeSdk.resolve("libSwiftUI.a"))) {
+            val swiftFiles = Files.walk(shadow).use { s ->
+                s.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".swift") }.toList()
+            }
+            val outBin = scratch.resolve("Clicky-cupertino")
+            val cmd = buildList {
+                add("swiftc")
+                add("-parse-as-library")
+                swiftFiles.forEach { add(it.toString()) }
+                add("-I$hostBridgeSdk")
+                add("-L$hostBridgeSdk")
+                add("-lSwiftUI")
+                add("-o")
+                add(outBin.toString())
+            }
+            val proc = ProcessBuilder(cmd).redirectErrorStream(true).start()
+            val compileOut = proc.inputStream.bufferedReader().readText()
+            val exitCode = proc.waitFor()
+            assertEquals(0, exitCode, "swiftc failed on Clicky shadow:\n$compileOut")
+
+            val runProc = ProcessBuilder(outBin.toString()).start()
+            val firstLine = runProc.inputStream.bufferedReader().readLine() ?: ""
+            runProc.destroyForcibly()
+            assertTrue(GuiBridgeRuntime.isBridgeJsonLine(firstLine), "Expected ViewNode JSON line, got: $firstLine")
+            assertTrue(firstLine.contains("Clicky"), "Rendered ViewNode JSON must contain 'Clicky'")
+            assertTrue(firstLine.contains("PERMISSIONS"), "Rendered ViewNode JSON must contain 'PERMISSIONS'")
+        }
     }
 }

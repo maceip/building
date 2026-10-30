@@ -5227,7 +5227,9 @@ class IdeServices private constructor(
         ): IdeServices {
             val (platform, store) = openStore(root, env)
             ensureSdks(store, sdk, sharedCachesRoot ?: root)
-            if (reconcileStaleExportedModelIfNeeded(root, store, env)) {
+            if (reconcileStaleExportedModelIfNeeded(root, store, env) ||
+                reconcileStaleGradleCompatModelIfNeeded(root, store, env)
+            ) {
                 ensureSdks(store, sdk, sharedCachesRoot ?: root)
             }
             return IdeServices(
@@ -5271,6 +5273,41 @@ class IdeServices private constructor(
                 }
                 reposFile.writeText(filtered.joinToString("\n") + "\n")
             }
+            ExternalRepositories.merge(root, model.repositories)
+            true
+        }.getOrDefault(false)
+
+        /**
+         * Heal an already-imported `gradle-compat` workspace whose build script uses `extensions.configure<ApplicationExtension>`
+         * (or declares `productFlavors` / `manifestPlaceholders` that an earlier import missed) so opening the
+         * existing project updates `module.toml` automatically.
+         */
+        private fun reconcileStaleGradleCompatModelIfNeeded(
+            root: Path,
+            store: ProjectModelStore,
+            env: ApplicationEnvironment,
+        ): Boolean = runCatching {
+            val marker = ExternalProjectMarker.read(root) ?: return false
+            if (marker.importerId != BuildSystemId.GRADLE_COMPAT.value) return false
+            val staleModules = store.workspace.projects.flatMap { it.modules }.filter { m ->
+                val facet = m.facets.get(AndroidFacet.KEY) ?: return@filter false
+                val modDir = Paths.get(m.dir.path)
+                val script = listOf(modDir.resolve("build.gradle.kts"), modDir.resolve("build.gradle"))
+                    .firstOrNull { Files.isRegularFile(it) }
+                    ?.let { runCatching { Files.readString(it) }.getOrNull() }
+                    ?: return@filter false
+                (facet.productFlavors.isEmpty() && "productFlavors" in script) ||
+                    (facet.manifestPlaceholders.isEmpty() && "manifestPlaceholders" in script)
+            }.mapTo(HashSet()) { it.name }
+            if (staleModules.isEmpty()) return false
+            val importer = dev.ide.core.gradle.GradleProjectImporter()
+            val request = SyncRequest(root, NoSyncProgress, SyncReason.IMPORT)
+            val rawModel = runSync { importer.resolve(request) }.model ?: return false
+            val model = ProjectSyncService.contributeTo(env.platform.extensions, importer, request, rawModel)
+            val langLevel = store.workspace.projects.flatMap { it.modules }.firstOrNull()?.languageLevel
+                ?: LanguageLevel.JAVA_17
+            ExternalModelApplier(store).apply(model, langLevel, removeAbsent = false, recreate = staleModules)
+            store.save()
             ExternalRepositories.merge(root, model.repositories)
             true
         }.getOrDefault(false)

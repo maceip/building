@@ -174,10 +174,28 @@ object GuiBridgeRuntime {
 
     internal val CUPERTINO_BRIDGE_PRELUDE = """
         import SwiftUI
-        import struct Foundation.UUID
-        import struct Foundation.Date
-        import struct Foundation.URL
-        import struct Foundation.Data
+        import Foundation
+        #if canImport(Darwin)
+        import Darwin
+        #elseif canImport(Android)
+        import Android
+        #elseif canImport(Glibc)
+        import Glibc
+        #endif
+
+        public typealias CGFloat = Double
+        public typealias ObservableObject = SwiftUI.ObservableObject
+        public typealias Published<Value> = SwiftUI.Published<Value>
+        public typealias ObservedObject<ObjectType: SwiftUI.ObservableObject> = SwiftUI.ObservedObject<ObjectType>
+        public typealias StateObject<ObjectType: SwiftUI.ObservableObject> = SwiftUI.StateObject<ObjectType>
+
+        public struct Group<Content: View>: View {
+            public let content: Content
+            public init(@ViewBuilder content: () -> Content) {
+                self.content = content()
+            }
+            public var body: some View { content }
+        }
 
         public typealias LocalizedStringKey = String
         public protocol ShapeStyle {}
@@ -195,10 +213,17 @@ object GuiBridgeRuntime {
             init(cornerRadius: Double, style: RoundedCornerStyle) {
                 self.init(cornerRadius: cornerRadius)
             }
+            func trim(from: Double, to: Double) -> Self { self }
             func stroke(_ content: Color, lineWidth: Double = 1) -> Self { self }
         }
         public extension Circle {
             func stroke(_ content: Color, lineWidth: Double = 1) -> Self { self }
+        }
+        public extension Animation {
+            func repeatForever(autoreverses: Bool = true) -> Animation { self }
+            func repeatCount(_ repeatCount: Int, autoreverses: Bool = true) -> Animation { self }
+            func delay(_ delay: Double) -> Animation { self }
+            func speed(_ speed: Double) -> Animation { self }
         }
         public struct Material: ShapeStyle, Sendable {
             public static let regularMaterial = Material()
@@ -235,13 +260,31 @@ object GuiBridgeRuntime {
             func textInputAutocapitalization(_ autocapitalization: TextInputAutocapitalization?) -> Self { self }
             func onChange<V: Equatable>(of value: V, initial: Bool = false, _ action: @escaping (V, V) -> Void) -> Self { self }
             func focused(_ condition: Binding<Bool>) -> Self { self }
+            func onHover(perform action: @escaping (Bool) -> Void) -> Self { self }
+            func allowsHitTesting(_ enabled: Bool) -> Self { self }
+            func labelsHidden() -> Self { self }
         }
 
         public struct NSColor: Sendable {
+            public enum ColorSpace: Sendable {
+                case sRGB, deviceRGB
+            }
             public let r: Double, g: Double, b: Double, a: Double
             public init(srgbRed: Double, green: Double, blue: Double, alpha: Double) {
                 self.r = srgbRed; self.g = green; self.b = blue; self.a = alpha
             }
+            public init(_ color: Color) {
+                let v = color.argb
+                self.a = Double((v >> 24) & 0xFF) / 255.0
+                self.r = Double((v >> 16) & 0xFF) / 255.0
+                self.g = Double((v >> 8) & 0xFF) / 255.0
+                self.b = Double(v & 0xFF) / 255.0
+            }
+            public var redComponent: Double { r }
+            public var greenComponent: Double { g }
+            public var blueComponent: Double { b }
+            public var alphaComponent: Double { a }
+            public func usingColorSpace(_ space: ColorSpace) -> NSColor? { self }
             public static let clear = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0)
         }
         public extension Color {
@@ -386,7 +429,7 @@ object GuiBridgeRuntime {
             }
         }
 
-        public class UIImage: @unchecked Sendable {
+        public struct UIImage: Sendable {
             public let systemName: String?
             public let named: String?
             public var size: CGSize = CGSize(width: 24, height: 24)
@@ -731,10 +774,10 @@ object GuiBridgeRuntime {
             public mutating func addArc(center: CGPoint, radius: Double, startAngle: Angle, endAngle: Angle, clockwise: Bool) {
                 let startRad = startAngle.radians
                 let endRad = endAngle.radians
-                let sx = center.x + radius * Foundation.cos(startRad)
-                let sy = center.y + radius * Foundation.sin(startRad)
-                let ex = center.x + radius * Foundation.cos(endRad)
-                let ey = center.y + radius * Foundation.sin(endRad)
+                let sx = center.x + radius * cos(startRad)
+                let sy = center.y + radius * sin(startRad)
+                let ex = center.x + radius * cos(endRad)
+                let ey = center.y + radius * sin(endRad)
                 if _commands.isEmpty {
                     _commands.append("M \(sx) \(sy)")
                 } else {
@@ -752,13 +795,13 @@ object GuiBridgeRuntime {
                 ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath)]) { EmptyView() }
             }
             public func fill(_ color: Color) -> some View {
-                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath), "fill": .int(color.argb)]) { EmptyView() }
+                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath), "fill": .int(Int(color.argb))]) { EmptyView() }
             }
             public func stroke(_ color: Color, lineWidth: Double = 1) -> some View {
-                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath), "stroke": .int(color.argb), "strokeWidth": .double(lineWidth)]) { EmptyView() }
+                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath), "stroke": .int(Int(color.argb)), "strokeWidth": .double(lineWidth)]) { EmptyView() }
             }
             public func stroke(_ color: Color, style: StrokeStyle) -> some View {
-                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath), "stroke": .int(color.argb), "strokeWidth": .double(style.lineWidth)]) { EmptyView() }
+                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath), "stroke": .int(Int(color.argb)), "strokeWidth": .double(style.lineWidth)]) { EmptyView() }
             }
         }
         public extension Shape {
@@ -813,6 +856,18 @@ object GuiBridgeRuntime {
         public let kSystemSoundID_Vibrate: SystemSoundID = 4095
 
         // AVFoundation shims
+        public enum AVMediaType: Sendable {
+            case audio, video
+        }
+        public enum AVAuthorizationStatus: Int, Sendable {
+            case notDetermined = 0, restricted = 1, denied = 2, authorized = 3
+        }
+        public final class AVCaptureDevice: @unchecked Sendable {
+            public static func authorizationStatus(for mediaType: AVMediaType) -> AVAuthorizationStatus { .authorized }
+            public static func requestAccess(for mediaType: AVMediaType, completionHandler handler: @escaping (Bool) -> Void) {
+                handler(true)
+            }
+        }
         public class AVAudioPlayer: @unchecked Sendable {
             public init() {}
             public init(data: Data) throws {}
@@ -820,6 +875,7 @@ object GuiBridgeRuntime {
             public func play() -> Bool { true }
             public func pause() {}
             public func stop() {}
+            public var isPlaying: Bool = false
             public var numberOfLoops: Int = 0
             public var volume: Float = 1.0
         }
@@ -836,6 +892,74 @@ object GuiBridgeRuntime {
         public extension VideoPlayer where VideoOverlay == EmptyView {
             init(player: Any? = nil) { self.init(player: player, videoOverlay: { EmptyView() }) }
         }
+
+        // AppKit shims for macOS SwiftUI targets
+        public typealias NSPoint = CGPoint
+        public typealias NSSize = CGSize
+        public typealias NSRect = CGRect
+
+        public final class NSCursor: @unchecked Sendable {
+            public static let arrow = NSCursor()
+            public static let pointingHand = NSCursor()
+            public static let iBeam = NSCursor()
+            public init() {}
+            public func push() {}
+            public static func pop() {}
+            public func pop() {}
+            public func set() {}
+        }
+
+        open class NSWindow: @unchecked Sendable {
+            public init() {}
+            open func invalidateCursorRects(for view: NSView) {}
+        }
+
+        open class NSPanel: NSWindow, @unchecked Sendable {
+            public override init() { super.init() }
+        }
+
+        open class NSView: @unchecked Sendable {
+            public var frame: CGRect = .zero
+            public var bounds: CGRect = .zero
+            public var window: NSWindow? = nil
+            public var toolTip: String? = nil
+            public init(frame: CGRect = .zero) {
+                self.frame = frame
+                self.bounds = CGRect(origin: .zero, size: frame.size)
+            }
+            open func resetCursorRects() {}
+            public func addCursorRect(_ rect: CGRect, cursor: NSCursor) {}
+            open func hitTest(_ point: NSPoint) -> NSView? { nil }
+        }
+
+        public protocol NSViewRepresentable: View {
+            associatedtype NSViewType = NSView
+            typealias Context = NSViewRepresentableContext<Self>
+            func makeNSView(context: Context) -> NSViewType
+            func updateNSView(_ nsView: NSViewType, context: Context)
+        }
+        public struct NSViewRepresentableContext<T> {
+            public let coordinator: Any? = nil
+            public let environment: EnvironmentValues = EnvironmentValues()
+            public init() {}
+        }
+        public extension NSViewRepresentable {
+            var body: some View { EmptyView() }
+        }
+
+        public final class NSWorkspace: @unchecked Sendable {
+            public static let shared = NSWorkspace()
+            public init() {}
+            @discardableResult
+            public func open(_ url: URL) -> Bool { true }
+        }
+
+        public final class NSApplication: @unchecked Sendable {
+            public static let shared = NSApplication()
+            public init() {}
+            public func terminate(_ sender: Any?) {}
+        }
+        public let NSApp = NSApplication.shared
 
         // PhotosUI shims
         public struct PhotosPicker<Label: View>: View {
@@ -938,14 +1062,20 @@ object GuiBridgeRuntime {
         var t = stripPreviewMacros(text)
         t = dropUnsupportedDeclarations(t)
         t = t.replace(Regex("""#if\s+os\(macOS\)"""), "#if false")
+        val foundationReexportMods = setOf("AppKit", "UIKit", "AVFoundation")
         val sanitizedMods = internalModules + listOf(
             "AppKit", "UIKit", "QuartzCore",
             "AudioToolbox", "AVFoundation", "PhotosUI", "WebKit", "Observation"
         )
         for (mod in sanitizedMods) {
+            val replacement = if (mod in foundationReexportMods) {
+                "import Foundation // [sanitized import $mod]"
+            } else {
+                "// [sanitized import $mod]"
+            }
             t = t.replace(
                 Regex("""(?m)^\s*import\s+${Regex.escape(mod)}\b.*$"""),
-                "// [sanitized import $mod]",
+                replacement,
             )
         }
         if (!hasMacroServer) {
@@ -956,12 +1086,17 @@ object GuiBridgeRuntime {
         }
         t = t.replace("private struct ", "struct ")
         t = t.replace("private enum ", "enum ")
+        t = t.replace("private class ", "class ")
         t = t.replace(
             Regex("""@FocusState\s+(private\s+)?var\s+(\w+)\s*:\s*Bool(?!\s*=)"""),
             "@State $1var $2: Bool = false",
         )
         return t
     }
+
+    private val MEMBERWISE_PROP_REGEX = Regex(
+        """^(?:@(ObservedObject|Binding|Bindable)\s+)?(?:(?:public|internal)\s+)?(?:let|var)\s+(\w+)\s*:\s*([^={]+)$"""
+    )
 
     internal fun inferPreviewExpression(text: String): String {
         val prevMatch = Regex("""struct\s+(\w+)\s*:\s*PreviewProvider\b""").find(text)
@@ -971,7 +1106,12 @@ object GuiBridgeRuntime {
         val views = Regex("""struct\s+(\w+)\s*:\s*View\b""").findAll(text).map { it.groupValues[1] }.toList()
         if (views.isEmpty()) return "EmptyView()"
         val orderedViews = views.sortedByDescending {
-            it.contains("Content") || it.contains("Main") || it.contains("App") || it.contains("View")
+            when {
+                it.contains("Content") || it.contains("Main") || it.contains("Root") ||
+                    it.contains("App") || it.contains("Panel") || it.contains("Home") -> 2
+                it.contains("View") -> 1
+                else -> 0
+            }
         }
         for (v in orderedViews) {
             val idx = text.indexOf("struct $v")
@@ -979,8 +1119,7 @@ object GuiBridgeRuntime {
             val headerSlice = if (idx >= 0 && bodyIdx > idx) text.substring(idx, bodyIdx) else ""
             if (headerSlice.contains("init()")) return "$v()"
             val uninitProps = headerSlice.lineSequence().drop(1).map { it.trim() }.filter { s ->
-                (s.startsWith("let ") || s.startsWith("var ") || s.startsWith("public let ") || s.startsWith("public var ")) &&
-                    !s.contains("=") && !s.contains("{")
+                !s.contains("=") && !s.contains("{") && MEMBERWISE_PROP_REGEX.matches(s)
             }.toList()
             if (uninitProps.isEmpty()) return "$v()"
         }
@@ -988,7 +1127,8 @@ object GuiBridgeRuntime {
         val idx = text.indexOf("struct $v")
         val bodyIdx = if (idx >= 0) text.indexOf("var body", idx) else -1
         val headerSlice = if (idx >= 0 && bodyIdx > idx) text.substring(idx, bodyIdx) else ""
-        val args = ArrayList<Pair<String, String>>()
+        data class PreviewInitArg(val name: String, val type: String, val isBinding: Boolean)
+        val args = ArrayList<PreviewInitArg>()
         val initMatch = Regex("""init\s*\(([^\)]*)\)""").find(headerSlice)
         if (initMatch != null) {
             for (rawParam in initMatch.groupValues[1].split(',')) {
@@ -996,33 +1136,35 @@ object GuiBridgeRuntime {
                 if (p.isEmpty() || p.contains("=")) continue
                 val pm = Regex("""(\w+)(?:\s+\w+)?\s*:\s*(.+)""").find(p)
                 if (pm != null) {
-                    args.add(pm.groupValues[1] to pm.groupValues[2].trim())
+                    val ptype = pm.groupValues[2].trim()
+                    args.add(PreviewInitArg(pm.groupValues[1], ptype, ptype.startsWith("Binding<")))
                 }
             }
         } else {
             for (line in headerSlice.lineSequence().drop(1)) {
                 val s = line.trim()
-                if ((s.startsWith("let ") || s.startsWith("var ") || s.startsWith("public let ") || s.startsWith("public var ")) &&
-                    !s.contains("=") && !s.contains("{")
-                ) {
-                    val pm = Regex("""(?:public\s+)?(?:let|var)\s+(\w+)\s*:\s*(.+)""").find(s)
+                if (!s.contains("=") && !s.contains("{")) {
+                    val pm = MEMBERWISE_PROP_REGEX.find(s)
                     if (pm != null) {
-                        args.add(pm.groupValues[1] to pm.groupValues[2].trim())
+                        val wrapper = pm.groupValues[1]
+                        args.add(PreviewInitArg(pm.groupValues[2], pm.groupValues[3].trim(), wrapper == "Binding"))
                     }
                 }
             }
         }
-        val renderedArgs = args.map { (pname, ptype) ->
-            val argVal = when {
+        val renderedArgs = args.map { arg ->
+            val ptype = arg.type.removePrefix("Binding<").removeSuffix(">")
+            val baseVal = when {
                 "->" in ptype -> "{}"
                 ptype.endsWith("?") -> "nil"
-                ptype == "String" -> "\"${pname.replaceFirstChar { it.uppercaseChar() }}\""
+                ptype == "String" -> "\"${arg.name.replaceFirstChar { it.uppercaseChar() }}\""
                 ptype in setOf("Double", "CGFloat", "Float") -> "0.72"
                 ptype in setOf("Int", "UInt64", "Int64") -> "42"
                 ptype == "Bool" -> "true"
                 else -> ".init()"
             }
-            "$pname: $argVal"
+            val argVal = if (arg.isBinding) ".constant($baseVal)" else baseVal
+            "${arg.name}: $argVal"
         }
         return "$v(${renderedArgs.joinToString(", ")})"
     }
@@ -1053,6 +1195,109 @@ object GuiBridgeRuntime {
         return count
     }
 
+    internal fun isNonUiPlatformServiceFile(raw: String): Boolean {
+        return raw.contains(": NSPanel") ||
+            raw.contains(": NSWindow") ||
+            raw.contains("NSPanel?") ||
+            raw.contains("NSBitmapImageRep") ||
+            raw.contains("CGEvent.tapCreate") ||
+            raw.contains("AVAudioPCMBuffer") ||
+            raw.contains("URLSessionConfiguration")
+    }
+
+    internal fun synthesizeFocusedCompanionShims(includedTexts: List<String>): String? {
+        val combined = includedTexts.joinToString("\n")
+        if (!combined.contains("CompanionManager") ||
+            Regex("""(?:class|struct)\s+CompanionManager\b""").containsMatchIn(combined)
+        ) {
+            return null
+        }
+        return """
+            import Foundation
+            import SwiftUI
+
+            extension Notification.Name {
+                static let clickyDismissPanel = Notification.Name("clickyDismissPanel")
+            }
+
+            enum CompanionVoiceState: Sendable {
+                case idle
+                case listening
+                case processing
+                case responding
+            }
+
+            final class BuddyDictationManagerStub: ObservableObject, @unchecked Sendable {
+                @Published var transcriptionProviderDisplayName: String = "Apple Speech"
+                init() {}
+            }
+
+            final class CompanionManager: ObservableObject, @unchecked Sendable {
+                nonisolated(unsafe) static weak var sharedInstance: CompanionManager?
+
+                @Published var voiceState: CompanionVoiceState = .idle
+                @Published var hasAccessibilityPermission: Bool = false
+                @Published var hasScreenRecordingPermission: Bool = false
+                @Published var hasMicrophonePermission: Bool = false
+                @Published var hasScreenContentPermission: Bool = true
+                @Published var isOverlayVisible: Bool = true
+                @Published var selectedModel: String = "claude-sonnet-4-6"
+                @Published var isClickyCursorEnabled: Bool = true
+                @Published var hasCompletedOnboarding: Bool = false
+                @Published var hasSubmittedEmail: Bool = false
+                let buddyDictationManager = BuddyDictationManagerStub()
+
+                var allPermissionsGranted: Bool {
+                    hasAccessibilityPermission && hasScreenRecordingPermission && hasMicrophonePermission && hasScreenContentPermission
+                }
+
+                init() {
+                    Self.sharedInstance = self
+                }
+
+                func setSelectedModel(_ model: String) {
+                    selectedModel = model
+                }
+
+                func setClickyCursorEnabled(_ enabled: Bool) {
+                    isClickyCursorEnabled = enabled
+                    isOverlayVisible = enabled
+                }
+
+                func submitEmail(_ email: String) {
+                    let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { return }
+                    hasSubmittedEmail = true
+                }
+
+                func triggerOnboarding() {
+                    hasCompletedOnboarding = true
+                    isOverlayVisible = true
+                }
+
+                func replayOnboarding() {
+                    hasCompletedOnboarding = true
+                    isOverlayVisible = true
+                }
+
+                func requestScreenContentPermission() {
+                    hasScreenContentPermission = true
+                }
+            }
+
+            enum WindowPositionManager {
+                static func requestAccessibilityPermission() {
+                    CompanionManager.sharedInstance?.hasAccessibilityPermission = true
+                }
+                static func revealAppInFinder() {}
+                static func openAccessibilitySettings() {}
+                static func requestScreenRecordingPermission() {
+                    CompanionManager.sharedInstance?.hasScreenRecordingPermission = true
+                }
+            }
+        """.trimIndent() + "\n"
+    }
+
     /**
      * Source files that a focused Cupertino preview must compile together with its candidate.
      *
@@ -1074,6 +1319,7 @@ object GuiBridgeRuntime {
         }.filter { f ->
             val raw = runCatching { f.readText() }.getOrDefault("")
             countUnsupportedSwiftImports(raw, internalModules) == 0 &&
+                !isNonUiPlatformServiceFile(raw) &&
                 !Regex("""@main|struct\s+\w+\s*:\s*App\b""").containsMatchIn(raw)
         }
     }
@@ -1163,7 +1409,10 @@ object GuiBridgeRuntime {
             ).firstOrNull()
 
             if (best != null && (best.unsupportedImports == 0 || pureSwiftUiFiles.isEmpty())) {
-                val cleanFiles = best.files.filter { countUnsupportedSwiftImports(fileTexts[it].orEmpty(), internalModules) == 0 }
+                val cleanFiles = best.files.filter {
+                    val raw = fileTexts[it].orEmpty()
+                    countUnsupportedSwiftImports(raw, internalModules) == 0 && !isNonUiPlatformServiceFile(raw)
+                }
                 return if (cleanFiles.isNotEmpty()) cleanFiles else best.files
             }
         }
@@ -1191,11 +1440,15 @@ object GuiBridgeRuntime {
             val bestTarget = byTargetDir.maxByOrNull { (_, files) ->
                 files.count { f ->
                     val t = fileTexts[f].orEmpty()
-                    t.contains(": View") && (t.contains("About") || t.contains("Content") || t.contains("Main") || t.contains("App"))
+                    t.contains(": View") && (t.contains("About") || t.contains("Content") || t.contains("Main") || t.contains("App") || t.contains("Panel"))
                 } * 10 + files.size
             }?.key
             if (bestTarget != null) {
-                return iosFiles.filter { it.startsWith(bestTarget) }
+                val targetClean = iosFiles.filter {
+                    val raw = fileTexts[it].orEmpty()
+                    it.startsWith(bestTarget) && countUnsupportedSwiftImports(raw, internalModules) == 0 && !isNonUiPlatformServiceFile(raw)
+                }
+                return if (targetClean.isNotEmpty()) targetClean else iosFiles.filter { it.startsWith(bestTarget) }
             }
             return pureSwiftUiFiles
         }
@@ -1277,7 +1530,11 @@ object GuiBridgeRuntime {
                             relStr.contains("/Mac/") || relStr.contains("/macOS/") || relStr.contains("/Watch/")
                         if (!isIgnored) {
                             val text = runCatching { candidate.readText() }.getOrDefault("")
-                            if (!text.contains("import XCTest") && !text.contains("exit(")) {
+                            if (!text.contains("import XCTest") &&
+                                !text.contains("exit(") &&
+                                countUnsupportedSwiftImports(text, internalModules) == 0 &&
+                                !isNonUiPlatformServiceFile(text)
+                            ) {
                                 val rel = runCatching { projectRoot.relativize(candidate) }.getOrDefault(candidate.fileName)
                                 val dst = shadow.resolve(rel.toString())
                                 if (!Files.exists(dst)) {
@@ -1288,6 +1545,13 @@ object GuiBridgeRuntime {
                     }
                 }
             }
+        }
+
+        val copiedTexts = copied.map { runCatching { it.readText() }.getOrDefault("") }
+        synthesizeFocusedCompanionShims(copiedTexts)?.let { shims ->
+            val shimFile = shadow.resolve("FocusedCompanionShims.swift")
+            shimFile.writeText(shims)
+            copied.add(shimFile)
         }
 
         // Always write CupertinoBridgePrelude.swift into the shadow workspace so all shims
@@ -1491,6 +1755,7 @@ object GuiBridgeRuntime {
                     val raw = runCatching { p.readText() }.getOrDefault("")
                     if (!raw.contains("import SwiftUI")) return@mapNotNull null
                     if (countUnsupportedSwiftImports(raw, internalModules) > 0) return@mapNotNull null
+                    if (isNonUiPlatformServiceFile(raw)) return@mapNotNull null
                     val san = sanitizeSwiftUiSource(raw, internalModules, hasMacroServer)
                     val hasView = Regex("""struct\s+\w+\s*:\s*View\b""").containsMatchIn(san)
                     val hasPreview = Regex("""struct\s+\w+\s*:\s*PreviewProvider\b""").containsMatchIn(san)
@@ -1499,7 +1764,7 @@ object GuiBridgeRuntime {
                     val pathStr = p.toString().replace('\\', '/')
                     var score = 0
                     if (hasPreview) score += 50
-                    if (listOf("ContentView", "MainView", "RootView", "AppView").any { fname.contains(it) }) {
+                    if (listOf("ContentView", "MainView", "RootView", "AppView", "PanelView", "HomeView").any { fname.contains(it) }) {
                         score += 100
                     }
                     if (listOf("/Shared/", "/DesignSystem/", "/Views/", "Previews").any { pathStr.contains(it) }) {
@@ -1537,6 +1802,12 @@ object GuiBridgeRuntime {
                         val target = focusedDir.resolve(name)
                         target.writeText(sanitizeSwiftUiSource(runCatching { comp.readText() }.getOrDefault(""), internalModules, hasMacroServer))
                         srcs.add(target)
+                    }
+                    val focusedTexts = srcs.map { runCatching { it.readText() }.getOrDefault("") }
+                    synthesizeFocusedCompanionShims(focusedTexts)?.let { shims ->
+                        val shimFile = focusedDir.resolve("FocusedCompanionShims.swift")
+                        shimFile.writeText(shims)
+                        srcs.add(shimFile)
                     }
                     val preludeFile = focusedDir.resolve("CupertinoBridgePrelude.swift")
                     preludeFile.writeText(CUPERTINO_BRIDGE_PRELUDE + "\n")

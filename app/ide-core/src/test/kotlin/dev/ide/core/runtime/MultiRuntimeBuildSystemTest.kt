@@ -647,6 +647,103 @@ class MultiRuntimeBuildSystemTest {
         }
     }
 
+    @Test
+    fun pythonMonorepoDiscoversSubpackageRootsAndRetriesCliEntrypointWithVersionOrHelp() = withTempDir("python-monorepo-deepagents") { root ->
+        val fakePrefix = root.resolve("fake-prefix")
+        val binDir = fakePrefix.resolve("bin")
+        Files.createDirectories(binDir)
+        val fakePython = binDir.resolve("python3").apply { writeText("#!/bin/sh\n") }
+
+        val recordedCommands = ArrayList<List<String>>()
+        val recordedEnvs = ArrayList<Map<String, String>>()
+        val previousHost = RuntimeBuildEnvironment.host
+        RuntimeBuildEnvironment.host = object : RuntimeHost {
+            override val workspaceCache: Path = root.resolve("ws-cache")
+            override suspend fun prepare(): RuntimeInstallation = RuntimeInstallation(
+                packId = "test-pack",
+                abi = "arm64-v8a",
+                prefix = fakePrefix,
+                node = null,
+                npmCli = null,
+                python = fakePython,
+                shell = null,
+                environment = emptyMap(),
+            )
+
+            override fun start(
+                command: List<String>,
+                workingDirectory: Path,
+                environment: Map<String, String>,
+            ): RuntimeChild {
+                synchronized(recordedCommands) {
+                    recordedCommands += command
+                    recordedEnvs += environment
+                }
+                val isPyCompile = command.contains("py_compile")
+                if (isPyCompile) {
+                    return FakeRuntimeChild(stdoutText = "", exitCode = 0)
+                }
+                val hasVersionFlag = command.contains("--version")
+                return if (!hasVersionFlag) {
+                    FakeRuntimeChild(
+                        stdoutText = "",
+                        stderrText = "Error: CLI requires arguments or interactive TTY",
+                        exitCode = 2,
+                    )
+                } else {
+                    FakeRuntimeChild(
+                        stdoutText = "deepagents 0.0.39\n",
+                        exitCode = 0,
+                    )
+                }
+            }
+        }
+
+        try {
+            val manager = ProjectManager.desktop(root.resolve("projects"))
+            val deepagents = manager.projectsRoot.resolve("deepagents")
+            write(deepagents, "libs/deepagents/deepagents/__init__.py", "__version__ = '0.0.39'")
+            write(deepagents, "libs/code/deepagents_code/__init__.py", "from deepagents import __version__")
+            write(
+                deepagents,
+                "libs/code/deepagents_code/main.py",
+                """
+                import sys
+                from deepagents_code import __version__
+                if "--version" in sys.argv:
+                    print(f"deepagents {__version__}")
+                    sys.exit(0)
+                sys.exit(2)
+                """,
+            )
+
+            val discoveredRoots = PythonBuildSystem.discoverPythonPathRoots(deepagents)
+            assertTrue(discoveredRoots.contains(deepagents.resolve("libs/code")), "Must discover libs/code in PYTHONPATH: $discoveredRoots")
+            assertTrue(discoveredRoots.contains(deepagents.resolve("libs/deepagents")), "Must discover libs/deepagents in PYTHONPATH: $discoveredRoots")
+
+            assertEquals(ImportableKind.PYTHON, manager.adoptFolderInPlace(deepagents))
+            manager.open(deepagents.toString()).use { ide ->
+                val backend = IdeServicesBackend(ide, manager)
+                val before = backend.build.buildState.value
+                backend.build.runBuild()
+                val finalState = runBlocking {
+                    withTimeout(30_000) {
+                        backend.build.buildState.first {
+                            it !== before && it.status != RunStatus.Running && it.log.isNotEmpty()
+                        }
+                    }
+                }
+                assertEquals(RunStatus.Succeeded, finalState.status, "Monorepo Python run log: ${finalState.log.map { it.message }}")
+                assertTrue(finalState.log.any { "deepagents 0.0.39" in it.message })
+                val pyPath = recordedEnvs.last()["PYTHONPATH"].orEmpty()
+                assertTrue(pyPath.contains("libs/code"), "PYTHONPATH must include libs/code, got: $pyPath")
+                assertTrue(pyPath.contains("libs/deepagents"), "PYTHONPATH must include libs/deepagents, got: $pyPath")
+            }
+        } finally {
+            RuntimeBuildEnvironment.host = previousHost
+        }
+    }
+
     private class FakeRuntimeChild(
         stdoutText: String,
         stderrText: String = "",

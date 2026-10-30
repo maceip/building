@@ -2249,3 +2249,250 @@ internal class SignApkTask(
     }
 }
 
+/**
+ * `generateBuildConfig`: emits `<namespace>/BuildConfig.java` into [outDir] with standard AGP constants
+ * (`DEBUG`, `APPLICATION_ID` / `LIBRARY_PACKAGE_NAME`, `BUILD_TYPE`, `FLAVOR`, `VERSION_CODE`, `VERSION_NAME`)
+ * plus any custom `buildConfigField(type, name, value)` declarations from the module's `build.gradle(.kts)`
+ * across `defaultConfig`, active [flavorNames], and [buildType].
+ */
+internal class GenerateBuildConfigTask(
+    override val name: TaskName,
+    private val namespace: String,
+    private val applicationId: String,
+    private val isLibrary: Boolean,
+    private val debug: Boolean,
+    private val buildType: String,
+    private val flavor: String,
+    private val flavorNames: List<String> = emptyList(),
+    private val versionCode: Int = 1,
+    private val versionName: String = "1.0",
+    private val moduleDir: Path? = null,
+    private val outDir: Path,
+) : Task {
+    private data class CustomField(val javaType: String, val name: String, val javaLiteral: String)
+
+    private val scriptFiles: List<Path>
+        get() = moduleDir?.let { dir ->
+            listOf(dir.resolve("build.gradle.kts"), dir.resolve("build.gradle")).filter { Files.isRegularFile(it) }
+        } ?: emptyList()
+
+    override val inputs: TaskInputs
+        get() = TaskInputsImpl().apply {
+            property("namespace", namespace)
+            property("applicationId", applicationId)
+            property("isLibrary", isLibrary.toString())
+            property("debug", debug.toString())
+            property("buildType", buildType)
+            property("flavor", flavor)
+            property("flavorNames", flavorNames.joinToString(","))
+            property("versionCode", versionCode.toString())
+            property("versionName", versionName)
+            filePaths("scripts", scriptFiles)
+        }
+
+    override val outputs: TaskOutputs
+        get() = TaskOutputsImpl().apply { dirPath("buildConfig", outDir) }
+
+    override suspend fun execute(ctx: TaskContext): TaskResult {
+        ctx.checkCanceled()
+        return runCatching {
+            if (Files.exists(outDir)) {
+                Files.walk(outDir).use { s ->
+                    s.sorted(Comparator.reverseOrder()).forEach { runCatching { Files.deleteIfExists(it) } }
+                }
+            }
+            val pkgDir = namespace.split('.').filter { it.isNotBlank() }.fold(outDir) { acc, seg -> acc.resolve(seg) }
+            Files.createDirectories(pkgDir)
+            val customFields = parseCustomBuildConfigFields()
+            val sb = StringBuilder()
+            if (namespace.isNotBlank()) {
+                sb.appendLine("package $namespace;")
+                sb.appendLine()
+            }
+            sb.appendLine("public final class BuildConfig {")
+            sb.appendLine("  public static final boolean DEBUG = ${if (debug) "Boolean.parseBoolean(\"true\")" else "false"};")
+            if (isLibrary) {
+                sb.appendLine("  public static final String LIBRARY_PACKAGE_NAME = \"${escapeJavaString(namespace)}\";")
+            } else {
+                sb.appendLine("  public static final String APPLICATION_ID = \"${escapeJavaString(applicationId)}\";")
+            }
+            sb.appendLine("  public static final String BUILD_TYPE = \"${escapeJavaString(buildType)}\";")
+            if (flavor.isNotBlank() || flavorNames.isNotEmpty()) {
+                sb.appendLine("  public static final String FLAVOR = \"${escapeJavaString(flavor)}\";")
+            }
+            if (!isLibrary) {
+                sb.appendLine("  public static final int VERSION_CODE = $versionCode;")
+                sb.appendLine("  public static final String VERSION_NAME = \"${escapeJavaString(versionName)}\";")
+            }
+            for (field in customFields.values) {
+                sb.appendLine("  public static final ${field.javaType} ${field.name} = ${field.javaLiteral};")
+            }
+            sb.appendLine("}")
+            Files.write(pkgDir.resolve("BuildConfig.java"), sb.toString().toByteArray(Charsets.UTF_8))
+            TaskResult.Success as TaskResult
+        }.getOrElse { TaskResult.Failed("generateBuildConfig failed: ${it.message}", it) }
+    }
+
+    private fun parseCustomBuildConfigFields(): LinkedHashMap<String, CustomField> {
+        val reserved = setOf(
+            "DEBUG", "APPLICATION_ID", "LIBRARY_PACKAGE_NAME", "BUILD_TYPE", "FLAVOR", "VERSION_CODE", "VERSION_NAME"
+        )
+        val out = LinkedHashMap<String, CustomField>()
+        val script = scriptFiles.firstOrNull()?.let { runCatching { String(Files.readAllBytes(it), Charsets.UTF_8) }.getOrNull() }
+            ?: return out
+        val activeScopes = LinkedHashSet<String>().apply {
+            add("defaultConfig")
+            addAll(flavorNames)
+            if (flavor.isNotBlank()) add(flavor)
+            add(buildType)
+        }
+        // First pass: collect from defaultConfig, then active flavor blocks, then active buildType block.
+        for (scopeName in activeScopes) {
+            for (block in extractNamedBlocks(script, scopeName)) {
+                collectFieldsFromBlock(block, reserved, out)
+            }
+        }
+        // Fallback: if any buildConfigField appears at top-level or in an unmatched helper block and isn't yet defined,
+        // include it as a default only if its enclosing block isn't a non-selected sibling flavor/buildType.
+        val allFlavorAndBtNames = extractChildBlockNames(script, "productFlavors") + extractChildBlockNames(script, "buildTypes")
+        val inactiveNames = allFlavorAndBtNames - activeScopes
+        val inactiveRanges = inactiveNames.flatMap { extractNamedBlockRanges(script, it) }
+        for (m in BUILD_CONFIG_FIELD_RE.findAll(script)) {
+            val pos = m.range.first
+            if (inactiveRanges.any { pos in it }) continue
+            val name = m.groupValues[2].trim()
+            if (name in reserved || out.containsKey(name)) continue
+            toCustomField(m.groupValues[1].trim(), name, m.groupValues[3].trim())?.let { out[name] = it }
+        }
+        return out
+    }
+
+    private fun collectFieldsFromBlock(
+        blockText: String,
+        reserved: Set<String>,
+        out: LinkedHashMap<String, CustomField>,
+    ) {
+        for (m in BUILD_CONFIG_FIELD_RE.findAll(blockText)) {
+            val rawType = m.groupValues[1].trim()
+            val name = m.groupValues[2].trim()
+            val rawVal = m.groupValues[3].trim()
+            if (name in reserved) continue
+            toCustomField(rawType, name, rawVal)?.let { out[name] = it }
+        }
+    }
+
+    private fun toCustomField(rawType: String, name: String, rawVal: String): CustomField? {
+        if (!name.matches(Regex("""[A-Za-z_][A-Za-z0-9_]*"""))) return null
+        val javaType = when (rawType) {
+            "Boolean", "boolean" -> "boolean"
+            "Int", "Integer", "int" -> "int"
+            "Long", "long" -> "long"
+            "Float", "float" -> "float"
+            "Double", "double" -> "double"
+            "String", "java.lang.String" -> "String"
+            else -> return null
+        }
+        val unquoted = unquoteGradleArg(rawVal)
+        val literal = when (javaType) {
+            "boolean" -> if (unquoted.trim().equals("true", ignoreCase = true)) "true" else "false"
+            "int" -> unquoted.trim().removeSuffix("L").removeSuffix("l").toIntOrNull()?.toString() ?: "0"
+            "long" -> {
+                val cleaned = unquoted.trim().removeSuffix("L").removeSuffix("l")
+                cleaned.toLongOrNull()?.let { "${it}L" } ?: "0L"
+            }
+            "float" -> {
+                val cleaned = unquoted.trim().removeSuffix("f").removeSuffix("F")
+                cleaned.toFloatOrNull()?.let { "${it}f" } ?: "0f"
+            }
+            "double" -> {
+                val cleaned = unquoted.trim().removeSuffix("d").removeSuffix("D")
+                cleaned.toDoubleOrNull()?.toString() ?: "0.0"
+            }
+            "String" -> {
+                val inner = unquoted.trim().removeSurrounding("\"")
+                val resolved = inner
+                    .replace(Regex("""\$\{[^}]*\}"""), "")
+                    .replace(Regex("""\$[A-Za-z_][A-Za-z0-9_.]*"""), "")
+                "\"${escapeJavaString(resolved)}\""
+            }
+            else -> return null
+        }
+        return CustomField(javaType, name, literal)
+    }
+
+    private fun unquoteGradleArg(raw: String): String {
+        val trimmed = raw.trim().removeSuffix(")").trim()
+        if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+            (trimmed.startsWith("'") && trimmed.endsWith("'"))
+        ) {
+            return trimmed.substring(1, trimmed.length - 1)
+                .replace("\\\"", "\"")
+                .replace("\\'", "'")
+                .replace("\\\\", "\\")
+        }
+        return trimmed
+    }
+
+    private fun extractNamedBlocks(script: String, blockName: String): List<String> =
+        extractNamedBlockRanges(script, blockName).map { script.substring(it.first, it.last + 1) }
+
+    private fun extractNamedBlockRanges(script: String, blockName: String): List<IntRange> {
+        val escaped = Regex.escape(blockName)
+        val headerRe = Regex("""\b(?:(?:create|getByName|named|register)\s*\(\s*['"]$escaped['"]\s*\)|$escaped)\s*\{""")
+        val out = ArrayList<IntRange>()
+        for (m in headerRe.findAll(script)) {
+            val openBrace = m.range.last
+            val closeBrace = findMatchingBrace(script, openBrace)
+            if (closeBrace > openBrace) out.add((openBrace + 1) until closeBrace)
+        }
+        return out
+    }
+
+    private fun extractChildBlockNames(script: String, containerName: String): Set<String> {
+        val out = LinkedHashSet<String>()
+        for (block in extractNamedBlocks(script, containerName)) {
+            val re = Regex("""\b(?:(?:create|getByName|named|register)\s*\(\s*['"]([\w.\-]+)['"]\s*\)|([A-Za-z_][\w.\-]*))\s*\{""")
+            for (m in re.findAll(block)) {
+                val n = m.groupValues[1].ifEmpty { m.groupValues[2] }
+                if (n.isNotEmpty() && n !in setOf("create", "getByName", "named", "register", "all", "configureEach")) {
+                    out.add(n)
+                }
+            }
+        }
+        return out
+    }
+
+    private fun findMatchingBrace(text: String, openIndex: Int): Int {
+        var depth = 0
+        var i = openIndex
+        while (i < text.length) {
+            val c = text[i]
+            if (c == '"' || c == '\'') {
+                val q = c
+                i++
+                while (i < text.length && text[i] != q) {
+                    if (text[i] == '\\') i += 2 else i++
+                }
+                i++
+                continue
+            }
+            if (c == '{') depth++
+            else if (c == '}') {
+                depth--
+                if (depth == 0) return i
+            }
+            i++
+        }
+        return -1
+    }
+
+    private fun escapeJavaString(s: String): String =
+        s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
+
+    companion object {
+        private val BUILD_CONFIG_FIELD_RE = Regex(
+            """buildConfigField\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*([^\n;]+?)\s*\)"""
+        )
+    }
+}
+

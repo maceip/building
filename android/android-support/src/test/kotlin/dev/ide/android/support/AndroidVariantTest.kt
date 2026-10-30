@@ -168,6 +168,55 @@ class AndroidVariantTest {
         }
     }
 
+    @Test
+    fun generateBuildConfigEmitsStandardAndCustomFlavorFields() {
+        val tmp = java.nio.file.Files.createTempDirectory("generate-build-config-test")
+        val script = tmp.resolve("build.gradle.kts")
+        java.nio.file.Files.writeString(
+            script,
+            """
+            extensions.configure<ApplicationExtension> {
+                defaultConfig {
+                    buildConfigField("String", "DISCORD_CLIENT_ID", "\"\"")
+                }
+                productFlavors {
+                    create("proprietary") {
+                        buildConfigField("boolean", "ENABLE_CAST", "true")
+                    }
+                    create("foss") {
+                        isDefault = true
+                        buildConfigField("boolean", "ENABLE_CAST", "false")
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        val outDir = tmp.resolve("generated/buildConfig")
+        val task = dev.ide.android.support.tasks.GenerateBuildConfigTask(
+            name = dev.ide.build.TaskName(":app:generateBuildConfig"),
+            namespace = "com.craftworks.music",
+            applicationId = "com.craftworks.music",
+            isLibrary = false,
+            debug = true,
+            buildType = "debug",
+            flavor = "foss",
+            flavorNames = listOf("foss"),
+            versionCode = 76,
+            versionName = "2.2.1",
+            moduleDir = tmp,
+            outDir = outDir,
+        )
+        val res = kotlinx.coroutines.runBlocking { task.execute(dev.ide.build.engine.SimpleTaskContext()) }
+        assertEquals(dev.ide.build.TaskResult.Success, res)
+        val generated = outDir.resolve("com/craftworks/music/BuildConfig.java")
+        assertTrue(java.nio.file.Files.isRegularFile(generated))
+        val text = java.nio.file.Files.readString(generated)
+        assertTrue("public static final String VERSION_NAME = \"2.2.1\";" in text, text)
+        assertTrue("public static final String FLAVOR = \"foss\";" in text, text)
+        assertTrue("public static final String DISCORD_CLIENT_ID = \"\";" in text, text)
+        assertTrue("public static final boolean ENABLE_CAST = false;" in text, text)
+    }
+
     // --- support ---
 
     private fun withModule(

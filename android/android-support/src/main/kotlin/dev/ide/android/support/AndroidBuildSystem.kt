@@ -16,6 +16,7 @@ import dev.ide.android.support.tasks.DexArchiveBuilderTask
 import dev.ide.android.support.tasks.DexExternalLibsTask
 import dev.ide.android.support.tasks.DexMergeTask
 import dev.ide.android.support.tasks.GenerateAarRJarTask
+import dev.ide.android.support.tasks.GenerateBuildConfigTask
 import dev.ide.android.support.tasks.GenerateLibraryRTask
 import dev.ide.android.support.tasks.GenerateRJarTask
 import dev.ide.android.support.tasks.GenerateReliabilityAssetsTask
@@ -481,6 +482,26 @@ class AndroidBuildSystem(
         // The Java compile resolves `R` from the generated R.jar (Kotlin keeps resolving it from `R.java` source).
         val compileClasspath = kotlinClasspath + listOf(layout.rJar) + if (appHasKotlin) listOf(layout.kotlinClasses) else emptyList()
 
+        val generateBuildConfig = step("generateBuildConfig")
+        tasks.task(generateBuildConfig) {
+            GenerateBuildConfigTask(
+                generateBuildConfig,
+                facet.namespace,
+                applicationId = applicationId,
+                isLibrary = false,
+                debug = bt?.debuggable == true,
+                buildType = variant.buildTypeName,
+                flavor = variant.flavorNames.firstOrNull().orEmpty(),
+                flavorNames = variant.flavorNames,
+                versionCode = versionCode,
+                versionName = versionName,
+                moduleDir = layout.moduleDir,
+                outDir = layout.buildConfigGen,
+            )
+        }
+        val bcGenDirs = listOf(layout.buildConfigGen)
+        val bcDep = listOf(generateBuildConfig)
+
         // generateSources (KSP etc.): run the source generators into the module's `generated/ksp` root ahead of
         // the compile tasks; that root joins the compile source roots below so generated .kt/.java compile +
         // index like hand-written code. KSP's `libraries` = the compile classpath (android.jar + deps + libs;
@@ -488,8 +509,16 @@ class AndroidBuildSystem(
         // contributed (`generators` empty ⇒ no task, `sourceRoots` unchanged, build byte-identical).
         val generateSources: TaskName? = if (generators.isNotEmpty()) {
             val gs = step("generateSources")
-            tasks.task(gs, directDepCompiles + directDepKotlin) {
-                GenerateSourcesTask(app, gs, generators, layout.kspGen, { kotlinClasspath }, acceptedGeneratorWarnings(app))
+            tasks.task(gs, directDepCompiles + directDepKotlin + bcDep) {
+                GenerateSourcesTask(
+                    app,
+                    gs,
+                    generators,
+                    layout.kspGen,
+                    { kotlinClasspath },
+                    acceptedGeneratorWarnings(app),
+                    explicitSourceRoots = sourceRoots + bcGenDirs,
+                )
             }
             gs
         } else null
@@ -621,7 +650,7 @@ class AndroidBuildSystem(
         // Package the generated R.java (app + every --extra-package) as R.jar bytecode instead of compiling it.
         tasks.task(generateRFile, listOf(aapt2Link)) { GenerateRJarTask(generateRFile, layout.genJava, layout.rJar) }
         if (appHasKotlin) {
-            tasks.task(compileKotlin, listOf(aapt2Link) + directDepCompiles + directDepKotlin + vbDep + aidlDep + listOfNotNull(generateSources)) {
+            tasks.task(compileKotlin, listOf(aapt2Link) + directDepCompiles + directDepKotlin + vbDep + aidlDep + bcDep + listOfNotNull(generateSources)) {
                 AndroidKotlinCompileTask(
                     app,
                     compileKotlin,
@@ -633,7 +662,7 @@ class AndroidBuildSystem(
                     bootClasspath,
                     kotlin,
                     plugins,
-                    extraGenDirs = vbGenDirs + aidlGenDirs,
+                    extraGenDirs = vbGenDirs + aidlGenDirs + bcGenDirs,
                 )
             }
         }
@@ -642,7 +671,7 @@ class AndroidBuildSystem(
         // classpath, not as compiled source. Non-R generated files (e.g. Manifest.java) are still compiled.
         tasks.task(
             compile,
-            listOf(aapt2Link, generateRFile) + directDepCompiles + (if (appHasKotlin) listOf(compileKotlin) else emptyList()) + vbDep + aidlDep + listOfNotNull(generateSources)
+            listOf(aapt2Link, generateRFile) + directDepCompiles + (if (appHasKotlin) listOf(compileKotlin) else emptyList()) + vbDep + aidlDep + bcDep + listOfNotNull(generateSources)
         ) {
             AndroidCompileTask(
                 compile,
@@ -652,7 +681,7 @@ class AndroidBuildSystem(
                 layout.classes,
                 level,
                 bootClasspath,
-                extraGenDirs = vbGenDirs + aidlGenDirs,
+                extraGenDirs = vbGenDirs + aidlGenDirs + bcGenDirs,
             )
         }
         // The app's project-scope dex covers both the Java and (when present) the Kotlin output.
@@ -1196,6 +1225,29 @@ class AndroidBuildSystem(
         }
         val libAidlGenDirs = listOfNotNull(libCompileAidl).map { aidlGen }
 
+        val libBcDir = rRoot.resolve("gen-build-config")
+        val libGenerateBuildConfig = TaskName(":${m.name}:generateBuildConfig")
+        val libBtName = libVariant?.buildTypeName ?: "debug"
+        val libBt = facet.buildType(libBtName)
+        tasks.task(libGenerateBuildConfig) {
+            GenerateBuildConfigTask(
+                libGenerateBuildConfig,
+                facet.namespace,
+                applicationId = facet.namespace,
+                isLibrary = true,
+                debug = libBt?.debuggable ?: libBtName.equals("debug", ignoreCase = true),
+                buildType = libBtName,
+                flavor = libVariant?.flavorNames?.firstOrNull().orEmpty(),
+                flavorNames = libVariant?.flavorNames.orEmpty(),
+                versionCode = facet.versionCode,
+                versionName = facet.versionName,
+                moduleDir = moduleDir(m),
+                outDir = libBcDir,
+            )
+        }
+        compileDeps.add(libGenerateBuildConfig)
+        val libBcGenDirs = listOf(libBcDir)
+
         // generateSources (KSP etc.) for the lib: emit into its variant `generated/ksp` root ahead of compile;
         // that root joins the compile source roots so generated code compiles into the AAR/jar. KSP `libraries`
         // = the lib's base compile classpath (snapshot now; R/kotlin-classes are added later and aren't needed).
@@ -1205,7 +1257,17 @@ class AndroidBuildSystem(
             val gs = TaskName(":${m.name}:generateSources")
             val genClasspath = classpath.toList()
             val gsDeps = compileDeps.toList()
-            tasks.task(gs, gsDeps) { GenerateSourcesTask(m, gs, generators, kspGen, { genClasspath }, acceptedGeneratorWarnings(m)) }
+            tasks.task(gs, gsDeps) {
+                GenerateSourcesTask(
+                    m,
+                    gs,
+                    generators,
+                    kspGen,
+                    { genClasspath },
+                    acceptedGeneratorWarnings(m),
+                    explicitSourceRoots = sourceRoots + libBcGenDirs,
+                )
+            }
             compileDeps.add(gs)
             gs
         } else null
@@ -1222,7 +1284,7 @@ class AndroidBuildSystem(
             val kotlinCp = compileBootclasspath + libs.compileJars + moduleOutputs + upstreamKotlin +
                 depRJars + listOfNotNull(aarRJar) + listOf(rJar)
             tasks.task(compileKotlin, listOf(compileR) + compileDeps.filter { it != compileR } + depKotlin) {
-                AndroidKotlinCompileTask(m, compileKotlin, libGenSourceRoots, rRoot.resolve("gen"), kotlinCp, libKotlin, level, bootClasspath, kotlin, plugins, extraGenDirs = libVbGenDirs + libAidlGenDirs)
+                AndroidKotlinCompileTask(m, compileKotlin, libGenSourceRoots, rRoot.resolve("gen"), kotlinCp, libKotlin, level, bootClasspath, kotlin, plugins, extraGenDirs = libVbGenDirs + libAidlGenDirs + libBcGenDirs)
             }
             classpath.add(libKotlin); compileDeps.add(compileKotlin)
         }
@@ -1237,7 +1299,7 @@ class AndroidBuildSystem(
                 classesOut,
                 level,
                 bootClasspath,
-                extraGenDirs = libVbGenDirs + libAidlGenDirs,
+                extraGenDirs = libVbGenDirs + libAidlGenDirs + libBcGenDirs,
             )
         }
         val procRes = TaskName(":${m.name}:processResources")
@@ -1658,6 +1720,7 @@ class AndroidBuildSystem(
         val rJar: Path = inter.resolve("compile_and_runtime_not_namespaced_r_class_jar").resolve("R.jar")
         val viewBindingGen: Path = inter.resolve("gen-view-binding")  // ViewBinding <Layout>Binding.java
         val aidlGen: Path = inter.resolve("gen-aidl")  // compileAidl output: the Binder interface/Stub/Proxy .java
+        val buildConfigGen: Path = inter.resolve("gen-build-config")  // generateBuildConfig output: <namespace>/BuildConfig.java
         // KSP source-generation output root (AGP's build/generated/ksp/<variant>); KSP emits kotlin/ + java/
         // under it, added to the compile source roots so both are compiled + indexed like hand-written code.
         val kspGen: Path = moduleDirField.resolve("build").resolve("generated").resolve("ksp").resolve(variantName)
