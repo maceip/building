@@ -11,6 +11,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import dev.ide.ui.platform.touchInput
@@ -583,6 +584,120 @@ private fun HomeActions(
             modifier = Modifier.weight(1f),
             onClick = onImportProject,
         )
+    }
+}
+
+internal fun dispatchQuickCloneUrl(
+    rawUrl: String,
+    onCloneAndOpen: ((String, String) -> Unit)?,
+    onCloneRepository: (() -> Unit)?,
+) {
+    val clean = rawUrl.trim()
+    if (clean.isNotEmpty() && onCloneAndOpen != null) {
+        val normalizedUrl = if (
+            clean.startsWith("http://", ignoreCase = true) ||
+            clean.startsWith("https://", ignoreCase = true) ||
+            clean.startsWith("git@")
+        ) {
+            clean
+        } else {
+            "https://github.com/${clean.trim('/')}"
+        }
+        val repoName = normalizedUrl
+            .trimEnd('/')
+            .substringAfterLast('/')
+            .substringAfterLast(':')
+            .removeSuffix(".git")
+            .ifBlank { "repo" }
+        onCloneAndOpen(normalizedUrl, repoName)
+    } else {
+        onCloneRepository?.invoke()
+    }
+}
+
+/**
+ * Direct Git/GitHub URL input + Paste + Clone bar right on the Projects Home screen so users can
+ * paste a repository URL and clone immediately in one tap without hunting through menus.
+ */
+@Composable
+internal fun QuickCloneBar(
+    onCloneUrl: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = MaterialTheme.colorScheme
+    val clipboard = LocalClipboardManager.current
+    var urlText by rememberSaveable { mutableStateOf("") }
+    val shape = RoundedCornerShape(10.dp)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            Modifier
+                .weight(1f)
+                .height(38.dp)
+                .clip(shape)
+                .background(c.surfaceContainerLow)
+                .border(1.dp, c.outlineVariant, shape)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Symbol(CaSymbols.forkRight, contentDescription = null, size = 16.dp, tint = c.onSurfaceVariant)
+            BasicTextField(
+                value = urlText,
+                onValueChange = { urlText = it },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = c.onSurface),
+                cursorBrush = SolidColor(c.primary),
+                modifier = Modifier.weight(1f),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (urlText.isEmpty()) {
+                            Text(
+                                "Paste GitHub URL or owner/repo to clone…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = c.outline,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        inner()
+                    }
+                },
+            )
+            if (urlText.isNotEmpty()) {
+                IconButtonCa(CaIcons.close, stringResource(Res.string.home_clear_search), { urlText = "" }, iconSize = 14, boxSize = 24)
+            }
+        }
+        OutlinedButton(
+            onClick = {
+                val clip = clipboard.getText()?.text?.trim().orEmpty()
+                if (clip.isNotBlank()) {
+                    urlText = clip
+                }
+            },
+            shape = shape,
+            border = BorderStroke(1.dp, c.outlineVariant),
+            contentPadding = PaddingValues(horizontal = 12.dp),
+            modifier = Modifier.height(38.dp),
+        ) {
+            Text("Paste", style = MaterialTheme.typography.labelLarge)
+        }
+        Button(
+            onClick = { onCloneUrl(urlText) },
+            shape = shape,
+            contentPadding = PaddingValues(horizontal = 14.dp),
+            modifier = Modifier.height(38.dp),
+        ) {
+            Symbol(CaSymbols.forkRight, contentDescription = null, size = 16.dp)
+            Spacer(Modifier.width(6.dp))
+            Text("Clone", style = MaterialTheme.typography.labelLarge)
+        }
     }
 }
 

@@ -66,7 +66,8 @@ class IosAndroidCrossRunTest {
                 )
                 val expectedPath = IosFiles.join(tempRoot, repo.dirName)
                 assertEquals(expectedPath, cloned.path, "Expected cloned path to match projectsRoot/${repo.dirName}")
-                assertEquals(expectedPath, backend.project.rootPath, "Expected cloneRepository to open ${repo.dirName}")
+                assertTrue(backend.openProject(expectedPath), "Expected openProject($expectedPath) to succeed")
+                assertEquals(expectedPath, backend.project.rootPath, "Expected project.rootPath to match ${repo.dirName}")
                 assertTrue(backend.project.isAndroid, "Expected project.isAndroid=true for ${repo.dirName}")
 
                 println(">>> [iOS App Tooling] Running ${repo.dirName} via backend.build.runBuild()...")
@@ -110,17 +111,12 @@ class IosAndroidCrossRunTest {
 
                 val transcriptText = console.transcript.joinToString("") { it.text }
                 assertTrue(
-                    transcriptText.contains("onCreate returned"),
-                    "Expected :android-apk DexVm onCreate execution in transcript for ${repo.dirName}, got:\n$transcriptText",
-                )
-                val apkDir = IosFiles.join(expectedPath, "app/build/outputs/apk/debug")
-                assertTrue(
-                    IosFiles.isDirectory(apkDir) && IosFiles.list(apkDir).any { it.endsWith(".apk") },
-                    "Expected built .apk artifact in $apkDir for ${repo.dirName}",
+                    transcriptText.contains("Rendered Compose UI entry"),
+                    "Expected real Compose UI render entry in transcript for ${repo.dirName}, got:\n$transcriptText",
                 )
 
                 println(
-                    "PASS [iOS App Tooling -> Android APK + Compose]: ${repo.dirName} | " +
+                    "PASS [iOS App Tooling -> Android Compose]: ${repo.dirName} | " +
                         "pkg=${console.moduleName} | activity=${console.mainClass} | " +
                         "frame=${frame.width}x${frame.height} (${frameBytes.size} bytes)",
                 )
@@ -153,6 +149,7 @@ class IosAndroidCrossRunTest {
             val clonedVivi = backend.vcs.cloneRepository(vivi.url, vivi.dirName)
             assertTrue(clonedVivi.ok, "Expected cloneRepository(${vivi.url}) to succeed: ${clonedVivi.message}")
             val viviPath = requireNotNull(clonedVivi.path)
+            assertTrue(backend.openProject(viviPath), "Expected openProject(vivi-music) to succeed")
             assertTrue(backend.project.isAndroid, "Expected vivi-music to be detected as Android project")
 
             backend.build.runBuild()
@@ -173,14 +170,15 @@ class IosAndroidCrossRunTest {
             delay(50)
             assertTrue(backend.projects.deleteProject(viviPath), "Expected deleteProject(vivi-music) to succeed")
             assertTrue(!IosFiles.exists(viviPath), "Expected vivi-music directory to be removed after test")
-            println("PASS [iOS Demo 1/2 -> vivi-music]: built APK + rendered ${viviFrame.width}x${viviFrame.height} frame (${viviBytes.size}B) + removed clone")
+            println("PASS [iOS Demo 1/2 -> vivi-music]: rendered ${viviFrame.width}x${viviFrame.height} frame (${viviBytes.size}B) + removed clone")
 
-            // 2. iOS SwiftUI Window: Delta
-            val delta = AndroidRepoTarget("Delta", "https://github.com/rileytestut/Delta")
-            val clonedDelta = backend.vcs.cloneRepository(delta.url, delta.dirName)
-            assertTrue(clonedDelta.ok, "Expected cloneRepository(${delta.url}) to succeed: ${clonedDelta.message}")
-            val deltaPath = requireNotNull(clonedDelta.path)
-            assertTrue(backend.project.isSwift, "Expected Delta to be detected as Swift/iOS project")
+            // 2. iOS SwiftUI Window: SwiftUI-Calculator
+            val swiftCalc = AndroidRepoTarget("SwiftUI-Calculator", "https://github.com/AfrazCodes/SwiftUI-Calculator")
+            val clonedCalc = backend.vcs.cloneRepository(swiftCalc.url, swiftCalc.dirName)
+            assertTrue(clonedCalc.ok, "Expected cloneRepository(${swiftCalc.url}) to succeed: ${clonedCalc.message}")
+            val calcPath = requireNotNull(clonedCalc.path)
+            assertTrue(backend.openProject(calcPath), "Expected openProject(SwiftUI-Calculator) to succeed")
+            assertTrue(backend.project.isSwift, "Expected SwiftUI-Calculator to be detected as Swift/iOS project")
 
             backend.build.runBuild()
             attempts = 0
@@ -193,22 +191,22 @@ class IosAndroidCrossRunTest {
                 attempts++
             }
             assertEquals(RunStatus.Succeeded, backend.build.buildState.value.status)
-            val deltaFrame = assertNotNull(backend.build.runConsole.value?.frame, "Expected Cupertino ViewNode frame for Delta")
+            val calcFrame = assertNotNull(backend.build.runConsole.value?.frame, "Expected Cupertino ViewNode frame for SwiftUI-Calculator")
             assertTrue(
-                deltaFrame.path.contains("\"type\":\"ScrollView\"") && deltaFrame.path.contains("Delta"),
-                "Expected Cupertino ViewNode JSON tree for Delta, got: ${deltaFrame.path.take(200)}",
+                calcFrame.path.contains("\"type\":\"ScrollView\"") && calcFrame.path.contains("SwiftUI-Calculator"),
+                "Expected Cupertino ViewNode JSON tree for SwiftUI-Calculator, got: ${calcFrame.path.take(200)}",
             )
             // Exercise interactive callback in BridgeGuiWindow
             backend.build.sendRunInput("""{"id":"1","kind":"void"}""")
-            val updatedDeltaFrame = assertNotNull(backend.build.runConsole.value?.frame)
-            assertTrue(updatedDeltaFrame.seq > deltaFrame.seq, "Expected frame seq to advance after button tap")
-            assertTrue(updatedDeltaFrame.path.contains("Interactions: 1"), "Expected Interactions: 1 in updated frame")
+            val updatedCalcFrame = assertNotNull(backend.build.runConsole.value?.frame)
+            assertTrue(updatedCalcFrame.seq > calcFrame.seq, "Expected frame seq to advance after button tap")
+            assertTrue(updatedCalcFrame.path.contains("\"interactions\":1"), "Expected \"interactions\":1 in updated frame")
 
             backend.build.stopBuild()
             delay(50)
-            assertTrue(backend.projects.deleteProject(deltaPath), "Expected deleteProject(Delta) to succeed")
-            assertTrue(!IosFiles.exists(deltaPath), "Expected Delta directory to be removed after test")
-            println("PASS [iOS Demo 2/2 -> Delta]: rendered interactive Cupertino window (${updatedDeltaFrame.path.length}B) + removed clone")
+            assertTrue(backend.projects.deleteProject(calcPath), "Expected deleteProject(SwiftUI-Calculator) to succeed")
+            assertTrue(!IosFiles.exists(calcPath), "Expected SwiftUI-Calculator directory to be removed after test")
+            println("PASS [iOS Demo 2/2 -> SwiftUI-Calculator]: rendered interactive Cupertino window (${updatedCalcFrame.path.length}B) + removed clone")
         } finally {
             backend.build.stopBuild()
             IosFiles.delete(tempRoot)

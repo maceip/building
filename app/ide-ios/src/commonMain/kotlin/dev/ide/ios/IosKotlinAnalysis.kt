@@ -500,6 +500,21 @@ internal class IosKotlinAnalysis(
     /** The `@Preview` functions [path] declares, by name. */
     fun previewNames(path: String, text: String): List<String> = previews(path, text).map { it.functionName }.distinct()
 
+    /** Whether [path] declares a top-level `fun main()` or `fun main(args: Array<String>)` entry point. */
+    fun hasMainFunction(path: String, text: String): Boolean {
+        val file = parsed(path, text)
+        val topFns = file.ktFile.declarations.filterIsInstance<KtNamedFunction>()
+        return topFns.any { fn ->
+            if (fn.name != "main") return@any false
+            val isComposable = fn.annotationEntries.any {
+                it.shortName?.asString() == "Composable"
+            }
+            if (isComposable) return@any false
+            val params = fn.valueParameters
+            params.isEmpty() || (params.size == 1 && params[0].typeReference?.text.orEmpty().let { "Array" in it && "String" in it })
+        }
+    }
+
     /**
      * `@Composable` functions declared in [path] (both top-level and inside classes) that can be invoked as a
      * preview entrypoint (either 0 required parameters or parameters with default/primitive/String/Modifier/lambda types),

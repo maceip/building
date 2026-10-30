@@ -50,6 +50,39 @@ object VmPreviewEntry {
         PreviewWire.encode(entry, program, classes)
 
     /**
+     * Executes a non-UI Kotlin entry point (such as `fun main()` or `fun main(args: Array<String>)`) decoded from
+     * [blob] inside the tree interpreter. Standard output written via `println`/`print` flows through the VM's
+     * `System.out` stream (`Vm.stdout`), and the returned array is `[returnValue, error]`.
+     */
+    @JvmStatic
+    fun executeMain(blob: ByteArray): Array<Any?> {
+        val (entry, program, classes) = PreviewWire.decode(blob)
+        var returnValue: String? = null
+        var errorText: String? = null
+        synchronized(renderLock) {
+            try {
+                val interpreter = dev.ide.interp.Interpreter(
+                    functions = program,
+                    classes = classes,
+                    tolerateGaps = false,
+                )
+                val args: List<Any?> = if (entry.params.isEmpty()) {
+                    emptyList()
+                } else {
+                    listOf(emptyArray<String>())
+                }
+                val res = interpreter.call(entry, args)
+                if (res != null && res != Unit) {
+                    returnValue = res.toString()
+                }
+            } catch (t: Throwable) {
+                errorText = describe(t)
+            }
+        }
+        return arrayOf(returnValue, errorText)
+    }
+
+    /**
      * The preview in [blob] rendered at [width]x[height] pixels under the `@Preview` options a host passes,
      * as `[png, problems]`: the PNG bytes, and what went wrong as text (null when nothing did). A preview
      * that fails part way still renders what it could, so a frame comes back with its problems.

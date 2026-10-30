@@ -29,6 +29,8 @@ object IosSwiftUiRuntime {
         val viewNodeJson: String,
         val previewPngPath: String?,
         val previewPngBytes: ByteArray?,
+        val ok: Boolean = true,
+        val errorMessage: String? = null,
     )
 
     class SwiftUiSession {
@@ -183,11 +185,22 @@ object IosSwiftUiRuntime {
         }
 
         val rootViewLabel = rootStruct?.name ?: appStruct?.name ?: "${projectName}App"
+        if (evaluatedRoot == null) {
+            return EvaluationResult(
+                projectName = projectName,
+                rootViewName = rootViewLabel,
+                swiftFiles = swiftFiles,
+                discoveredTypes = discoveredTypes,
+                viewNodeJson = "",
+                previewPngPath = null,
+                previewPngBytes = null,
+                ok = false,
+                errorMessage = "No SwiftUI View declaration with an evaluable body found in $projectName (${swiftFiles.size} Swift files)",
+            )
+        }
+
         val finalNode = buildCupertinoWindowNode(
             projectName = projectName,
-            rootViewLabel = rootViewLabel,
-            swiftFileCount = swiftFiles.size,
-            discoveredTypes = discoveredTypes,
             evaluatedRoot = evaluatedRoot,
             session = session,
         )
@@ -215,15 +228,14 @@ object IosSwiftUiRuntime {
             viewNodeJson = json,
             previewPngPath = pngPath,
             previewPngBytes = pngBytes,
+            ok = true,
+            errorMessage = null,
         )
     }
 
     private fun buildCupertinoWindowNode(
         projectName: String,
-        rootViewLabel: String,
-        swiftFileCount: Int,
-        discoveredTypes: List<String>,
-        evaluatedRoot: VNode?,
+        evaluatedRoot: VNode,
         session: SwiftUiSession,
     ): VNode {
         // Ensure callback id 1 is always registered (if no button in evaluatedRoot registered id 1, register a default action)
@@ -231,82 +243,7 @@ object IosSwiftUiRuntime {
             session.actions[1L] = SwiftUiSession.Action.Statement("")
         }
 
-        val headerCard = VNode(
-            type = "VStack",
-            props = mapOf("alignment" to "leading", "spacing" to 6),
-            modifiers = listOf(mapOf("kind" to "padding", "all" to 12.0)),
-            children = buildList {
-                add(
-                    VNode(
-                        type = "Text",
-                        props = mapOf("text" to projectName),
-                        modifiers = listOf(mapOf("kind" to "font", "style" to "headline"), mapOf("kind" to "bold")),
-                    ),
-                )
-                add(
-                    VNode(
-                        type = "Text",
-                        props = mapOf(
-                            "text" to "Target: $rootViewLabel • $swiftFileCount Swift files • Interactions: ${session.interactions}",
-                        ),
-                        modifiers = listOf(
-                            mapOf("kind" to "font", "style" to "caption"),
-                            mapOf("kind" to "foregroundColor", "color" to "secondary"),
-                        ),
-                    ),
-                )
-            },
-        )
-
-        val bodyContent: List<VNode> = if (evaluatedRoot != null) {
-            listOf(headerCard, DividerNode, evaluatedRoot)
-        } else {
-            val typeSummary = discoveredTypes.take(8).ifEmpty { listOf("${projectName}App", "ContentView") }
-            val actionId = if (session.nextId == 1L) {
-                session.register(SwiftUiSession.Action.Statement(""))
-            } else {
-                1L
-            }
-            listOf(
-                headerCard,
-                DividerNode,
-                VNode(
-                    type = "VStack",
-                    props = mapOf("alignment" to "leading", "spacing" to 8),
-                    modifiers = listOf(mapOf("kind" to "padding", "all" to 12.0)),
-                    children = buildList {
-                        add(
-                            VNode(
-                                type = "Text",
-                                props = mapOf("text" to "Discovered Swift Declarations (${discoveredTypes.size})"),
-                                modifiers = listOf(mapOf("kind" to "font", "style" to "subheadline"), mapOf("kind" to "bold")),
-                            ),
-                        )
-                        for (t in typeSummary) {
-                            add(
-                                VNode(
-                                    type = "HStack",
-                                    props = mapOf("spacing" to 8),
-                                    children = listOf(
-                                        VNode("Image", props = mapOf("systemName" to "swift")),
-                                        VNode("Text", props = mapOf("text" to t)),
-                                    ),
-                                ),
-                            )
-                        }
-                        add(
-                            VNode(
-                                type = "Button",
-                                props = mapOf("label" to "Trigger Cupertino Interaction", "onTap" to actionId),
-                                children = listOf(VNode("Text", props = mapOf("text" to "Trigger Cupertino Interaction"))),
-                            ),
-                        )
-                    },
-                ),
-            )
-        }
-
-        // If the evaluated root is already a NavigationStack or TabView, keep its structure inside a ScrollView container
+        // Wrap the evaluated SwiftUI root hierarchy inside a ScrollView container preserving project/interaction metadata
         return VNode(
             type = "ScrollView",
             props = mapOf("axes" to "vertical", "project" to projectName, "interactions" to session.interactions),
@@ -315,13 +252,11 @@ object IosSwiftUiRuntime {
                     type = "VStack",
                     props = mapOf("alignment" to "leading", "spacing" to 12),
                     modifiers = listOf(mapOf("kind" to "padding", "all" to 16.0)),
-                    children = bodyContent,
+                    children = listOf(evaluatedRoot),
                 ),
             ),
         )
     }
-
-    private val DividerNode = VNode("Divider")
 
     /**
      * Renders the evaluated Cupertino [VNode] hierarchy into a PNG image using native iOS Skia.

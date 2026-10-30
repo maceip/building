@@ -172,9 +172,21 @@ object GuestAppRunner {
 
         emit("[LiveContainer] Module successfully mapped into process space (handle: $handle)")
 
-        // 8. Locate main / guest entry point
-        val mainSym = dlsym(handle, "main") ?: dlsym(handle, "_main") ?: dlsym(handle, "guest_entry_point")
+        // 8. Locate and invoke guest entry point
+        val guestEntrySym = dlsym(handle, "guest_entry_point")
+        val mainSym = dlsym(handle, "main") ?: dlsym(handle, "_main") ?: guestEntrySym
         val resolvedSymbol = when {
+            guestEntrySym != null -> {
+                emit("[LiveContainer] Entry point 'guest_entry_point' located at $guestEntrySym ($bundleEntry)")
+                runCatching {
+                    val fn: CPointer<CFunction<() -> Int>> = guestEntrySym.reinterpret()
+                    val rc = fn()
+                    emit("[LiveContainer] Invoked guest_entry_point() -> return code $rc")
+                }.onFailure { err ->
+                    emit("[LiveContainer] guest_entry_point() threw: ${err.message}")
+                }
+                "guest_entry_point ($bundleEntry)"
+            }
             mainSym != null -> {
                 emit("[LiveContainer] Entry point 'main' symbol located at $mainSym ($bundleEntry)")
                 "main ($bundleEntry)"

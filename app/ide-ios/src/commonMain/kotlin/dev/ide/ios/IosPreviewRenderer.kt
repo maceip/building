@@ -13,14 +13,50 @@ import dev.ide.vm.skiko.SkikoNativeBindings
  * desktop artifacts. Only skia is native. One VM serves every render for a class path, so classes are
  * decoded once and later renders are warm.
  */
+internal data class IosMainExecutionResult(
+    val output: String,
+    val returnValue: String?,
+    val error: String?,
+)
+
 internal class IosPreviewRenderer(private val classPath: List<String>) {
+    private var stdoutListener: ((String) -> Unit)? = null
+
     private val vm: Vm by lazy {
         Vm(
             ClassPath(classPath),
+            stdout = { chunk ->
+                val listener = stdoutListener
+                if (listener != null) listener(chunk) else print(chunk)
+            },
             bindings = SkikoNativeBindings(),
             // skiko's JVM build reads the OS to pick its defaults; a Mac is the closest to what draws here.
             systemProperties = mapOf("os.name" to "Mac OS X", "os.arch" to "aarch64"),
         )
+    }
+
+    /**
+     * Executes a lowered `fun main` entry point in [blob] inside `:jvm-vm`, streaming `println`/`print`
+     * output to [onStdout] and returning [IosMainExecutionResult].
+     */
+    fun executeMain(blob: ByteArray, onStdout: (String) -> Unit = {}): IosMainExecutionResult {
+        val captured = StringBuilder()
+        val prev = stdoutListener
+        stdoutListener = { chunk ->
+            captured.append(chunk)
+            onStdout(chunk)
+        }
+        return try {
+            val result = vm.invokeStatic(ENTRY, "executeMain", "([B)[Ljava/lang/Object;", blob) as dev.ide.vm.VmRefArray
+            vm.runPendingTasks()
+            IosMainExecutionResult(
+                output = captured.toString(),
+                returnValue = result.data[0] as String?,
+                error = result.data[1] as String?,
+            )
+        } finally {
+            stdoutListener = prev
+        }
     }
 
     /** The preview in [blob] (a `PreviewWire` encoding) rendered at [width]x[height] pixels, as a PNG. */

@@ -880,24 +880,37 @@ class IosBackend(
         runKotlinComposeBuild(root)
     }
 
-    private fun isAndroidProject(root: String): Boolean =
-        IosFiles.exists(IosFiles.join(root, "app/src/main/AndroidManifest.xml")) ||
-            IosFiles.exists(IosFiles.join(root, "androidApp/src/main/AndroidManifest.xml")) ||
-            IosFiles.exists(IosFiles.join(root, "app/src/androidMain/AndroidManifest.xml")) ||
-            IosFiles.exists(IosFiles.join(root, "src/main/AndroidManifest.xml"))
-
-    private fun assembleAndRunProjectApk(
-        root: String,
-        candidateFiles: List<String>,
-        onChunk: (ConsoleChunk) -> Unit,
-    ): ApkRuntime.LaunchResult? {
-        val manifestPath = listOf(
+    private fun findAndroidManifests(root: String): List<String> {
+        val direct = listOf(
             IosFiles.join(root, "app/src/main/AndroidManifest.xml"),
             IosFiles.join(root, "androidApp/src/main/AndroidManifest.xml"),
             IosFiles.join(root, "app/src/androidMain/AndroidManifest.xml"),
             IosFiles.join(root, "src/main/AndroidManifest.xml"),
-        ).firstOrNull { IosFiles.exists(it) } ?: return null
+        ).filter { IosFiles.exists(it) }
+        if (direct.isNotEmpty()) return direct
 
+        val found = mutableListOf<String>()
+        for (entry in IosFiles.list(root)) {
+            if (entry.startsWith(".") || entry == "build" || entry == "gradle") continue
+            val sub = IosFiles.join(root, entry)
+            if (IosFiles.isDirectory(sub)) {
+                val m1 = IosFiles.join(sub, "src/main/AndroidManifest.xml")
+                val m2 = IosFiles.join(sub, "src/androidMain/AndroidManifest.xml")
+                if (IosFiles.exists(m1)) found.add(m1)
+                if (IosFiles.exists(m2)) found.add(m2)
+            }
+        }
+        return found
+    }
+
+    private fun isAndroidProject(root: String): Boolean =
+        findAndroidManifests(root).isNotEmpty()
+
+    private fun parseAndroidProjectMetadata(
+        root: String,
+        candidateFiles: List<String>,
+    ): ApkBuilder.AndroidProjectSpec? {
+        val manifestPath = findAndroidManifests(root).firstOrNull() ?: return null
         val manifestXml = IosFiles.readText(manifestPath)
         val gradlePaths = listOf(
             IosFiles.join(root, "app/build.gradle.kts"),
@@ -915,31 +928,13 @@ class IosBackend(
         ).firstOrNull { IosFiles.exists(it) }
         val stringsXml = stringsPath?.let { IosFiles.readText(it) }.orEmpty()
 
-        val spec = ApkBuilder.parseProjectSpec(
+        return ApkBuilder.parseProjectSpec(
             fallbackName = IosFiles.nameOf(root),
             manifestXml = manifestXml,
             gradleTexts = gradleTexts,
             stringsXml = stringsXml,
             kotlinFileNames = candidateFiles,
         )
-        val apkBytes = ApkBuilder.buildApkBytes(spec)
-        val outDir = IosFiles.join(root, "app/build/outputs/apk/debug")
-        IosFiles.mkdirs(outDir)
-        val apkName = "${IosFiles.sanitize(IosFiles.nameOf(root)).lowercase()}-debug.apk"
-        val apkPath = IosFiles.join(outDir, apkName)
-        IosFiles.writeBytes(apkPath, apkBytes)
-        onChunk(ConsoleChunk("Built APK: $apkPath (${apkBytes.size} bytes)\n", ConsoleChunkKind.SYSTEM))
-
-        val result = ApkRuntime { line ->
-            onChunk(ConsoleChunk("$line\n", ConsoleChunkKind.OUTPUT))
-        }.launch(apkBytes)
-        onChunk(
-            ConsoleChunk(
-                "APK Runtime: ${result.message} (package=${result.packageName}, activity=${result.activity}, classes=${result.dexClasses})\n",
-                ConsoleChunkKind.SYSTEM,
-            ),
-        )
-        return result
     }
 
     private fun isKotlinOrGradleProject(root: String): Boolean {
@@ -1227,6 +1222,23 @@ class IosBackend(
                     ConsoleChunkKind.SYSTEM,
                 ),
             )
+            if (!eval.ok) {
+                val errMsg = eval.errorMessage ?: "Failed to evaluate SwiftUI target in ${eval.projectName}"
+                onChunk(ConsoleChunk("Error: $errMsg\n", ConsoleChunkKind.OUTPUT))
+                _buildState.value = BuildState(
+                    status = RunStatus.Failed,
+                    log = listOf(BuildLogLine(errMsg, UiLogLevel.Error)),
+                )
+                _runConsole.update {
+                    it?.copy(
+                        phase = RunPhase.Finished,
+                        exitCode = 1,
+                        acceptsInput = false,
+                    )
+                }
+                activeRunSession = null
+                return@launch
+            }
             onChunk(
                 ConsoleChunk(
                     "[SwiftUI Runtime] Root view: ${eval.rootViewName}\n",
@@ -1298,9 +1310,10 @@ class IosBackend(
 
             onChunk(ConsoleChunk("=== Launching ${task.option.label} ===\n", ConsoleChunkKind.SYSTEM))
 
-            if (task.runtime == IosRuntimeRunner.RuntimeKind.NODE && task.targetFile != null && !hasNodeExecutable()) {
+            if (task.runtime == IosRuntimeRunner.RuntimeKind.NODE && task.targetFile != null) {
                 val script = IosFiles.readText(task.targetFile)
-                val ok = IosRuntimeRunner.runJavaScriptInProcess(script, IosFiles.nameOf(task.targetFile), root, onChunk)
+                val relScriptName = task.targetFile.removePrefix("${root.trimEnd('/')}/")
+                val ok = IosRuntimeRunner.runJavaScriptInProcess(script, relScriptName, root, onChunk)
                 if (ok) {
                     _buildState.value = BuildState(
                         status = RunStatus.Succeeded,
@@ -1388,11 +1401,19 @@ class IosBackend(
                     }
                 }
                 val candidateFiles = findKotlinSourceFiles(root)
-                val apkLaunchResult = if (isAndroidProject(root)) {
+                val androidSpec = if (isAndroidProject(root)) {
                     withContext(ioDispatcher) {
-                        assembleAndRunProjectApk(root, candidateFiles, onChunk)
+                        parseAndroidProjectMetadata(root, candidateFiles)
                     }
                 } else null
+                if (androidSpec != null) {
+                    onChunk(
+                        ConsoleChunk(
+                            "Android target: package=${androidSpec.packageName}, activity=${androidSpec.launchActivity}\n",
+                            ConsoleChunkKind.SYSTEM,
+                        ),
+                    )
+                }
 
                 // Collect candidate entry points in priority order so if the first candidate
                 // renders a blank frame (0 inked pixels), we automatically try the next candidate.
@@ -1408,7 +1429,7 @@ class IosBackend(
 
                 // 0. For Android projects, extract @Composable from MainActivity.onCreate setContent { ... }
                 if (isAndroidProject(root)) {
-                    val actName = apkLaunchResult?.activity ?: "MainActivity"
+                    val actName = androidSpec?.launchActivity ?: "MainActivity"
                     val actSimple = actName.substringAfterLast('.')
                     val actFile = candidateFiles.find { it.endsWith("/$actSimple.kt") }
                         ?: candidateFiles.find { it.endsWith("Activity.kt") && !it.endsWith("Test.kt") }
@@ -1544,15 +1565,80 @@ class IosBackend(
                         val fallbackPath = candidateFiles.first()
                         val fallbackText = IosFiles.readText(fallbackPath)
                         val fallbackFn = "App"
-                        val fallbackBlob = previewStage("Lowering $fallbackFn for Run") {
-                            withAnalysis(null) { it.lowerPreview(fallbackPath, fallbackText, fallbackFn) }
+                        if ("fun $fallbackFn" in fallbackText) {
+                            val fallbackBlob = previewStage("Lowering $fallbackFn for Run") {
+                                withAnalysis(null) { it.lowerPreview(fallbackPath, fallbackText, fallbackFn) }
+                            }
+                            addCandidate(fallbackPath, fallbackText, fallbackFn, fallbackBlob)
                         }
-                        addCandidate(fallbackPath, fallbackText, fallbackFn, fallbackBlob)
                     }
                 }
 
+                val runtime = previewRuntimeJars()
+                val libraries = previewLibraryJars()
+                val classpath = runtime + libraries
+
                 if (loweredCandidates.isEmpty()) {
-                    val errMsg = "No runnable Kotlin Compose entry point found in $root"
+                    // Check for a standard Kotlin console entry point (`fun main()`)
+                    var mainFile: String? = null
+                    var mainText: String? = null
+                    var mainBlob: ByteArray? = null
+
+                    val openKtPaths = buffers.keys.filter { it.endsWith(".kt") }
+                    val allMainCandidates = (openKtPaths + candidateFiles).distinct()
+                    for (file in allMainCandidates) {
+                        val text = buffers[file] ?: IosFiles.readText(file)
+                        if ("fun main" !in text) continue
+                        val hasMain = withAnalysis(false) { it.hasMainFunction(file, text) }
+                        if (hasMain) {
+                            val lowered = withAnalysis(null) { it.lowerPreview(file, text, "main") }
+                            if (lowered != null) {
+                                mainFile = file
+                                mainText = text
+                                mainBlob = lowered
+                                break
+                            }
+                        }
+                    }
+
+                    if (mainBlob != null && mainFile != null) {
+                        val relFile = mainFile.removePrefix("${root.trimEnd('/')}/")
+                        onChunk(ConsoleChunk("=== Executing Kotlin main() ($relFile) ===\n", ConsoleChunkKind.SYSTEM))
+                        _runConsole.update {
+                            it?.copy(
+                                moduleName = active?.name ?: "app",
+                                mainClass = "${IosFiles.nameOf(mainFile).removeSuffix(".kt")}Kt.main",
+                                phase = RunPhase.Running,
+                            )
+                        }
+                        val execResult = IosPreviewThread.run {
+                            val renderer = previewRendererFor(classpath)
+                            renderer.executeMain(mainBlob) { outChunk ->
+                                onChunk(ConsoleChunk(outChunk, ConsoleChunkKind.OUTPUT))
+                            }
+                        }
+                        if (execResult.error != null) {
+                            onChunk(ConsoleChunk("Error: ${execResult.error}\n", ConsoleChunkKind.OUTPUT))
+                            _buildState.value = BuildState(
+                                status = RunStatus.Failed,
+                                log = listOf(BuildLogLine(execResult.error, UiLogLevel.Error)),
+                            )
+                            _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = 1) }
+                        } else {
+                            if (execResult.returnValue != null) {
+                                onChunk(ConsoleChunk("Return: ${execResult.returnValue}\n", ConsoleChunkKind.SYSTEM))
+                            }
+                            _buildState.value = BuildState(
+                                status = RunStatus.Succeeded,
+                                log = listOf(BuildLogLine("Executed Kotlin main() in $relFile", UiLogLevel.Info)),
+                            )
+                            _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = 0) }
+                        }
+                        activeRunSession = null
+                        return@launch
+                    }
+
+                    val errMsg = "No runnable Kotlin Compose or main() entry point found in $root"
                     _buildState.value = BuildState(
                         status = RunStatus.Failed,
                         log = listOf(BuildLogLine(errMsg, UiLogLevel.Error)),
@@ -1561,10 +1647,6 @@ class IosBackend(
                     _runConsole.update { it?.copy(phase = RunPhase.Finished, exitCode = 1) }
                     return@launch
                 }
-
-                val runtime = previewRuntimeJars()
-                val libraries = previewLibraryJars()
-                val classpath = runtime + libraries
 
                 val tmpDir = NSTemporaryDirectory().trimEnd('/')
                 var chosenCandidate = loweredCandidates.first()
@@ -1627,16 +1709,16 @@ class IosBackend(
                 )
                 _runConsole.value = RunConsoleUi(
                     id = sessionId,
-                    moduleName = apkLaunchResult?.packageName?.ifBlank { "app" } ?: "app",
-                    mainClass = apkLaunchResult?.activity ?: targetFn,
+                    moduleName = androidSpec?.packageName?.ifBlank { "app" } ?: "app",
+                    mainClass = androidSpec?.launchActivity ?: targetFn,
                     phase = RunPhase.Running,
                     transcript = transcriptChunks.toList(),
                     acceptsInput = true,
                     frame = initialFrameUi,
                 )
                 val logLines = buildList {
-                    apkLaunchResult?.let {
-                        add(BuildLogLine(it.message, if (it.ok) UiLogLevel.Info else UiLogLevel.Error))
+                    androidSpec?.let {
+                        add(BuildLogLine("Target ${it.packageName}/${it.launchActivity}", UiLogLevel.Info))
                     }
                     addAll(initialFrame.problems.map { BuildLogLine(it, UiLogLevel.Warn) })
                 }
@@ -1772,18 +1854,23 @@ class IosBackend(
 
     private fun findKotlinSourceFiles(dir: String): List<String> {
         val results = mutableListOf<String>()
-        fun scan(d: String) {
+        val ignoredDirs = setOf(
+            "build", ".git", ".gradle", ".idea", "node_modules",
+            "test", "androidTest", "commonTest", "jvmTest", "iosTest",
+        )
+        fun scan(d: String, depth: Int) {
+            if (depth > 10) return
             for (entry in IosFiles.list(d)) {
-                if (entry.startsWith(".")) continue
+                if (entry.startsWith(".") || entry in ignoredDirs) continue
                 val full = IosFiles.join(d, entry)
                 if (IosFiles.isDirectory(full)) {
-                    if (entry != "build" && entry != ".git") scan(full)
-                } else if (entry.endsWith(".kt")) {
+                    scan(full, depth + 1)
+                } else if (entry.endsWith(".kt") && !entry.endsWith("Test.kt")) {
                     results.add(full)
                 }
             }
         }
-        scan(dir)
+        scan(dir, 0)
         return results
     }
 
@@ -2338,6 +2425,9 @@ class IosBackend(
      */
     override suspend fun openProject(rootPath: String): Boolean {
         if (!IosFiles.isDirectory(rootPath)) return false
+        if (activeRunSession != null || runJob != null) {
+            stopBuild()
+        }
         resetAnalysis()
         withContext(ioDispatcher) { projectModel.reopen(rootPath) }
         active = projectInfo(rootPath)
@@ -2892,11 +2982,7 @@ class IosBackend(
         val isSwift = projectModel.isSwift(root)
         val isAndroid = (store?.workspace?.projects?.any { p ->
             p.modules.any { it.type.id in listOf("android-app", "android-lib") }
-        } ?: false) ||
-            IosFiles.exists(IosFiles.join(root, "app/src/main/AndroidManifest.xml")) ||
-            IosFiles.exists(IosFiles.join(root, "androidApp/src/main/AndroidManifest.xml")) ||
-            IosFiles.exists(IosFiles.join(root, "app/src/androidMain/AndroidManifest.xml")) ||
-            IosFiles.exists(IosFiles.join(root, "src/main/AndroidManifest.xml"))
+        } ?: false) || isAndroidProject(root)
         val unrecognized = !isNode && !isPython && !isSwift && !isAndroid &&
             (store?.workspace?.projects?.isEmpty() == true ||
                 store?.workspace?.projects?.all { it.modules.isEmpty() } == true)

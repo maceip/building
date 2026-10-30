@@ -1807,7 +1807,7 @@ class IosBackendTest {
         val updatedFrame = assertNotNull(backend.build.runConsole.value?.frame)
         assertTrue(updatedFrame.seq > initialFrame.seq, "Frame seq must advance after button tap")
         assertTrue(updatedFrame.path.contains("Count: 1"), "Expected Count: 1 after button tap: ${updatedFrame.path}")
-        assertTrue(updatedFrame.path.contains("Interactions: 1"), "Expected Interactions: 1 in updated frame")
+        assertTrue(updatedFrame.path.contains("\"interactions\":1"), "Expected \"interactions\":1 in updated frame: ${updatedFrame.path}")
         backend.build.stopBuild()
     }
 
@@ -1877,6 +1877,129 @@ class IosBackendTest {
         val console = backend.build.runConsole.value
         assertNotNull(console, "console created for guest patch")
         assertTrue(console.transcript.any { "Patching Mach-O" in it.text }, "started Mach-O patch task")
+    }
+
+    @Test
+    fun kotlinConsoleMainFunctionExecutesInJvmVmAndStreamsOutput() = runTest {
+        backend.previewRuntimeJars = { PreviewTestClasspath.jars }
+        backend.dependenciesFor = { IosDependencies(it, ArtifactFetcher { null }) }
+
+        val consoleDir = IosFiles.join(root, "KotlinConsoleDemo")
+        val srcDir = IosFiles.join(consoleDir, "src/main/kotlin/demo")
+        IosFiles.mkdirs(srcDir)
+        IosFiles.writeText(IosFiles.join(consoleDir, "build.gradle.kts"), "plugins { kotlin(\"jvm\") }\n")
+        IosFiles.writeText(
+            IosFiles.join(srcDir, "Greeter.kt"),
+            """
+            package demo
+
+            class Greeter(private val prefix: String) {
+                fun greet(target: String, count: Int): String = "${'$'}prefix, ${'$'}target (#${'$'}count)!"
+            }
+            """.trimIndent(),
+        )
+        IosFiles.writeText(
+            IosFiles.join(srcDir, "Main.kt"),
+            """
+            package demo
+
+            fun main() {
+                val greeter = Greeter("Hello from iOS JVM-VM")
+                println(greeter.greet("Foundry", 42))
+            }
+            """.trimIndent(),
+        )
+
+        assertTrue(backend.openProject(consoleDir), "opens Kotlin console project")
+        backend.build.runBuild()
+        withContext(Dispatchers.Default) {
+            withTimeout(20_000) {
+                while (backend.build.buildState.value.status == dev.ide.ui.backend.RunStatus.Running ||
+                    backend.build.buildState.value.status == dev.ide.ui.backend.RunStatus.Idle
+                ) {
+                    delay(50)
+                }
+            }
+        }
+        val state = backend.build.buildState.value
+        val console = assertNotNull(backend.build.runConsole.value, "Expected RunConsoleUi for Kotlin console main()")
+        val transcript = console.transcript.joinToString("") { it.text }
+        assertEquals(
+            dev.ide.ui.backend.RunStatus.Succeeded,
+            state.status,
+            "Expected Kotlin main() to succeed, got ${state.status}: $transcript",
+        )
+        assertTrue(
+            "Hello from iOS JVM-VM, Foundry (#42)!" in transcript,
+            "Expected real println output from :jvm-vm in console transcript, got:\n$transcript",
+        )
+    }
+
+    @Test
+    fun nodeProjectWithMultiFileCommonJsRequireAndNpmScriptExecutesInJavaScriptCore() = runTest {
+        val nodeDir = IosFiles.join(root, "MultiFileNodeApp")
+        val srcDir = IosFiles.join(nodeDir, "src")
+        IosFiles.mkdirs(srcDir)
+        IosFiles.writeText(
+            IosFiles.join(nodeDir, "package.json"),
+            """
+            {
+              "name": "multi-file-node-app",
+              "version": "1.0.0",
+              "main": "src/index.js",
+              "scripts": {
+                "start": "node src/index.js"
+              }
+            }
+            """.trimIndent(),
+        )
+        IosFiles.writeText(
+            IosFiles.join(srcDir, "math.js"),
+            """
+            exports.multiply = function(a, b) {
+                return a * b;
+            };
+            """.trimIndent(),
+        )
+        IosFiles.writeText(
+            IosFiles.join(srcDir, "config.json"),
+            """{"label":"JSC-CommonJS"}""",
+        )
+        IosFiles.writeText(
+            IosFiles.join(srcDir, "index.js"),
+            """
+            const math = require('./math');
+            const cfg = require('./config.json');
+            console.log(cfg.label + ':' + math.multiply(6, 7));
+            """.trimIndent(),
+        )
+
+        assertTrue(backend.openProject(nodeDir), "opens multi-file Node project")
+        val tasks = backend.build.runTasks()
+        assertTrue(tasks.any { it.id == "node:script:start" }, "discovers npm run start script")
+
+        backend.build.runTask("node:script:start")
+        withContext(Dispatchers.Default) {
+            withTimeout(10_000) {
+                while (backend.build.buildState.value.status == dev.ide.ui.backend.RunStatus.Running ||
+                    backend.build.buildState.value.status == dev.ide.ui.backend.RunStatus.Idle
+                ) {
+                    delay(50)
+                }
+            }
+        }
+        val state = backend.build.buildState.value
+        val console = assertNotNull(backend.build.runConsole.value)
+        val transcript = console.transcript.joinToString("") { it.text }
+        assertEquals(
+            dev.ide.ui.backend.RunStatus.Succeeded,
+            state.status,
+            "Expected node:script:start to succeed via in-process JSC CommonJS loader, got: $transcript",
+        )
+        assertTrue(
+            "JSC-CommonJS:42" in transcript,
+            "Expected multi-file require('./math') + require('./config.json') output in transcript, got:\n$transcript",
+        )
     }
 
 }
