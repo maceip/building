@@ -107,7 +107,7 @@ fun AgentChip(
     label: String,
     selected: Boolean = false,
     leading: (@Composable () -> Unit)? = null,
-    onClick: () -> Unit = {},
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val bg = if (selected) AgentUi.chrome.surfaceAlt else Color.Transparent
@@ -119,10 +119,16 @@ fun AgentChip(
             .clip(RoundedCornerShape(AgentUi.radius.chip))
             .background(bg)
             .border(1.dp, stroke, RoundedCornerShape(AgentUi.radius.chip))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onClick,
+                    )
+                } else {
+                    Modifier
+                }
             )
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,

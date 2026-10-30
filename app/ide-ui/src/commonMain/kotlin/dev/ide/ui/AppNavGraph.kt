@@ -781,6 +781,10 @@ private fun ProjectPickerRoute(
         onOpenAgentSettings = { app.openPluginScreen(dev.ide.ui.screens.SCREEN_AGENT_SETTINGS) },
         onCloneGit = { app.openPluginScreen(VcsService.SCREEN_CLONE) },
         onImportPackage = if (fileActions.canPickFile) app::requestProjectImport else null,
+        onSubmitToStore = { project ->
+            dev.ide.ui.ext.ScreenArgumentHandoff.pending = project
+            app.openPluginScreen("store.submit")
+        },
     )
     if (notificationsVisible) {
         NotificationsSheet(

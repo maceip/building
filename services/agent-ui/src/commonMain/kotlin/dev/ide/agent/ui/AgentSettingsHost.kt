@@ -12,13 +12,20 @@ import dev.ide.ui.backend.UiAgentPermissionMode
 import dev.ide.ui.ext.ScreenContext
 import dev.ide.ui.screens.AgentSettingsContent
 
+private const val PREF_OFFLINE_ONLY = "agent.restrictExternalWeb"
+private const val PREF_PAUSE_LOW_BATTERY = "agent.pauseLowBattery"
+
 /**
- * [AgentSettingsContent] wired to [AgentService]. Safe when the backend reports [AgentService.Unsupported]:
- * controls still render with defaults and writes are no-ops.
+ * [AgentSettingsContent] wired to [AgentService] and [IdeBackend.settings]. Safe when the backend reports
+ * [AgentService.Unsupported]: controls render with persisted preferences and provider state.
  */
 @Composable
 fun AgentSettingsScreen(ctx: ScreenContext) {
-    AgentSettingsHost(backend = ctx.backend, onBack = ctx::back, onOpenEditorPrefs = {})
+    AgentSettingsHost(
+        backend = ctx.backend,
+        onBack = ctx::back,
+        onOpenEditorPrefs = { ctx.openScreen("ide.settings") },
+    )
 }
 
 @Composable
@@ -29,17 +36,20 @@ fun AgentSettingsHost(
     onDownloadModel: () -> Unit = {},
 ) {
     val agent = backend.agent
+    val settings = backend.settings
     var cfg by remember(agent) { mutableStateOf(agent.config()) }
 
-    // 0 = On this phone, 1 = Cloud. Not a backend enum yet — kept locally so the segmented control is
-    // truthful and the rest of the page can prefer offline-safe defaults while on-device is selected.
-    var modeIndex by remember(agent) { mutableIntStateOf(0) }
-    var offlineOnly by remember(agent) { mutableStateOf(modeIndex == 0) }
-    var pauseLowBattery by remember(agent) { mutableStateOf(true) }
+    var modeIndex by remember(cfg.selectedProvider) {
+        mutableIntStateOf(if (cfg.selectedProvider == "gateway") 0 else 1)
+    }
+    var offlineOnly by remember(settings) {
+        mutableStateOf(settings.preference(PREF_OFFLINE_ONLY) == "true")
+    }
+    var pauseLowBattery by remember(settings) {
+        mutableStateOf((settings.preference(PREF_PAUSE_LOW_BATTERY) ?: "true") == "true")
+    }
 
-    // Map the redesigned radios onto the engine's permission modes. Defaults stay ASK_EACH when the
-    // service is Unsupported (cfg.mode).
-    var permissionIndex by remember(agent) {
+    var permissionIndex by remember(cfg.mode) {
         mutableIntStateOf(
             when (cfg.mode) {
                 UiAgentPermissionMode.PLAN_ONLY -> 0
@@ -51,28 +61,31 @@ fun AgentSettingsHost(
 
     val providers = cfg.providers
     val selected = providers.firstOrNull { it.id == cfg.selectedProvider }
-    val localTitle = selected?.displayName?.takeIf { it.isNotBlank() } ?: "On-device agent"
+    val localTitle = selected?.displayName?.takeIf { it.isNotBlank() } ?: "Cloud AI provider"
     val localMeta = when {
         cfg.model.isNotBlank() -> "${cfg.model} · Active"
         selected != null -> "${selected.defaultModel} · Active"
         else -> "No model selected"
     }
     val secondary = providers.firstOrNull { it.id != cfg.selectedProvider }
-    val secondaryTitle = secondary?.displayName ?: "Cloud models"
+    val secondaryTitle = secondary?.displayName ?: "Alternate provider"
     val secondaryMeta = secondary?.let {
-        "${it.defaultModel.ifBlank { it.models.firstOrNull()?.id ?: "Ready" }} · Download when you switch to Cloud"
-    } ?: "Available after you pick Cloud"
+        "${it.defaultModel.ifBlank { it.models.firstOrNull()?.id ?: "Ready" }} · Tap to switch"
+    } ?: "Configure another provider in Agent settings"
 
     AgentSettingsContent(
         modeIndex = modeIndex,
         onModeChange = { next ->
             modeIndex = next
-            // Prefer an offline posture on-device; allow cloud fallback when Cloud is selected.
-            if (next == 0) offlineOnly = true
-            // Best-effort provider flip: pick the first cloud provider when moving to Cloud, and leave
-            // the current one alone when returning to on-device (no local registry entry exists yet).
-            if (next == 1) {
+            if (next == 0) {
+                val gw = providers.firstOrNull { it.id == "gateway" }
+                if (gw != null && gw.id != cfg.selectedProvider) {
+                    agent.selectProvider(gw.id)
+                    cfg = agent.config()
+                }
+            } else {
                 val cloud = providers.firstOrNull { it.id != "gateway" && it.id != cfg.selectedProvider }
+                    ?: providers.firstOrNull { it.id != "gateway" }
                     ?: providers.firstOrNull()
                 if (cloud != null && cloud.id != cfg.selectedProvider) {
                     agent.selectProvider(cloud.id)
@@ -97,11 +110,20 @@ fun AgentSettingsHost(
             cfg = agent.config()
         },
         offlineOnly = offlineOnly,
-        onOfflineOnlyChange = { offlineOnly = it },
+        onOfflineOnlyChange = { enabled ->
+            offlineOnly = enabled
+            settings.setPreference(PREF_OFFLINE_ONLY, enabled.toString())
+        },
         pauseLowBattery = pauseLowBattery,
-        onPauseLowBatteryChange = { pauseLowBattery = it },
+        onPauseLowBatteryChange = { enabled ->
+            pauseLowBattery = enabled
+            settings.setPreference(PREF_PAUSE_LOW_BATTERY, enabled.toString())
+        },
         onOpenEditorPrefs = onOpenEditorPrefs,
         onDownloadModel = {
+            if (secondary != null) {
+                agent.selectProvider(secondary.id)
+            }
             agent.refreshModels()
             cfg = agent.config()
             onDownloadModel()
@@ -109,3 +131,4 @@ fun AgentSettingsHost(
         onBack = onBack,
     )
 }
+

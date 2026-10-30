@@ -152,6 +152,12 @@ import dev.ide.ui.generated.resources.home_delete_confirm_action
 import dev.ide.ui.generated.resources.home_delete_confirm_body
 import dev.ide.ui.generated.resources.home_delete_confirm_title
 import dev.ide.ui.generated.resources.home_more_actions
+import fragments.agentui.AgentDualActionRows
+import fragments.agentui.ChatActionPurpose
+import fragments.agentui.ChatInput
+import fragments.agentui.ChatInputStatus
+import fragments.agentui.ChatQuickAction
+import fragments.agentui.rememberIdeAgentUiPalette
 import org.jetbrains.compose.resources.stringResource
 
 /** Which list the Home screen's segment chips are showing. */
@@ -230,6 +236,8 @@ fun ProjectsHomeScreen(
     onCloneGit: (() -> Unit)? = null,
     /** Import a `.caproj` package from the New-project sheet. */
     onImportPackage: (() -> Unit)? = null,
+    /** Submit a project to the store for inclusion. */
+    onSubmitToStore: ((ProjectInfo?) -> Unit)? = null,
 ) {
     var segment by remember { mutableStateOf(HomeSegment.Projects) }
     // Deleting wipes the project from disk and nothing else in this flow asks first.
@@ -245,7 +253,32 @@ fun ProjectsHomeScreen(
     // Rendered icons by project root. Held for the screen rather than per card: a card is recomposed every
     // time it scrolls back into view, and resolving an icon means parsing a manifest and a drawable.
     val icons = remember { ProjectIconCache() }
-    val mostRecent = ordered.firstOrNull { it.lastOpened > 0L }
+    val mostRecent = ordered.firstOrNull { it.lastOpened > 0L } ?: ordered.firstOrNull()
+    val activeProviderLabel = remember(backend) {
+        val cfg = backend?.agent?.config()
+        val provider = cfg?.providers?.firstOrNull { it.id == cfg.selectedProvider }
+        provider?.displayName?.takeIf { it.isNotBlank() } ?: "Cloud AI"
+    }
+    val triggerRebuildMostRecent: () -> Unit = {
+        val target = mostRecent ?: ordered.firstOrNull()
+        if (target != null) {
+            onOpen(target)
+            if (backend?.build?.supported() == true) {
+                backend.build.runBuild()
+            }
+        } else {
+            sheet = HomeSheet.NewProject
+        }
+    }
+    val triggerSubmitToStore: () -> Unit = {
+        val target = mostRecent ?: ordered.firstOrNull()
+        when {
+            onSubmitToStore != null -> onSubmitToStore(target)
+            target != null && onExportProject != null -> onExportProject(target)
+            target != null -> onOpen(target)
+            else -> sheet = HomeSheet.NewProject
+        }
+    }
 
     // Pull-to-refresh re-reads the project list. The read is synchronous, so the spinner is held up for a
     // short beat afterwards purely so the gesture registers as having done something.
@@ -276,7 +309,7 @@ fun ProjectsHomeScreen(
             onOpen = onOpen,
             onNewProject = { sheet = HomeSheet.NewProject },
             onImportProject = onImportProject,
-            onCloneRepository = onCloneRepository,
+            onCloneRepository = onCloneRepository ?: onCloneGit,
             onExportProject = onExportProject,
             onRequestDelete = onDeleteProject?.let { { project: ProjectInfo -> pendingDelete = project } },
             showLegacyRecovery = showLegacyRecovery,
@@ -287,6 +320,14 @@ fun ProjectsHomeScreen(
             onJoinDiscord = onJoinDiscord,
             backend = backend,
             onCloneAndOpen = onCloneAndOpen,
+            agentPrompt = agentPrompt,
+            onAgentPromptChange = { agentPrompt = it },
+            onStartAgentPrompt = {
+                if (agentPrompt.isNotBlank()) newProjectPrompt = agentPrompt
+                sheet = HomeSheet.NewProject
+            },
+            onRebuildProject = triggerRebuildMostRecent,
+            onSubmitToStore = triggerSubmitToStore,
         )
     } else if (!showAllProjects) {
         // Agent-first Home (phone width): prompt hero + Continue, with the classic project list one tap
@@ -335,11 +376,13 @@ fun ProjectsHomeScreen(
                     onImportProject != null -> onImportProject()
                 }
             },
-            onDeviceLabel = "On-device",
+            onDeviceLabel = activeProviderLabel,
             continueItems = continueItems,
             allProjectsLabel = "All projects",
             onOpenItem = { item -> ordered.firstOrNull { it.rootPath == item.id }?.let(onOpen) },
             onSeeAllProjects = { showAllProjects = true },
+            onRebuildProject = triggerRebuildMostRecent,
+            onSubmitToStore = triggerSubmitToStore,
             modifier = Modifier.fillMaxSize(),
         )
     } else
@@ -1206,10 +1249,85 @@ private fun WideProjectsHome(
     onJoinDiscord: (() -> Unit)?,
     backend: dev.ide.ui.backend.IdeBackend? = null,
     onCloneAndOpen: ((String, String) -> Unit)? = null,
+    agentPrompt: String = "",
+    onAgentPromptChange: (String) -> Unit = {},
+    onStartAgentPrompt: () -> Unit = {},
+    onRebuildProject: (() -> Unit)? = null,
+    onSubmitToStore: (() -> Unit)? = null,
 ) {
     val c = MaterialTheme.colorScheme
+    val palette = fragments.agentui.rememberIdeAgentUiPalette()
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(ProjectSort.Recent) }
+    val mostRecent = remember(projects) { projects.firstOrNull { it.lastOpened > 0L } ?: projects.firstOrNull() }
+    val navigationActions = remember(mostRecent, onOpen, onCloneRepository, onOpenHub) {
+        buildList {
+            if (mostRecent != null) {
+                add(
+                    fragments.agentui.ChatQuickAction(
+                        id = "wide_nav_open_recent",
+                        label = "Open ${mostRecent.name}",
+                        purpose = fragments.agentui.ChatActionPurpose.Navigation,
+                        primary = true,
+                        onClick = { onOpen(mostRecent) },
+                    ),
+                )
+            }
+            if (onCloneRepository != null) {
+                add(
+                    fragments.agentui.ChatQuickAction(
+                        id = "wide_nav_clone_git",
+                        label = "Clone from Git",
+                        purpose = fragments.agentui.ChatActionPurpose.Navigation,
+                        onClick = onCloneRepository,
+                    ),
+                )
+            }
+            if (onOpenHub != null) {
+                add(
+                    fragments.agentui.ChatQuickAction(
+                        id = "wide_nav_settings",
+                        label = "Settings & SDKs",
+                        purpose = fragments.agentui.ChatActionPurpose.Navigation,
+                        onClick = onOpenHub,
+                    ),
+                )
+            }
+        }
+    }
+    val taskActions = remember(mostRecent, onRebuildProject, onSubmitToStore, onNewProject) {
+        buildList {
+            if (onRebuildProject != null && mostRecent != null) {
+                add(
+                    fragments.agentui.ChatQuickAction(
+                        id = "wide_task_rebuild_project",
+                        label = "Rebuild project",
+                        purpose = fragments.agentui.ChatActionPurpose.Task,
+                        primary = true,
+                        onClick = onRebuildProject,
+                    ),
+                )
+            }
+            if (onSubmitToStore != null) {
+                add(
+                    fragments.agentui.ChatQuickAction(
+                        id = "wide_task_submit_play_store",
+                        label = "Submit to the Google Play Store for inclusion",
+                        purpose = fragments.agentui.ChatActionPurpose.Task,
+                        onClick = onSubmitToStore,
+                    ),
+                )
+            }
+            add(
+                fragments.agentui.ChatQuickAction(
+                    id = "wide_task_create_project",
+                    label = "New project",
+                    purpose = fragments.agentui.ChatActionPurpose.Task,
+                    onClick = onNewProject,
+                ),
+            )
+        }
+    }
     val shown = remember(projects, query, sort) {
         val q = query.trim()
         projects
@@ -1253,6 +1371,29 @@ private fun WideProjectsHome(
                         onClick = onOpenAccount,
                         shape = CircleShape,
                         size = 40.dp,
+                    )
+                }
+            }
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = c.surfaceContainerLow,
+                border = BorderStroke(1.dp, c.outlineVariant),
+            ) {
+                Column(Modifier.fillMaxWidth()) {
+                    fragments.agentui.AgentDualActionRows(
+                        navigationActions = navigationActions,
+                        taskActions = taskActions,
+                        palette = palette,
+                        compact = true,
+                    )
+                    fragments.agentui.ChatInput(
+                        value = agentPrompt,
+                        onValueChange = onAgentPromptChange,
+                        onSend = { onStartAgentPrompt() },
+                        palette = palette,
+                        placeholder = "Describe what you want to build or change...",
+                        compactActions = true,
                     )
                 }
             }

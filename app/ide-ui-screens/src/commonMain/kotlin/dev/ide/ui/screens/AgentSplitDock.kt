@@ -34,6 +34,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.ide.ui.icons.CaIcons
 import dev.ide.ui.theme.AgentUi
+import fragments.agentui.AgentDualActionRows
+import fragments.agentui.ChatActionPurpose
+import fragments.agentui.ChatInput
+import fragments.agentui.ChatInputStatus
+import fragments.agentui.ChatQuickAction
+import fragments.agentui.rememberIdeAgentUiPalette
 
 /** Where the agent pane sits in a split layout. */
 enum class AgentPanePlacement {
@@ -228,7 +234,8 @@ fun AgentSplitHeader(
 }
 
 /**
- * A compact agent conversation strip used inside the split agent pane.
+ * A compact agent conversation strip used inside the split agent pane, powered by
+ * `io.fragments:agent-ui-compose` ([AgentDualActionRows] + [ChatInput]).
  */
 @Composable
 fun AgentSplitConversation(
@@ -243,25 +250,66 @@ fun AgentSplitConversation(
     onSecondaryAction: () -> Unit,
     modifier: Modifier = Modifier,
     placeholder: String = "Ask about what’s below…",
+    navigationActions: List<ChatQuickAction> = emptyList(),
+    taskActions: List<ChatQuickAction> = emptyList(),
 ) {
+    val palette = rememberIdeAgentUiPalette()
+    val resolvedNavigationActions = remember(navigationActions, primaryActionLabel, onPrimaryAction) {
+        navigationActions.ifEmpty {
+            listOf(
+                ChatQuickAction(
+                    id = "split-nav-primary",
+                    label = primaryActionLabel,
+                    purpose = ChatActionPurpose.Navigation,
+                    primary = true,
+                    onClick = onPrimaryAction,
+                ),
+            )
+        }
+    }
+    val resolvedTaskActions = remember(taskActions, secondaryActionLabel, onSecondaryAction) {
+        taskActions.ifEmpty {
+            listOf(
+                ChatQuickAction(
+                    id = "split-task-secondary",
+                    label = secondaryActionLabel,
+                    purpose = ChatActionPurpose.Task,
+                    primary = true,
+                    onClick = onSecondaryAction,
+                ),
+            )
+        }
+    }
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         AgentUserBubble(userText, Modifier.fillMaxWidth(0.84f))
         AgentReplyBody(replyText)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            AgentPrimaryButton(primaryActionLabel, onPrimaryAction)
-            AgentGhostButton(secondaryActionLabel, onSecondaryAction)
-        }
         Spacer(Modifier.weight(1f))
-        AgentComposer(
+        AgentDualActionRows(
+            navigationActions = resolvedNavigationActions,
+            taskActions = resolvedTaskActions,
+            navigationTitle = "Where you want to go",
+            taskTitle = "What you want done",
+            compact = true,
+            palette = palette,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        ChatInput(
             value = prompt,
             onValueChange = onPromptChange,
-            onSend = onSend,
+            onSend = {
+                onPromptChange(it)
+                onSend()
+            },
+            status = ChatInputStatus.Ready,
             placeholder = placeholder,
+            compactActions = true,
+            palette = palette,
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

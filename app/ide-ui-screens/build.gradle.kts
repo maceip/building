@@ -104,6 +104,8 @@ kotlin {
                 implementation(project(":ide-ui-testing"))
                 implementation(libs.kotlinx.coroutines.test)
                 implementation(compose.desktop.currentOs)
+                @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+                implementation(compose.uiTest)
             }
         }
     }

@@ -50,7 +50,10 @@ kotlin {
             dependencies {
                 implementation(kotlin("test"))
                 implementation(project(":ide-ui-testing"))
+                implementation(libs.kotlinx.coroutines.test)
                 implementation(compose.desktop.currentOs) // skiko, for the off-screen render
+                @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+                implementation(compose.uiTest)
             }
         }
     }

@@ -304,6 +304,23 @@ class ChatDrawerSnapshot {
     }
 
     @OptIn(ExperimentalComposeUiApi::class)
+    @Test
+    fun renderChatHalfScreenDark() {
+        val scene = ImageComposeScene(width = 822, height = 680, density = Density(2f)) {
+            CodeAssistTheme(dark = true) { Chat() }
+        }
+        try {
+            var img = scene.render()
+            for (frame in 1..80) img = scene.render(frame * 16_666_667L)
+            val png = img.encodeToData(EncodedImageFormat.PNG)!!.bytes
+            File(OUT_DIR).mkdirs()
+            File("$OUT_DIR/chat-half-screen-dark.png").writeBytes(png)
+        } finally {
+            scene.close()
+        }
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
     private fun snapshot(name: String, dark: Boolean, content: @Composable () -> Unit = { Chat() }) {
         // A real phone viewport (411 x 890 dp), so what falls below the fold is what a user would see.
         val scene = ImageComposeScene(width = 822, height = 1780, density = Density(2f)) {

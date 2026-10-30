@@ -461,6 +461,68 @@ class CodeAssistAppState(
     fun openPluginScreen(id: String) {
         // Taken first, so a refused navigation cannot leave it pending for the next one.
         val argument = ScreenArgumentHandoff.take()
+        when (id) {
+            "store.submit" -> {
+                val activeProject = (argument as? ProjectInfo)
+                    ?: backend.project.takeIf { it.rootPath.isNotBlank() }
+                    ?: backend.projects.projects().maxByOrNull { it.lastOpened }
+                if (ScreenRegistry.find("developer.workbench.publish") != null) {
+                    if (activeProject != null && backend.project.rootPath != activeProject.rootPath) {
+                        scope.launch {
+                            backend.projects.openProject(activeProject.rootPath)
+                            if (screen != Screen.PluginScreen) pluginScreenReturn = screen
+                            pushEntry()
+                            pluginScreenId = "developer.workbench.publish"
+                            pluginScreenArgument = argument
+                            screen = Screen.PluginScreen
+                        }
+                    } else {
+                        if (screen != Screen.PluginScreen) pluginScreenReturn = screen
+                        pushEntry()
+                        pluginScreenId = "developer.workbench.publish"
+                        pluginScreenArgument = argument
+                        screen = Screen.PluginScreen
+                    }
+                    return
+                }
+                openSubmitProject(project = activeProject)
+                return
+            }
+            "home.projects" -> {
+                selectHomeTab(HomeTab.Projects)
+                navigateTo(Screen.Projects)
+                return
+            }
+            "home.store" -> {
+                showStore()
+                return
+            }
+            "ide.run" -> {
+                navigateTo(Screen.Run)
+                return
+            }
+            "ide.hub", "ide.settings" -> {
+                openHub(screen)
+                return
+            }
+            "ide.createProject" -> {
+                createProject(argument as? String)
+                return
+            }
+            "ide.editor" -> {
+                val targetProject = (argument as? ProjectInfo)
+                    ?: backend.project.takeIf { it.rootPath.isNotBlank() }
+                    ?: backend.projects.projects().maxByOrNull { it.lastOpened }
+                if (targetProject != null) {
+                    if (backend.project.rootPath == targetProject.rootPath) {
+                        navigateTo(Screen.Editor)
+                    } else {
+                        openProject(targetProject)
+                    }
+                }
+                return
+            }
+        }
         if (ScreenRegistry.find(id) == null) return
         if (screen != Screen.PluginScreen) pluginScreenReturn = screen
         pushEntry()
