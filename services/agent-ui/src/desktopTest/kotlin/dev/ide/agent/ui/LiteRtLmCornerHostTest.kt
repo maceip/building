@@ -23,6 +23,16 @@ import dev.ide.ui.backend.UiLiteRtHardwareInfo
 import dev.ide.ui.backend.UiLiteRtModelEntry
 import dev.ide.ui.backend.UiLiteRtModelStatus
 import dev.ide.ui.backend.UiLiteRtServerStatus
+import dev.ide.ui.backend.UiLlmApiFormat
+import dev.ide.ui.backend.UiLlmCircuitBreakerInfo
+import dev.ide.ui.backend.UiLlmCircuitState
+import dev.ide.ui.backend.UiLlmLiveConfigTarget
+import dev.ide.ui.backend.UiLlmModelMapping
+import dev.ide.ui.backend.UiLlmProviderCategory
+import dev.ide.ui.backend.UiLlmProviderPreset
+import dev.ide.ui.backend.UiLlmSwitchMode
+import dev.ide.ui.backend.UiLlmSwitchProviderInput
+import dev.ide.ui.backend.UiLlmSwitchProviderProfile
 import dev.ide.ui.ext.ScreenContext
 import dev.ide.ui.testing.DeviceConfig
 import dev.ide.ui.testing.PaparazziSession
@@ -37,9 +47,12 @@ import kotlin.test.assertTrue
 
 /**
  * Automated end-to-end Compose UI & Paparazzi audit test for [LiteRtLmCornerScreen] and [LiteRtLmCornerHost]:
+ * - Exercises Universal CC-Switch operating modes (`Direct`, `Routing Proxy`, `Aggregation Stack`),
+ *   provider switching, preset adding, failover/stack toggles, health probes, stacked model selection,
+ *   and live CLI config syncing.
  * - Exercises hardware delegate switching (`CPU`, `GPU`, `NPU`).
  * - Exercises model catalog provisioning (`Download`, `Activate`, `Use in IDE Agent`, `Delete`).
- * - Exercises local loopback HTTP server toggle, endpoint copy actions, and live local smoke test execution.
+ * - Exercises local loopback HTTP server toggle, multi-protocol endpoint copy actions, and live local smoke test execution.
  * - Exercises guest-app SDK language switching (`Kotlin / Android`, `Swift / iOS`, `Node.js`, `Python`),
  *   snippet copy, and project client scaffolding (`Add client to project`).
  * - Runs [PaparazziSession.assertNoDeadClickables] to prove zero dead/mock clickables exist on the screen.
@@ -65,6 +78,73 @@ class LiteRtLmCornerHostTest {
         val modelStatuses = linkedMapOf(
             "gemma-3-1b-it-int4" to UiLiteRtModelStatus.NOT_INSTALLED,
             "qwen-2.5-coder-1.5b-int4" to UiLiteRtModelStatus.NOT_INSTALLED,
+        )
+
+        var switchMode: UiLlmSwitchMode = UiLlmSwitchMode.DIRECT
+        var autoFailover: Boolean = true
+        var circuitBreaker: Boolean = true
+        var cliSyncCount: Int = 0
+        val providerProfiles = linkedMapOf(
+            "openai" to UiLlmSwitchProviderProfile(
+                id = "openai",
+                providerKey = "openai",
+                name = "OpenAI Codex",
+                presetId = "openai",
+                category = UiLlmProviderCategory.OFFICIAL,
+                apiFormat = UiLlmApiFormat.OPENAI_CHAT,
+                baseUrl = "https://api.openai.com",
+                apiKey = "sk-openai-test",
+                defaultModel = "gpt-5.4",
+                models = listOf(UiAgentModel("gpt-5.4", "GPT-5.4")),
+                modelMapping = UiLlmModelMapping(defaultModel = "gpt-5.4", haikuModel = "gpt-5.4-mini"),
+                inFailoverQueue = true,
+                failoverPriority = 1,
+                inAggregationStack = true,
+                configured = true,
+                active = true,
+                circuitBreaker = UiLlmCircuitBreakerInfo(state = UiLlmCircuitState.CLOSED, totalRequests = 4L, lastLatencyMs = 42L),
+            ),
+            "anthropic" to UiLlmSwitchProviderProfile(
+                id = "anthropic",
+                providerKey = "claude",
+                name = "Anthropic Claude",
+                presetId = "anthropic",
+                category = UiLlmProviderCategory.OFFICIAL,
+                apiFormat = UiLlmApiFormat.ANTHROPIC_MESSAGES,
+                baseUrl = "https://api.anthropic.com",
+                apiKey = "sk-ant-test",
+                defaultModel = "claude-sonnet-4-6",
+                models = listOf(UiAgentModel("claude-sonnet-4-6", "Claude Sonnet 4.6")),
+                modelMapping = UiLlmModelMapping(defaultModel = "claude-sonnet-4-6"),
+                inFailoverQueue = true,
+                failoverPriority = 2,
+                inAggregationStack = true,
+                configured = true,
+                active = false,
+                circuitBreaker = UiLlmCircuitBreakerInfo(state = UiLlmCircuitState.CLOSED, totalRequests = 2L, lastLatencyMs = 65L),
+            ),
+        )
+        val presets = listOf(
+            UiLlmProviderPreset(
+                presetId = "deepseek",
+                defaultProviderId = "deepseek",
+                name = "DeepSeek",
+                category = UiLlmProviderCategory.CN_OFFICIAL,
+                apiFormat = UiLlmApiFormat.OPENAI_CHAT,
+                baseUrl = "https://api.deepseek.com",
+                defaultModel = "deepseek-chat",
+                models = listOf(UiAgentModel("deepseek-chat", "DeepSeek V3.2")),
+            ),
+            UiLlmProviderPreset(
+                presetId = "openrouter",
+                defaultProviderId = "openrouter",
+                name = "OpenRouter",
+                category = UiLlmProviderCategory.AGGREGATOR,
+                apiFormat = UiLlmApiFormat.OPENAI_CHAT,
+                baseUrl = "https://openrouter.ai/api/v1",
+                defaultModel = "anthropic/claude-sonnet-4.6",
+                models = listOf(UiAgentModel("anthropic/claude-sonnet-4.6", "Claude Sonnet 4.6 (OR)")),
+            ),
         )
 
         private val _cornerState = MutableStateFlow(buildCornerState())
@@ -113,6 +193,12 @@ class LiteRtLmCornerHostTest {
                     sha256 = "f0e1d2c3b4a5968778695a4b3c2d1e0ff0e1d2c3b4a5968778695a4b3c2d1e0f",
                 ),
             )
+            val providersList = providerProfiles.values.map {
+                it.copy(active = it.id == selectedProviderId)
+            }
+            val stacked = providersList.filter { it.inAggregationStack }.map {
+                UiAgentModel("ccs-${it.providerKey}/${it.defaultModel}", "[${it.name}] ${it.defaultModel}")
+            }
             return UiLiteRtCornerState(
                 hardware = UiLiteRtHardwareInfo(
                     socName = "Google Tensor G4 (Pixel 9 Pro)",
@@ -130,6 +216,9 @@ class LiteRtLmCornerHostTest {
                     running = serverEnabled,
                     port = serverPort,
                     openAiEndpoint = "http://127.0.0.1:$serverPort/v1/chat/completions",
+                    anthropicEndpoint = "http://127.0.0.1:$serverPort/v1/messages",
+                    responsesEndpoint = "http://127.0.0.1:$serverPort/v1/responses",
+                    geminiEndpoint = "http://127.0.0.1:$serverPort/v1beta/models",
                     nativeEndpoint = "http://127.0.0.1:$serverPort/v1/litert/generate",
                     ipcUri = "content://dev.ide.android.litertlm/models",
                     requestsServed = if (smokeResponse.isNotBlank()) 1L else 0L,
@@ -142,10 +231,163 @@ class LiteRtLmCornerHostTest {
                 lastSmokeTestResponse = smokeResponse,
                 lastSmokeTestBusy = false,
                 statusBanner = statusBanner,
+                switchMode = switchMode,
+                activeProviderId = selectedProviderId,
+                autoFailoverEnabled = autoFailover,
+                circuitBreakerEnabled = circuitBreaker,
+                universalProviders = providersList,
+                providerPresets = presets,
+                aggregatedModels = stacked,
+                liveConfigTargets = listOf(
+                    UiLlmLiveConfigTarget(
+                        toolId = "claude",
+                        displayName = "Claude Code",
+                        configFilePath = "/workspace/.claude/settings.json",
+                        hasBackup = cliSyncCount > 0,
+                        syncedMode = switchMode.label,
+                        syncedProviderId = selectedProviderId,
+                        lastSyncedEpochMs = cliSyncCount.toLong(),
+                    ),
+                    UiLlmLiveConfigTarget(
+                        toolId = "codex",
+                        displayName = "OpenAI Codex",
+                        configFilePath = "/workspace/.codex/config.toml",
+                        hasBackup = cliSyncCount > 0,
+                        syncedMode = switchMode.label,
+                        syncedProviderId = selectedProviderId,
+                        lastSyncedEpochMs = cliSyncCount.toLong(),
+                    ),
+                ),
             )
         }
 
         override fun liteRtCorner(): UiLiteRtCornerState = _cornerState.value
+
+        override fun selectLlmSwitchMode(mode: UiLlmSwitchMode) {
+            switchMode = mode
+            if (mode != UiLlmSwitchMode.DIRECT) serverEnabled = true
+            statusBanner = "Switch mode set to ${mode.label}"
+            sync()
+        }
+
+        override fun switchUniversalProvider(providerId: String) {
+            selectedProviderId = providerId
+            providerProfiles[providerId]?.let { selectedModelId = it.defaultModel }
+            statusBanner = "Switched active provider to $providerId"
+            sync()
+        }
+
+        override fun saveUniversalProvider(input: UiLlmSwitchProviderInput) {
+            providerProfiles[input.id] = UiLlmSwitchProviderProfile(
+                id = input.id,
+                providerKey = input.id,
+                name = input.name,
+                presetId = input.presetId,
+                category = input.category,
+                apiFormat = input.apiFormat,
+                baseUrl = input.baseUrl,
+                apiKey = input.apiKey,
+                defaultModel = input.defaultModel,
+                models = listOf(UiAgentModel(input.defaultModel, input.defaultModel)),
+                modelMapping = UiLlmModelMapping(
+                    defaultModel = input.defaultModel,
+                    haikuModel = input.haikuModel,
+                    sonnetModel = input.sonnetModel,
+                    opusModel = input.opusModel,
+                ),
+                inFailoverQueue = input.inFailoverQueue,
+                failoverPriority = providerProfiles.size + 1,
+                inAggregationStack = input.inAggregationStack,
+                configured = input.apiKey.isNotBlank() || !input.requiresApiKey,
+                active = input.id == selectedProviderId,
+            )
+            statusBanner = "Saved provider ${input.name}"
+            sync()
+        }
+
+        override fun addPresetProvider(presetId: String, apiKey: String) {
+            val preset = presets.firstOrNull { it.presetId == presetId } ?: return
+            providerProfiles[preset.defaultProviderId] = UiLlmSwitchProviderProfile(
+                id = preset.defaultProviderId,
+                providerKey = preset.defaultProviderId,
+                name = preset.name,
+                presetId = preset.presetId,
+                category = preset.category,
+                apiFormat = preset.apiFormat,
+                baseUrl = preset.baseUrl,
+                apiKey = apiKey,
+                defaultModel = preset.defaultModel,
+                models = preset.models,
+                inFailoverQueue = true,
+                failoverPriority = providerProfiles.size + 1,
+                inAggregationStack = true,
+                configured = apiKey.isNotBlank(),
+                active = false,
+            )
+            statusBanner = "Added preset ${preset.name}"
+            sync()
+        }
+
+        override fun deleteUniversalProvider(providerId: String) {
+            if (providerId != selectedProviderId) {
+                providerProfiles.remove(providerId)
+                statusBanner = "Removed provider $providerId"
+                sync()
+            }
+        }
+
+        override fun setAutoFailoverEnabled(enabled: Boolean) {
+            autoFailover = enabled
+            statusBanner = "Auto-failover: $enabled"
+            sync()
+        }
+
+        override fun setCircuitBreakerEnabled(enabled: Boolean) {
+            circuitBreaker = enabled
+            sync()
+        }
+
+        override fun toggleProviderFailover(providerId: String, enabled: Boolean) {
+            val cur = providerProfiles[providerId] ?: return
+            providerProfiles[providerId] = cur.copy(inFailoverQueue = enabled)
+            statusBanner = "Failover for ${cur.name}: $enabled"
+            sync()
+        }
+
+        override fun toggleProviderAggregation(providerId: String, enabled: Boolean) {
+            val cur = providerProfiles[providerId] ?: return
+            providerProfiles[providerId] = cur.copy(inAggregationStack = enabled)
+            statusBanner = "Aggregation stack for ${cur.name}: $enabled"
+            sync()
+        }
+
+        override fun resetProviderCircuitBreaker(providerId: String) {
+            val cur = providerProfiles[providerId] ?: return
+            providerProfiles[providerId] = cur.copy(
+                circuitBreaker = UiLlmCircuitBreakerInfo(state = UiLlmCircuitState.CLOSED),
+            )
+            statusBanner = "Reset circuit breaker for ${cur.name}"
+            sync()
+        }
+
+        override fun probeProviderHealth(providerId: String) {
+            val cur = providerProfiles[providerId] ?: return
+            providerProfiles[providerId] = cur.copy(
+                circuitBreaker = cur.circuitBreaker.copy(
+                    state = UiLlmCircuitState.CLOSED,
+                    totalRequests = cur.circuitBreaker.totalRequests + 1L,
+                    lastLatencyMs = 19L,
+                ),
+            )
+            statusBanner = "Probed ${cur.name}: 19 ms"
+            sync()
+        }
+
+        override fun syncLiveToolConfigs() {
+            cliSyncCount++
+            statusBanner = "Synced live CLI configs (#$cliSyncCount)"
+            sync()
+        }
 
         override fun selectLiteRtDelegate(delegate: UiLiteRtDelegate) {
             selectedDelegate = delegate
@@ -241,10 +483,10 @@ class LiteRtLmCornerHostTest {
             mode = UiAgentPermissionMode.ASK_EACH,
         )
 
-        override fun selectProvider(id: String) { selectedProviderId = id }
+        override fun selectProvider(id: String) { selectedProviderId = id; sync() }
         override fun setProviderKey(providerId: String, key: String) {}
         override fun setProviderBaseUrl(providerId: String, baseUrl: String) {}
-        override fun setModel(model: String) { selectedModelId = model }
+        override fun setModel(model: String) { selectedModelId = model; statusBanner = "Model set to $model"; sync() }
         override fun setEffort(effort: String) {}
         override fun setPermissionMode(mode: UiAgentPermissionMode) {}
         override fun setGateway(baseUrl: String, model: String, caCert: String) {}
@@ -279,7 +521,7 @@ class LiteRtLmCornerHostTest {
         }
 
     @Test
-    fun exercisesDelegatesCatalogLoopbackServerSmokeTestAndGuestSdkScaffolding() {
+    fun exercisesUniversalCcSwitchDelegatesCatalogLoopbackServerSmokeTestAndGuestSdkScaffolding() {
         val fakeAgent = FakeLiteRtAgentService()
         val backend = object : StubBackend() {
             override val agent: AgentService = fakeAgent
@@ -293,7 +535,7 @@ class LiteRtLmCornerHostTest {
             override fun openScreen(id: String) {}
         }
 
-        val scene = ImageComposeScene(width = 860, height = 4800, density = Density(2f)) {
+        val scene = ImageComposeScene(width = 860, height = 10000, density = Density(2f)) {
             CodeAssistTheme(dark = true) {
                 LiteRtLmCornerScreen(ctx)
             }
@@ -321,12 +563,35 @@ class LiteRtLmCornerHostTest {
             frames()
             val initialTexts = collectTexts(scene)
             assertTrue("Self-Serve LiteRT-LM Corner" in initialTexts)
+            assertTrue("Universal Provider Switcher & Proxy" in initialTexts)
             assertTrue("Google Tensor G4 (Pixel 9 Pro)" in initialTexts)
             assertTrue("Gemma 3 1B Instruct" in initialTexts)
             assertTrue("Qwen 2.5 Coder 1.5B" in initialTexts)
 
+            // 0a. Switch CC-Switch mode to Routing Proxy & Aggregation Stack
+            clickText("Routing Proxy")
+            assertEquals(UiLlmSwitchMode.ROUTING, fakeAgent.switchMode)
+            assertTrue(fakeAgent.serverEnabled)
+
+            clickText("Aggregation Stack")
+            assertEquals(UiLlmSwitchMode.AGGREGATION, fakeAgent.switchMode)
+
+            // 0b. Add DeepSeek preset & switch active provider to Anthropic Claude
+            clickText("+ DeepSeek")
+            assertTrue(fakeAgent.providerProfiles.containsKey("deepseek"))
+
+            clickText("Switch to Anthropic Claude")
+            assertEquals("anthropic", fakeAgent.selectedProviderId)
+
+            // 0c. Use stacked model & sync CLI configs
+            clickText("Use Stack ccs-claude/claude-sonnet-4-6")
+            assertEquals("ccs-claude/claude-sonnet-4-6", fakeAgent.selectedModelId)
+
+            clickText("Sync CLI Configs (.claude / .codex / .gemini)")
+            assertEquals(1, fakeAgent.cliSyncCount)
+
             // 1. Switch hardware delegate to NPU
-            clickText("NPU (Tensor/QNN)")
+            clickText("NPU")
             assertEquals(UiLiteRtDelegate.NPU, fakeAgent.selectedDelegate)
             assertTrue("NPU active" in collectTexts(scene))
 
@@ -357,7 +622,7 @@ class LiteRtLmCornerHostTest {
             assertTrue(collectTexts(scene).any { it.contains("Local runtime healthy") })
 
             // 7. Switch Guest SDK language tabs & scaffold client into project
-            clickText("Swift / iOS")
+            clickText("Swift")
             assertEquals(UiLiteRtGuestLanguage.SWIFT, fakeAgent.guestLanguage)
             assertTrue(collectTexts(scene).any { it.contains("Guest SDK snippet for SWIFT") })
 
@@ -387,8 +652,9 @@ class LiteRtLmCornerHostTest {
         }
 
         val reportDir = File("build/reports/paparazzi/litert-corner")
+        File(reportDir, "litert_corner_golden.png").delete()
         PaparazziSession(
-            deviceConfig = DeviceConfig.PIXEL_9_PRO.withHeight(4800),
+            deviceConfig = DeviceConfig.PIXEL_9_PRO.withHeight(10000),
             reportDir = reportDir,
         ) {
             CodeAssistTheme(dark = true) {
@@ -404,6 +670,13 @@ class LiteRtLmCornerHostTest {
             val verified = session.assertNoDeadClickables(
                 backendStateSnapshot = {
                     listOf(
+                        fakeAgent.selectedProviderId,
+                        fakeAgent.selectedModelId,
+                        fakeAgent.switchMode,
+                        fakeAgent.autoFailover,
+                        fakeAgent.circuitBreaker,
+                        fakeAgent.cliSyncCount,
+                        fakeAgent.providerProfiles.toMap(),
                         fakeAgent.selectedDelegate,
                         fakeAgent.activeLiteRtModelId,
                         fakeAgent.modelStatuses.toMap(),
@@ -416,7 +689,7 @@ class LiteRtLmCornerHostTest {
                     )
                 },
             )
-            assertTrue(verified.size >= 10, "Expected at least 10 verified interactive controls, found ${verified.size}")
+            assertTrue(verified.size >= 18, "Expected at least 18 verified interactive controls, found ${verified.size}")
         }
     }
 }

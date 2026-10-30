@@ -81,25 +81,35 @@ class LiteRtLmLocalServer(
                     return
                 }
                 val cleanPath = req.path.substringBefore('?')
+                val query = req.path.substringAfter('?', "")
                 when {
-                    req.method == "GET" && (cleanPath == "/v1/models" || cleanPath == "/v1/litert/models") -> {
+                    req.method == "GET" && cleanPath in setOf("/v1/models", "/models", "/claude-desktop/v1/models", "/v1/litert/models") -> {
                         writeJsonResponse(sock.getOutputStream(), 200, handleListModels())
                     }
-                    req.method == "GET" && (cleanPath == "/v1/litert/status" || cleanPath == "/health") -> {
+                    req.method == "GET" && cleanPath in setOf("/v1/litert/status", "/status", "/health") -> {
                         writeJsonResponse(sock.getOutputStream(), 200, handleStatus())
                     }
                     req.method == "POST" && cleanPath == "/v1/litert/generate" -> {
                         val (status, json) = handleNativeGenerate(req.body)
                         writeJsonResponse(sock.getOutputStream(), status, json)
                     }
-                    req.method == "POST" && cleanPath == "/v1/chat/completions" -> {
+                    req.method == "POST" && (cleanPath == "/v1/chat/completions" || cleanPath == "/chat/completions") -> {
                         handleChatCompletions(req.body, sock.getOutputStream())
+                    }
+                    req.method == "POST" && (cleanPath == "/v1/messages" || cleanPath == "/claude/v1/messages") -> {
+                        handleAnthropicMessages(req.body, sock.getOutputStream())
+                    }
+                    req.method == "POST" && (cleanPath == "/v1/responses" || cleanPath == "/responses") -> {
+                        handleOpenAiResponses(req.body, sock.getOutputStream())
+                    }
+                    req.method == "POST" && (cleanPath.startsWith("/v1beta/models/") || cleanPath.startsWith("/gemini/v1beta/models/")) -> {
+                        handleGeminiNative(cleanPath, query, req.body, sock.getOutputStream())
                     }
                     else -> {
                         writeJsonResponse(
                             sock.getOutputStream(),
                             404,
-                            """{"error":{"message":"Unknown LiteRT-LM endpoint: ${req.method} $cleanPath"}}""",
+                            """{"error":{"message":"Unknown LiteRT-LM / CC-Switch endpoint: ${req.method} $cleanPath"}}""",
                         )
                     }
                 }
@@ -123,6 +133,8 @@ class LiteRtLmLocalServer(
             put("object", "list")
             put("active_model", snap.activeModelId)
             put("active_delegate", snap.selectedDelegate.id)
+            put("switch_mode", snap.switchMode.id)
+            put("active_provider", snap.activeProviderId)
             put(
                 "data",
                 buildJsonArray {
@@ -141,6 +153,30 @@ class LiteRtLmLocalServer(
                                 put("active", entry.status == LiteRtModelInstallState.ACTIVE)
                             },
                         )
+                    }
+                    if (snap.switchMode == CcSwitchOperatingMode.AGGREGATION) {
+                        snap.aggregatedModels.forEach { m ->
+                            add(
+                                buildJsonObject {
+                                    put("id", m.id)
+                                    put("object", "model")
+                                    put("owned_by", "cc-switch-stack")
+                                    put("display_name", m.displayName)
+                                },
+                            )
+                        }
+                    } else if (snap.activeProviderId != LiteRtLmCatalog.PROVIDER_ID) {
+                        val activeProf = snap.providerProfiles.firstOrNull { it.id == snap.activeProviderId }
+                        activeProf?.models?.forEach { m ->
+                            add(
+                                buildJsonObject {
+                                    put("id", m.id)
+                                    put("object", "model")
+                                    put("owned_by", activeProf.id)
+                                    put("display_name", m.displayName)
+                                },
+                            )
+                        }
                     }
                 },
             )
@@ -161,6 +197,11 @@ class LiteRtLmLocalServer(
             put("tokens_generated", snap.tokensGenerated)
             put("last_latency_ms", snap.lastLatencyMs)
             put("ipc_authority", snap.ipcAuthority)
+            put("switch_mode", snap.switchMode.id)
+            put("active_provider", snap.activeProviderId)
+            put("auto_failover_enabled", snap.autoFailoverEnabled)
+            put("circuit_breaker_enabled", snap.circuitBreakerEnabled)
+            put("aggregated_models_count", snap.aggregatedModels.size)
         }.toString()
     }
 
@@ -214,6 +255,45 @@ class LiteRtLmLocalServer(
     private fun handleChatCompletions(rawBody: String, output: OutputStream) {
         val obj = parseArgsObject(rawBody)
         val modelId = obj["model"].asStr()
+        val snap = manager.currentSnapshot()
+        val shouldRouteUniversal = snap.switchMode != CcSwitchOperatingMode.DIRECT ||
+            snap.activeProviderId != LiteRtLmCatalog.PROVIDER_ID ||
+            (modelId != null && CcSwitchStackCodec.hasStackPrefix(modelId))
+
+        if (shouldRouteUniversal) {
+            val parsed = CcSwitchProtocolBridge.parseOpenAiChatRequest(rawBody)
+            val routed = manager.routeTurn(parsed)
+            if (!routed.ok) {
+                val errJson = buildJsonObject {
+                    put(
+                        "error",
+                        buildJsonObject {
+                            put("message", routed.error)
+                            put("type", "invalid_request_error")
+                            put("provider", routed.providerId)
+                        },
+                    )
+                }.toString()
+                writeJsonResponse(output, 400, errJson, routeHeaders(routed, snap.switchMode))
+                return
+            }
+            if (!parsed.stream) {
+                writeJsonResponse(
+                    output,
+                    200,
+                    CcSwitchProtocolBridge.formatOpenAiChatResponse(routed),
+                    routeHeaders(routed, snap.switchMode),
+                )
+            } else {
+                writeSseResponse(
+                    output,
+                    CcSwitchProtocolBridge.formatOpenAiChatSse(routed),
+                    routeHeaders(routed, snap.switchMode),
+                )
+            }
+            return
+        }
+
         val stream = obj["stream"].asBool() ?: false
         val maxTokens = obj["max_tokens"].asInt() ?: 512
         val delegate = LiteRtHardwareDelegate.fromId(obj["delegate"].asStr())
@@ -385,7 +465,139 @@ class LiteRtLmLocalServer(
         }
     }
 
-    private fun writeJsonResponse(output: OutputStream, status: Int, jsonBody: String) {
+    private fun handleAnthropicMessages(rawBody: String, output: OutputStream) {
+        val snap = manager.currentSnapshot()
+        val parsed = CcSwitchProtocolBridge.parseAnthropicMessagesRequest(rawBody)
+        val routed = manager.routeTurn(parsed)
+        if (!routed.ok) {
+            val errJson = buildJsonObject {
+                put("type", "error")
+                put(
+                    "error",
+                    buildJsonObject {
+                        put("type", "api_error")
+                        put("message", routed.error)
+                    },
+                )
+            }.toString()
+            writeJsonResponse(output, 400, errJson, routeHeaders(routed, snap.switchMode))
+            return
+        }
+        if (!parsed.stream) {
+            writeJsonResponse(
+                output,
+                200,
+                CcSwitchProtocolBridge.formatAnthropicResponse(routed),
+                routeHeaders(routed, snap.switchMode),
+            )
+        } else {
+            writeSseResponse(
+                output,
+                CcSwitchProtocolBridge.formatAnthropicSse(routed),
+                routeHeaders(routed, snap.switchMode),
+            )
+        }
+    }
+
+    private fun handleOpenAiResponses(rawBody: String, output: OutputStream) {
+        val snap = manager.currentSnapshot()
+        val parsed = CcSwitchProtocolBridge.parseOpenAiResponsesRequest(rawBody)
+        val routed = manager.routeTurn(parsed)
+        if (!routed.ok) {
+            val errJson = buildJsonObject {
+                put(
+                    "error",
+                    buildJsonObject {
+                        put("message", routed.error)
+                        put("type", "invalid_request_error")
+                    },
+                )
+            }.toString()
+            writeJsonResponse(output, 400, errJson, routeHeaders(routed, snap.switchMode))
+            return
+        }
+        if (!parsed.stream) {
+            writeJsonResponse(
+                output,
+                200,
+                CcSwitchProtocolBridge.formatOpenAiResponsesJson(routed),
+                routeHeaders(routed, snap.switchMode),
+            )
+        } else {
+            writeSseResponse(
+                output,
+                CcSwitchProtocolBridge.formatOpenAiResponsesSse(routed),
+                routeHeaders(routed, snap.switchMode),
+            )
+        }
+    }
+
+    private fun handleGeminiNative(cleanPath: String, query: String, rawBody: String, output: OutputStream) {
+        val snap = manager.currentSnapshot()
+        val parsed = CcSwitchProtocolBridge.parseGeminiNativeRequest(cleanPath, query, rawBody)
+        val routed = manager.routeTurn(parsed)
+        if (!routed.ok) {
+            val errJson = buildJsonObject {
+                put(
+                    "error",
+                    buildJsonObject {
+                        put("code", 400)
+                        put("message", routed.error)
+                        put("status", "INVALID_ARGUMENT")
+                    },
+                )
+            }.toString()
+            writeJsonResponse(output, 400, errJson, routeHeaders(routed, snap.switchMode))
+            return
+        }
+        if (!parsed.stream) {
+            writeJsonResponse(
+                output,
+                200,
+                CcSwitchProtocolBridge.formatGeminiNativeJson(routed),
+                routeHeaders(routed, snap.switchMode),
+            )
+        } else {
+            writeSseResponse(
+                output,
+                CcSwitchProtocolBridge.formatGeminiNativeSse(routed),
+                routeHeaders(routed, snap.switchMode),
+            )
+        }
+    }
+
+    private fun routeHeaders(
+        routed: CcSwitchRoutedTurnResult,
+        mode: CcSwitchOperatingMode,
+    ): Map<String, String> = mapOf(
+        "X-CC-Switch-Provider" to routed.providerId,
+        "X-CC-Switch-Model" to routed.resolvedModel,
+        "X-CC-Switch-Mode" to mode.id,
+        "X-CC-Switch-Failovers" to routed.failoversAttempted.toString(),
+    )
+
+    private fun writeSseResponse(
+        output: OutputStream,
+        ssePayload: String,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ) {
+        val writer = BufferedWriter(OutputStreamWriter(output, StandardCharsets.UTF_8))
+        writer.write("HTTP/1.1 200 OK\r\n")
+        writer.write("Connection: close\r\n")
+        writer.write("Content-Type: text/event-stream; charset=utf-8\r\n")
+        writer.write("Cache-Control: no-cache\r\n")
+        extraHeaders.forEach { (k, v) -> writer.write("$k: $v\r\n") }
+        writer.write("\r\n")
+        writer.write(ssePayload)
+        writer.flush()
+    }
+
+    private fun writeJsonResponse(
+        output: OutputStream,
+        status: Int,
+        jsonBody: String,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ) {
         val bytes = jsonBody.toByteArray(StandardCharsets.UTF_8)
         val writer = BufferedWriter(OutputStreamWriter(output, StandardCharsets.UTF_8))
         val phrase = when (status) {
@@ -398,6 +610,7 @@ class LiteRtLmLocalServer(
         writer.write("HTTP/1.1 $status $phrase\r\n")
         writer.write("Connection: close\r\n")
         writer.write("Content-Type: application/json; charset=utf-8\r\n")
+        extraHeaders.forEach { (k, v) -> writer.write("$k: $v\r\n") }
         writer.write("Content-Length: ${bytes.size}\r\n\r\n")
         writer.flush()
         output.write(bytes)

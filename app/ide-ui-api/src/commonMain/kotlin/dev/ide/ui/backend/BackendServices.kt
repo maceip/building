@@ -1897,6 +1897,45 @@ interface AgentService {
     /** Write the selected guest-app LiteRT-LM client file into the currently open workspace project. */
     fun scaffoldLiteRtGuestClient(language: UiLiteRtGuestLanguage = UiLiteRtGuestLanguage.KOTLIN_ANDROID): String = ""
 
+    /** Select the Universal LLM Corner operating mode (`DIRECT`, `ROUTING`, `AGGREGATION`). */
+    fun selectLlmSwitchMode(mode: UiLlmSwitchMode) {}
+
+    /** Switch the active universal provider in one click (updating both the LLM Corner and IDE Agent). */
+    fun switchUniversalProvider(providerId: String) {}
+
+    /** Add or update a universal provider profile (API key, base URL, protocol format, default model, tier mappings). */
+    fun saveUniversalProvider(input: UiLlmSwitchProviderInput) {}
+
+    /** Provision a built-in provider preset into the Universal LLM Corner. */
+    fun addPresetProvider(presetId: String, apiKey: String = "") {}
+
+    /** Delete a non-active custom universal provider profile. */
+    fun deleteUniversalProvider(providerId: String) {}
+
+    /** Enable or disable automatic failover queue routing in `ROUTING` mode. */
+    fun setAutoFailoverEnabled(enabled: Boolean) {}
+
+    /** Enable or disable per-provider circuit breaker health protection. */
+    fun setCircuitBreakerEnabled(enabled: Boolean) {}
+
+    /** Add or remove a provider profile from the ordered failover queue. */
+    fun toggleProviderFailover(providerId: String, enabled: Boolean) {}
+
+    /** Move a provider profile up (`delta < 0`) or down (`delta > 0`) in the failover priority queue. */
+    fun moveProviderInFailoverQueue(providerId: String, delta: Int) {}
+
+    /** Add or remove a provider profile from the `AGGREGATION` (Stack) model catalog. */
+    fun toggleProviderAggregation(providerId: String, enabled: Boolean) {}
+
+    /** Reset a provider's circuit breaker back to `CLOSED` (Healthy). */
+    fun resetProviderCircuitBreaker(providerId: String) {}
+
+    /** Run a live connectivity & latency health probe against a provider profile. */
+    fun probeProviderHealth(providerId: String) {}
+
+    /** Sync the active provider / proxy contract to Claude Code, Codex, and Gemini CLI config files. */
+    fun syncLiveToolConfigs() {}
+
     /** A no-op agent for backends that wire none. */
     object Unsupported : AgentService {
         override val chatState: StateFlow<UiAgentChatState> =

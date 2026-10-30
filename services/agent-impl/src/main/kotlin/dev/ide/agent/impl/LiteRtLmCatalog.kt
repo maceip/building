@@ -5,12 +5,12 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Hardware execution delegates supported by Google LiteRT-LM (`.litertlm` / TFLite GenAI).
+ * Hardware execution delegates supported by Google LiteRT-LM (`.litertlm` / TFLite GenAI / Android AI Core).
  */
 enum class LiteRtHardwareDelegate(val id: String, val displayName: String) {
     CPU("CPU", "CPU (XNNPACK / ARM NEON)"),
     GPU("GPU", "GPU (OpenCL / Vulkan / Metal)"),
-    NPU("NPU", "NPU (Google Tensor / Qualcomm QNN)"),
+    NPU("NPU", "NPU (Google Tensor / MediaTek / Qualcomm)"),
     ;
 
     companion object {
@@ -23,7 +23,7 @@ enum class LiteRtHardwareDelegate(val id: String, val displayName: String) {
  * Lifecycle state of an on-device LiteRT-LM model artifact in the shared catalog.
  *
  * Per engineering law, [INSTALLED] and [ACTIVE] are ONLY reported when a verified `.litertlm`
- * artifact file physically exists on disk and passes header + SHA-256 verification.
+ * artifact file (or verified Android System AI Core binding) physically exists and passes verification.
  */
 enum class LiteRtModelInstallState {
     NOT_INSTALLED,
@@ -31,6 +31,65 @@ enum class LiteRtModelInstallState {
     INSTALLED,
     ACTIVE,
     ERROR,
+}
+
+/**
+ * Live status of Android's built-in Google AI Core (`com.google.android.aicore` / `on_device_intelligence`)
+ * on Pixel and modern Android devices.
+ */
+data class LiteRtAiCoreStatus(
+    val available: Boolean,
+    val packageName: String = "com.google.android.aicore",
+    val versionName: String = "",
+    val systemServicePresent: Boolean = false,
+    val modelName: String = "Gemini Nano (Android AI Core)",
+)
+
+/**
+ * Bridge to Android's system-level AI Core (`com.google.android.aicore` / Gemini Nano) so devices
+ * with AI Core pre-loaded can run on-device inference with zero multi-GB model download.
+ */
+interface LiteRtAiCoreBridge {
+    fun probeStatus(): LiteRtAiCoreStatus
+
+    fun generate(
+        prompt: String,
+        system: String? = null,
+        maxTokens: Int = 512,
+    ): Result<String>
+}
+
+/**
+ * Default [LiteRtAiCoreBridge] implementation for non-Android hosts or before `AndroidAiCoreBridge.install(context)` runs.
+ * Never fabricates responses.
+ */
+object DefaultLiteRtAiCoreBridge : LiteRtAiCoreBridge {
+    override fun probeStatus(): LiteRtAiCoreStatus = runCatching {
+        val appClass = Class.forName("android.app.ActivityThread")
+        val app = appClass.getMethod("currentApplication").invoke(null) ?: return LiteRtAiCoreStatus(available = false)
+        val ctxClass = Class.forName("android.content.Context")
+        val pm = ctxClass.getMethod("getPackageManager").invoke(app)
+        val pkgInfo = pm.javaClass.getMethod("getPackageInfo", String::class.java, Int::class.javaPrimitiveType)
+            .invoke(pm, "com.google.android.aicore", 0)
+        val versionName = pkgInfo.javaClass.getField("versionName").get(pkgInfo) as? String ?: "installed"
+        val odiService = runCatching {
+            ctxClass.getMethod("getSystemService", String::class.java).invoke(app, "on_device_intelligence")
+        }.getOrNull()
+        LiteRtAiCoreStatus(
+            available = true,
+            packageName = "com.google.android.aicore",
+            versionName = versionName,
+            systemServicePresent = odiService != null,
+        )
+    }.getOrDefault(LiteRtAiCoreStatus(available = false))
+
+    override fun generate(prompt: String, system: String?, maxTokens: Int): Result<String> {
+        return Result.failure(
+            IllegalStateException(
+                "Android AI Core bridge is not initialized in this process. On Android, call AndroidAiCoreBridge.install(context) and ensure the app is in the foreground.",
+            ),
+        )
+    }
 }
 
 /**
@@ -50,18 +109,99 @@ data class LiteRtModelCatalogSpec(
     val supportsThinking: Boolean,
     val downloadUrl: String,
     val description: String,
+    val isSystemAiCore: Boolean = false,
+    val isBundled: Boolean = false,
 )
 
 /**
- * Curated catalog of on-device LiteRT-LM (`.litertlm`) models for local IDE agent execution
- * and for guest apps running on the phone.
+ * Curated catalog of real on-device LiteRT-LM (`.litertlm`) and Android AI Core models for local IDE agent
+ * execution and for guest apps running on the phone.
  */
 object LiteRtLmCatalog {
-    const val DEFAULT_MODEL_ID: String = "gemma-3-1b-it-int4"
+    const val PROVIDER_ID: String = "litert"
+    const val AICORE_MODEL_ID: String = "aicore-gemini-nano"
+    const val SMOLLM2_135M_MODEL_ID: String = "smollm2-135m-instruct"
+    const val DEFAULT_MODEL_ID: String = SMOLLM2_135M_MODEL_ID
     const val DEFAULT_SERVER_PORT: Int = 11435
     const val DEFAULT_IPC_AUTHORITY: String = "dev.ide.android.litertlm"
 
     val MODELS: List<LiteRtModelCatalogSpec> = listOf(
+        LiteRtModelCatalogSpec(
+            id = AICORE_MODEL_ID,
+            displayName = "Android AI Core (Gemini Nano)",
+            family = "Google AI Core",
+            parameterCount = "System Built-In",
+            quantization = "AICORE-NPU",
+            artifactFileName = "aicore-gemini-nano.system",
+            estimatedSizeBytes = 0L,
+            contextLength = 32_768,
+            supportedDelegates = listOf(
+                LiteRtHardwareDelegate.NPU,
+                LiteRtHardwareDelegate.GPU,
+                LiteRtHardwareDelegate.CPU,
+            ),
+            supportsToolCalling = true,
+            supportsThinking = false,
+            downloadUrl = "aicore://com.google.android.aicore/gemini-nano",
+            description = "Uses Android's built-in com.google.android.aicore (Gemini Nano / ML Kit GenAI Prompt) on Pixel & modern phones — 0 B download required.",
+            isSystemAiCore = true,
+            isBundled = false,
+        ),
+        LiteRtModelCatalogSpec(
+            id = SMOLLM2_135M_MODEL_ID,
+            displayName = "SmolLM2 135M Instruct",
+            family = "SmolLM2",
+            parameterCount = "135M",
+            quantization = "INT8/FP16",
+            artifactFileName = "SmolLM2_135M_Instruct.litertlm",
+            estimatedSizeBytes = 142_254_080L,
+            contextLength = 8_192,
+            supportedDelegates = listOf(
+                LiteRtHardwareDelegate.CPU,
+                LiteRtHardwareDelegate.GPU,
+            ),
+            supportsToolCalling = false,
+            supportsThinking = false,
+            downloadUrl = "https://huggingface.co/litert-community/SmolLM2-135M-Instruct/resolve/main/SmolLM2_135M_Instruct.litertlm",
+            description = "Ultra-compact 135M instruction-tuned LiteRT-LM model (136 MB) that loads in under a second on CPU and GPU via com.google.ai.edge.litertlm.Engine.",
+        ),
+        LiteRtModelCatalogSpec(
+            id = "smollm2-360m-instruct",
+            displayName = "SmolLM2 360M Instruct",
+            family = "SmolLM2",
+            parameterCount = "360M",
+            quantization = "INT8/FP16",
+            artifactFileName = "SmolLM2_360M_instruct.litertlm",
+            estimatedSizeBytes = 373_293_056L,
+            contextLength = 8_192,
+            supportedDelegates = listOf(
+                LiteRtHardwareDelegate.CPU,
+                LiteRtHardwareDelegate.GPU,
+            ),
+            supportsToolCalling = false,
+            supportsThinking = false,
+            downloadUrl = "https://huggingface.co/litert-community/SmolLM2-360M-Instruct/resolve/main/SmolLM2_360M_instruct.litertlm",
+            description = "Fast 360M instruction-tuned LiteRT-LM model (356 MB) for responsive on-device chat and summarization.",
+        ),
+        LiteRtModelCatalogSpec(
+            id = "gemma-4-e2b-it",
+            displayName = "Gemma 4 E2B Instruct",
+            family = "Gemma 4",
+            parameterCount = "E2B",
+            quantization = "INT4",
+            artifactFileName = "gemma-4-E2B-it.litertlm",
+            estimatedSizeBytes = 2_588_147_712L,
+            contextLength = 32_768,
+            supportedDelegates = listOf(
+                LiteRtHardwareDelegate.CPU,
+                LiteRtHardwareDelegate.GPU,
+                LiteRtHardwareDelegate.NPU,
+            ),
+            supportsToolCalling = true,
+            supportsThinking = true,
+            downloadUrl = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
+            description = "Multimodal & tool-capable Gemma 4 E2B instruction model for on-device LiteRT-LM execution.",
+        ),
         LiteRtModelCatalogSpec(
             id = "gemma-3-1b-it-int4",
             displayName = "Gemma 3 1B Instruct (INT4)",
@@ -80,25 +220,6 @@ object LiteRtLmCatalog {
             supportsThinking = false,
             downloadUrl = "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.litertlm",
             description = "Compact 1B edge model tuned for sub-second responses on CPU, GPU, and Tensor NPU.",
-        ),
-        LiteRtModelCatalogSpec(
-            id = "gemma-3-4b-it-int4",
-            displayName = "Gemma 3 4B Instruct (INT4)",
-            family = "Gemma 3",
-            parameterCount = "4B",
-            quantization = "INT4",
-            artifactFileName = "gemma3-4b-it-int4.litertlm",
-            estimatedSizeBytes = 2_621_440_000L,
-            contextLength = 128_000,
-            supportedDelegates = listOf(
-                LiteRtHardwareDelegate.GPU,
-                LiteRtHardwareDelegate.NPU,
-                LiteRtHardwareDelegate.CPU,
-            ),
-            supportsToolCalling = true,
-            supportsThinking = false,
-            downloadUrl = "https://huggingface.co/litert-community/Gemma3-4B-IT/resolve/main/gemma3-4b-it-int4.litertlm",
-            description = "High-capacity 4B instruction model for coding, local agent tool use, and guest apps.",
         ),
         LiteRtModelCatalogSpec(
             id = "qwen-2.5-coder-1.5b-int4",

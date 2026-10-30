@@ -16,6 +16,8 @@ import dev.ide.ui.backend.UiAgentUsage
 import dev.ide.ui.backend.UiLiteRtCornerState
 import dev.ide.ui.backend.UiLiteRtDelegate
 import dev.ide.ui.backend.UiLiteRtGuestLanguage
+import dev.ide.ui.backend.UiLlmSwitchMode
+import dev.ide.ui.backend.UiLlmSwitchProviderInput
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -118,6 +120,89 @@ class ZCodeAgentService(
 
     override fun scaffoldLiteRtGuestClient(language: UiLiteRtGuestLanguage): String =
         hostAgent?.invoke()?.scaffoldLiteRtGuestClient(language).orEmpty()
+
+    override fun selectLlmSwitchMode(mode: UiLlmSwitchMode) {
+        val host = hostAgent?.invoke() ?: return
+        host.selectLlmSwitchMode(mode)
+        val snap = host.liteRtCorner()
+        if (mode != UiLlmSwitchMode.DIRECT && snap.server.running) {
+            setGateway(snap.server.openAiEndpoint.removeSuffix("/chat/completions"), snap.activeModelId.ifBlank { modelId() }, "")
+        }
+    }
+
+    override fun switchUniversalProvider(providerId: String) {
+        val host = hostAgent?.invoke()
+        if (host != null) {
+            host.switchUniversalProvider(providerId)
+            val snap = host.liteRtCorner()
+            val active = snap.universalProviders.firstOrNull { it.id == snap.activeProviderId }
+            if (active != null) {
+                prefs.edit()
+                    .putString(KEY_PROVIDER, active.id)
+                    .putString(KEY_MODEL, active.defaultModel)
+                    .putString(KEY_API_KEY, active.apiKey.ifBlank { "LOCAL_PROVIDER" })
+                    .putString(KEY_BASE_URL, active.baseUrl)
+                    .apply()
+                writeProviderConfig()
+                refreshModels()
+            }
+        } else {
+            selectProvider(providerId)
+        }
+    }
+
+    override fun saveUniversalProvider(input: UiLlmSwitchProviderInput) {
+        hostAgent?.invoke()?.saveUniversalProvider(input)
+        if (input.id == providerId()) {
+            prefs.edit()
+                .putString(KEY_MODEL, input.defaultModel)
+                .putString(KEY_API_KEY, input.apiKey)
+                .putString(KEY_BASE_URL, input.baseUrl)
+                .apply()
+            writeProviderConfig()
+            refreshModels()
+        }
+    }
+
+    override fun deleteUniversalProvider(providerId: String) {
+        hostAgent?.invoke()?.deleteUniversalProvider(providerId)
+    }
+
+    override fun addPresetProvider(presetId: String, apiKey: String) {
+        hostAgent?.invoke()?.addPresetProvider(presetId, apiKey)
+    }
+
+    override fun setAutoFailoverEnabled(enabled: Boolean) {
+        hostAgent?.invoke()?.setAutoFailoverEnabled(enabled)
+    }
+
+    override fun setCircuitBreakerEnabled(enabled: Boolean) {
+        hostAgent?.invoke()?.setCircuitBreakerEnabled(enabled)
+    }
+
+    override fun toggleProviderFailover(providerId: String, enabled: Boolean) {
+        hostAgent?.invoke()?.toggleProviderFailover(providerId, enabled)
+    }
+
+    override fun moveProviderInFailoverQueue(providerId: String, delta: Int) {
+        hostAgent?.invoke()?.moveProviderInFailoverQueue(providerId, delta)
+    }
+
+    override fun toggleProviderAggregation(providerId: String, enabled: Boolean) {
+        hostAgent?.invoke()?.toggleProviderAggregation(providerId, enabled)
+    }
+
+    override fun resetProviderCircuitBreaker(providerId: String) {
+        hostAgent?.invoke()?.resetProviderCircuitBreaker(providerId)
+    }
+
+    override fun probeProviderHealth(providerId: String) {
+        hostAgent?.invoke()?.probeProviderHealth(providerId)
+    }
+
+    override fun syncLiveToolConfigs() {
+        hostAgent?.invoke()?.syncLiveToolConfigs()
+    }
 
     @Volatile private var job: Job? = null
     @Volatile private var sessionId: String? = prefs.getString(KEY_SESSION, null)

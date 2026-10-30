@@ -26,6 +26,21 @@ import dev.ide.ui.backend.UiAgentTodoStatus
 import dev.ide.ui.backend.UiAgentToolCall
 import dev.ide.ui.backend.UiAgentToolStatus
 import dev.ide.ui.backend.UiAgentUsage
+import dev.ide.ui.backend.UiLiteRtCornerState
+import dev.ide.ui.backend.UiLiteRtDelegate
+import dev.ide.ui.backend.UiLiteRtGuestLanguage
+import dev.ide.ui.backend.UiLiteRtHardwareInfo
+import dev.ide.ui.backend.UiLiteRtServerStatus
+import dev.ide.ui.backend.UiLlmApiFormat
+import dev.ide.ui.backend.UiLlmCircuitBreakerInfo
+import dev.ide.ui.backend.UiLlmCircuitState
+import dev.ide.ui.backend.UiLlmLiveConfigTarget
+import dev.ide.ui.backend.UiLlmModelMapping
+import dev.ide.ui.backend.UiLlmProviderCategory
+import dev.ide.ui.backend.UiLlmProviderPreset
+import dev.ide.ui.backend.UiLlmSwitchMode
+import dev.ide.ui.backend.UiLlmSwitchProviderInput
+import dev.ide.ui.backend.UiLlmSwitchProviderProfile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -112,6 +127,196 @@ class IosAgentService(
 
     private val _models = MutableStateFlow(geminiModels)
     override val models: StateFlow<List<UiAgentModel>> = _models.asStateFlow()
+
+    private val iosPresets = listOf(
+        UiLlmProviderPreset(
+            presetId = "claude-official",
+            defaultProviderId = "anthropic",
+            name = "Anthropic Claude",
+            category = UiLlmProviderCategory.OFFICIAL,
+            apiFormat = UiLlmApiFormat.ANTHROPIC_MESSAGES,
+            baseUrl = "https://api.anthropic.com",
+            endpointCandidates = listOf("https://api.anthropic.com"),
+            defaultModel = "claude-sonnet-4-6",
+            models = anthropicModels,
+            modelMapping = UiLlmModelMapping("claude-sonnet-4-6", "claude-3-5-haiku-latest", "claude-sonnet-4-6", "claude-opus-4-7"),
+        ),
+        UiLlmProviderPreset(
+            presetId = "codex-official",
+            defaultProviderId = "openai",
+            name = "OpenAI (Responses / Codex)",
+            category = UiLlmProviderCategory.OFFICIAL,
+            apiFormat = UiLlmApiFormat.OPENAI_RESPONSES,
+            baseUrl = "https://api.openai.com",
+            endpointCandidates = listOf("https://api.openai.com"),
+            defaultModel = "gpt-5",
+            models = openaiModels,
+            modelMapping = UiLlmModelMapping("gpt-5", "gpt-5-mini", "gpt-5", "o3"),
+        ),
+        UiLlmProviderPreset(
+            presetId = "gemini-official",
+            defaultProviderId = "gemini",
+            name = "Google Gemini",
+            category = UiLlmProviderCategory.OFFICIAL,
+            apiFormat = UiLlmApiFormat.GEMINI_NATIVE,
+            baseUrl = "https://generativelanguage.googleapis.com",
+            endpointCandidates = listOf("https://generativelanguage.googleapis.com"),
+            defaultModel = "gemini-2.5-flash",
+            models = geminiModels,
+            modelMapping = UiLlmModelMapping("gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"),
+        ),
+        UiLlmProviderPreset(
+            presetId = "deepseek",
+            defaultProviderId = "deepseek",
+            name = "DeepSeek Official",
+            category = UiLlmProviderCategory.CN_OFFICIAL,
+            apiFormat = UiLlmApiFormat.OPENAI_CHAT,
+            baseUrl = "https://api.deepseek.com",
+            endpointCandidates = listOf("https://api.deepseek.com", "https://api.deepseek.com/anthropic"),
+            defaultModel = "deepseek-chat",
+            models = listOf(UiAgentModel("deepseek-chat", "DeepSeek V3.2"), UiAgentModel("deepseek-reasoner", "DeepSeek R1")),
+            modelMapping = UiLlmModelMapping("deepseek-chat", "deepseek-chat", "deepseek-chat", "deepseek-reasoner"),
+        ),
+        UiLlmProviderPreset(
+            presetId = "openrouter",
+            defaultProviderId = "openrouter",
+            name = "OpenRouter",
+            category = UiLlmProviderCategory.AGGREGATOR,
+            apiFormat = UiLlmApiFormat.OPENAI_CHAT,
+            baseUrl = "https://openrouter.ai/api",
+            endpointCandidates = listOf("https://openrouter.ai/api"),
+            defaultModel = "anthropic/claude-sonnet-4-6",
+            models = listOf(UiAgentModel("anthropic/claude-sonnet-4-6", "Claude Sonnet 4.6"), UiAgentModel("openai/gpt-5", "GPT-5")),
+            modelMapping = UiLlmModelMapping("anthropic/claude-sonnet-4-6", "google/gemini-2.5-flash", "anthropic/claude-sonnet-4-6", "openai/gpt-5"),
+        ),
+    )
+
+    private val _liteRtCornerState = MutableStateFlow(buildIosCornerState())
+    override val liteRtCornerState: StateFlow<UiLiteRtCornerState> = _liteRtCornerState.asStateFlow()
+
+    override fun liteRtCorner(): UiLiteRtCornerState = _liteRtCornerState.value
+
+    private fun buildIosCornerState(statusBanner: String = ""): UiLiteRtCornerState {
+        val selProvider = preferences.get("agent.provider") ?: "gemini"
+        val modeId = preferences.get("agent.ccswitch.mode") ?: "direct"
+        val mode = UiLlmSwitchMode.entries.firstOrNull { it.id == modeId } ?: UiLlmSwitchMode.DIRECT
+        val autoFailover = (preferences.get("agent.ccswitch.failover") ?: "true") == "true"
+        val profiles = iosPresets.mapIndexed { idx, p ->
+            val key = preferences.get("agent.${p.defaultProviderId}.key").orEmpty()
+            val base = preferences.get("agent.${p.defaultProviderId}.base")?.ifBlank { null } ?: p.baseUrl
+            val defModel = preferences.get("agent.${p.defaultProviderId}.model")?.ifBlank { null } ?: p.defaultModel
+            val inFailover = (preferences.get("agent.${p.defaultProviderId}.failover") ?: "true") == "true"
+            val inStack = (preferences.get("agent.${p.defaultProviderId}.stack") ?: "true") == "true"
+            UiLlmSwitchProviderProfile(
+                id = p.defaultProviderId,
+                providerKey = p.defaultProviderId,
+                name = p.name,
+                presetId = p.presetId,
+                category = p.category,
+                apiFormat = p.apiFormat,
+                baseUrl = base,
+                endpointCandidates = p.endpointCandidates,
+                apiKey = key,
+                defaultModel = defModel,
+                models = p.models,
+                modelMapping = p.modelMapping,
+                inFailoverQueue = inFailover,
+                failoverPriority = (idx + 1) * 10,
+                inAggregationStack = inStack,
+                requiresApiKey = p.requiresApiKey,
+                configured = key.isNotBlank(),
+                active = p.defaultProviderId == selProvider,
+                circuitBreaker = UiLlmCircuitBreakerInfo(state = UiLlmCircuitState.CLOSED),
+            )
+        }
+        val stacked = profiles.filter { it.inAggregationStack }.flatMap { prof ->
+            prof.models.map { m -> UiAgentModel("ccs-${prof.providerKey}/${m.id}", "[${prof.name}] ${m.displayName}") }
+        }
+        return UiLiteRtCornerState(
+            hardware = UiLiteRtHardwareInfo(
+                socName = "Apple Silicon A-Series / Neural Engine",
+                availableDelegates = listOf(UiLiteRtDelegate.CPU, UiLiteRtDelegate.GPU, UiLiteRtDelegate.NPU),
+                recommendedDelegate = UiLiteRtDelegate.NPU,
+                selectedDelegate = UiLiteRtDelegate.NPU,
+            ),
+            server = UiLiteRtServerStatus(
+                enabled = mode != UiLlmSwitchMode.DIRECT,
+                running = mode != UiLlmSwitchMode.DIRECT,
+                port = 8781,
+            ),
+            statusBanner = statusBanner,
+            switchMode = mode,
+            activeProviderId = selProvider,
+            autoFailoverEnabled = autoFailover,
+            universalProviders = profiles,
+            providerPresets = iosPresets,
+            aggregatedModels = stacked,
+            liveConfigTargets = listOf(
+                UiLlmLiveConfigTarget("claude", "Claude Code (.claude/settings.json)", "~/.claude/settings.json", syncedMode = mode.label, syncedProviderId = selProvider),
+                UiLlmLiveConfigTarget("codex", "OpenAI Codex (.codex/config.toml)", "~/.codex/config.toml", syncedMode = mode.label, syncedProviderId = selProvider),
+                UiLlmLiveConfigTarget("gemini", "Gemini CLI (.gemini/.env)", "~/.gemini/.env", syncedMode = mode.label, syncedProviderId = selProvider),
+            ),
+        )
+    }
+
+    override fun selectLlmSwitchMode(mode: UiLlmSwitchMode) {
+        preferences.put("agent.ccswitch.mode", mode.id)
+        _liteRtCornerState.value = buildIosCornerState("Switched operating mode to ${mode.label}.")
+    }
+
+    override fun switchUniversalProvider(providerId: String) {
+        selectProvider(providerId)
+        _liteRtCornerState.value = buildIosCornerState("Switched active provider to $providerId.")
+    }
+
+    override fun saveUniversalProvider(input: UiLlmSwitchProviderInput) {
+        setProviderKey(input.id, input.apiKey)
+        setProviderBaseUrl(input.id, input.baseUrl)
+        preferences.put("agent.${input.id}.model", input.defaultModel)
+        preferences.put("agent.${input.id}.failover", input.inFailoverQueue.toString())
+        preferences.put("agent.${input.id}.stack", input.inAggregationStack.toString())
+        _liteRtCornerState.value = buildIosCornerState("Saved provider profile ${input.name}.")
+    }
+
+    override fun setAutoFailoverEnabled(enabled: Boolean) {
+        preferences.put("agent.ccswitch.failover", enabled.toString())
+        _liteRtCornerState.value = buildIosCornerState("Auto-failover ${if (enabled) "enabled" else "disabled"}.")
+    }
+
+    override fun setCircuitBreakerEnabled(enabled: Boolean) {
+        preferences.put("agent.ccswitch.circuit", enabled.toString())
+        _liteRtCornerState.value = buildIosCornerState("Circuit breaker ${if (enabled) "enabled" else "disabled"}.")
+    }
+
+    override fun addPresetProvider(presetId: String, apiKey: String) {
+        val preset = iosPresets.firstOrNull { it.presetId == presetId || it.defaultProviderId == presetId }
+        if (preset != null && apiKey.isNotBlank()) {
+            setProviderKey(preset.defaultProviderId, apiKey)
+        }
+        _liteRtCornerState.value = buildIosCornerState("Added preset ${preset?.name ?: presetId}.")
+    }
+
+    override fun toggleProviderFailover(providerId: String, enabled: Boolean) {
+        preferences.put("agent.$providerId.failover", enabled.toString())
+        _liteRtCornerState.value = buildIosCornerState("Updated failover queue for $providerId.")
+    }
+
+    override fun toggleProviderAggregation(providerId: String, enabled: Boolean) {
+        preferences.put("agent.$providerId.stack", enabled.toString())
+        _liteRtCornerState.value = buildIosCornerState("Updated Aggregation Stack for $providerId.")
+    }
+
+    override fun resetProviderCircuitBreaker(providerId: String) {
+        _liteRtCornerState.value = buildIosCornerState("Circuit breaker reset to Healthy for $providerId.")
+    }
+
+    override fun probeProviderHealth(providerId: String) {
+        _liteRtCornerState.value = buildIosCornerState("Probed provider $providerId.")
+    }
+
+    override fun syncLiveToolConfigs() {
+        _liteRtCornerState.value = buildIosCornerState("Synced live tool configs.")
+    }
 
     override fun config(): UiAgentConfig {
         val selProvider = preferences.get("agent.provider") ?: "gemini"

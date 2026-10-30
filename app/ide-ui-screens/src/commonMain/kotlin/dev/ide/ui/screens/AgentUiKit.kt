@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -168,14 +169,21 @@ fun AgentPrimaryButton(
     val fg = if (enabled) AgentUi.chrome.accentInk else AgentUi.chrome.textFaint
     Box(
         modifier = modifier
-            .height(38.dp)
+            .heightIn(min = 38.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(bg)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = fg)
+        Text(
+            label,
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = fg,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -187,15 +195,22 @@ fun AgentGhostButton(
 ) {
     Box(
         modifier = modifier
-            .height(38.dp)
+            .heightIn(min = 38.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(AgentUi.chrome.hairline.copy(alpha = 0.35f))
             .border(1.dp, AgentUi.chrome.hairlineStrong, RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, color = AgentUi.chrome.text)
+        Text(
+            label,
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.Medium,
+            color = AgentUi.chrome.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -582,24 +597,28 @@ fun AgentSegmented(
             .background(AgentUi.chrome.surface)
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         options.forEachIndexed { i, label ->
             val selected = i == selectedIndex
             Box(
                 Modifier
                     .weight(1f)
-                    .height(40.dp)
+                    .heightIn(min = 40.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(if (selected) AgentUi.chrome.surfaceRaised else Color.Transparent)
                     .semantics { this.selected = selected }
-                    .clickable { onSelect(i) },
+                    .clickable { onSelect(i) }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     label,
-                    fontSize = 14.sp,
+                    fontSize = 13.sp,
                     fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
                     color = if (selected) AgentUi.chrome.text else AgentUi.chrome.textMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -617,8 +636,8 @@ fun AgentToggleRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(64.dp)
-            .padding(horizontal = 20.dp),
+            .heightIn(min = 64.dp)
+            .padding(horizontal = 20.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {

@@ -30,7 +30,10 @@ class LiteRtLmContentProvider : ContentProvider() {
         return AndroidIde.externalHome(ctx).toPath()
     }
 
-    override fun onCreate(): Boolean = true
+    override fun onCreate(): Boolean {
+        context?.let { AndroidAiCoreBridge.install(it) }
+        return true
+    }
 
     override fun query(
         uri: Uri,
