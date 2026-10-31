@@ -19,6 +19,12 @@ HERE = Path(__file__).resolve().parent
 def stage(source, output, xtool_root, lock_path=HERE / "xtool-inputs.lock.json"):
     if source.resolve() == output.resolve():
         raise ValueError("Swift staging requires a separate output from the base runtime")
+    if not (xtool_root / "Android/output").is_dir() or not (xtool_root / ".build/android-debs").is_dir():
+        if output.exists():
+            shutil.rmtree(output)
+        shutil.copytree(source, output)
+        print(f"Swift/xtool: {xtool_root} not present on host; staged base developer runtime pack", flush=True)
+        return
     lock = json.loads(lock_path.read_text())
     assets = source / "assets/developer-runtime"
     original = json.loads((assets / "manifest.json").read_text())

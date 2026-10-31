@@ -270,7 +270,26 @@ class IosBackend(
                 val success = withContext(ioDispatcher) {
                     var cloned = false
                     val cleanUrl = trimmedUrl.removeSuffix(".git").trimEnd('/')
-                    if (cleanUrl.startsWith("https://github.com/")) {
+                    if (cleanUrl.startsWith("file://") || cleanUrl.startsWith("/")) {
+                        val localSrc = cleanUrl.removePrefix("file://")
+                        if (IosFiles.isDirectory(localSrc)) {
+                            fun copyTree(src: String, dst: String) {
+                                IosFiles.mkdirs(dst)
+                                for (entry in IosFiles.list(src)) {
+                                    val sChild = IosFiles.join(src, entry)
+                                    val dChild = IosFiles.join(dst, entry)
+                                    if (IosFiles.isDirectory(sChild)) {
+                                        copyTree(sChild, dChild)
+                                    } else {
+                                        IosFiles.readBytes(sChild)?.let { IosFiles.writeBytes(dChild, it) }
+                                    }
+                                }
+                            }
+                            copyTree(localSrc, targetPath)
+                            cloned = IosFiles.exists(targetPath)
+                        }
+                    }
+                    if (!cloned && cleanUrl.startsWith("https://github.com/")) {
                         val parts = cleanUrl.removePrefix("https://github.com/").split('/')
                         if (parts.size >= 2) {
                             val owner = parts[0]

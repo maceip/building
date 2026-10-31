@@ -25,8 +25,10 @@ val stageXtoolRuntimePack = tasks.register<Exec>("stageXtoolRuntimePack") {
     val xtool = providers.environmentVariable("XTOOL_ROOT").orElse(rootProject.projectDir.parentFile.resolve("xtool").absolutePath)
     inputs.files(sources.resolve("stage_xtool.py"), sources.resolve("xtool-inputs.lock.json"), sources.resolve("build.py"))
     inputs.dir(runtimeBaseOutput)
-    inputs.dir(file(xtool.get()).resolve("Android/output"))
-    inputs.dir(file(xtool.get()).resolve(".build/android-debs"))
+    val xtoolAndroidOut = file(xtool.get()).resolve("Android/output")
+    val xtoolAndroidDebs = file(xtool.get()).resolve(".build/android-debs")
+    if (xtoolAndroidOut.isDirectory) inputs.dir(xtoolAndroidOut)
+    if (xtoolAndroidDebs.isDirectory) inputs.dir(xtoolAndroidDebs)
     outputs.dir(runtimePackOutput)
     dependsOn(stageDeveloperRuntimePack)
     commandLine("python3", sources.resolve("stage_xtool.py"), "--source", runtimeBaseOutput.get().asFile,

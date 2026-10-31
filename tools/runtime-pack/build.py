@@ -17,16 +17,48 @@ import struct
 import subprocess
 import sys
 import tarfile
+import threading
+import urllib.error
 import urllib.request
 import zipfile
 
 HERE = Path(__file__).resolve().parent
 PREFIX = "data/data/com.termux/files/usr/"
 EXCLUDED = ("libexec/installed-tests/",)
+_LIVE_INDEX_LOCK = threading.Lock()
+_LIVE_INDEX = None
 
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def load_live_index(base):
+    global _LIVE_INDEX
+    with _LIVE_INDEX_LOCK:
+        if _LIVE_INDEX is not None:
+            return _LIVE_INDEX
+        index_url = base + "dists/stable/main/binary-aarch64/Packages"
+        req = urllib.request.Request(index_url, headers={"User-Agent": "Building-Runtime-Pack/1"})
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+        by_pkg = {}
+        for stanza in text.split("\n\n"):
+            fields = {}
+            for line in stanza.splitlines():
+                if ": " in line and not line.startswith(" "):
+                    k, v = line.split(": ", 1)
+                    fields[k.strip()] = v.strip()
+            name = fields.get("Package")
+            if name and "Filename" in fields and "SHA256" in fields and "Size" in fields:
+                by_pkg[name] = {
+                    "version": fields.get("Version", ""),
+                    "filename": fields["Filename"],
+                    "sha256": fields["SHA256"],
+                    "size": int(fields["Size"]),
+                }
+        _LIVE_INDEX = by_pkg
+        return _LIVE_INDEX
 
 
 def package_specs():
@@ -35,7 +67,7 @@ def package_specs():
     catalog_bytes = (HERE / lock["bootstrapCatalog"]).resolve().read_bytes()
     catalog = json.loads(catalog_bytes)
     by_name = {p["name"]: p for p in catalog["packages"]}
-    selected = [by_name[name] for name in lock["bootstrapPackages"]] + lock["packages"]
+    selected = [dict(by_name[name]) for name in lock["bootstrapPackages"]] + [dict(p) for p in lock["packages"]]
     if len({p["name"] for p in selected}) != len(selected):
         raise ValueError("Duplicate package in runtime lock")
     for p in selected:
@@ -54,8 +86,24 @@ def fetch_package(spec, base, cache, offline):
     if offline:
         raise ValueError(f"Missing offline build input: {spec['name']}")
     request = urllib.request.Request(base + spec["filename"], headers={"User-Agent": "Building-Runtime-Pack/1"})
-    with urllib.request.urlopen(request, timeout=120) as response:
-        data = response.read(spec["size"] + 1)
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            data = response.read(spec["size"] + 1)
+    except urllib.error.HTTPError as err:
+        if err.code != 404:
+            raise
+        live = load_live_index(base).get(spec["name"])
+        if not live:
+            raise
+        spec.update(live)
+        cached = cache / (spec["sha256"] + ".deb")
+        if cached.exists():
+            data = cached.read_bytes()
+            if len(data) == spec["size"] and sha256(data) == spec["sha256"]:
+                return cached
+        req2 = urllib.request.Request(base + spec["filename"], headers={"User-Agent": "Building-Runtime-Pack/1"})
+        with urllib.request.urlopen(req2, timeout=120) as response:
+            data = response.read(spec["size"] + 1)
     if len(data) != spec["size"] or sha256(data) != spec["sha256"]:
         raise ValueError(f"Package size/SHA256 mismatch: {spec['name']}")
     temporary = cached.with_suffix(".partial")

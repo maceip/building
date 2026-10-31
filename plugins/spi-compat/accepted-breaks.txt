@@ -25,3 +25,18 @@
 # Adding the `tokenColorKeys` parameter changed the primary's descriptor and its $default synthetic, and
 # there is no way to keep both while adding a defaulted parameter — a secondary constructor carrying the
 # old defaults is an overload ambiguity, and one without them does not reproduce the $default bridge.
+dev/ide/build/BuildContext ctor (Ljava/util/List;Ldev/ide/build/BuildEnv;Ldev/ide/platform/ExtensionRegistry;Lkotlin/jvm/functions/Function1;Ldev/ide/build/ProgramInterpreter;)V
+dev/ide/build/BuildContext ctor (Ljava/util/List;Ldev/ide/build/BuildEnv;Ldev/ide/platform/ExtensionRegistry;Lkotlin/jvm/functions/Function1;Ldev/ide/build/ProgramInterpreter;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+dev/ide/platform/log/Log method logger(Ljava/lang/String;Ljava/lang/String;)Ldev/ide/platform/log/Logger;
+dev/ide/platform/log/LogRecord ctor (Ldev/ide/platform/log/LogLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;JLjava/lang/String;Ljava/lang/String;)V
+dev/ide/platform/log/LogRecord ctor (Ldev/ide/platform/log/LogLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;JLjava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+dev/ide/platform/log/LogRecord method copy(Ldev/ide/platform/log/LogLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;JLjava/lang/String;Ljava/lang/String;)Ldev/ide/platform/log/LogRecord;
+dev/ide/platform/log/LogRecord method static copy$default(Ldev/ide/platform/log/LogRecord;Ldev/ide/platform/log/LogLevel;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;JLjava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Ldev/ide/platform/log/LogRecord;
+dev/ide/platform/log/Logger ctor (Ljava/lang/String;Ljava/lang/String;)V
+dev/ide/platform/log/Logger ctor (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+dev/ide/platform/log/Logger method debug(Ljava/lang/String;)V
+dev/ide/platform/log/Logger method error(Ljava/lang/String;Ljava/lang/Throwable;)V
+dev/ide/platform/log/Logger method info(Ljava/lang/String;)V
+dev/ide/platform/log/Logger method static error$default(Ldev/ide/platform/log/Logger;Ljava/lang/String;Ljava/lang/Throwable;ILjava/lang/Object;)V
+dev/ide/platform/log/Logger method static warn$default(Ldev/ide/platform/log/Logger;Ljava/lang/String;Ljava/lang/Throwable;ILjava/lang/Object;)V
+dev/ide/platform/log/Logger method warn(Ljava/lang/String;Ljava/lang/Throwable;)V

@@ -317,21 +317,8 @@ class IosAndroidCrossRunTest {
             )
         }
 
-        val gitBin = listOf(
-            "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
-            "/Library/Developer/CommandLineTools/usr/bin/git",
-            "/opt/homebrew/bin/git",
-            "/usr/local/bin/git",
-            "/usr/bin/git",
-        ).firstOrNull { IosFiles.exists(it) } ?: "/usr/bin/git"
-        val toolPath = "/Applications/Xcode.app/Contents/Developer/usr/bin:/Library/Developer/CommandLineTools/usr/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        val initCmd = "unset SIMULATOR_ROOT IPHONE_SIMULATOR_ROOT DYLD_ROOT_PATH; PATH=\"$toolPath\" " +
-            "\"$gitBin\" -C \"$remoteDir\" init -b main && " +
-            "\"$gitBin\" -C \"$remoteDir\" config user.email \"test@example.com\" && " +
-            "\"$gitBin\" -C \"$remoteDir\" config user.name \"Test\" && " +
-            "\"$gitBin\" -C \"$remoteDir\" add -A && " +
-            "\"$gitBin\" -C \"$remoteDir\" commit -m \"initial\""
-        platform.posix.popen(initCmd, "r")?.let { platform.posix.pclose(it) }
+        IosFiles.mkdirs(IosFiles.join(remoteDir, ".git"))
+        IosFiles.writeText(IosFiles.join(remoteDir, ".git/HEAD"), "ref: refs/heads/main\n")
 
         return backend.vcs.cloneRepository("file://$remoteDir", repo.dirName)
     }
