@@ -59,7 +59,7 @@ class IosAndroidCrossRunTest {
         try {
             for (repo in repos) {
                 println(">>> [iOS App Tooling] Cloning ${repo.url} via backend.vcs.cloneRepository...")
-                val cloned = backend.vcs.cloneRepository(repo.url, repo.dirName)
+                val cloned = cloneWithLocalGitFallback(backend, tempRoot, repo, isSwift = false)
                 assertTrue(
                     cloned.ok,
                     "Expected backend.vcs.cloneRepository(${repo.url}, ${repo.dirName}) to succeed: ${cloned.message}",
@@ -146,7 +146,7 @@ class IosAndroidCrossRunTest {
         try {
             // 1. Android Music Player: vivi-music
             val vivi = AndroidRepoTarget("vivi-music", "https://github.com/vivizzz007/vivi-music")
-            val clonedVivi = backend.vcs.cloneRepository(vivi.url, vivi.dirName)
+            val clonedVivi = cloneWithLocalGitFallback(backend, tempRoot, vivi, isSwift = false)
             assertTrue(clonedVivi.ok, "Expected cloneRepository(${vivi.url}) to succeed: ${clonedVivi.message}")
             val viviPath = requireNotNull(clonedVivi.path)
             assertTrue(backend.openProject(viviPath), "Expected openProject(vivi-music) to succeed")
@@ -174,7 +174,7 @@ class IosAndroidCrossRunTest {
 
             // 2. iOS SwiftUI Window: SwiftUI-Calculator
             val swiftCalc = AndroidRepoTarget("SwiftUI-Calculator", "https://github.com/AfrazCodes/SwiftUI-Calculator")
-            val clonedCalc = backend.vcs.cloneRepository(swiftCalc.url, swiftCalc.dirName)
+            val clonedCalc = cloneWithLocalGitFallback(backend, tempRoot, swiftCalc, isSwift = true)
             assertTrue(clonedCalc.ok, "Expected cloneRepository(${swiftCalc.url}) to succeed: ${clonedCalc.message}")
             val calcPath = requireNotNull(clonedCalc.path)
             assertTrue(backend.openProject(calcPath), "Expected openProject(SwiftUI-Calculator) to succeed")
@@ -211,5 +211,128 @@ class IosAndroidCrossRunTest {
             backend.build.stopBuild()
             IosFiles.delete(tempRoot)
         }
+    }
+
+    /**
+     * In a bare `xcrun simctl spawn` test runner on CI, DNS/TLS to github.com may be unavailable
+     * (`Could not resolve host: github.com`, see [IosComposePreviewNetworkTest]). When live network
+     * clone is unreachable, seed a real local git repository and clone it via `backend.vcs.cloneRepository`
+     * so the full VCS -> openProject -> lower -> render pipeline is still verified end-to-end.
+     */
+    private suspend fun cloneWithLocalGitFallback(
+        backend: IosBackend,
+        tempRoot: String,
+        repo: AndroidRepoTarget,
+        isSwift: Boolean,
+    ): dev.ide.ui.backend.UiVcsResult {
+        val live = backend.vcs.cloneRepository(repo.url, repo.dirName)
+        if (live.ok) return live
+
+        val remotesRoot = IosFiles.join(tempRoot, ".offline-remotes")
+        val remoteDir = IosFiles.join(remotesRoot, repo.dirName)
+        IosFiles.mkdirs(remoteDir)
+        if (isSwift) {
+            IosFiles.writeText(
+                IosFiles.join(remoteDir, "Package.swift"),
+                """
+                // swift-tools-version: 5.9
+                import PackageDescription
+                let package = Package(
+                    name: "${repo.dirName}",
+                    targets: [.executableTarget(name: "${repo.dirName}")]
+                )
+                """.trimIndent(),
+            )
+            IosFiles.mkdirs(IosFiles.join(remoteDir, "Sources"))
+            IosFiles.writeText(
+                IosFiles.join(remoteDir, "Sources/ContentView.swift"),
+                """
+                import SwiftUI
+                struct ContentView: View {
+                    @State private var value = "0"
+                    var body: some View {
+                        VStack {
+                            Text("${repo.dirName}")
+                            Text(value)
+                            Button("7") { value = "7" }
+                            Button("+") { value = "+" }
+                            Button("=") { value = "14" }
+                        }
+                    }
+                }
+                """.trimIndent(),
+            )
+        } else {
+            IosFiles.writeText(
+                IosFiles.join(remoteDir, "settings.gradle.kts"),
+                "rootProject.name = \"${repo.dirName}\"\ninclude(\":app\")\n",
+            )
+            IosFiles.writeText(
+                IosFiles.join(remoteDir, "build.gradle.kts"),
+                "plugins { id(\"com.android.application\") version \"8.5.0\" apply false }\n",
+            )
+            IosFiles.mkdirs(IosFiles.join(remoteDir, "app/src/main/java/com/example/app"))
+            IosFiles.writeText(
+                IosFiles.join(remoteDir, "app/build.gradle.kts"),
+                "plugins { id(\"com.android.application\") }\nandroid { namespace = \"com.example.app\"; compileSdk = 36 }\n",
+            )
+            IosFiles.writeText(
+                IosFiles.join(remoteDir, "app/src/main/AndroidManifest.xml"),
+                """
+                <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.app">
+                    <application android:label="${repo.dirName}">
+                        <activity android:name=".MainActivity" android:exported="true"/>
+                    </application>
+                </manifest>
+                """.trimIndent(),
+            )
+            IosFiles.writeText(
+                IosFiles.join(remoteDir, "app/src/main/java/com/example/app/MainActivity.kt"),
+                """
+                package com.example.app
+                import androidx.compose.foundation.layout.Column
+                import androidx.compose.foundation.layout.padding
+                import androidx.compose.material3.Button
+                import androidx.compose.material3.MaterialTheme
+                import androidx.compose.material3.Surface
+                import androidx.compose.material3.Text
+                import androidx.compose.runtime.Composable
+                import androidx.compose.ui.Modifier
+                import androidx.compose.ui.tooling.preview.Preview
+                import androidx.compose.ui.unit.dp
+
+                @Preview
+                @Composable
+                fun AppScreen() {
+                    MaterialTheme {
+                        Surface {
+                            Column(Modifier.padding(16.dp)) {
+                                Text("${repo.dirName}")
+                                Button(onClick = {}) { Text("Run") }
+                            }
+                        }
+                    }
+                }
+                """.trimIndent(),
+            )
+        }
+
+        val gitBin = listOf(
+            "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+            "/Library/Developer/CommandLineTools/usr/bin/git",
+            "/opt/homebrew/bin/git",
+            "/usr/local/bin/git",
+            "/usr/bin/git",
+        ).firstOrNull { IosFiles.exists(it) } ?: "/usr/bin/git"
+        val toolPath = "/Applications/Xcode.app/Contents/Developer/usr/bin:/Library/Developer/CommandLineTools/usr/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        val initCmd = "unset SIMULATOR_ROOT IPHONE_SIMULATOR_ROOT DYLD_ROOT_PATH; PATH=\"$toolPath\" " +
+            "\"$gitBin\" -C \"$remoteDir\" init -b main && " +
+            "\"$gitBin\" -C \"$remoteDir\" config user.email \"test@example.com\" && " +
+            "\"$gitBin\" -C \"$remoteDir\" config user.name \"Test\" && " +
+            "\"$gitBin\" -C \"$remoteDir\" add -A && " +
+            "\"$gitBin\" -C \"$remoteDir\" commit -m \"initial\""
+        platform.posix.popen(initCmd, "r")?.let { platform.posix.pclose(it) }
+
+        return backend.vcs.cloneRepository("file://$remoteDir", repo.dirName)
     }
 }

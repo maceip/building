@@ -28,8 +28,14 @@ class GradleReliabilityInitScriptTest {
         assumeTrue(sdk != null, "Android SDK 36 is required for the real AGP reliability fixture")
         val gradleHome = Path.of(System.getProperty("dev.ide.gradle.home") ?: error("dev.ide.gradle.home is not set"))
         val init = System.getProperty("dev.ide.init.script") ?: error("dev.ide.init.script is not set")
-        val agpCache = home.resolve(".gradle/caches/modules-2/files-2.1/com.android.tools.build/gradle/9.2.1")
-        assumeTrue(Files.isDirectory(agpCache), "AGP 9.2.1 must already be cached; fixture never downloads it")
+        val filesCache = home.resolve(".gradle/caches/modules-2/files-2.1")
+        val agpCache = filesCache.resolve("com.android.tools.build/gradle/9.2.1")
+        val kgpCache = filesCache.resolve("org.jetbrains.kotlin/kotlin-gradle-plugin/2.2.10")
+        val kReflectCache = filesCache.resolve("org.jetbrains.kotlin/kotlin-reflect/2.2.10")
+        assumeTrue(
+            Files.isDirectory(agpCache) && Files.isDirectory(kgpCache) && Files.isDirectory(kReflectCache),
+            "AGP 9.2.1 and its Kotlin 2.2.10 buildscript dependencies must already be cached; fixture never downloads them",
+        )
         val root = Files.createTempDirectory("reliability-agp-app")
         val privateCache = Files.createTempDirectory("reliability-agp-private")
         try {
@@ -99,10 +105,17 @@ class GradleReliabilityInitScriptTest {
                 val row = JsonReader.obj(JsonReader.arr(descriptor["variants"]).single())!!
                 val generated = Path.of(row["outputDir"].toString())
                 val cap = variant.replaceFirstChar { it.uppercase() }
-                val result = runner(root, gradleHome, init, args + listOf(
-                    ":app:generateIdeReliability$cap", ":app:injectIdeReliabilityManifest$cap",
-                    ":app:check${cap}Runtime", ":lib:assertNoReliability",
-                )).build()
+                val result = try {
+                    runner(root, gradleHome, init, args + listOf(
+                        ":app:generateIdeReliability$cap", ":app:injectIdeReliabilityManifest$cap",
+                        ":app:check${cap}Runtime", ":lib:assertNoReliability",
+                    )).build()
+                } catch (e: org.gradle.testkit.runner.UnexpectedBuildFailure) {
+                    if (e.message?.contains("available for offline mode") == true) {
+                        assumeTrue(false, "Transitive AGP 9.2.1 dependency missing from offline cache: ${e.message}")
+                    }
+                    throw e
+                }
                 assertTrue("RELIABILITY_RUNTIME=$variant" in result.output, result.output)
                 val asset = Files.readString(generated.resolve("assets/ide-reliability.json"))
                 val manifest = Files.readString(generated.resolve("manifest/AndroidManifest.xml"))

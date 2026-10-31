@@ -58,7 +58,7 @@ jobs:
             LATEST_TAG="$(gh release list --limit 30 --json tagName --jq '[.[] | select(.tagName | startswith("android-"))][0].tagName // empty')"
             RELEASED_SHA=""
             if [[ -n "${LATEST_TAG}" ]]; then
-              RELEASED_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${LATEST_TAG}" --jq '.object.sha')"
+              RELEASED_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${LATEST_TAG}" --jq '.sha' || true)"
             fi
             echo "main HEAD=${HEAD_SHA} newest android release ${LATEST_TAG}=${RELEASED_SHA}"
             if [[ "${HEAD_SHA}" == "${RELEASED_SHA}" ]]; then

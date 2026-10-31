@@ -183,7 +183,15 @@ class GradleNodeExecTest {
         // Prefer real system compiler binaries to HOME-dependent rustup/swiftly-style shims. npm
         // and Node still come from PATH so the installed Node distribution supplies matching headers.
         if (name in setOf("clang", "clang++", "ar") && Files.isExecutable(Path.of("/usr/bin", name))) return Path.of("/usr/bin", name)
-        return System.getenv("PATH").orEmpty().split(java.io.File.pathSeparatorChar).filter { it.isNotEmpty() }
+        val nvmBins = runCatching {
+            val versionsDir = Path.of(System.getProperty("user.home", ""), ".nvm/versions/node")
+            if (Files.isDirectory(versionsDir)) {
+                Files.list(versionsDir).use { s -> s.sorted(Comparator.reverseOrder()).map { it.resolve("bin").toString() }.toList() }
+            } else emptyList()
+        }.getOrDefault(emptyList())
+        val searchDirs = System.getenv("PATH").orEmpty().split(java.io.File.pathSeparatorChar).filter { it.isNotEmpty() } +
+            nvmBins + listOf("/opt/homebrew/bin", "/usr/local/bin")
+        return searchDirs
             .map { Path.of(it).resolve(name).toAbsolutePath() }.firstOrNull(Files::isExecutable)
             ?: error("Required real test executable '$name' is unavailable; install it${property?.let { " or set $it" }.orEmpty()}")
     }

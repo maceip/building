@@ -11,8 +11,10 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-val cupertinoRoot = file("/Users/mac/.building/composeui-bridge/compose-cupertino")
-val composeUiRoot = file("/Users/mac/.building/composeui-bridge/composeui/src")
+val cupertinoRoot = projectDir.resolve("vendor/composeui-bridge/compose-cupertino").takeIf { it.isDirectory }
+    ?: file("/Users/mac/.building/composeui-bridge/compose-cupertino")
+val composeUiRoot = projectDir.resolve("vendor/composeui-bridge/composeui/src").takeIf { it.isDirectory }
+    ?: file("/Users/mac/.building/composeui-bridge/composeui/src")
 val cupertinoModules = listOf(
     "cupertino-core",
     "cupertino",
