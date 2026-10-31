@@ -304,7 +304,7 @@ def find_ndk(explicit):
         candidates = [HERE.parent / "android-sdk/build/android-ndk-r29-beta1"]
         for variable in ("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT"):
             if os.environ.get(variable):
-                candidates.insert(0, Path(os.environ[variable]))
+                candidates.append(Path(os.environ[variable]))
         for sdk in (os.environ.get("ANDROID_SDK_ROOT"), os.environ.get("ANDROID_HOME"), str(Path.home() / "Library/Android/sdk"), "/opt/homebrew/share/android-commandlinetools"):
             if sdk:
                 candidates += sorted((Path(sdk) / "ndk").glob("*"), reverse=True)

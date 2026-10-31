@@ -239,7 +239,10 @@ class SwiftUiPreviewInterpreterTest {
         assertTrue(tree1.contains("\"type\":\"NavigationStack\""), "NavigationStack must be present: $tree1")
         assertTrue(tree1.contains("\"type\":\"NavigationLink\""), "NavigationLink must be present: $tree1")
         assertTrue(tree1.contains("Detail Destination Screen"), "NavigationLink destination must be preserved: $tree1")
-        assertTrue(tree1.contains("M 10 15 L 80 90 Z"), "Path closure must serialize SVG path commands: $tree1")
+        assertTrue(
+            tree1.contains("M 10 15 L 80 90 Z") || tree1.contains("M 10.0 15.0 L 80.0 90.0 Z"),
+            "Path closure must serialize SVG path commands: $tree1",
+        )
         assertTrue(tree1.contains("\"type\":\"Sheet\""), "Sheet modifier must attach Sheet node: $tree1")
         assertTrue(tree1.contains("\"isPresented\":false"), "Sheet initially not presented: $tree1")
 

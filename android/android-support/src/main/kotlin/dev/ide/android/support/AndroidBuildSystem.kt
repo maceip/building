@@ -813,8 +813,11 @@ class AndroidBuildSystem(
         // shared cache as it completes, so progress survives a low-memory-killer stop.
         // Keyed on the REAL external libraries (libs.dexJars), not the log-bridge runtime we may have appended:
         // a dep-less app shouldn't flip to the forked one-pass just because instrumentation added one tiny jar.
+        val hasHeavyExtLibs = libs.dexJars.any { (runCatching { Files.size(it) }.getOrDefault(0L)) >= 8L * 1024 * 1024 } ||
+            libs.dexJars.sumOf { runCatching { Files.size(it) }.getOrDefault(0L) } >= 20L * 1024 * 1024
         val dexExtOnePass =
-            facet.minSdk in 21..25 && libs.dexJars.isNotEmpty() && !minify && goal != BuildGoal.DEX && mergeDexer.runsOffHeap()
+            facet.minSdk >= 21 && (facet.minSdk <= 25 || hasHeavyExtLibs) &&
+                libs.dexJars.isNotEmpty() && !minify && goal != BuildGoal.DEX && mergeDexer.runsOffHeap()
 
         // The merged dex layers the packager assembles (renumbered into one classes*.dex set) + packageApk's deps.
         var dexDirs: List<Path>

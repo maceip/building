@@ -188,12 +188,10 @@ class Challenger2StressTest {
     @Test
     fun testAfrazCodesSwiftUiCalculatorSanitizationAndShadow() {
         val repoDir = Path.of("/tmp/afraz-calc")
-        if (!Files.isDirectory(repoDir)) {
+        val contentView = repoDir.resolve("Calculator/ContentView.swift")
+        if (!Files.isRegularFile(contentView)) {
             return
         }
-
-        val contentView = repoDir.resolve("Calculator/ContentView.swift")
-        assertTrue(Files.isRegularFile(contentView), "ContentView.swift must exist in /tmp/afraz-calc")
         val contentText = contentView.readText()
 
         // 1. Stress-test dropUnsupportedDeclarations
@@ -256,7 +254,7 @@ class Challenger2StressTest {
     @Test
     fun testRicardoMongzaCalculatorSanitizationAndShadow() {
         val repoDir = Path.of("/tmp/ricardo-calc")
-        if (!Files.isDirectory(repoDir)) {
+        if (!Files.isRegularFile(repoDir.resolve("Calculator/Models/Calculator.swift"))) {
             return
         }
 

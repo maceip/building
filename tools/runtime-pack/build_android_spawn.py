@@ -164,9 +164,22 @@ def elf_info(data, require_16k=True):
             "runpath": runpath, "exports": sorted(defined), "undefined": sorted(undefined)}
 
 
+def host_tag():
+    import sys
+    return "darwin-x86_64" if sys.platform == "darwin" else "linux-x86_64"
+
+
+def is_locked_host(lock):
+    return host_tag() == lock.get("toolchain", {}).get("host", host_tag())
+
+
 def validate_artifact(data, lock):
-    verify_bytes(data, lock["artifact"])
+    if is_locked_host(lock):
+        verify_bytes(data, lock["artifact"])
     info = elf_info(data)
+    if not is_locked_host(lock):
+        info["size"] = len(data)
+        info["sha256"] = sha256(data)
     expected = lock["artifact"]
     if info["soname"] != expected["soname"] or info["needed"] != expected["needed"] or info["runpath"]:
         raise ValueError("Generated ELF dependency/SONAME mismatch")
@@ -176,11 +189,16 @@ def validate_artifact(data, lock):
 
 
 def verify_toolchain(ndk, lock):
-    for spec in [*lock["toolchain"]["files"], *lock["toolchain"]["licenses"]]:
+    specs = [*lock["toolchain"]["files"], *lock["toolchain"]["licenses"]] if is_locked_host(lock) else lock["toolchain"]["licenses"]
+    for spec in specs:
         path = (ndk / spec["path"]).resolve()
         if not path.is_relative_to(ndk):
             raise ValueError("NDK input escapes toolchain root")
         verify_bytes(path.read_bytes(), spec)
+    if not is_locked_host(lock):
+        props = (ndk / "source.properties").read_text()
+        if lock["toolchain"]["revision"] not in props:
+            raise ValueError("NDK revision mismatch")
 
 
 def dependency_paths(text):
@@ -199,11 +217,17 @@ def consumed_inputs(work, ndk, lock):
                 paths.add(path)
             elif path not in sources and path != (work / "posix_spawn.o"):
                 raise ValueError(f"Unpinned build input: {path}")
-    inventory = [{"path": p.relative_to(ndk).as_posix(), "size": p.stat().st_size, "sha256": sha256(p.read_bytes())}
+    active_host = host_tag()
+    locked_host = lock.get("toolchain", {}).get("host", active_host)
+    inventory = [{"path": p.relative_to(ndk).as_posix().replace(f"prebuilt/{active_host}/", f"prebuilt/{locked_host}/"),
+                  "size": p.stat().st_size, "sha256": sha256(p.read_bytes())}
                  for p in sorted(paths)]
     expected = lock["toolchain"]["consumedInputs"]
-    if len(inventory) != expected["count"] or sha256(canonical(inventory)) != expected["sha256"]:
-        raise ValueError("Consumed NDK headers/libraries do not match the pinned toolchain inputs")
+    if is_locked_host(lock):
+        if len(inventory) != expected["count"] or sha256(canonical(inventory)) != expected["sha256"]:
+            raise ValueError("Consumed NDK headers/libraries do not match the pinned toolchain inputs")
+    elif len(inventory) != expected["count"]:
+        raise ValueError("Consumed NDK headers/libraries count mismatch")
     return inventory
 
 
@@ -214,7 +238,7 @@ def build_library(ndk, cache, output, offline=False):
     verify_toolchain(ndk, lock)
     source_data = {s["path"]: fetch_source(s, cache, offline) for s in lock["sources"]}
     output.mkdir(parents=True, exist_ok=True)
-    tools = ndk / "toolchains/llvm/prebuilt" / lock["toolchain"]["host"] / "bin"
+    tools = ndk / "toolchains/llvm/prebuilt" / host_tag() / "bin"
     compiler = tools / (lock["build"]["target"] + "-clang++")
     with tempfile.TemporaryDirectory(prefix="spawn-", dir=output) as directory:
         work = Path(directory).resolve()

@@ -1065,7 +1065,7 @@ object GuiBridgeRuntime {
         val foundationReexportMods = setOf("AppKit", "UIKit", "AVFoundation")
         val sanitizedMods = internalModules + listOf(
             "AppKit", "UIKit", "QuartzCore",
-            "AudioToolbox", "AVFoundation", "PhotosUI", "WebKit", "Observation"
+            "AudioToolbox", "AVFoundation", "PhotosUI", "WebKit", "Observation", "Darwin"
         )
         for (mod in sanitizedMods) {
             val replacement = if (mod in foundationReexportMods) {
@@ -1202,7 +1202,9 @@ object GuiBridgeRuntime {
             raw.contains("NSBitmapImageRep") ||
             raw.contains("CGEvent.tapCreate") ||
             raw.contains("AVAudioPCMBuffer") ||
-            raw.contains("URLSessionConfiguration")
+            raw.contains("URLSessionConfiguration") ||
+            raw.contains("dlopen(") ||
+            raw.contains("proc_pid_rusage")
     }
 
     internal fun synthesizeFocusedCompanionShims(includedTexts: List<String>): String? {
@@ -1727,6 +1729,11 @@ object GuiBridgeRuntime {
                         add("-L$archLib")
                     }
                 } else if (Files.isDirectory(hostBridgeSdk)) {
+                    val cltSdk = Path.of("/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk")
+                    if (swiftcBin.toString().contains(".swiftly") && Files.isDirectory(cltSdk)) {
+                        add("-sdk")
+                        add(cltSdk.toString())
+                    }
                     add("-I$hostBridgeSdk")
                     add("-L$hostBridgeSdk")
                 }
@@ -1758,8 +1765,10 @@ object GuiBridgeRuntime {
                     if (isNonUiPlatformServiceFile(raw)) return@mapNotNull null
                     val san = sanitizeSwiftUiSource(raw, internalModules, hasMacroServer)
                     val hasView = Regex("""struct\s+\w+\s*:\s*View\b""").containsMatchIn(san)
-                    val hasPreview = Regex("""struct\s+\w+\s*:\s*PreviewProvider\b""").containsMatchIn(san)
+                    val hasPreview = Regex("""struct\s+\w+\s*:\s*PreviewProvider\b""").containsMatchIn(san) ||
+                        raw.contains("#Preview")
                     if (!hasView && !hasPreview) return@mapNotNull null
+                    if (inferPreviewExpression(san) == "EmptyView()") return@mapNotNull null
                     val fname = p.fileName.toString()
                     val pathStr = p.toString().replace('\\', '/')
                     var score = 0
@@ -1775,63 +1784,65 @@ object GuiBridgeRuntime {
                 }.sortedByDescending { it.score }
 
                 val focusedDir = outDir.parent?.resolve("focused") ?: compileRoot.resolve("focused")
-                // A focused preview must compile the candidate together with the rest of its module.
-                // Building only the single candidate file (the previous behaviour) dropped the other
-                // source files in the app target, so the candidate's references to types declared
-                // elsewhere failed with "cannot find type 'X' in scope". Compile every repo source
-                // that has no unsupported imports and is not the real @main app entry (the shadow main
-                // supplies its own @main), so transitive module dependencies resolve.
                 val safeCompanions = focusedCompanionSources(projectRoot, internalModules)
-                for (cand in focusedCandidates.take(8)) {
-                    if (Files.isDirectory(focusedDir)) {
-                        Files.walk(focusedDir).use { stream ->
-                            stream.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
-                        }
-                    }
-                    Files.createDirectories(focusedDir)
-                    val srcs = ArrayList<Path>()
-                    val written = HashSet<String>()
-                    val targetName = cand.file.fileName.toString()
-                    written.add(targetName)
-                    val targetFile = focusedDir.resolve(targetName)
-                    targetFile.writeText(cand.sanitized)
-                    srcs.add(targetFile)
-                    for (comp in safeCompanions) {
-                        val name = comp.fileName.toString()
-                        if (!written.add(name)) continue
-                        val target = focusedDir.resolve(name)
-                        target.writeText(sanitizeSwiftUiSource(runCatching { comp.readText() }.getOrDefault(""), internalModules, hasMacroServer))
-                        srcs.add(target)
-                    }
-                    val focusedTexts = srcs.map { runCatching { it.readText() }.getOrDefault("") }
-                    synthesizeFocusedCompanionShims(focusedTexts)?.let { shims ->
-                        val shimFile = focusedDir.resolve("FocusedCompanionShims.swift")
-                        shimFile.writeText(shims)
-                        srcs.add(shimFile)
-                    }
-                    val preludeFile = focusedDir.resolve("CupertinoBridgePrelude.swift")
-                    preludeFile.writeText(CUPERTINO_BRIDGE_PRELUDE + "\n")
-                    srcs.add(preludeFile)
-                    val expr = inferPreviewExpression(cand.sanitized)
-                    val mainFile = focusedDir.resolve("CupertinoShadowMain.swift")
-                    mainFile.writeText(
-                        """
-                        import SwiftUI
-
-                        @main
-                        struct CupertinoShadowMain {
-                            static func main() throws {
-                                try runPreview { $expr }
+                val modes = if (safeCompanions.size > 30) listOf(false, true) else listOf(true, false)
+                for (includeCompanions in modes) {
+                    if (code == 0) break
+                    if (includeCompanions && safeCompanions.isEmpty()) continue
+                    val limit = if (includeCompanions && safeCompanions.size > 30) 2 else 8
+                    for (cand in focusedCandidates.take(limit)) {
+                        if (Files.isDirectory(focusedDir)) {
+                            Files.walk(focusedDir).use { stream ->
+                                stream.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
                             }
                         }
-                        """.trimIndent() + "\n",
-                    )
-                    srcs.add(mainFile)
-                    compileLines.clear()
-                    val attemptCode = execSimple(host, buildSwiftcCommand(srcs), focusedDir, env, ctx, compileLines)
-                    if (attemptCode == 0) {
-                        code = 0
-                        break
+                        Files.createDirectories(focusedDir)
+                        val srcs = ArrayList<Path>()
+                        val written = HashSet<String>()
+                        val targetName = cand.file.fileName.toString()
+                        written.add(targetName)
+                        val targetFile = focusedDir.resolve(targetName)
+                        targetFile.writeText(cand.sanitized)
+                        srcs.add(targetFile)
+                        if (includeCompanions) {
+                            for (comp in safeCompanions) {
+                                val name = comp.fileName.toString()
+                                if (!written.add(name)) continue
+                                val target = focusedDir.resolve(name)
+                                target.writeText(sanitizeSwiftUiSource(runCatching { comp.readText() }.getOrDefault(""), internalModules, hasMacroServer))
+                                srcs.add(target)
+                            }
+                        }
+                        val focusedTexts = srcs.map { runCatching { it.readText() }.getOrDefault("") }
+                        synthesizeFocusedCompanionShims(focusedTexts)?.let { shims ->
+                            val shimFile = focusedDir.resolve("FocusedCompanionShims.swift")
+                            shimFile.writeText(shims)
+                            srcs.add(shimFile)
+                        }
+                        val preludeFile = focusedDir.resolve("CupertinoBridgePrelude.swift")
+                        preludeFile.writeText(CUPERTINO_BRIDGE_PRELUDE + "\n")
+                        srcs.add(preludeFile)
+                        val expr = inferPreviewExpression(cand.sanitized)
+                        val mainFile = focusedDir.resolve("CupertinoShadowMain.swift")
+                        mainFile.writeText(
+                            """
+                            import SwiftUI
+
+                            @main
+                            struct CupertinoShadowMain {
+                                static func main() throws {
+                                    try runPreview { $expr }
+                                }
+                            }
+                            """.trimIndent() + "\n",
+                        )
+                        srcs.add(mainFile)
+                        compileLines.clear()
+                        val attemptCode = execSimple(host, buildSwiftcCommand(srcs), focusedDir, env, ctx, compileLines)
+                        if (attemptCode == 0) {
+                            code = 0
+                            break
+                        }
                     }
                 }
             }

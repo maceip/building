@@ -1318,50 +1318,57 @@ class PythonBuildSystem : BuildSystem {
                                 ":python:compileBytecode",
                                 ctx,
                             )
-                            val scriptArgs = if (scriptPath.fileName?.toString() == "setup.py") {
-                                listOf(pythonBin.toString(), "-u", scriptPath.toString(), "--name", "--version")
-                            } else {
-                                listOf(pythonBin.toString(), "-u", scriptPath.toString())
-                            }
-                            val firstLines = ArrayList<String>()
-                            val firstRes = runToolCommand(
-                                host,
-                                scriptArgs,
-                                root,
-                                pyEnv,
-                                "python",
-                                taskName.value,
-                                ctx,
-                                capturedLines = firstLines,
-                            )
-                            if (firstRes is TaskResult.Success) {
-                                if (firstLines.isNotEmpty()) {
-                                    emitConsoleToProgramIo(buildCtx, project.name, "python3 -u $rel", firstLines)
+                            val candidates = listOf(rel) + discoverPythonEntrypoints(root).filter { it != rel }.take(3)
+                            var lastRes: TaskResult = TaskResult.Failed("No Python entrypoints executed")
+                            for (candRel in candidates) {
+                                val candPath = root.resolve(candRel)
+                                if (!Files.isRegularFile(candPath)) continue
+                                val scriptArgs = if (candPath.fileName?.toString() == "setup.py") {
+                                    listOf(pythonBin.toString(), "-u", candPath.toString(), "--name", "--version")
+                                } else {
+                                    listOf(pythonBin.toString(), "-u", candPath.toString())
                                 }
-                                return firstRes
-                            }
-                            if (scriptPath.fileName?.toString() != "setup.py") {
-                                for (fallbackFlag in listOf("--version", "--help")) {
-                                    val retryLines = ArrayList<String>()
-                                    val retryRes = runToolCommand(
-                                        host,
-                                        listOf(pythonBin.toString(), "-u", scriptPath.toString(), fallbackFlag),
-                                        root,
-                                        pyEnv,
-                                        "python",
-                                        taskName.value,
-                                        ctx,
-                                        capturedLines = retryLines,
-                                    )
-                                    if (retryRes is TaskResult.Success) {
-                                        if (retryLines.isNotEmpty()) {
-                                            emitConsoleToProgramIo(buildCtx, project.name, "python3 -u $rel $fallbackFlag", retryLines)
+                                val firstLines = ArrayList<String>()
+                                val firstRes = runToolCommand(
+                                    host,
+                                    scriptArgs,
+                                    root,
+                                    pyEnv,
+                                    "python",
+                                    taskName.value,
+                                    ctx,
+                                    capturedLines = firstLines,
+                                )
+                                lastRes = firstRes
+                                if (firstRes is TaskResult.Success) {
+                                    if (firstLines.isNotEmpty()) {
+                                        emitConsoleToProgramIo(buildCtx, project.name, "python3 -u $candRel", firstLines)
+                                    }
+                                    return firstRes
+                                }
+                                if (candPath.fileName?.toString() != "setup.py") {
+                                    for (fallbackFlag in listOf("--version", "--help")) {
+                                        val retryLines = ArrayList<String>()
+                                        val retryRes = runToolCommand(
+                                            host,
+                                            listOf(pythonBin.toString(), "-u", candPath.toString(), fallbackFlag),
+                                            root,
+                                            pyEnv,
+                                            "python",
+                                            taskName.value,
+                                            ctx,
+                                            capturedLines = retryLines,
+                                        )
+                                        if (retryRes is TaskResult.Success) {
+                                            if (retryLines.isNotEmpty()) {
+                                                emitConsoleToProgramIo(buildCtx, project.name, "python3 -u $candRel $fallbackFlag", retryLines)
+                                            }
+                                            return retryRes
                                         }
-                                        return retryRes
                                     }
                                 }
                             }
-                            return firstRes
+                            return lastRes
                         }
                         val cmd = when {
                             specId == TASK_TEST -> listOf(pythonBin.toString(), "-u", "-m", "unittest", "discover")
@@ -1384,6 +1391,7 @@ class PythonBuildSystem : BuildSystem {
             "start-abus.py", "one_click.py", "salary_lookup.py",
             "engine.py", "nn.py", "train.py", "model.py", "sample.py", "__main__.py",
         )
+        private val RELATIVE_IMPORT_REGEX = Regex("""(?m)^\s*from\s+\.""")
 
         fun discoverPythonPathRoots(root: Path): List<Path> = runCatching {
             val out = LinkedHashSet<Path>()
@@ -1391,7 +1399,7 @@ class PythonBuildSystem : BuildSystem {
             val rootSrc = root.resolve("src")
             if (Files.isDirectory(rootSrc)) out.add(rootSrc)
             if (!Files.isDirectory(root)) return out.toList()
-            val excluded = setOf(".git", ".platform", ".venv", "venv", "__pycache__", "node_modules", "build", "dist", "tests", "test")
+            val excluded = setOf(".git", ".github", ".platform", ".venv", "venv", "__pycache__", "node_modules", "build", "dist", "tests", "test")
             Files.walk(root, 5).use { stream ->
                 stream.forEach { p ->
                     val rel = runCatching { root.relativize(p) }.getOrNull() ?: return@forEach
@@ -1417,7 +1425,7 @@ class PythonBuildSystem : BuildSystem {
 
         fun discoverPythonEntrypoints(root: Path): List<String> = runCatching {
             if (!Files.isDirectory(root)) return emptyList()
-            val excluded = setOf(".git", ".platform", ".venv", "venv", "__pycache__", "node_modules", "build", "dist")
+            val excluded = setOf(".git", ".github", ".platform", ".venv", "venv", "__pycache__", "node_modules", "build", "dist")
             val allPy = Files.walk(root, 5).use { stream ->
                 stream.filter { p ->
                     Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) &&
@@ -1426,18 +1434,37 @@ class PythonBuildSystem : BuildSystem {
                         root.relativize(p).none { seg -> seg.toString() in excluded }
                 }.map { root.relativize(it).toString().replace('\\', '/') }.toList()
             }
+            val scoreByRel = HashMap<String, Int>(allPy.size)
+            for (rel in allPy) {
+                val fileName = rel.substringAfterLast('/')
+                val lower = rel.lowercase()
+                val priorityIdx = PRIORITY_NAMES.indexOf(fileName)
+                val isTest = lower.contains("test_") || lower.contains("_test.py") || lower.startsWith("test/") || lower.startsWith("tests/")
+                val text = runCatching {
+                    val p = root.resolve(rel)
+                    if (Files.size(p) <= 256 * 1024) p.readText() else ""
+                }.getOrDefault("")
+                val hasRelativeImport = RELATIVE_IMPORT_REGEX.containsMatchIn(text)
+                val hasMainGuard = text.contains("__name__") && text.contains("__main__")
+                val hasShebang = text.startsWith("#!") && text.lineSequence().firstOrNull().orEmpty().contains("python")
+                val baseScore = when {
+                    fileName == "setup.py" || fileName == "conftest.py" -> 500
+                    isTest -> 400
+                    priorityIdx >= 0 && hasMainGuard -> priorityIdx
+                    hasMainGuard -> 20
+                    hasShebang -> 35
+                    priorityIdx >= 0 -> 40 + priorityIdx
+                    else -> 100
+                }
+                // Package submodules with top-level relative imports (`from .foo import bar`) cannot be executed
+                // directly as `python3 path/to/module.py` (`ImportError: attempted relative import with no known
+                // parent package`), so always prefer standalone runnable scripts over internal library modules.
+                scoreByRel[rel] = if (hasRelativeImport) baseScore + 1000 else baseScore
+            }
             allPy.sortedWith(
-                compareBy<String> { rel ->
-                    val fileName = rel.substringAfterLast('/')
-                    val lower = rel.lowercase()
-                    val priorityIdx = PRIORITY_NAMES.indexOf(fileName)
-                    when {
-                        priorityIdx >= 0 -> priorityIdx
-                        fileName == "setup.py" || fileName == "conftest.py" -> 500
-                        lower.contains("test_") || lower.contains("_test.py") || lower.startsWith("test/") || lower.startsWith("tests/") -> 400
-                        else -> 100
-                    }
-                }.thenBy { it.count { c -> c == '/' } }.thenBy { it },
+                compareBy<String> { scoreByRel[it] ?: 100 }
+                    .thenBy { it.count { c -> c == '/' } }
+                    .thenBy { it },
             ).take(12)
         }.getOrDefault(emptyList())
     }

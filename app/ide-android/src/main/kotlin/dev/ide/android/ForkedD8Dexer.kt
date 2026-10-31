@@ -253,11 +253,10 @@ class ForkedD8Dexer(
         jar: Path, classpath: List<Path>, androidJar: Path, minApi: Int, release: Boolean, outDir: Path,
         threads: Int, desugaredLibConfig: Path?,
     ): ToolResult {
-        // In-process, NOT forked. A per-library archive is small and is not the memory peak, and running it in
-        // process lets it reuse the shared android.jar/classpath providers (parsed once for the whole build)
-        // rather than re-opening + re-indexing android.jar in a new VM for each of the dozens of libraries. The
-        // forked VM stays reserved for the dex merge (the real peak, see [dex]).
-        return fallback.dexArchive(listOf(jar), classpath, androidJar, minApi, release, outDir, threads, desugaredLibConfig)
+        // Small libraries stay in-process to reuse the shared android.jar/classpath providers, while
+        // oversized libraries (e.g. material-icons-extended at 35+ MB / 11k classes) delegate through
+        // [dexArchive]'s size threshold so they fork into the large child heap instead of OOMing a 512 MB app VM.
+        return dexArchive(listOf(jar), classpath, androidJar, minApi, release, outDir, threads, desugaredLibConfig)
     }
 
     private companion object {
@@ -269,7 +268,7 @@ class ForkedD8Dexer(
 
         // Default archive-fork threshold (MB) when the setting is unset: archive inputs at/above this size fork
         // (clean-build project jar / big library); smaller ones (the incremental case) stay in-process.
-        const val ARCHIVE_FORK_DEFAULT_MB = 8
+        const val ARCHIVE_FORK_DEFAULT_MB = 2
 
         // A forked VM (one-pass dexing OR the dex merge) is worth it only when the device has this multiple of
         // the fork's heap actually available, so D8's working set stays resident instead of thrashing / being

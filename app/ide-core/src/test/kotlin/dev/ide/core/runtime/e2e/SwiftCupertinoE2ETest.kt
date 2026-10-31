@@ -250,7 +250,7 @@ class SwiftCupertinoE2ETest {
     private fun findHostSwiftc(): String? {
         val fromEnv = System.getenv("SWIFT")
         if (fromEnv != null && Files.isRegularFile(Path.of(fromEnv))) return fromEnv
-        for (p in listOf("/usr/bin/swiftc", "/Users/mac/.swiftly/bin/swiftc")) {
+        for (p in listOf("/Users/mac/.swiftly/bin/swiftc", "/usr/bin/swiftc")) {
             if (Files.isRegularFile(Path.of(p))) return p
         }
         return null
@@ -344,18 +344,23 @@ class SwiftCupertinoE2ETest {
                 )
 
                 exe = work.resolve("CalculatorApp")
-                val compileCmd = listOf(
-                    swiftc,
-                    "-parse-as-library",
-                    "-I$sdk",
-                    "-L$sdk",
-                    "-lSwiftUI",
-                    bridgeFile.toString(),
-                    brainFile.toString(),
-                    viewFile.toString(),
-                    "-o",
-                    exe.toString(),
-                )
+                val cltSdk = Path.of("/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk")
+                val compileCmd = buildList {
+                    add(swiftc)
+                    add("-parse-as-library")
+                    if (swiftc.contains(".swiftly") && Files.isDirectory(cltSdk)) {
+                        add("-sdk")
+                        add(cltSdk.toString())
+                    }
+                    add("-I$sdk")
+                    add("-L$sdk")
+                    add("-lSwiftUI")
+                    add(bridgeFile.toString())
+                    add(brainFile.toString())
+                    add(viewFile.toString())
+                    add("-o")
+                    add(exe.toString())
+                }
                 val build = ProcessBuilder(compileCmd)
                     .directory(work.toFile())
                     .redirectErrorStream(true)

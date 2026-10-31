@@ -397,6 +397,7 @@ class AndroidRuntimeHost(context: Context) : RuntimeHost {
                     "tkinter", "_tkinter", "PyQt5", "PyQt6", "PySide6", "webview",
                     "torch", "torchvision", "torchaudio", "numpy", "scipy", "pandas",
                     "pydantic", "click", "typer", "rich", "yaml", "PIL", "cv2",
+                    "mcp", "readchar", "json5", "packaging", "pathspec", "requests", "httpx", "dotenv",
                 )
                 def find_spec(self, fullname, path, target=None):
                     top = fullname.split(".")[0]
