@@ -170,22 +170,53 @@ import dev.ide.ui.screens.AgentStatusDot
 import dev.ide.ui.screens.AgentChip
 import dev.ide.ui.screens.AgentIconCircle
 import dev.ide.ui.screens.AgentPrimaryButton
+import androidx.compose.foundation.layout.BoxWithConstraints
 import dev.ide.ui.theme.AgentUi
 import dev.ide.ui.theme.Ca
 import dev.ide.ui.theme.CaMotion
 import dev.ide.ui.theme.Ide
+import fragments.agentui.AgentCapabilities
+import fragments.agentui.AgentChatPanel
+import fragments.agentui.AgentId
+import fragments.agentui.AgentMarkdownRenderer
+import fragments.agentui.AgentParticipant
+import fragments.agentui.AgentRun
+import fragments.agentui.ChatActionPurpose
+import fragments.agentui.ChatQuickAction
+import fragments.agentui.ChatSlashAction
+import fragments.agentui.ChatTimelinePhase
+import fragments.agentui.ChatToolTimelineCall
+import fragments.agentui.CommandResult
+import fragments.agentui.ConversationAttachment
+import fragments.agentui.ConversationCommand
+import fragments.agentui.ConversationEvent
+import fragments.agentui.ConversationHandle
+import fragments.agentui.ConversationId
+import fragments.agentui.ConversationPart
+import fragments.agentui.ConversationSnapshot
+import fragments.agentui.ConversationTurn
+import fragments.agentui.File
+import fragments.agentui.MessagePartRegistry
+import fragments.agentui.RunId
+import fragments.agentui.RunState
+import fragments.agentui.TurnId
+import fragments.agentui.rememberIdeAgentUiPalette
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
 
 /**
- * The AI agent chat drawer: a streamed transcript over the tool-using agent. Renders user/assistant messages,
- * streaming reasoning, per-tool-call status, and a composer; a right-edge drawer on desktop. See
- * docs/agentic-coding.md.
+ * The AI agent chat drawer, powered by `io.fragments:agent-ui-compose` ([AgentChatPanel]).
  *
- * The panel is opaque: it paints its own `surface` rather than letting whatever hosts it show through, and
- * nothing inside composites with alpha. Text over a half-transparent fill has no predictable contrast — what
- * is behind it decides — and that is not a property you can check once, because the thing behind is the
- * editor, whatever file happens to be open.
+ * Renders user/assistant turns, streaming reasoning, tool timelines, interactive file diffs, a rich
+ * composer, and two persistent action rows in every full-screen and half-screen chat window:
+ * 1. **Where you want to go** ([ChatActionPurpose.Navigation]): e.g., `"Open <Most Recent Project>"`,
+ *    `"All projects"`, `"Build & Run output"`, `"Agent providers"`.
+ * 2. **What you want done** ([ChatActionPurpose.Task]): e.g., `"Rebuild project"`,
+ *    `"Submit to the Google Play Store for inclusion"`, `"Fix build & diagnostics"`.
  */
 @Composable
 fun ChatDrawer(
@@ -194,6 +225,7 @@ fun ChatDrawer(
     modifier: Modifier = Modifier,
     fileActions: FileActions = FileActions.None,
     activeFilePath: String? = null,
+    openScreen: (String) -> Unit = {},
 ) {
     val chat by backend.agent.chatState.collectAsState()
     val models by backend.agent.models.collectAsState()
@@ -202,15 +234,18 @@ fun ChatDrawer(
     var showProviders by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
     var modelMenuOpen by remember { mutableStateOf(false) }
+    var attachMenuOpen by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val imageFailed = stringResource(Res.string.chat_image_failed)
+    val placeholderText = stringResource(if (cfg.configured) Res.string.chat_placeholder else Res.string.chat_need_key)
+    val palette = rememberIdeAgentUiPalette()
 
     // Fetch the provider's live model list when the drawer opens or the provider changes.
     LaunchedEffect(cfg.selectedProvider) { backend.agent.refreshModels() }
 
-    fun submit() {
-        val text = input.text.trim()
+    fun submitText(raw: String) {
+        val text = raw.trim()
         if (text.isEmpty()) return
         if (text.startsWith("/")) {
             val name = text.removePrefix("/").substringBefore(' ').lowercase()
@@ -251,9 +286,233 @@ fun ChatDrawer(
         hasClipboardImage = fileActions::hasClipboardImage,
     )
 
-    Box(modifier.fillMaxSize().background(AgentUi.chrome.bg)) {
+    val headerModels = models.ifEmpty { cfg.providers.firstOrNull { it.id == cfg.selectedProvider }?.models ?: emptyList() }
+    val activeProvider = cfg.providers.firstOrNull { it.id == cfg.selectedProvider }
+    val currentModelId = cfg.model.ifBlank { activeProvider?.defaultModel ?: "" }
+    val activeModelName = headerModels.firstOrNull { it.id == currentModelId }?.displayName
+        ?: currentModelId.ifBlank { activeProvider?.displayName ?: "AI Agent" }
+
+    val handle = remember(backend) {
+        IdeAgentConversationHandle(
+            conversationId = ConversationId("ide-agent-chat"),
+            onDraftChange = { next -> input = TextFieldValue(next, TextRange(next.length)) },
+            onSend = { text -> submitText(text) },
+            onStop = { backend.agent.stop() },
+            onRemoveAttachment = { id -> id.toIntOrNull()?.let { backend.agent.detach(it) } },
+            onAddFiles = { files ->
+                files.forEach { file ->
+                    backend.agent.attach(UiAgentAttachment(UiAgentAttachmentKind.FILE, file.name, path = file.path))
+                }
+            },
+        )
+    }
+    handle.sync(
+        chat = chat,
+        configured = cfg.configured,
+        canAttach = imageSources.any || activeFilePath != null,
+        agentName = activeModelName,
+        draft = input.text,
+    )
+
+    val rendererRegistry = remember(backend, chat.busy) {
+        MessagePartRegistry().apply {
+            register("ide.error") { part ->
+                val text = part.fields["text"].orEmpty()
+                val canRetry = part.fields["canRetry"] == "true"
+                val suggestedModel = part.fields["suggestedModel"]
+                ErrorMessage(
+                    text = text,
+                    onRetry = if (canRetry) ({ backend.agent.retry() }) else null,
+                    suggestedModel = suggestedModel,
+                    onUseModel = { model ->
+                        backend.agent.switchModelAndRetry(model)
+                        cfg = backend.agent.config()
+                    },
+                )
+            }
+            register("ide.file.changes") { part ->
+                val msgId = part.fields["messageId"]?.toLongOrNull()
+                val stepIdx = part.fields["stepIdx"]?.toIntOrNull()
+                val msg = chat.messages.firstOrNull { it.id == msgId }
+                val step = msg?.let { stepsOf(it).getOrNull(stepIdx ?: -1) } as? Step.Tools
+                val changes = step?.calls?.flatMap { it.changes }.orEmpty()
+                if (changes.isNotEmpty() && msg != null) {
+                    DisableSelection {
+                        FileChangesList(
+                            changes = changes,
+                            onUndo = if (!chat.busy && msg.canUndo) ({ backend.agent.undoTurn(msg.id) }) else null,
+                        )
+                    }
+                }
+            }
+            register("ide.user.meta") { part ->
+                val msgId = part.fields["messageId"]?.toLongOrNull()
+                val canUndo = part.fields["canUndo"] == "true"
+                val undone = part.fields["undone"] == "true"
+                val text = part.fields["text"].orEmpty()
+                DisableSelection {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (undone) {
+                            Text(
+                                stringResource(Res.string.chat_undone),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AgentUi.chrome.textFaint,
+                            )
+                        }
+                        if (canUndo && msgId != null) {
+                            TextButton(
+                                onClick = { backend.agent.undoTurn(msgId) },
+                                colors = ButtonDefaults.textButtonColors(contentColor = AgentUi.chrome.danger),
+                            ) {
+                                Icon(CaIcons.undo, null, Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(stringResource(Res.string.chat_undo), style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                        if (text.isNotBlank()) CopyButton(text)
+                    }
+                }
+            }
+            register("ide.assistant.footer") { part ->
+                val msgId = part.fields["messageId"]?.toLongOrNull()
+                val msg = chat.messages.firstOrNull { it.id == msgId }
+                if (msg != null && !msg.streaming && (msg.text.isNotBlank() || msg.usage != null)) {
+                    DisableSelection {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            if (msg.text.isNotBlank()) CopyButton(msg.text)
+                            msg.usage?.let { UsageFooter(it) }
+                        }
+                    }
+                }
+            }
+            register("ide.wait") { part ->
+                val untilMs = part.fields["untilMs"]?.toLongOrNull()
+                val reason = part.fields["reason"].orEmpty()
+                if (untilMs != null) WaitRow(untilMs, reason)
+            }
+            register("ide.todos") {
+                if (chat.todos.isNotEmpty()) TodoCard(chat.todos)
+            }
+        }
+    }
+
+    val allProjects = remember(backend.project.rootPath) {
+        backend.projects.projects().sortedByDescending { it.lastOpened }
+    }
+    val activeProjectName = backend.project.name.trim()
+    val mostRecentProject = allProjects.firstOrNull { it.rootPath != backend.project.rootPath }
+        ?: allProjects.firstOrNull()
+
+    val navigationActions = remember(allProjects, activeProjectName, backend) {
+        buildList {
+            if (mostRecentProject != null) {
+                add(
+                    ChatQuickAction(
+                        id = "open-recent-project",
+                        label = "Open ${mostRecentProject.name}",
+                        purpose = ChatActionPurpose.Navigation,
+                        primary = true,
+                        onClick = {
+                            scope.launch {
+                                backend.projects.openProject(mostRecentProject.rootPath)
+                            }
+                            openScreen("ide.editor")
+                        },
+                    ),
+                )
+            } else if (activeProjectName.isNotEmpty()) {
+                add(
+                    ChatQuickAction(
+                        id = "open-active-project",
+                        label = "Open $activeProjectName",
+                        purpose = ChatActionPurpose.Navigation,
+                        primary = true,
+                        onClick = { openScreen("ide.editor") },
+                    ),
+                )
+            }
+            add(
+                ChatQuickAction(
+                    id = "go-all-projects",
+                    label = "All projects",
+                    purpose = ChatActionPurpose.Navigation,
+                    primary = mostRecentProject == null && activeProjectName.isEmpty(),
+                    onClick = { openScreen("home.projects") },
+                ),
+            )
+            add(
+                ChatQuickAction(
+                    id = "go-run-output",
+                    label = "Build & Run output",
+                    purpose = ChatActionPurpose.Navigation,
+                    onClick = { openScreen("ide.run") },
+                ),
+            )
+            add(
+                ChatQuickAction(
+                    id = "go-agent-providers",
+                    label = "Agent providers",
+                    purpose = ChatActionPurpose.Navigation,
+                    onClick = { showProviders = true },
+                ),
+            )
+        }
+    }
+
+    val taskActions = remember(backend, activeFilePath) {
+        buildList {
+            add(
+                ChatQuickAction(
+                    id = "rebuild-project",
+                    label = "Rebuild project",
+                    purpose = ChatActionPurpose.Task,
+                    primary = true,
+                    onClick = {
+                        if (backend.build.supported()) {
+                            backend.build.runBuild()
+                            openScreen("ide.run")
+                        } else {
+                            backend.agent.send("Rebuild the project and verify all targets compile cleanly.")
+                        }
+                    },
+                ),
+            )
+            add(
+                ChatQuickAction(
+                    id = "submit-google-play-store",
+                    label = "Submit to the Google Play Store for inclusion",
+                    purpose = ChatActionPurpose.Task,
+                    onClick = { openScreen("store.submit") },
+                ),
+            )
+            add(
+                ChatQuickAction(
+                    id = "fix-build-diagnostics",
+                    label = "Fix build & diagnostics",
+                    purpose = ChatActionPurpose.Task,
+                    onClick = {
+                        backend.agent.send("Inspect current build errors and diagnostics in this project and fix them.")
+                    },
+                ),
+            )
+        }
+    }
+
+    val slashActions = remember(cfg) {
+        backend.agent.commands().map { cmd ->
+            ChatSlashAction(id = cmd.name, label = "/${cmd.name}", description = cmd.description)
+        } + listOf(
+            ChatSlashAction(id = "history", label = "/history", description = "Open saved conversations"),
+            ChatSlashAction(id = "model", label = "/model", description = "Switch active AI model"),
+        )
+    }
+
+    BoxWithConstraints(modifier.fillMaxSize().background(AgentUi.chrome.bg)) {
+        val isCompactWindow = maxHeight < 500.dp
         Column(Modifier.fillMaxSize()) {
-            val headerModels = models.ifEmpty { cfg.providers.firstOrNull { it.id == cfg.selectedProvider }?.models ?: emptyList() }
             val onPickModel: (String, String) -> Unit = { providerId, modelId ->
                 backend.agent.selectProvider(providerId)
                 backend.agent.setModel(modelId)
@@ -264,8 +523,6 @@ fun ChatDrawer(
                 backend.agent.setPermissionMode(nextMode(cfg.mode))
                 cfg = backend.agent.config()
             }
-            // In a tool window the host header carries the title and the hide button; the model picker, the mode
-            // chip and the menu go into it rather than a second header row.
             val hosted = ToolWindowHeaderActions(
                 leading = {
                     ModelPicker(
@@ -304,56 +561,101 @@ fun ChatDrawer(
                     )
                 }
             }
+            notice?.let { message ->
+                LaunchedEffect(message) { delay(3000); notice = null }
+                Text(
+                    message,
+                    color = AgentUi.chrome.danger,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                )
+            }
+            Suggestions(
+                backend = backend,
+                input = input,
+                onPick = { picked ->
+                    input = picked
+                    handle.setDraft(IdeAgentConversationHandle.AGENT_ID, picked.text)
+                },
+            )
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (chat.messages.isEmpty()) {
-                    EmptyState(configured = cfg.configured, onManage = { showProviders = true })
-                } else {
-                    Transcript(
-                        chat.messages,
-                        busy = chat.busy,
-                        onRetry = { backend.agent.retry() },
-                        onUndo = { backend.agent.undoTurn(it) },
-                        onUseModel = { backend.agent.switchModelAndRetry(it); cfg = backend.agent.config() },
+                AgentMarkdownRenderer(renderer = { md -> AssistantMarkdown(md) }) {
+                    AgentChatPanel(
+                        handle = handle,
+                        modifier = Modifier.fillMaxSize(),
+                        palette = palette,
+                        rendererRegistry = rendererRegistry,
+                        slashActions = slashActions,
+                        onSlashAction = { action, _ ->
+                            when (action.id) {
+                                "resume", "history" -> showHistory = true
+                                "model" -> modelMenuOpen = true
+                                else -> {
+                                    if (backend.agent.runCommand(action.id, "")) {
+                                        cfg = backend.agent.config()
+                                    } else {
+                                        val next = "${action.label} "
+                                        input = TextFieldValue(next, TextRange(next.length))
+                                    }
+                                }
+                            }
+                        },
+                        navigationActions = navigationActions,
+                        taskActions = taskActions,
+                        navigationActionsTitle = "Where you want to go",
+                        taskActionsTitle = "What you want done",
+                        compactActions = isCompactWindow,
+                        showHeader = false,
+                        placeholder = placeholderText,
+                        onRequestAttach = if (imageSources.any || activeFilePath != null) ({ attachMenuOpen = true }) else null,
+                        emptyState = {
+                            EmptyState(configured = cfg.configured, onManage = { showProviders = true })
+                        },
                     )
                 }
-            }
-            if (chat.todos.isNotEmpty() && (chat.busy || chat.todos.any { it.status != UiAgentTodoStatus.DONE })) {
-                TodoCard(chat.todos)
-            }
-            ChatChrome {
-                Column {
-                    notice?.let { message ->
-                        LaunchedEffect(message) { delay(3000); notice = null }
-                        Text(
-                            message,
-                            color = AgentUi.chrome.danger,
-                            style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
-                        )
+                if (attachMenuOpen) {
+                    Box(Modifier.align(Alignment.BottomStart).padding(start = 24.dp, bottom = 72.dp)) {
+                        CaDropdownMenu(expanded = attachMenuOpen, onDismissRequest = { attachMenuOpen = false }) {
+                            imageSources.pick?.let { pick ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(Res.string.chat_attach_image), style = MaterialTheme.typography.bodyMedium) },
+                                    leadingIcon = { Icon(CaIcons.image, null, Modifier.size(16.dp)) },
+                                    onClick = { attachMenuOpen = false; pick() },
+                                )
+                            }
+                            imageSources.camera?.let { camera ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(Res.string.chat_attach_photo), style = MaterialTheme.typography.bodyMedium) },
+                                    leadingIcon = { Icon(CaIcons.eye, null, Modifier.size(16.dp)) },
+                                    onClick = { attachMenuOpen = false; camera() },
+                                )
+                            }
+                            val paste = imageSources.paste
+                            if (paste != null && remember(attachMenuOpen) { imageSources.hasClipboardImage() }) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(Res.string.chat_paste_image), style = MaterialTheme.typography.bodyMedium) },
+                                    leadingIcon = { Icon(CaIcons.copy, null, Modifier.size(16.dp)) },
+                                    onClick = { attachMenuOpen = false; paste() },
+                                )
+                            }
+                            if (activeFilePath != null) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(Res.string.chat_attach_file), style = MaterialTheme.typography.bodyMedium) },
+                                    leadingIcon = { Icon(CaIcons.file, null, Modifier.size(16.dp)) },
+                                    onClick = {
+                                        attachMenuOpen = false
+                                        backend.agent.attach(
+                                            UiAgentAttachment(
+                                                UiAgentAttachmentKind.FILE,
+                                                activeFilePath.substringAfterLast('/'),
+                                                path = activeFilePath,
+                                            ),
+                                        )
+                                    },
+                                )
+                            }
+                        }
                     }
-                    Suggestions(
-                        backend = backend,
-                        input = input,
-                        onPick = { input = it },
-                    )
-                    AttachmentChips(
-                        chat.pendingAttachments,
-                        onRemove = { backend.agent.detach(it) },
-                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp),
-                    )
-                    Composer(
-                    value = input,
-                    configured = cfg.configured,
-                    busy = chat.busy,
-                    images = imageSources,
-                    activeFilePath = activeFilePath,
-                    onAttachFile = { path ->
-                        backend.agent.attach(UiAgentAttachment(UiAgentAttachmentKind.FILE, path.substringAfterLast('/'), path = path))
-                    },
-                    onValueChange = { input = it },
-                    onSend = ::submit,
-                    onStop = { backend.agent.stop() },
-                    )
                 }
             }
         }
@@ -371,6 +673,242 @@ fun ChatDrawer(
         }
     }
 }
+
+/**
+ * Bridges [IdeBackend.agent] (`UiAgentChatState`) into `io.fragments:agent-ui-compose`'s [ConversationHandle].
+ */
+private class IdeAgentConversationHandle(
+    override val conversationId: ConversationId,
+    private val onDraftChange: (String) -> Unit,
+    private val onSend: (String) -> Unit,
+    private val onStop: () -> Unit,
+    private val onRemoveAttachment: (String) -> Unit,
+    private val onAddFiles: (List<File>) -> Unit,
+) : ConversationHandle {
+    private val state = MutableStateFlow(ConversationSnapshot(conversationId = conversationId))
+    override val snapshots: StateFlow<ConversationSnapshot> = state
+    override val events: Flow<ConversationEvent> = emptyFlow()
+
+    override fun history(): List<ConversationEvent> = emptyList()
+
+    override fun setDraft(target: AgentId, value: String) {
+        onDraftChange(value)
+        state.value = state.value.copy(
+            drafts = state.value.drafts + (target to value),
+            revision = state.value.revision + 1,
+        )
+    }
+
+    override fun addAttachments(target: AgentId, files: List<File>) {
+        onAddFiles(files)
+    }
+
+    override fun removeAttachment(target: AgentId, attachmentId: String) {
+        onRemoveAttachment(attachmentId)
+    }
+
+    override suspend fun dispatch(command: ConversationCommand): CommandResult {
+        return when (command) {
+            is ConversationCommand.Send -> {
+                onDraftChange("")
+                onSend(command.text)
+                CommandResult.Accepted("send-${command.text.hashCode()}")
+            }
+            is ConversationCommand.Interrupt -> {
+                onStop()
+                CommandResult.Accepted("stop")
+            }
+            else -> CommandResult.Accepted("noop")
+        }
+    }
+
+    fun sync(
+        chat: dev.ide.ui.backend.UiAgentChatState,
+        configured: Boolean,
+        canAttach: Boolean,
+        agentName: String,
+        draft: String,
+    ) {
+        val participant = AgentParticipant(
+            id = AGENT_ID,
+            name = agentName,
+            capabilities = AgentCapabilities(
+                send = configured,
+                steer = false,
+                interrupt = true,
+                approve = true,
+                answerQuestion = true,
+                attachments = canAttach,
+            ),
+        )
+        val lastId = chat.messages.lastOrNull()?.id
+        val showTodos = chat.todos.isNotEmpty() && (chat.busy || chat.todos.any { it.status != UiAgentTodoStatus.DONE })
+        val turns = chat.messages.mapIndexed { msgIndex, msg ->
+            val runId = RunId("run-${msg.id}")
+            if (msg.role == UiAgentRole.USER) {
+                ConversationTurn(
+                    id = TurnId("turn-${msg.id}"),
+                    authorId = "user",
+                    agentId = AGENT_ID,
+                    runId = runId,
+                    parts = buildList {
+                        if (msg.text.isNotBlank()) {
+                            add(ConversationPart.Text("user-text-${msg.id}", msg.text))
+                        }
+                        msg.attachments.forEachIndexed { idx, att ->
+                            add(ConversationPart.Attachment("user-att-${msg.id}-$idx", att.name, 0L))
+                        }
+                        add(
+                            ConversationPart.Custom(
+                                id = "user-meta-${msg.id}",
+                                kind = "ide.user.meta",
+                                fields = mapOf(
+                                    "messageId" to msg.id.toString(),
+                                    "canUndo" to (!chat.busy && msg.canUndo).toString(),
+                                    "undone" to msg.undone.toString(),
+                                    "text" to msg.text,
+                                ),
+                            ),
+                        )
+                    },
+                )
+            } else if (msg.isError) {
+                ConversationTurn(
+                    id = TurnId("turn-${msg.id}"),
+                    authorId = "assistant",
+                    agentId = AGENT_ID,
+                    runId = runId,
+                    parts = buildList {
+                        add(
+                            ConversationPart.Custom(
+                                id = "error-${msg.id}",
+                                kind = "ide.error",
+                                fields = buildMap {
+                                    put("messageId", msg.id.toString())
+                                    put("text", msg.text)
+                                    put("canRetry", (msg.id == lastId && msg.canRetry).toString())
+                                    msg.suggestedModel?.takeIf { msg.id == lastId }?.let { put("suggestedModel", it) }
+                                },
+                            ),
+                        )
+                        if (showTodos && msgIndex == chat.messages.lastIndex) {
+                            add(ConversationPart.Custom("todos-${msg.id}", "ide.todos", emptyMap()))
+                        }
+                    },
+                )
+            } else {
+                val steps = stepsOf(msg)
+                val parts = buildList {
+                    steps.forEachIndexed { stepIdx, step ->
+                        val live = msg.streaming && stepIdx == steps.lastIndex
+                        when (step) {
+                            is Step.Thinking -> if (step.text.isNotBlank()) {
+                                add(ConversationPart.Reasoning("think-${msg.id}-$stepIdx", step.text))
+                            }
+                            is Step.Tools -> if (step.calls.isNotEmpty()) {
+                                add(
+                                    ConversationPart.ToolTimeline(
+                                        id = "tools-${msg.id}-$stepIdx",
+                                        calls = step.calls.map { call ->
+                                            ChatToolTimelineCall(
+                                                id = call.id,
+                                                name = call.title,
+                                                phase = when (call.status) {
+                                                    UiAgentToolStatus.RUNNING -> ChatTimelinePhase.Running
+                                                    UiAgentToolStatus.OK -> ChatTimelinePhase.Success
+                                                    UiAgentToolStatus.ERROR -> ChatTimelinePhase.Error
+                                                    UiAgentToolStatus.DENIED -> ChatTimelinePhase.Denied
+                                                },
+                                                output = call.detail.takeIf { it.isNotBlank() },
+                                                summary = call.detail,
+                                            )
+                                        },
+                                        active = live || step.calls.any { it.status == UiAgentToolStatus.RUNNING },
+                                    ),
+                                )
+                                if (step.calls.any { it.changes.isNotEmpty() }) {
+                                    add(
+                                        ConversationPart.Custom(
+                                            id = "changes-${msg.id}-$stepIdx",
+                                            kind = "ide.file.changes",
+                                            fields = mapOf(
+                                                "messageId" to msg.id.toString(),
+                                                "stepIdx" to stepIdx.toString(),
+                                            ),
+                                        ),
+                                    )
+                                }
+                            }
+                            is Step.Text -> if (step.text.isNotBlank()) {
+                                add(ConversationPart.Text("text-${msg.id}-$stepIdx", step.text, streaming = live))
+                            }
+                        }
+                    }
+                    msg.waitUntilMs?.let { untilMs ->
+                        add(
+                            ConversationPart.Custom(
+                                id = "wait-${msg.id}",
+                                kind = "ide.wait",
+                                fields = mapOf(
+                                    "untilMs" to untilMs.toString(),
+                                    "reason" to (msg.waitReason ?: ""),
+                                ),
+                            ),
+                        )
+                    }
+                    val lastStep = steps.lastOrNull()
+                    val idle = lastStep == null ||
+                        (lastStep is Step.Tools && lastStep.calls.none { it.status == UiAgentToolStatus.RUNNING })
+                    if (msg.streaming && msg.waitUntilMs == null && idle) {
+                        add(ConversationPart.Reasoning("think-idle-${msg.id}", "Thinking…"))
+                    }
+                    if (!msg.streaming && (msg.text.isNotBlank() || msg.usage != null)) {
+                        add(
+                            ConversationPart.Custom(
+                                id = "footer-${msg.id}",
+                                kind = "ide.assistant.footer",
+                                fields = mapOf("messageId" to msg.id.toString()),
+                            ),
+                        )
+                    }
+                    if (showTodos && msgIndex == chat.messages.lastIndex) {
+                        add(ConversationPart.Custom("todos-${msg.id}", "ide.todos", emptyMap()))
+                    }
+                }
+                ConversationTurn(
+                    id = TurnId("turn-${msg.id}"),
+                    authorId = "assistant",
+                    agentId = AGENT_ID,
+                    runId = runId,
+                    parts = parts,
+                )
+            }
+        }
+        val activeRunId = RunId("run-${lastId ?: 0L}")
+        val runs = if (chat.busy) {
+            listOf(AgentRun(activeRunId, AGENT_ID, RunState.Working))
+        } else {
+            listOf(AgentRun(activeRunId, AGENT_ID, RunState.Complete))
+        }
+        val pendingAttachments = chat.pendingAttachments.mapIndexed { idx, att ->
+            ConversationAttachment(id = idx.toString(), file = File(att.path ?: att.name))
+        }
+        state.value = ConversationSnapshot(
+            conversationId = conversationId,
+            participants = listOf(participant),
+            turns = turns,
+            runs = runs,
+            drafts = mapOf(AGENT_ID to draft),
+            attachments = mapOf(AGENT_ID to pendingAttachments),
+            revision = state.value.revision + 1,
+        )
+    }
+
+    companion object {
+        val AGENT_ID = AgentId("ide-agent")
+    }
+}
+
 
 private val IMAGE_EXTENSIONS = listOf("png", "jpg", "jpeg", "webp", "gif")
 
@@ -488,35 +1026,82 @@ private fun ChatHeader(
     onNew: () -> Unit,
     onClose: (() -> Unit)?,
 ) {
-    Row(
-        Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        SparkleBadge(size = 24)
-        Column(Modifier.weight(1f)) {
-            Text(
-                stringResource(Res.string.chat_title),
-                color = AgentUi.chrome.text,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            ModelPicker(
-                cfg = cfg,
-                models = models,
-                open = modelMenuOpen,
-                onOpen = onModelMenu,
-                onPickModel = onPickModel,
-                onManageProviders = onManage,
-            )
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val isMobileHeader = maxWidth < 520.dp
+        if (isMobileHeader) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    SparkleBadge(size = 24)
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            stringResource(Res.string.chat_title),
+                            color = AgentUi.chrome.text,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        ModelPicker(
+                            cfg = cfg,
+                            models = models,
+                            open = modelMenuOpen,
+                            onOpen = onModelMenu,
+                            onPickModel = onPickModel,
+                            onManageProviders = onManage,
+                        )
+                    }
+                    IconButtonCa(CaIcons.gear, stringResource(Res.string.chat_manage_keys), onManage, iconSize = 16, boxSize = 36)
+                    ChatMenu(onNew = onNew, onHistory = onHistory, onManage = onManage)
+                    if (onClose != null) HideToolWindowButton(onClose)
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 30.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    EffortChip(cfg.effort, onPickEffort)
+                    ModeChip(cfg.mode, onCycleMode)
+                }
+            }
+        } else {
+            Row(
+                Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                SparkleBadge(size = 24)
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(Res.string.chat_title),
+                        color = AgentUi.chrome.text,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    ModelPicker(
+                        cfg = cfg,
+                        models = models,
+                        open = modelMenuOpen,
+                        onOpen = onModelMenu,
+                        onPickModel = onPickModel,
+                        onManageProviders = onManage,
+                    )
+                }
+                EffortChip(cfg.effort, onPickEffort)
+                ModeChip(cfg.mode, onCycleMode)
+                IconButtonCa(CaIcons.gear, stringResource(Res.string.chat_manage_keys), onManage, iconSize = 16, boxSize = 36)
+                ChatMenu(onNew = onNew, onHistory = onHistory, onManage = onManage)
+                if (onClose != null) HideToolWindowButton(onClose)
+            }
         }
-        EffortChip(cfg.effort, onPickEffort)
-        ModeChip(cfg.mode, onCycleMode)
-        IconButtonCa(CaIcons.gear, stringResource(Res.string.chat_manage_keys), onManage, iconSize = 16, boxSize = 36)
-        ChatMenu(onNew = onNew, onHistory = onHistory, onManage = onManage)
-        if (onClose != null) HideToolWindowButton(onClose)
     }
 }
 

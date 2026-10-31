@@ -54,9 +54,31 @@ import dev.ide.ui.icons.CaIcons
 import dev.ide.ui.icons.CaSymbols
 import dev.ide.ui.theme.AgentUi
 import dev.ide.ui.theme.Symbol
+import fragments.agentui.AgentDualActionRows
+import fragments.agentui.ChatActionPurpose
+import fragments.agentui.ChatInput
+import fragments.agentui.ChatInputStatus
+import fragments.agentui.ChatQuickAction
+import fragments.agentui.rememberIdeAgentUiPalette
 
 /** Screen id of the redesigned Agent settings destination (Settings hub → Agent, Home → agent icon). */
 const val SCREEN_AGENT_SETTINGS: String = "agent.settings"
+
+/** Distinct text color for each project operating system / runtime stack (plain colored text, no pill badge). */
+fun projectStackColor(
+    isAndroid: Boolean = false,
+    isNode: Boolean = false,
+    isPython: Boolean = false,
+    isSwift: Boolean = false,
+    compatibility: Boolean = false,
+): Color = when {
+    isSwift -> Color(0xFFFB923C)      // Swift orange
+    isPython -> Color(0xFFFACC15)     // Python gold
+    isNode -> Color(0xFF4ADE80)       // Node.js green
+    isAndroid -> Color(0xFF3DDC84)    // Android green
+    compatibility -> Color(0xFFA78BFA) // Gradle/Kotlin purple
+    else -> Color(0xFF38BDF8)         // Sky blue
+}
 
 /** One row in the Home "Continue" list. */
 data class AgentContinueItem(
@@ -66,39 +88,148 @@ data class AgentContinueItem(
     val time: String,
     val letter: String,
     val needsAttention: Boolean = false,
+    val stackLabel: String = "",
+    val stackColor: Color = Color.Unspecified,
+    val modulesLabel: String = "",
+    val tags: List<String> = emptyList(),
+    val avatar: ImageBitmap? = null,
+    val shimmerSubtitle: Boolean = false,
 )
 
 /**
- * Agent-first Home: "What should we build?" prompt card, status chips, Continue list.
- * Matches the redesign Home screen for both iOS and Android.
+ * Agent-first Home: "What should we build?" prompt card powered by `io.fragments:agent-ui-compose`
+ * ([ChatInput] + [AgentDualActionRows]), status chips, and Continue list.
+ *
+ * Always renders the two persistent action rows:
+ * 1. **Where you want to go** ([ChatActionPurpose.Navigation]): `"Open <Most Recent Project>"`, `"All projects"`, `"New project"`, `"Import or clone"`.
+ * 2. **What you want done** ([ChatActionPurpose.Task]): `"Rebuild project"`, `"Submit to the Google Play Store for inclusion"`, `"Scaffold a new app with AI"`.
  */
 @Composable
 fun AgentHomeContent(
-    appName: String = "[APP NAME]",
+    appName: String = "building",
     prompt: String,
     onPromptChange: (String) -> Unit,
     onStart: () -> Unit,
     onOpenAgentSettings: () -> Unit = {},
+    onOpenSettings: (() -> Unit)? = null,
     onOpenAccount: () -> Unit = {},
     onNewProject: () -> Unit = {},
     onImportOrClone: () -> Unit = {},
-    onDeviceLabel: String = "On-device",
+    onDeviceLabel: String = "Configure AI",
+    providerConfigured: Boolean = false,
     continueItems: List<AgentContinueItem> = emptyList(),
     allProjectsLabel: String = "All projects",
     onOpenItem: (AgentContinueItem) -> Unit = {},
     onSeeAllProjects: () -> Unit = {},
+    onRebuildProject: (() -> Unit)? = null,
+    onSubmitToStore: (() -> Unit)? = null,
+    navigationActions: List<ChatQuickAction> = emptyList(),
+    taskActions: List<ChatQuickAction> = emptyList(),
     modifier: Modifier = Modifier,
-    agentIcon: ImageVector = CaIcons.arrowRight,
-    accountIcon: ImageVector = CaIcons.close,
+    agentIcon: ImageVector = CaIcons.sparkle,
+    settingsIcon: ImageVector = CaIcons.gear,
+    accountIcon: ImageVector = CaIcons.account,
     trendingWidgetSlot: (@Composable () -> Unit)? = null,
 ) {
+    val palette = rememberIdeAgentUiPalette()
+    val mostRecent = continueItems.firstOrNull()
+    val resolvedNavigationActions = remember(navigationActions, continueItems) {
+        navigationActions.ifEmpty {
+            buildList {
+                if (mostRecent != null) {
+                    add(
+                        ChatQuickAction(
+                            id = "open-recent-project",
+                            label = "Open ${mostRecent.title}",
+                            purpose = ChatActionPurpose.Navigation,
+                            primary = true,
+                            onClick = { onOpenItem(mostRecent) },
+                        ),
+                    )
+                }
+                add(
+                    ChatQuickAction(
+                        id = "go-all-projects",
+                        label = allProjectsLabel,
+                        purpose = ChatActionPurpose.Navigation,
+                        primary = mostRecent == null,
+                        onClick = onSeeAllProjects,
+                    ),
+                )
+                add(
+                    ChatQuickAction(
+                        id = "go-new-project",
+                        label = "New project",
+                        purpose = ChatActionPurpose.Navigation,
+                        onClick = onNewProject,
+                    ),
+                )
+                add(
+                    ChatQuickAction(
+                        id = "go-import-clone",
+                        label = "Import or clone",
+                        purpose = ChatActionPurpose.Navigation,
+                        onClick = onImportOrClone,
+                    ),
+                )
+            }
+        }
+    }
+    val resolvedTaskActions = remember(taskActions, mostRecent, onRebuildProject, onSubmitToStore) {
+        taskActions.ifEmpty {
+            buildList {
+                add(
+                    ChatQuickAction(
+                        id = "rebuild-project",
+                        label = "Rebuild project",
+                        purpose = ChatActionPurpose.Task,
+                        primary = true,
+                        onClick = {
+                            if (onRebuildProject != null) {
+                                onRebuildProject()
+                            } else if (mostRecent != null) {
+                                onOpenItem(mostRecent)
+                            } else {
+                                onNewProject()
+                            }
+                        },
+                    ),
+                )
+                add(
+                    ChatQuickAction(
+                        id = "submit-google-play-store",
+                        label = "Submit to the Google Play Store for inclusion",
+                        purpose = ChatActionPurpose.Task,
+                        onClick = {
+                            if (onSubmitToStore != null) {
+                                onSubmitToStore()
+                            } else if (mostRecent != null) {
+                                onOpenItem(mostRecent)
+                            } else {
+                                onSeeAllProjects()
+                            }
+                        },
+                    ),
+                )
+                add(
+                    ChatQuickAction(
+                        id = "scaffold-app-ai",
+                        label = "Scaffold a new app with AI",
+                        purpose = ChatActionPurpose.Task,
+                        onClick = onStart,
+                    ),
+                )
+            }
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(AgentUi.chrome.bg)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(28.dp),
+        verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -111,10 +242,13 @@ fun AgentHomeContent(
                 modifier = Modifier.weight(1f),
             )
             AgentIconCircle(agentIcon, "Agent settings", onOpenAgentSettings, Modifier.size(44.dp))
+            if (onOpenSettings != null) {
+                AgentIconCircle(settingsIcon, "Settings", onOpenSettings, Modifier.size(44.dp))
+            }
             AgentIconCircle(accountIcon, "Account", onOpenAccount, Modifier.size(44.dp))
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(
                 "What should we build?",
                 fontSize = 32.sp,
@@ -122,57 +256,44 @@ fun AgentHomeContent(
                 lineHeight = 35.sp,
                 color = AgentUi.chrome.text,
             )
-            AgentSurface(
-                shape = RoundedCornerShape(20.dp),
-                contentPadding = PaddingValues(16.dp),
-                stroke = AgentUi.chrome.hairlineStrong,
+            AgentDualActionRows(
+                navigationActions = resolvedNavigationActions,
+                taskActions = resolvedTaskActions,
+                navigationTitle = "Where you want to go",
+                taskTitle = "What you want done",
+                palette = palette,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            ChatInput(
+                value = prompt,
+                onValueChange = onPromptChange,
+                onSend = {
+                    onPromptChange(it)
+                    onStart()
+                },
+                status = ChatInputStatus.Ready,
+                placeholder = "Describe an app, or a change to one of your projects…",
+                palette = palette,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                // Prompt field
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color.Transparent),
-                ) {
-                    if (prompt.isEmpty()) {
-                        Text(
-                            "Describe an app, or a change to one of your projects…",
-                            fontSize = 17.sp,
-                            color = AgentUi.chrome.textMuted,
-                        )
-                    }
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = prompt,
-                        onValueChange = onPromptChange,
-                        textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 17.sp,
-                            color = AgentUi.chrome.text,
-                        ),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(AgentUi.chrome.accent),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(72.dp),
-                    )
-                }
+                AgentChip("New project", selected = false, onClick = onNewProject)
+                Spacer(Modifier.weight(1f))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .height(36.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .clickable(onClick = onOpenAgentSettings)
+                        .padding(horizontal = 12.dp),
                 ) {
-                    AgentChip("New project", selected = false, onClick = onNewProject)
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier
-                            .height(36.dp)
-                            .clip(RoundedCornerShape(18.dp))
-                            .clickable(onClick = onOpenAgentSettings)
-                            .padding(horizontal = 12.dp),
-                    ) {
-                        AgentStatusDot(active = true, size = 7.dp)
-                        Text(onDeviceLabel, fontSize = 13.sp, color = AgentUi.chrome.textMuted)
-                    }
-                    Spacer(Modifier.weight(1f))
-                    AgentIconCircle(CaIcons.arrowRight, "Start", onStart, Modifier.size(44.dp), accent = true)
+                    AgentStatusDot(active = providerConfigured, size = 7.dp)
+                    Text(onDeviceLabel, fontSize = 13.sp, color = AgentUi.chrome.textMuted, maxLines = 1)
                 }
             }
         }
@@ -199,6 +320,12 @@ fun AgentHomeContent(
                     meta = item.meta,
                     time = item.time,
                     letter = item.letter,
+                    avatar = item.avatar,
+                    stackLabel = item.stackLabel,
+                    stackColor = item.stackColor,
+                    modulesLabel = item.modulesLabel,
+                    tags = item.tags,
+                    shimmerSubtitle = item.shimmerSubtitle,
                     selected = item.needsAttention,
                     statusColor = if (item.needsAttention) AgentUi.chrome.warn else AgentUi.chrome.accent,
                     onClick = { onOpenItem(item) },
@@ -469,7 +596,7 @@ private fun NewProjectSheetAction(glyph: Char, label: String, onClick: () -> Uni
 }
 
 /**
- * Agent settings: on-device vs cloud, model cards, permission radios, privacy toggles.
+ * Agent settings: provider selection, active & alternate model cards, permission radios, privacy toggles.
  */
 @Composable
 fun AgentSettingsContent(
@@ -489,6 +616,8 @@ fun AgentSettingsContent(
     onDownloadModel: () -> Unit = {},
     onBack: () -> Unit = {},
     modifier: Modifier = Modifier,
+    modeOptions: List<String> = listOf("Gateway", "Cloud API"),
+    secondaryActionLabel: String = "Use provider",
 ) {
     Column(
         modifier = modifier
@@ -509,7 +638,7 @@ fun AgentSettingsContent(
                 color = AgentUi.chrome.text,
             )
             AgentSegmented(
-                options = listOf("On this phone", "Cloud"),
+                options = modeOptions,
                 selectedIndex = modeIndex,
                 onSelect = onModeChange,
             )
@@ -540,7 +669,7 @@ fun AgentSettingsContent(
                             Text(secondaryModelTitle, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = AgentUi.chrome.text)
                             Text(secondaryModelMeta, fontSize = 12.sp, color = AgentUi.chrome.textFaint)
                         }
-                        AgentGhostButton("Download", onDownloadModel)
+                        AgentGhostButton(secondaryActionLabel, onDownloadModel)
                     }
                 }
             }
@@ -557,8 +686,8 @@ fun AgentSettingsContent(
             }
             Column {
                 AgentToggleRow(
-                    "Never send code off this phone",
-                    "Blocks cloud fallback and web tools",
+                    "Restrict external web tools",
+                    "Disables web search and external HTTP fetches",
                     offlineOnly,
                     onOfflineOnlyChange,
                 )
