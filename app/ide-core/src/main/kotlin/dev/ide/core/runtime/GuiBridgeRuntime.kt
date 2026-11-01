@@ -168,825 +168,46 @@ object GuiBridgeRuntime {
         "Android",
         "AudioToolbox",
         "AVFoundation",
+        "AVKit",
         "PhotosUI",
         "WebKit",
+        "SwiftData",
+        "CoreData",
+        "Charts",
+        "MapKit",
+        "CoreLocation",
+        "StoreKit",
+        "UserNotifications",
+        "AuthenticationServices",
+        "LocalAuthentication",
+        "UniformTypeIdentifiers",
+        "CryptoKit",
+        "Security",
+        "OSLog",
+        "os",
+        "Network",
+        "SafariServices",
+        "MessageUI",
+        "TipKit",
+        "WidgetKit",
+        "CoreHaptics",
+        "CoreImage",
+        "ImageIO",
+        "Vision",
+        "Accelerate",
+        "simd",
+        "CoreText",
+        "CoreServices",
+        "MobileCoreServices",
+        "Contacts",
+        "EventKit",
+        "QuickLook",
+        "PDFKit",
+        "MusicKit",
+        "DeveloperToolsSupport",
     )
 
-    internal val CUPERTINO_BRIDGE_PRELUDE = """
-        import SwiftUI
-        import Foundation
-        #if canImport(Darwin)
-        import Darwin
-        #elseif canImport(Android)
-        import Android
-        #elseif canImport(Glibc)
-        import Glibc
-        #endif
-
-        public typealias CGFloat = Double
-        public typealias ObservableObject = SwiftUI.ObservableObject
-        public typealias Published<Value> = SwiftUI.Published<Value>
-        public typealias ObservedObject<ObjectType: SwiftUI.ObservableObject> = SwiftUI.ObservedObject<ObjectType>
-        public typealias StateObject<ObjectType: SwiftUI.ObservableObject> = SwiftUI.StateObject<ObjectType>
-
-        public struct Group<Content: View>: View {
-            public let content: Content
-            public init(@ViewBuilder content: () -> Content) {
-                self.content = content()
-            }
-            public var body: some View { content }
-        }
-
-        public typealias LocalizedStringKey = String
-        public protocol ShapeStyle {}
-        extension Color: ShapeStyle {}
-        extension LinearGradient: ShapeStyle {}
-
-        public struct Locale: Sendable {
-            public static let current = Locale()
-            public init() {}
-            public func localizedString(forIdentifier id: String) -> String? { id }
-        }
-
-        public enum RoundedCornerStyle: Sendable { case circular, continuous }
-        public extension RoundedRectangle {
-            init(cornerRadius: Double, style: RoundedCornerStyle) {
-                self.init(cornerRadius: cornerRadius)
-            }
-            func trim(from: Double, to: Double) -> Self { self }
-            func stroke(_ content: Color, lineWidth: Double = 1) -> Self { self }
-        }
-        public extension Circle {
-            func stroke(_ content: Color, lineWidth: Double = 1) -> Self { self }
-        }
-        public extension Animation {
-            func repeatForever(autoreverses: Bool = true) -> Animation { self }
-            func repeatCount(_ repeatCount: Int, autoreverses: Bool = true) -> Animation { self }
-            func delay(_ delay: Double) -> Animation { self }
-            func speed(_ speed: Double) -> Animation { self }
-        }
-        public struct Material: ShapeStyle, Sendable {
-            public static let regularMaterial = Material()
-            public static let thinMaterial = Material()
-            public static let ultraThinMaterial = Material()
-            public static let thickMaterial = Material()
-        }
-        public extension ShapeStyle where Self == Material {
-            static var regularMaterial: Material { .regularMaterial }
-            static var thinMaterial: Material { .thinMaterial }
-            static var ultraThinMaterial: Material { .ultraThinMaterial }
-            static var thickMaterial: Material { .thickMaterial }
-        }
-        public enum ControlSize: Sendable { case mini, small, regular, large, extraLarge }
-        public extension _ControlStyle {
-            static let glassProminent = _ControlStyle.borderedProminent
-            static let glass = _ControlStyle.bordered
-        }
-        public struct RoundedBorderTextFieldStyle: Sendable {
-            public init() {}
-        }
-        public enum NavigationBarTitleDisplayMode: Sendable { case automatic, inline, large }
-        public enum TextInputAutocapitalization: Sendable { case never, words, sentences, characters }
-        public extension View {
-            func background<S: ShapeStyle, Sh>(_ style: S, in shape: Sh) -> Self { self }
-            func controlSize(_ size: ControlSize) -> Self { self }
-            func accessibilityHint(_ hint: String) -> Self { self }
-            func accessibilityValue(_ value: String) -> Self { self }
-            func layoutPriority(_ value: Double) -> Self { self }
-            func fixedSize(horizontal: Bool = true, vertical: Bool = true) -> Self { self }
-            func textFieldStyle<S>(_ style: S) -> Self { self }
-            func navigationBarTitleDisplayMode(_ mode: NavigationBarTitleDisplayMode) -> Self { self }
-            func autocorrectionDisabled(_ disabled: Bool = true) -> Self { self }
-            func textInputAutocapitalization(_ autocapitalization: TextInputAutocapitalization?) -> Self { self }
-            func onChange<V: Equatable>(of value: V, initial: Bool = false, _ action: @escaping (V, V) -> Void) -> Self { self }
-            func focused(_ condition: Binding<Bool>) -> Self { self }
-            func onHover(perform action: @escaping (Bool) -> Void) -> Self { self }
-            func allowsHitTesting(_ enabled: Bool) -> Self { self }
-            func labelsHidden() -> Self { self }
-        }
-
-        public struct NSColor: Sendable {
-            public enum ColorSpace: Sendable {
-                case sRGB, deviceRGB
-            }
-            public let r: Double, g: Double, b: Double, a: Double
-            public init(srgbRed: Double, green: Double, blue: Double, alpha: Double) {
-                self.r = srgbRed; self.g = green; self.b = blue; self.a = alpha
-            }
-            public init(_ color: Color) {
-                let v = color.argb
-                self.a = Double((v >> 24) & 0xFF) / 255.0
-                self.r = Double((v >> 16) & 0xFF) / 255.0
-                self.g = Double((v >> 8) & 0xFF) / 255.0
-                self.b = Double(v & 0xFF) / 255.0
-            }
-            public var redComponent: Double { r }
-            public var greenComponent: Double { g }
-            public var blueComponent: Double { b }
-            public var alphaComponent: Double { a }
-            public func usingColorSpace(_ space: ColorSpace) -> NSColor? { self }
-            public static let clear = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0)
-        }
-        public extension Color {
-            init(nsColor: NSColor) {
-                self.init(red: nsColor.r, green: nsColor.g, blue: nsColor.b, opacity: nsColor.a)
-            }
-            static let cyan = Color(red: 0.0, green: 0.8, blue: 1.0)
-            static let indigo = Color(red: 0.35, green: 0.34, blue: 0.84)
-        }
-        public extension ShapeStyle where Self == Color {
-            static var indigo: Color { .indigo }
-            static var secondary: Color { .secondary }
-        }
-        public func dynamicNSColor(light: NSColor, dark: NSColor) -> NSColor { light }
-        public func dynamicColor(light: NSColor, dark: NSColor) -> Color { Color(nsColor: light) }
-
-        public struct StrokeStyle: Sendable {
-            public enum LineCap: Sendable { case round, butt, square }
-            public enum LineJoin: Sendable { case round, miter, bevel }
-            public var lineWidth: Double
-            public var lineCap: LineCap
-            public var lineJoin: LineJoin
-            public var miterLimit: Double
-            public var dash: [Double]
-            public var dashPhase: Double
-            public init(lineWidth: Double = 1, lineCap: LineCap = .butt, lineJoin: LineJoin = .miter, miterLimit: Double = 10, dash: [Double] = [], dashPhase: Double = 0) {
-                self.lineWidth = lineWidth
-                self.lineCap = lineCap
-                self.lineJoin = lineJoin
-                self.miterLimit = miterLimit
-                self.dash = dash
-                self.dashPhase = dashPhase
-            }
-        }
-        public extension Circle {
-            func trim(from: Double, to: Double) -> Self { self }
-            func stroke<S>(_ content: S, style: StrokeStyle) -> Self { self }
-        }
-        public extension VerticalAlignment {
-            static let firstTextBaseline = VerticalAlignment.center
-            static let lastTextBaseline = VerticalAlignment.center
-        }
-        public extension Font.Design {
-            static let rounded = Font.Design.default
-        }
-        public enum DynamicTypeSize: Int, Comparable, Sendable {
-            case xSmall = 0, small, medium, large, xLarge, xxLarge, xxxLarge
-            case accessibility1, accessibility2, accessibility3, accessibility4, accessibility5
-            public static func < (lhs: DynamicTypeSize, rhs: DynamicTypeSize) -> Bool { lhs.rawValue < rhs.rawValue }
-            public var isAccessibilitySize: Bool { rawValue >= DynamicTypeSize.accessibility1.rawValue }
-        }
-        public extension EnvironmentValues {
-            var dynamicTypeSize: DynamicTypeSize {
-                get { .large }
-                set {}
-            }
-        }
-        public extension Comparable {
-            func clamped(to limits: ClosedRange<Self>) -> Self {
-                min(max(self, limits.lowerBound), limits.upperBound)
-            }
-        }
-        public extension Angle {
-            var radians: Double {
-                get { degrees * .pi / 180.0 }
-                set { degrees = newValue * 180.0 / .pi }
-            }
-            init(radians: Double) {
-                self.init(degrees: radians * 180.0 / .pi)
-            }
-            static let zero = Angle(degrees: 0)
-        }
-
-        // Observation / @Observable fallback when OpenAppleMacrosServer is not loaded
-        // (@propertyWrapper public struct Observable fallback handled via @State / Observable protocol)
-        public protocol Observable: AnyObject {}
-
-        // UIKit & Foundation compatibility shims for Android / Cupertino Bridge
-        public final class UIScreen: @unchecked Sendable {
-            public static let main = UIScreen()
-            public var bounds: CGRect = CGRect(x: 0, y: 0, width: 390, height: 844)
-            public var scale: Double = 3.0
-            public var nativeBounds: CGRect = CGRect(x: 0, y: 0, width: 1170, height: 2532)
-            public init() {}
-        }
-
-        public struct UIColor: Equatable, Sendable {
-            public let red: Double
-            public let green: Double
-            public let blue: Double
-            public let alpha: Double
-            public init(red: Double, green: Double, blue: Double, alpha: Double = 1.0) {
-                self.red = red
-                self.green = green
-                self.blue = blue
-                self.alpha = alpha
-            }
-            public init(white: Double, alpha: Double = 1.0) {
-                self.red = white
-                self.green = white
-                self.blue = white
-                self.alpha = alpha
-            }
-            public static let systemBackground = UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
-            public static let secondarySystemBackground = UIColor(red: 0.95, green: 0.95, blue: 0.97, alpha: 1.0)
-            public static let tertiarySystemBackground = UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
-            public static let systemGroupedBackground = UIColor(red: 0.95, green: 0.95, blue: 0.97, alpha: 1.0)
-            public static let secondarySystemGroupedBackground = UIColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
-            public static let label = UIColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)
-            public static let secondaryLabel = UIColor(red: 0.24, green: 0.24, blue: 0.26, alpha: 0.6)
-            public static let tertiaryLabel = UIColor(red: 0.24, green: 0.24, blue: 0.26, alpha: 0.3)
-            public static let systemBlue = UIColor(red: 0.0, green: 0.48, blue: 1.0, alpha: 1.0)
-            public static let systemRed = UIColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1.0)
-            public static let systemGreen = UIColor(red: 0.20, green: 0.78, blue: 0.35, alpha: 1.0)
-            public static let systemOrange = UIColor(red: 1.0, green: 0.58, blue: 0.0, alpha: 1.0)
-            public static let systemYellow = UIColor(red: 1.0, green: 0.80, blue: 0.0, alpha: 1.0)
-            public static let systemPurple = UIColor(red: 0.69, green: 0.32, blue: 0.87, alpha: 1.0)
-            public static let systemPink = UIColor(red: 1.0, green: 0.18, blue: 0.33, alpha: 1.0)
-            public static let systemTeal = UIColor(red: 0.19, green: 0.69, blue: 0.78, alpha: 1.0)
-            public static let systemIndigo = UIColor(red: 0.35, green: 0.34, blue: 0.84, alpha: 1.0)
-            public static let systemGray = UIColor(red: 0.56, green: 0.56, blue: 0.58, alpha: 1.0)
-            public static let systemGray2 = UIColor(red: 0.68, green: 0.68, blue: 0.70, alpha: 1.0)
-            public static let systemGray3 = UIColor(red: 0.78, green: 0.78, blue: 0.80, alpha: 1.0)
-            public static let systemGray4 = UIColor(red: 0.82, green: 0.82, blue: 0.84, alpha: 1.0)
-            public static let systemGray5 = UIColor(red: 0.90, green: 0.90, blue: 0.92, alpha: 1.0)
-            public static let systemGray6 = UIColor(red: 0.95, green: 0.95, blue: 0.97, alpha: 1.0)
-            public static let clear = UIColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0)
-            public static let white = UIColor(white: 1.0)
-            public static let black = UIColor(white: 0.0)
-            public static let darkGray = UIColor(white: 0.333)
-            public static let lightGray = UIColor(white: 0.667)
-            public func withAlphaComponent(_ alpha: Double) -> UIColor {
-                UIColor(red: red, green: green, blue: blue, alpha: alpha)
-            }
-        }
-        public extension Color {
-            init(_ uiColor: UIColor) {
-                self.init(red: uiColor.red, green: uiColor.green, blue: uiColor.blue, opacity: uiColor.alpha)
-            }
-            init(uiColor: UIColor) {
-                self.init(red: uiColor.red, green: uiColor.green, blue: uiColor.blue, opacity: uiColor.alpha)
-            }
-        }
-
-        public struct UIImage: Sendable {
-            public let systemName: String?
-            public let named: String?
-            public var size: CGSize = CGSize(width: 24, height: 24)
-            public init?(systemName: String) {
-                self.systemName = systemName
-                self.named = nil
-            }
-            public init?(named: String) {
-                self.named = named
-                self.systemName = nil
-            }
-            public init?(data: Data) {
-                self.systemName = nil
-                self.named = nil
-            }
-            public init() {
-                self.systemName = nil
-                self.named = nil
-            }
-        }
-        public extension Image {
-            init(uiImage: UIImage) {
-                if let sys = uiImage.systemName {
-                    self.init(systemName: sys)
-                } else {
-                    self.init(uiImage.named ?? "photo")
-                }
-            }
-        }
-
-        public class UIFont: @unchecked Sendable {
-            public enum Weight: Sendable {
-                case ultraLight, thin, light, regular, medium, semibold, bold, heavy, black
-            }
-            public let pointSize: Double
-            public init(size: Double = 17.0) { self.pointSize = size }
-            public static func systemFont(ofSize size: Double, weight: Weight = .regular) -> UIFont { UIFont(size: size) }
-            public static func boldSystemFont(ofSize size: Double) -> UIFont { UIFont(size: size) }
-            public static func italicSystemFont(ofSize size: Double) -> UIFont { UIFont(size: size) }
-            public static func monospacedDigitSystemFont(ofSize size: Double, weight: Weight = .regular) -> UIFont { UIFont(size: size) }
-            public static func preferredFont(forTextStyle style: String) -> UIFont { UIFont(size: 17.0) }
-        }
-
-        open class UIView: @unchecked Sendable {
-            public var frame: CGRect
-            public var bounds: CGRect
-            public var backgroundColor: UIColor?
-            public var isHidden: Bool = false
-            public var alpha: Double = 1.0
-            public var subviews: [UIView] = []
-            public init(frame: CGRect = CGRect()) {
-                self.frame = frame
-                self.bounds = CGRect(origin: CGPoint(), size: frame.size)
-            }
-            open func addSubview(_ view: UIView) { subviews.append(view) }
-            open func layoutSubviews() {}
-            open func setNeedsLayout() {}
-            open func setNeedsDisplay() {}
-        }
-
-        open class UIViewController: @unchecked Sendable {
-            public var view: UIView = UIView()
-            public var title: String?
-            public var children: [UIViewController] = []
-            public init() {}
-            public init(nibName: String?, bundle: Any?) {}
-            open func viewDidLoad() {}
-            open func viewWillAppear(_ animated: Bool) {}
-            open func viewDidAppear(_ animated: Bool) {}
-            open func viewWillDisappear(_ animated: Bool) {}
-            open func viewDidDisappear(_ animated: Bool) {}
-            open func addChild(_ childController: UIViewController) { children.append(childController) }
-            open func present(_ viewControllerToPresent: UIViewController, animated flag: Bool, completion: (() -> Void)? = nil) {
-                completion?()
-            }
-            open func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
-                completion?()
-            }
-        }
-
-        open class UIHostingController<Content: View>: UIViewController, @unchecked Sendable {
-            public var rootView: Content
-            public init(rootView: Content) {
-                self.rootView = rootView
-                super.init()
-            }
-        }
-
-        open class UINavigationController: UIViewController, @unchecked Sendable {
-            public var viewControllers: [UIViewController] = []
-            public override init() { super.init() }
-            public init(rootViewController: UIViewController) {
-                self.viewControllers = [rootViewController]
-                super.init()
-            }
-            open func pushViewController(_ viewController: UIViewController, animated: Bool) {
-                viewControllers.append(viewController)
-            }
-            @discardableResult
-            open func popViewController(animated: Bool) -> UIViewController? {
-                guard viewControllers.count > 1 else { return nil }
-                return viewControllers.removeLast()
-            }
-        }
-
-        // UIViewRepresentable & UIViewControllerRepresentable shims
-        public protocol UIViewRepresentable: View {
-            associatedtype UIViewType = Any
-            typealias Context = UIViewRepresentableContext<Self>
-            func makeUIView(context: Context) -> UIViewType
-            func updateUIView(_ uiView: UIViewType, context: Context)
-        }
-        public struct UIViewRepresentableContext<T> {
-            public let coordinator: Any? = nil
-            public let environment: EnvironmentValues = EnvironmentValues()
-            public init() {}
-        }
-        public extension UIViewRepresentable {
-            var body: some View { EmptyView() }
-            func makeUIView(context: Context) -> Any { () }
-            func updateUIView(_ uiView: Any, context: Context) {}
-        }
-
-        public protocol UIViewControllerRepresentable: View {
-            associatedtype UIViewControllerType = UIViewController
-            typealias Context = UIViewControllerRepresentableContext<Self>
-            func makeUIViewController(context: Context) -> UIViewControllerType
-            func updateUIViewController(_ uiViewController: UIViewControllerType, context: Context)
-        }
-        public struct UIViewControllerRepresentableContext<T> {
-            public let coordinator: Any? = nil
-            public let environment: EnvironmentValues = EnvironmentValues()
-            public init() {}
-        }
-        public extension UIViewControllerRepresentable {
-            var body: some View { EmptyView() }
-            func makeUIViewController(context: Context) -> UIViewController { UIViewController() }
-            func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
-        }
-
-        public final class UIApplication: @unchecked Sendable {
-            public static let shared = UIApplication()
-            public init() {}
-            public func open(_ url: URL, options: [String: Any] = [:], completionHandler completion: ((Bool) -> Void)? = nil) {
-                completion?(true)
-            }
-            public func canOpenURL(_ url: URL) -> Bool { true }
-            public func sendAction(_ action: Any, to target: Any?, from sender: Any?, for event: Any?) -> Bool { true }
-        }
-
-        public final class UIPasteboard: @unchecked Sendable {
-            public static let general = UIPasteboard()
-            public var string: String?
-            public var strings: [String]? {
-                get { string.map { [$0] } }
-                set { string = newValue?.first }
-            }
-            public init() {}
-        }
-
-        public class UIFeedbackGenerator: @unchecked Sendable {
-            public init() {}
-            public func prepare() {}
-        }
-        public final class UIImpactFeedbackGenerator: UIFeedbackGenerator, @unchecked Sendable {
-            public enum FeedbackStyle: Int, Sendable {
-                case light = 0, medium = 1, heavy = 2, soft = 3, rigid = 4
-            }
-            public let style: FeedbackStyle
-            public override init() {
-                self.style = .medium
-                super.init()
-            }
-            public init(style: FeedbackStyle) {
-                self.style = style
-                super.init()
-            }
-            public func impactOccurred(intensity: Double = 1.0) {}
-        }
-        public final class UINotificationFeedbackGenerator: UIFeedbackGenerator, @unchecked Sendable {
-            public enum FeedbackType: Int, Sendable {
-                case success = 0, warning = 1, error = 2
-            }
-            public override init() { super.init() }
-            public func notificationOccurred(_ notificationType: FeedbackType) {}
-        }
-        public final class UISelectionFeedbackGenerator: UIFeedbackGenerator, @unchecked Sendable {
-            public override init() { super.init() }
-            public func selectionChanged() {}
-        }
-
-        // ToggleStyle shim
-        public protocol ToggleStyle {
-            associatedtype Body: View
-            typealias Configuration = ToggleStyleConfiguration
-            @ViewBuilder func makeBody(configuration: Configuration) -> Body
-        }
-        public struct ToggleStyleConfiguration {
-            public struct Label: View {
-                public init() {}
-                public var body: some View { EmptyView() }
-            }
-            @Binding public var isOn: Bool
-            public var label: Label
-            public init(isOn: Binding<Bool> = .constant(false), label: Label = Label()) {
-                self._isOn = isOn
-                self.label = label
-            }
-        }
-        public extension ToggleStyle where Body == EmptyView {
-            func makeBody(configuration: Configuration) -> EmptyView { EmptyView() }
-        }
-        public extension View {
-            func toggleStyle<S: ToggleStyle>(_ style: S) -> some View { self }
-        }
-        public struct DefaultToggleStyle: ToggleStyle {
-            public init() {}
-            public func makeBody(configuration: Configuration) -> some View { EmptyView() }
-        }
-        public struct SwitchToggleStyle: ToggleStyle {
-            public init() {}
-            public func makeBody(configuration: Configuration) -> some View { EmptyView() }
-        }
-        public extension ToggleStyle where Self == DefaultToggleStyle {
-            static var `default`: DefaultToggleStyle { DefaultToggleStyle() }
-        }
-        public extension ToggleStyle where Self == SwitchToggleStyle {
-            static var `switch`: SwitchToggleStyle { SwitchToggleStyle() }
-        }
-
-        // 2D geometry, Path, Shape, Canvas, and Capsule shims
-        public struct CGPoint: Equatable, Sendable {
-            public var x: Double
-            public var y: Double
-            public init(x: Double = 0, y: Double = 0) { self.x = x; self.y = y }
-            public static let zero = CGPoint(x: 0, y: 0)
-        }
-        public struct CGSize: Equatable, Sendable {
-            public var width: Double
-            public var height: Double
-            public init(width: Double = 0, height: Double = 0) { self.width = width; self.height = height }
-            public static let zero = CGSize(width: 0, height: 0)
-        }
-        public struct CGRect: Equatable, Sendable {
-            public var origin: CGPoint
-            public var size: CGSize
-            public init(origin: CGPoint = CGPoint(), size: CGSize = CGSize()) { self.origin = origin; self.size = size }
-            public init(x: Double, y: Double, width: Double, height: Double) { self.origin = CGPoint(x: x, y: y); self.size = CGSize(width: width, height: height) }
-            public static let zero = CGRect(x: 0, y: 0, width: 0, height: 0)
-            public var width: Double { size.width }
-            public var height: Double { size.height }
-            public var midX: Double { origin.x + size.width / 2 }
-            public var midY: Double { origin.y + size.height / 2 }
-            public var minX: Double { origin.x }
-            public var minY: Double { origin.y }
-            public var maxX: Double { origin.x + size.width }
-            public var maxY: Double { origin.y + size.height }
-        }
-        public struct Path: View, Shape, Sendable {
-            private var _commands: [String] = []
-            public var svgPath: String { _commands.joined(separator: " ") }
-            public var isEmpty: Bool { _commands.isEmpty }
-            public init() {}
-            public init(_ callback: (inout Path) -> Void) {
-                var p = Path()
-                callback(&p)
-                self = p
-            }
-            public init(_ rect: CGRect) {
-                self.init()
-                addRect(rect)
-            }
-            public init(roundedRect rect: CGRect, cornerRadius: Double, style: RoundedCornerStyle = .continuous) {
-                self.init()
-                addRoundedRect(in: rect, cornerSize: CGSize(width: cornerRadius, height: cornerRadius), style: style)
-            }
-            public init(roundedRect rect: CGRect, cornerSize: CGSize, style: RoundedCornerStyle = .continuous) {
-                self.init()
-                addRoundedRect(in: rect, cornerSize: cornerSize, style: style)
-            }
-            public init(ellipseIn rect: CGRect) {
-                self.init()
-                addEllipse(in: rect)
-            }
-            public mutating func move(to p: CGPoint) {
-                _commands.append("M \(p.x) \(p.y)")
-            }
-            public mutating func addLine(to p: CGPoint) {
-                _commands.append("L \(p.x) \(p.y)")
-            }
-            public mutating func addLines(_ lines: [CGPoint]) {
-                guard let first = lines.first else { return }
-                move(to: first)
-                for pt in lines.dropFirst() {
-                    addLine(to: pt)
-                }
-            }
-            public mutating func addQuadCurve(to p: CGPoint, control: CGPoint) {
-                _commands.append("Q \(control.x) \(control.y) \(p.x) \(p.y)")
-            }
-            public mutating func addCurve(to p: CGPoint, control1: CGPoint, control2: CGPoint) {
-                _commands.append("C \(control1.x) \(control1.y) \(control2.x) \(control2.y) \(p.x) \(p.y)")
-            }
-            public mutating func addRect(_ rect: CGRect) {
-                _commands.append("M \(rect.minX) \(rect.minY) L \(rect.maxX) \(rect.minY) L \(rect.maxX) \(rect.maxY) L \(rect.minX) \(rect.maxY) Z")
-            }
-            public mutating func addRoundedRect(in rect: CGRect, cornerSize: CGSize, style: RoundedCornerStyle = .continuous) {
-                let rx = min(max(0, cornerSize.width), rect.width / 2)
-                let ry = min(max(0, cornerSize.height), rect.height / 2)
-                if rx <= 0 && ry <= 0 {
-                    addRect(rect)
-                    return
-                }
-                _commands.append(
-                    "M \(rect.minX + rx) \(rect.minY) " +
-                    "L \(rect.maxX - rx) \(rect.minY) " +
-                    "Q \(rect.maxX) \(rect.minY) \(rect.maxX) \(rect.minY + ry) " +
-                    "L \(rect.maxX) \(rect.maxY - ry) " +
-                    "Q \(rect.maxX) \(rect.maxY) \(rect.maxX - rx) \(rect.maxY) " +
-                    "L \(rect.minX + rx) \(rect.maxY) " +
-                    "Q \(rect.minX) \(rect.maxY) \(rect.minX) \(rect.maxY - ry) " +
-                    "L \(rect.minX) \(rect.minY + ry) " +
-                    "Q \(rect.minX) \(rect.minY) \(rect.minX + rx) \(rect.minY) Z"
-                )
-            }
-            public mutating func addEllipse(in rect: CGRect) {
-                let cx = rect.midX
-                let cy = rect.midY
-                let rx = rect.width / 2
-                let ry = rect.height / 2
-                let k = 0.5522847498307936
-                let ox = rx * k
-                let oy = ry * k
-                _commands.append(
-                    "M \(cx - rx) \(cy) " +
-                    "C \(cx - rx) \(cy - oy) \(cx - ox) \(cy - ry) \(cx) \(cy - ry) " +
-                    "C \(cx + ox) \(cy - ry) \(cx + rx) \(cy - oy) \(cx + rx) \(cy) " +
-                    "C \(cx + rx) \(cy + oy) \(cx + ox) \(cy + ry) \(cx) \(cy + ry) " +
-                    "C \(cx - ox) \(cy + ry) \(cx - rx) \(cy + oy) \(cx - rx) \(cy) Z"
-                )
-            }
-            public mutating func addArc(center: CGPoint, radius: Double, startAngle: Angle, endAngle: Angle, clockwise: Bool) {
-                let startRad = startAngle.radians
-                let endRad = endAngle.radians
-                let sx = center.x + radius * cos(startRad)
-                let sy = center.y + radius * sin(startRad)
-                let ex = center.x + radius * cos(endRad)
-                let ey = center.y + radius * sin(endRad)
-                if _commands.isEmpty {
-                    _commands.append("M \(sx) \(sy)")
-                } else {
-                    _commands.append("L \(sx) \(sy)")
-                }
-                let sweep = clockwise ? 0 : 1
-                let delta = abs(endRad - startRad)
-                let largeArc = delta > .pi ? 1 : 0
-                _commands.append("A \(radius) \(radius) 0 \(largeArc) \(sweep) \(ex) \(ey)")
-            }
-            public mutating func closeSubpath() {
-                _commands.append("Z")
-            }
-            public var body: some View {
-                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath)]) { EmptyView() }
-            }
-            public func fill(_ color: Color) -> some View {
-                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath), "fill": .int(Int(color.argb))]) { EmptyView() }
-            }
-            public func stroke(_ color: Color, lineWidth: Double = 1) -> some View {
-                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath), "stroke": .int(Int(color.argb)), "strokeWidth": .double(lineWidth)]) { EmptyView() }
-            }
-            public func stroke(_ color: Color, style: StrokeStyle) -> some View {
-                ComposableView("Path", props: ["d": .string(svgPath), "svgPath": .string(svgPath), "stroke": .int(Int(color.argb)), "strokeWidth": .double(style.lineWidth)]) { EmptyView() }
-            }
-        }
-        public extension Shape {
-            var _shapeKind: String { "rectangle" }
-            var _cornerRadius: Double? { nil }
-            var body: some View { Rectangle() }
-            func fill(_ color: Color) -> some View { Rectangle().fill(color) }
-            func stroke(_ color: Color, lineWidth: Double = 1) -> some View { Rectangle().stroke(color, lineWidth: lineWidth) }
-            func stroke(_ color: Color, style: StrokeStyle) -> some View { Rectangle().stroke(color, lineWidth: style.lineWidth) }
-        }
-        public extension Capsule {
-            init(style: RoundedCornerStyle) { self.init() }
-        }
-        public struct GraphicsContext: Sendable {
-            public enum Shading: Sendable {
-                public static func color(_ color: Color) -> Shading { .color }
-                case color
-            }
-            public var opacity: Double = 1.0
-            public init() {}
-            public func fill(_ path: Path, with shading: Shading) {}
-            public func stroke(_ path: Path, with shading: Shading, lineWidth: Double = 1.0) {}
-            public func stroke(_ path: Path, with shading: Shading, style: StrokeStyle) {}
-        }
-        public struct Canvas<Symbols: View>: View {
-            public init(
-                opaque: Bool = false,
-                colorMode: Any? = nil,
-                rendersAsynchronously: Bool = false,
-                renderer: @escaping (inout GraphicsContext, CGSize) -> Void,
-                @ViewBuilder symbols: () -> Symbols
-            ) {}
-            public var body: some View { EmptyView() }
-        }
-        public extension Canvas where Symbols == EmptyView {
-            init(
-                opaque: Bool = false,
-                colorMode: Any? = nil,
-                rendersAsynchronously: Bool = false,
-                renderer: @escaping (inout GraphicsContext, CGSize) -> Void
-            ) {
-                self.init(opaque: opaque, colorMode: colorMode, rendersAsynchronously: rendersAsynchronously, renderer: renderer) {
-                    EmptyView()
-                }
-            }
-        }
-
-        // AudioToolbox shims
-        public typealias SystemSoundID = UInt32
-        public func AudioServicesPlaySystemSound(_ inSystemSoundID: SystemSoundID) {}
-        public func AudioServicesPlayAlertSound(_ inSystemSoundID: SystemSoundID) {}
-        public let kSystemSoundID_Vibrate: SystemSoundID = 4095
-
-        // AVFoundation shims
-        public enum AVMediaType: Sendable {
-            case audio, video
-        }
-        public enum AVAuthorizationStatus: Int, Sendable {
-            case notDetermined = 0, restricted = 1, denied = 2, authorized = 3
-        }
-        public final class AVCaptureDevice: @unchecked Sendable {
-            public static func authorizationStatus(for mediaType: AVMediaType) -> AVAuthorizationStatus { .authorized }
-            public static func requestAccess(for mediaType: AVMediaType, completionHandler handler: @escaping (Bool) -> Void) {
-                handler(true)
-            }
-        }
-        public class AVAudioPlayer: @unchecked Sendable {
-            public init() {}
-            public init(data: Data) throws {}
-            public init(contentsOf url: URL) throws {}
-            public func play() -> Bool { true }
-            public func pause() {}
-            public func stop() {}
-            public var isPlaying: Bool = false
-            public var numberOfLoops: Int = 0
-            public var volume: Float = 1.0
-        }
-        public class AVPlayer: @unchecked Sendable {
-            public init() {}
-            public init(url: URL) {}
-            public func play() {}
-            public func pause() {}
-        }
-        public struct VideoPlayer<VideoOverlay: View>: View {
-            public var body: some View { EmptyView() }
-            public init(player: Any? = nil, @ViewBuilder videoOverlay: () -> VideoOverlay = { EmptyView() }) {}
-        }
-        public extension VideoPlayer where VideoOverlay == EmptyView {
-            init(player: Any? = nil) { self.init(player: player, videoOverlay: { EmptyView() }) }
-        }
-
-        // AppKit shims for macOS SwiftUI targets
-        public typealias NSPoint = CGPoint
-        public typealias NSSize = CGSize
-        public typealias NSRect = CGRect
-
-        public final class NSCursor: @unchecked Sendable {
-            public static let arrow = NSCursor()
-            public static let pointingHand = NSCursor()
-            public static let iBeam = NSCursor()
-            public init() {}
-            public func push() {}
-            public static func pop() {}
-            public func pop() {}
-            public func set() {}
-        }
-
-        open class NSWindow: @unchecked Sendable {
-            public init() {}
-            open func invalidateCursorRects(for view: NSView) {}
-        }
-
-        open class NSPanel: NSWindow, @unchecked Sendable {
-            public override init() { super.init() }
-        }
-
-        open class NSView: @unchecked Sendable {
-            public var frame: CGRect = .zero
-            public var bounds: CGRect = .zero
-            public var window: NSWindow? = nil
-            public var toolTip: String? = nil
-            public init(frame: CGRect = .zero) {
-                self.frame = frame
-                self.bounds = CGRect(origin: .zero, size: frame.size)
-            }
-            open func resetCursorRects() {}
-            public func addCursorRect(_ rect: CGRect, cursor: NSCursor) {}
-            open func hitTest(_ point: NSPoint) -> NSView? { nil }
-        }
-
-        public protocol NSViewRepresentable: View {
-            associatedtype NSViewType = NSView
-            typealias Context = NSViewRepresentableContext<Self>
-            func makeNSView(context: Context) -> NSViewType
-            func updateNSView(_ nsView: NSViewType, context: Context)
-        }
-        public struct NSViewRepresentableContext<T> {
-            public let coordinator: Any? = nil
-            public let environment: EnvironmentValues = EnvironmentValues()
-            public init() {}
-        }
-        public extension NSViewRepresentable {
-            var body: some View { EmptyView() }
-        }
-
-        public final class NSWorkspace: @unchecked Sendable {
-            public static let shared = NSWorkspace()
-            public init() {}
-            @discardableResult
-            public func open(_ url: URL) -> Bool { true }
-        }
-
-        public final class NSApplication: @unchecked Sendable {
-            public static let shared = NSApplication()
-            public init() {}
-            public func terminate(_ sender: Any?) {}
-        }
-        public let NSApp = NSApplication.shared
-
-        // PhotosUI shims
-        public struct PhotosPicker<Label: View>: View {
-            public var body: some View { EmptyView() }
-            public init(selection: Any, matching: Any? = nil, photoLibrary: Any? = nil, @ViewBuilder label: () -> Label) {}
-        }
-        public struct PhotosPickerItem: Sendable {
-            public init() {}
-            public func loadTransferable<T>(type: T.Type) async throws -> T? { nil }
-        }
-
-        // WebKit shims
-        public class WKWebView: @unchecked Sendable {
-            public init() {}
-            public init(frame: Any, configuration: Any) {}
-            public func load(_ request: Any) {}
-            public func loadHTMLString(_ string: String, baseURL: URL?) {}
-        }
-        public class WKWebViewConfiguration: @unchecked Sendable {
-            public init() {}
-        }
-        public class WKNavigation: @unchecked Sendable {
-            public init() {}
-        }
-        public protocol WKNavigationDelegate: AnyObject {}
-        public protocol WKUIDelegate: AnyObject {}
-    """.trimIndent()
+    internal val CUPERTINO_BRIDGE_PRELUDE: String = CUPERTINO_BRIDGE_PRELUDE_SOURCE
 
     internal fun stripPreviewMacros(text: String): String {
         if (!text.contains("#Preview")) return text
@@ -1054,18 +275,145 @@ object GuiBridgeRuntime {
         return mods
     }
 
+    internal fun discoverXcassetsColors(projectRoot: Path): Map<String, String> {
+        val colors = LinkedHashMap<String, String>()
+        fun parseComponent(raw: String): Double {
+            val s = raw.trim()
+            if (s.startsWith("0x", ignoreCase = true)) {
+                return (s.substring(2).toIntOrNull(16) ?: 0).coerceIn(0, 255) / 255.0
+            }
+            val d = s.toDoubleOrNull() ?: return 0.0
+            return if (!s.contains('.') && d > 1.0) (d / 255.0).coerceIn(0.0, 1.0) else d.coerceIn(0.0, 1.0)
+        }
+        runCatching {
+            Files.walk(projectRoot, 6).use { stream ->
+                stream.filter { p ->
+                    Files.isDirectory(p) && p.fileName?.toString()?.endsWith(".colorset") == true
+                }.forEach { colorsetDir ->
+                    val name = colorsetDir.fileName.toString().removeSuffix(".colorset")
+                    val contentsFile = colorsetDir.resolve("Contents.json")
+                    if (Files.isRegularFile(contentsFile)) {
+                        val json = runCatching { contentsFile.readText() }.getOrDefault("")
+                        val rMatch = Regex(""""red"\s*:\s*"([^"]+)"""").find(json)
+                        val gMatch = Regex(""""green"\s*:\s*"([^"]+)"""").find(json)
+                        val bMatch = Regex(""""blue"\s*:\s*"([^"]+)"""").find(json)
+                        val aMatch = Regex(""""alpha"\s*:\s*"([^"]+)"""").find(json)
+                        if (rMatch != null && gMatch != null && bMatch != null) {
+                            val r = parseComponent(rMatch.groupValues[1])
+                            val g = parseComponent(gMatch.groupValues[1])
+                            val b = parseComponent(bMatch.groupValues[1])
+                            val a = aMatch?.let { parseComponent(it.groupValues[1]) } ?: 1.0
+                            colors[name] = String.format(
+                                java.util.Locale.US,
+                                "Color(red: %.4f, green: %.4f, blue: %.4f, opacity: %.4f)",
+                                r,
+                                g,
+                                b,
+                                a,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        return colors
+    }
+
+    internal fun synthesizeXcassetsColorExtensions(xcassetsColors: Map<String, String>): String? {
+        if (xcassetsColors.isEmpty()) return null
+        val reserved = setOf(
+            "red", "green", "blue", "orange", "yellow", "purple", "pink", "gray", "clear",
+            "primary", "secondary", "black", "white", "teal", "cyan", "indigo", "mint",
+            "brown", "accentColor", "link", "lightGray", "darkGray",
+        )
+        val entries = LinkedHashMap<String, String>()
+        for ((rawName, colorExpr) in xcassetsColors) {
+            val parts = rawName.split(Regex("""[^A-Za-z0-9]+""")).filter { it.isNotEmpty() }
+            if (parts.isEmpty()) continue
+            val camel = parts.mapIndexed { idx, part ->
+                if (idx == 0) part.replaceFirstChar { it.lowercaseChar() }
+                else part.replaceFirstChar { it.uppercaseChar() }
+            }.joinToString("")
+            if (camel.isNotEmpty() && camel.first().isLetter() && camel !in reserved) {
+                entries[camel] = colorExpr
+            }
+        }
+        if (entries.isEmpty()) return null
+        val sb = StringBuilder()
+        sb.appendLine("import SwiftUI")
+        sb.appendLine("public extension Color {")
+        for ((ident, expr) in entries) {
+            sb.appendLine("    static let $ident = $expr")
+        }
+        sb.appendLine("}")
+        sb.appendLine("public extension ShapeStyle where Self == Color {")
+        for ((ident, _) in entries) {
+            sb.appendLine("    static var $ident: Color { .$ident }")
+        }
+        sb.appendLine("}")
+        return sb.toString()
+    }
+
+    internal fun discoverLocalizableStrings(projectRoot: Path): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        fun cleanValue(raw: String): String =
+            raw.replace("\u2028", "\\n").replace("\u2029", "\\n").replace("\r\n", "\\n").replace("\n", "\\n")
+        runCatching {
+            Files.walk(projectRoot, 6).use { stream ->
+                stream.filter { p ->
+                    Files.isRegularFile(p) && (
+                        p.fileName?.toString()?.endsWith(".xcstrings") == true ||
+                            p.fileName?.toString()?.endsWith(".strings") == true
+                        ) && !p.toString().replace('\\', '/').contains("/.building/")
+                }.forEach { file ->
+                    val text = runCatching { file.readText() }.getOrDefault("")
+                    if (file.fileName.toString().endsWith(".xcstrings")) {
+                        Regex(
+                            """"([A-Za-z0-9_.-]+)"\s*:\s*\{\s*(?:"extractionState"\s*:\s*"[^"]*"\s*,\s*)?"localizations"\s*:\s*\{\s*"en"\s*:\s*\{\s*"stringUnit"\s*:\s*\{\s*"state"\s*:\s*"[^"]*"\s*,\s*"value"\s*:\s*"((?:\\.|[^"\\])*)""""
+                        ).findAll(text).forEach { m ->
+                            out[m.groupValues[1]] = cleanValue(m.groupValues[2])
+                        }
+                    } else {
+                        val isPreferred = file.parent?.fileName?.toString()?.let {
+                            it.equals("en.lproj", ignoreCase = true) || it.equals("Base.lproj", ignoreCase = true)
+                        } ?: true
+                        Regex("""(?m)^\s*"([A-Za-z0-9_.-]+)"\s*=\s*"((?:\\.|[^"\\])*)"\s*;""").findAll(text).forEach { m ->
+                            val k = m.groupValues[1]
+                            if (isPreferred || k !in out) {
+                                out[k] = cleanValue(m.groupValues[2])
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return out
+    }
+
     internal fun sanitizeSwiftUiSource(
         text: String,
         internalModules: Set<String> = emptySet(),
         hasMacroServer: Boolean = false,
+        xcassetsColors: Map<String, String> = emptyMap(),
+        localizableStrings: Map<String, String> = emptyMap(),
     ): String {
         var t = stripPreviewMacros(text)
         t = dropUnsupportedDeclarations(t)
         t = t.replace(Regex("""#if\s+os\(macOS\)"""), "#if false")
-        val foundationReexportMods = setOf("AppKit", "UIKit", "AVFoundation")
+        val foundationReexportMods = setOf(
+            "AppKit", "UIKit", "AVFoundation", "SwiftData", "CoreData", "Combine",
+            "UserNotifications", "CoreLocation", "MapKit", "StoreKit", "Network",
+        )
         val sanitizedMods = internalModules + listOf(
             "AppKit", "UIKit", "QuartzCore",
-            "AudioToolbox", "AVFoundation", "PhotosUI", "WebKit", "Observation", "Darwin"
+            "AudioToolbox", "AVFoundation", "AVKit", "PhotosUI", "WebKit", "Observation", "Darwin",
+            "SwiftData", "CoreData", "Charts", "MapKit", "CoreLocation", "StoreKit",
+            "UserNotifications", "AuthenticationServices", "LocalAuthentication",
+            "UniformTypeIdentifiers", "CryptoKit", "Security", "OSLog", "os", "Network",
+            "SafariServices", "MessageUI", "TipKit", "WidgetKit", "CoreHaptics",
+            "CoreImage", "ImageIO", "Vision", "Accelerate", "simd", "CoreText",
+            "CoreServices", "MobileCoreServices", "Contacts", "EventKit", "QuickLook",
+            "PDFKit", "MusicKit", "DeveloperToolsSupport",
         )
         for (mod in sanitizedMods) {
             val replacement = if (mod in foundationReexportMods) {
@@ -1074,19 +422,52 @@ object GuiBridgeRuntime {
                 "// [sanitized import $mod]"
             }
             t = t.replace(
-                Regex("""(?m)^\s*import\s+${Regex.escape(mod)}\b.*$"""),
+                Regex("""(?m)^\s*(?:@\w+(?:\([^)]*\))?\s+)*import\s+(?:(?:struct|class|enum|protocol|typealias|func|var|let)\s+)?${Regex.escape(mod)}\b.*$"""),
                 replacement,
             )
         }
+        if (t.contains("import SwiftUI") && !t.contains("import Foundation")) {
+            t = t.replaceFirst("import SwiftUI", "import Foundation\nimport SwiftUI")
+        }
+        t = Regex("""@Model\s+((?:(?:public|internal|private|fileprivate|final)\s+)*class\s+\w+)([^{]*)\{""").replace(t) { m ->
+            val decl = m.groupValues[1]
+            val rest = m.groupValues[2]
+            when {
+                rest.contains("PersistentModel") -> "/* @Model */ $decl$rest{"
+                rest.contains(":") -> "/* @Model */ $decl${rest.trimEnd()}, PersistentModel {"
+                else -> "/* @Model */ $decl: PersistentModel $rest{"
+            }
+        }
+        t = t.replace(Regex("""@Attribute(?:\([^)]*\))?\s*"""), "")
+        t = t.replace(Regex("""@Relationship(?:\([^)]*\))?\s*"""), "")
+        t = t.replace(Regex("""@Transient\s+"""), "")
+        t = t.replace(Regex("""TextField<(?:Self\.)?_Label>"""), "TextField")
         if (!hasMacroServer) {
             t = t.replace(
                 Regex("""@Observable\s+((?:(?:public|internal|private|fileprivate|final)\s+)*class\s+\w+)"""),
                 "/* @Observable */ $1",
             )
+            t = t.replace(Regex("""@ObservationTracked\s+"""), "")
+            t = t.replace(Regex("""@ObservationIgnored\s+"""), "")
         }
-        t = t.replace("private struct ", "struct ")
-        t = t.replace("private enum ", "enum ")
-        t = t.replace("private class ", "class ")
+        if (xcassetsColors.isNotEmpty()) {
+            t = Regex("""Color\(\s*"([^"]+)"(?:\s*,\s*bundle\s*:\s*[^)]+)?\s*\)""").replace(t) { m ->
+                xcassetsColors[m.groupValues[1]] ?: m.value
+            }
+        }
+        if (localizableStrings.isNotEmpty()) {
+            t = Regex(""""([A-Za-z0-9_.-]+)"""")
+                .replace(t) { m ->
+                    val key = m.groupValues[1]
+                    val resolved = localizableStrings[key]
+                    if (resolved != null && (key.contains('_') || !key.contains('.'))) {
+                        "\"$resolved\""
+                    } else {
+                        m.value
+                    }
+                }
+        }
+        t = t.replace(Regex("""(?<![A-Za-z0-9_])private\s+(struct|enum|class)\s+"""), "$1 ")
         t = t.replace(
             Regex("""@FocusState\s+(private\s+)?var\s+(\w+)\s*:\s*Bool(?!\s*=)"""),
             "@State $1var $2: Bool = false",
@@ -1169,12 +550,69 @@ object GuiBridgeRuntime {
         return "$v(${renderedArgs.joinToString(", ")})"
     }
 
+    internal fun inferEnvironmentInjections(combinedSource: String): List<String> {
+        val requestedTypes = LinkedHashSet<String>()
+        Regex("""@EnvironmentObject\s+(?:(?:private|internal|public|fileprivate)\s+)?var\s+\w+\s*:\s*([A-Za-z_][A-Za-z0-9_]*)""")
+            .findAll(combinedSource)
+            .forEach { requestedTypes.add(it.groupValues[1]) }
+        Regex("""@Environment\(\s*([A-Za-z_][A-Za-z0-9_]*)\.self\s*\)""")
+            .findAll(combinedSource)
+            .forEach { requestedTypes.add(it.groupValues[1]) }
+        if (requestedTypes.isEmpty()) return emptyList()
+        val modifiers = ArrayList<String>()
+        for (typeName in requestedTypes) {
+            val classMatch = Regex("""class\s+${Regex.escape(typeName)}\b[^{]*\{""").find(combinedSource) ?: continue
+            val startIdx = classMatch.range.last
+            var depth = 1
+            var j = startIdx + 1
+            while (j < combinedSource.length && depth > 0) {
+                when (combinedSource[j]) {
+                    '{' -> depth++
+                    '}' -> depth--
+                }
+                j++
+            }
+            val classBody = combinedSource.substring(startIdx + 1, (j - 1).coerceAtLeast(startIdx + 1))
+            val hasZeroArgInit = Regex("""\binit\s*\(\s*\)""").containsMatchIn(classBody)
+            val hasRequiredArgInit = Regex("""\binit\s*\((?!\s*\))""").containsMatchIn(classBody)
+            if (hasZeroArgInit || !hasRequiredArgInit) {
+                modifiers.add(".environmentObject($typeName())")
+            }
+        }
+        return modifiers
+    }
+
+    internal fun extractFailingSwiftFiles(
+        compileLines: List<String>,
+        candidates: List<Path>,
+        protectedFiles: Set<Path>,
+    ): Set<Path> {
+        val protectedNames = protectedFiles.map { it.fileName.toString() }.toSet()
+        val protectedPaths = protectedFiles.map { it.toAbsolutePath().normalize() }.toSet()
+        val errorRegex = Regex("""^(.+?\.swift):\d+:\d+:\s*error:""")
+        val matched = LinkedHashSet<Path>()
+        for (line in compileLines) {
+            val m = errorRegex.find(line.trim()) ?: continue
+            val rawPath = m.groupValues[1].trim()
+            val fileName = Path.of(rawPath).fileName?.toString().orEmpty()
+            for (cand in candidates) {
+                val candNorm = cand.toAbsolutePath().normalize()
+                if (candNorm in protectedPaths || cand.fileName.toString() in protectedNames) continue
+                if (candNorm.toString().endsWith(rawPath.replace('\\', '/')) || cand.fileName.toString() == fileName) {
+                    matched.add(cand)
+                }
+            }
+        }
+        return matched
+    }
+
     internal fun countUnsupportedSwiftImports(text: String, internalModules: Set<String> = emptySet()): Int {
         val sanitized = text.replace(Regex("""#if\s+os\(macOS\)"""), "#if false")
         var inFalse = 0
         var count = 0
+        val attrPrefix = Regex("""^(?:@\w+(?:\([^)]*\))?\s+)+""")
         for (line in sanitized.lineSequence()) {
-            val t = line.trim()
+            val t = line.trim().replace(attrPrefix, "")
             if (t.startsWith("#if false")) {
                 inFalse++
             } else if (t.startsWith("#if ") && inFalse > 0) {
@@ -1316,7 +754,7 @@ object GuiBridgeRuntime {
     ): List<Path> {
         return SwiftBuildSystem.findSwiftSourceFiles(projectRoot).filterNot { f ->
             val s = f.toString().replace('\\', '/')
-            s.contains("/.build/") || s.contains("/Pods/") ||
+            s.contains("/.build/") || s.contains("/.building/") || s.contains("/cupertino-shadow/") || s.contains("/Pods/") ||
                 s.contains("/Tests/") || s.contains("/UITests/") || s.contains("/UnitTests/")
         }.filter { f ->
             val raw = runCatching { f.readText() }.getOrDefault("")
@@ -1339,6 +777,7 @@ object GuiBridgeRuntime {
         val iosFiles = candidateFiles.filterNot { f ->
             val s = f.toString().replace('\\', '/')
             s.contains("/Mac/") || s.contains("/macOS/") ||
+                s.contains("/.build/") || s.contains("/.building/") || s.contains("/cupertino-shadow/") ||
                 s.contains("/Tests/") || s.contains("/UnitTests/") || s.contains("/UITests/") ||
                 s.contains("/Watch/") || s.contains("/watchOS/") || s.contains("/Pods/")
         }.ifEmpty { candidateFiles }
@@ -1356,6 +795,10 @@ object GuiBridgeRuntime {
             val text = fileTexts[f].orEmpty()
             text.contains("@main") || Regex("""struct\s+\w+\s*:\s*App\b""").containsMatchIn(text)
         }
+
+        val commonTargetSubdirs = setOf(
+            "views", "models", "styles", "viewmodels", "components", "shared", "model", "view", "services",
+        )
 
         if (mainFiles.isNotEmpty()) {
             data class TargetCandidate(
@@ -1376,23 +819,24 @@ object GuiBridgeRuntime {
                         break
                     }
                     val p = curr.parent
-                    if (p != null && p != projectRoot) {
+                    if (p != null) {
                         val pName = p.fileName?.toString()?.lowercase()
-                        if (pName in setOf("experiments", "samples", "examples", "apps", "packages", "projects", "subprojects", "demos")) {
+                        if (p != projectRoot && pName in setOf("experiments", "samples", "examples", "apps", "packages", "projects", "subprojects", "demos")) {
                             targetDir = curr
                             break
                         }
-                        val hasCommonSubdirs = runCatching {
-                            Files.list(p).use { stream ->
-                                stream.anyMatch { dir ->
-                                    Files.isDirectory(dir) && dir.fileName?.toString()?.lowercase() in setOf(
-                                        "views", "models", "styles", "viewmodels", "components", "shared", "model", "view"
-                                    )
+                        val currIsCommonSubdir = curr.fileName?.toString()?.lowercase() in commonTargetSubdirs
+                        if (p != projectRoot || currIsCommonSubdir) {
+                            val hasCommonSubdirs = runCatching {
+                                Files.list(p).use { stream ->
+                                    stream.anyMatch { dir ->
+                                        Files.isDirectory(dir) && dir.fileName?.toString()?.lowercase() in commonTargetSubdirs
+                                    }
                                 }
+                            }.getOrDefault(false)
+                            if (hasCommonSubdirs) {
+                                targetDir = p
                             }
-                        }.getOrDefault(false)
-                        if (hasCommonSubdirs) {
-                            targetDir = p
                         }
                     }
                     curr = p
@@ -1425,17 +869,18 @@ object GuiBridgeRuntime {
             val byTargetDir = pureSwiftUiFiles.groupBy { f ->
                 var d = f.parent ?: projectRoot
                 val p = d.parent
-                if (p != null && p != projectRoot) {
-                    val hasCommonSubdirs = runCatching {
-                        Files.list(p).use { stream ->
-                            stream.anyMatch { dir ->
-                                Files.isDirectory(dir) && dir.fileName?.toString()?.lowercase() in setOf(
-                                    "views", "models", "styles", "viewmodels", "components", "shared", "model", "view"
-                                )
+                if (p != null) {
+                    val dIsCommonSubdir = d.fileName?.toString()?.lowercase() in commonTargetSubdirs
+                    if (p != projectRoot || dIsCommonSubdir) {
+                        val hasCommonSubdirs = runCatching {
+                            Files.list(p).use { stream ->
+                                stream.anyMatch { dir ->
+                                    Files.isDirectory(dir) && dir.fileName?.toString()?.lowercase() in commonTargetSubdirs
+                                }
                             }
-                        }
-                    }.getOrDefault(false)
-                    if (hasCommonSubdirs) d = p
+                        }.getOrDefault(false)
+                        if (hasCommonSubdirs) d = p
+                    }
                 }
                 d
             }
@@ -1476,6 +921,8 @@ object GuiBridgeRuntime {
         }
         Files.createDirectories(shadow)
         val internalModules = discoverInternalSwiftModules(projectRoot)
+        val xcassetsColors = discoverXcassetsColors(projectRoot)
+        val localizableStrings = discoverLocalizableStrings(projectRoot)
         val allSwiftFiles = SwiftBuildSystem.findSwiftSourceFiles(projectRoot)
         val filteredFiles = allSwiftFiles.filter { f ->
             val name = f.fileName.toString()
@@ -1489,7 +936,13 @@ object GuiBridgeRuntime {
         fun copyAndSanitize(src: Path, dst: Path) {
             Files.createDirectories(dst.parent)
             val raw = runCatching { src.readText() }.getOrDefault("")
-            val content = sanitizeSwiftUiSource(raw, internalModules)
+            val content = sanitizeSwiftUiSource(
+                raw,
+                internalModules,
+                hasMacroServer = false,
+                xcassetsColors = xcassetsColors,
+                localizableStrings = localizableStrings,
+            )
             dst.writeText(content)
             copied.add(dst)
         }
@@ -1502,9 +955,12 @@ object GuiBridgeRuntime {
 
         // Recursively discover and copy all .swift files across subdirectories
         // (Models/, Views/, Styles/, ViewModels/, Components/) in the target directory tree
+        val commonSubdirs = setOf(
+            "views", "models", "styles", "viewmodels", "components", "shared", "model", "view", "services",
+        )
         val targetRoots = swiftUiFiles.mapNotNull { f ->
             var d = f.parent
-            while (d != null && d != projectRoot && d.parent != null && d.parent != projectRoot) {
+            while (d != null && d != projectRoot && d.parent != null && (d.parent != projectRoot || d.fileName?.toString()?.lowercase() in commonSubdirs)) {
                 val pName = d.fileName?.toString()?.lowercase()
                 if (pName in setOf("experiments", "samples", "examples", "apps", "packages", "projects", "subprojects", "demos")) {
                     break
@@ -1527,7 +983,8 @@ object GuiBridgeRuntime {
                             !f.fileName.toString().endsWith("Main.swift")
                     }.forEach { candidate ->
                         val relStr = candidate.toString().replace('\\', '/')
-                        val isIgnored = relStr.contains("/.build/") || relStr.contains("/Pods/") ||
+                        val isIgnored = candidate.startsWith(shadow) ||
+                            relStr.contains("/.build/") || relStr.contains("/.building/") || relStr.contains("/cupertino-shadow/") || relStr.contains("/Pods/") ||
                             relStr.contains("/Tests/") || relStr.contains("/UnitTests/") || relStr.contains("/UITests/") ||
                             relStr.contains("/Mac/") || relStr.contains("/macOS/") || relStr.contains("/Watch/")
                         if (!isIgnored) {
@@ -1554,6 +1011,11 @@ object GuiBridgeRuntime {
             val shimFile = shadow.resolve("FocusedCompanionShims.swift")
             shimFile.writeText(shims)
             copied.add(shimFile)
+        }
+        synthesizeXcassetsColorExtensions(xcassetsColors)?.let { colorShims ->
+            val colorShimFile = shadow.resolve("XcassetsColorShims.swift")
+            colorShimFile.writeText(colorShims)
+            copied.add(colorShimFile)
         }
 
         // Always write CupertinoBridgePrelude.swift into the shadow workspace so all shims
@@ -1631,6 +1093,7 @@ object GuiBridgeRuntime {
         if (!hasBridgeEntry) {
             val text = copied.joinToString("\n") { runCatching { it.readText() }.getOrDefault("") }
             val expr = inferPreviewExpression(text)
+            val envChain = inferEnvironmentInjections(text).joinToString("")
             shadow.resolve("CupertinoShadowMain.swift").writeText(
                 """
                 import SwiftUI
@@ -1638,7 +1101,7 @@ object GuiBridgeRuntime {
                 @main
                 struct CupertinoShadowMain {
                     static func main() throws {
-                        try runPreview { $expr }
+                        try runPreview { $expr$envChain }
                     }
                 }
                 """.trimIndent() + "\n",
@@ -1747,11 +1210,32 @@ object GuiBridgeRuntime {
             }
             ctx.buildLog.log(BuildLogEntry("$ swiftc -parse-as-library $relNames -lSwiftUI -o ${outBin.fileName}", BuildLogLevel.INFO))
             val compileLines = ArrayList<String>()
-            var code = execSimple(host, buildSwiftcCommand(swiftUiFiles), compileRoot, env, ctx, compileLines)
+            val activePrimaryFiles = ArrayList(swiftUiFiles)
+            val protectedPrimary = swiftUiFiles.filter { f ->
+                val name = f.fileName.toString()
+                if (name in setOf("CupertinoBridgePrelude.swift", "CupertinoShadowMain.swift", "FocusedCompanionShims.swift", "XcassetsColorShims.swift")) {
+                    true
+                } else {
+                    val text = runCatching { f.readText() }.getOrDefault("")
+                    text.contains("@main") || Regex("""struct\s+\w+\s*:\s*App\b""").containsMatchIn(text)
+                }
+            }.toSet()
+            var code = execSimple(host, buildSwiftcCommand(activePrimaryFiles), compileRoot, env, ctx, compileLines)
+            var primaryPrunePass = 0
+            while (code != 0 && primaryPrunePass < 5 && activePrimaryFiles.size > protectedPrimary.size + 1) {
+                val failing = extractFailingSwiftFiles(compileLines, activePrimaryFiles, protectedPrimary)
+                if (failing.isEmpty()) break
+                activePrimaryFiles.removeAll(failing)
+                primaryPrunePass++
+                compileLines.clear()
+                code = execSimple(host, buildSwiftcCommand(activePrimaryFiles), compileRoot, env, ctx, compileLines)
+            }
 
             if (code != 0) {
                 // Multi-file target had cross-module/platform symbols; try focused candidate SwiftUI view files in projectRoot
                 val internalModules = discoverInternalSwiftModules(projectRoot)
+                val xcassetsColors = discoverXcassetsColors(projectRoot)
+                val localizableStrings = discoverLocalizableStrings(projectRoot)
                 val repoSwiftFiles = SwiftBuildSystem.findSwiftSourceFiles(projectRoot).filterNot { f ->
                     val s = f.toString().replace('\\', '/')
                     s.contains("/.build/") || s.contains("/Pods/") ||
@@ -1763,7 +1247,7 @@ object GuiBridgeRuntime {
                     if (!raw.contains("import SwiftUI")) return@mapNotNull null
                     if (countUnsupportedSwiftImports(raw, internalModules) > 0) return@mapNotNull null
                     if (isNonUiPlatformServiceFile(raw)) return@mapNotNull null
-                    val san = sanitizeSwiftUiSource(raw, internalModules, hasMacroServer)
+                    val san = sanitizeSwiftUiSource(raw, internalModules, hasMacroServer, xcassetsColors, localizableStrings)
                     val hasView = Regex("""struct\s+\w+\s*:\s*View\b""").containsMatchIn(san)
                     val hasPreview = Regex("""struct\s+\w+\s*:\s*PreviewProvider\b""").containsMatchIn(san) ||
                         raw.contains("#Preview")
@@ -1785,11 +1269,11 @@ object GuiBridgeRuntime {
 
                 val focusedDir = outDir.parent?.resolve("focused") ?: compileRoot.resolve("focused")
                 val safeCompanions = focusedCompanionSources(projectRoot, internalModules)
-                val modes = if (safeCompanions.size > 30) listOf(false, true) else listOf(true, false)
+                val modes = if (safeCompanions.size > 120) listOf(false, true) else listOf(true, false)
                 for (includeCompanions in modes) {
                     if (code == 0) break
                     if (includeCompanions && safeCompanions.isEmpty()) continue
-                    val limit = if (includeCompanions && safeCompanions.size > 30) 2 else 8
+                    val limit = if (includeCompanions && safeCompanions.size > 40) 3 else 8
                     for (cand in focusedCandidates.take(limit)) {
                         if (Files.isDirectory(focusedDir)) {
                             Files.walk(focusedDir).use { stream ->
@@ -1809,36 +1293,74 @@ object GuiBridgeRuntime {
                                 val name = comp.fileName.toString()
                                 if (!written.add(name)) continue
                                 val target = focusedDir.resolve(name)
-                                target.writeText(sanitizeSwiftUiSource(runCatching { comp.readText() }.getOrDefault(""), internalModules, hasMacroServer))
+                                target.writeText(
+                                    sanitizeSwiftUiSource(
+                                        runCatching { comp.readText() }.getOrDefault(""),
+                                        internalModules,
+                                        hasMacroServer,
+                                        xcassetsColors,
+                                        localizableStrings,
+                                    )
+                                )
                                 srcs.add(target)
                             }
                         }
                         val focusedTexts = srcs.map { runCatching { it.readText() }.getOrDefault("") }
+                        val protectedFocused = LinkedHashSet<Path>().apply { add(targetFile) }
                         synthesizeFocusedCompanionShims(focusedTexts)?.let { shims ->
                             val shimFile = focusedDir.resolve("FocusedCompanionShims.swift")
                             shimFile.writeText(shims)
                             srcs.add(shimFile)
+                            protectedFocused.add(shimFile)
+                        }
+                        synthesizeXcassetsColorExtensions(xcassetsColors)?.let { colorShims ->
+                            val colorShimFile = focusedDir.resolve("XcassetsColorShims.swift")
+                            colorShimFile.writeText(colorShims)
+                            srcs.add(colorShimFile)
+                            protectedFocused.add(colorShimFile)
                         }
                         val preludeFile = focusedDir.resolve("CupertinoBridgePrelude.swift")
                         preludeFile.writeText(CUPERTINO_BRIDGE_PRELUDE + "\n")
                         srcs.add(preludeFile)
+                        protectedFocused.add(preludeFile)
                         val expr = inferPreviewExpression(cand.sanitized)
+                        val combinedFocused = focusedTexts.joinToString("\n")
+                        val envChain = inferEnvironmentInjections(combinedFocused).joinToString("")
                         val mainFile = focusedDir.resolve("CupertinoShadowMain.swift")
-                        mainFile.writeText(
-                            """
-                            import SwiftUI
+                        fun writeShadowMain(withEnv: Boolean) {
+                            val suffix = if (withEnv) envChain else ""
+                            mainFile.writeText(
+                                """
+                                import SwiftUI
 
-                            @main
-                            struct CupertinoShadowMain {
-                                static func main() throws {
-                                    try runPreview { $expr }
+                                @main
+                                struct CupertinoShadowMain {
+                                    static func main() throws {
+                                        try runPreview { $expr$suffix }
+                                    }
                                 }
-                            }
-                            """.trimIndent() + "\n",
-                        )
+                                """.trimIndent() + "\n",
+                            )
+                        }
+                        writeShadowMain(withEnv = envChain.isNotEmpty())
                         srcs.add(mainFile)
+                        protectedFocused.add(mainFile)
                         compileLines.clear()
-                        val attemptCode = execSimple(host, buildSwiftcCommand(srcs), focusedDir, env, ctx, compileLines)
+                        var attemptCode = execSimple(host, buildSwiftcCommand(srcs), focusedDir, env, ctx, compileLines)
+                        var prunePass = 0
+                        while (attemptCode != 0 && includeCompanions && prunePass < 6 && srcs.size > protectedFocused.size) {
+                            val failing = extractFailingSwiftFiles(compileLines, srcs, protectedFocused)
+                            if (failing.isEmpty()) break
+                            srcs.removeAll(failing)
+                            prunePass++
+                            compileLines.clear()
+                            attemptCode = execSimple(host, buildSwiftcCommand(srcs), focusedDir, env, ctx, compileLines)
+                        }
+                        if (attemptCode != 0 && envChain.isNotEmpty()) {
+                            writeShadowMain(withEnv = false)
+                            compileLines.clear()
+                            attemptCode = execSimple(host, buildSwiftcCommand(srcs), focusedDir, env, ctx, compileLines)
+                        }
                         if (attemptCode == 0) {
                             code = 0
                             break

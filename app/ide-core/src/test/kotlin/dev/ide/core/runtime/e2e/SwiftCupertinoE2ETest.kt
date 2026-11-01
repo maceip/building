@@ -11,10 +11,12 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import dev.ide.core.runtime.GuiBridgeRuntime
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -504,6 +506,293 @@ class SwiftCupertinoE2ETest {
                     updatedLine.contains("Result: 7"),
                     "Expected Result: 7 after tapping 7: $updatedLine",
                 )
+            } finally {
+                proc.destroyForcibly()
+            }
+        } finally {
+            runCatching { work.toFile().deleteRecursively() }
+        }
+    }
+
+    @Test
+    fun tier4_realWorldScenario_expansiveMultiScreenIosAppWithFrameworksAndPrunedLeaf() {
+        val swiftc = findHostSwiftc() ?: run {
+            assumeTrue(false, "No host swiftc; skipping real Swift execution")
+            return
+        }
+        val sdk = findSwiftUiSdk() ?: run {
+            assumeTrue(false, "No SwiftUI bridge SDK found; skipping real Swift execution")
+            return
+        }
+        assumeTrue(Files.isRegularFile(sdk.resolve("libSwiftUI.a")), "Requires prebuilt libSwiftUI.a bridge SDK")
+
+        val work = Files.createTempDirectory("swiftui-expansive-ios-e2e")
+        try {
+            val colorsetDir = work.resolve("Assets.xcassets/BrandAccent.colorset")
+            Files.createDirectories(colorsetDir)
+            colorsetDir.resolve("Contents.json").writeText(
+                """
+                {
+                  "colors" : [
+                    {
+                      "color" : {
+                        "color-space" : "srgb",
+                        "components" : {
+                          "alpha" : "1.000",
+                          "blue" : "0.950",
+                          "green" : "0.550",
+                          "red" : "0.150"
+                        }
+                      },
+                      "idiom" : "universal"
+                    }
+                  ]
+                }
+                """.trimIndent(),
+            )
+
+            Files.createDirectories(work.resolve("Models"))
+            Files.createDirectories(work.resolve("ViewModels"))
+            Files.createDirectories(work.resolve("Views"))
+            Files.createDirectories(work.resolve("Services"))
+
+            work.resolve("Models/ExpenseModels.swift").writeText(
+                """
+                import SwiftUI
+                import SwiftData
+
+                enum AppTab: String, CaseIterable, Identifiable {
+                    case dashboard
+                    case analytics
+                    var id: String { rawValue }
+                }
+
+                @Model
+                final class ExpenseRecord {
+                    @Attribute(.unique) var id: UUID
+                    var title: String
+                    init(id: UUID = UUID(), title: String = "") {
+                        self.id = id
+                        self.title = title
+                    }
+                }
+
+                struct ExpenseItem: Identifiable, Hashable {
+                    let id = UUID()
+                    var title: String
+                    var category: String
+                    var amount: Double
+                }
+                """.trimIndent(),
+            )
+
+            work.resolve("ViewModels/ExpenseStore.swift").writeText(
+                """
+                import SwiftUI
+                import Combine
+                import OSLog
+
+                final class ExpenseStore: ObservableObject {
+                    private let logger = Logger(subsystem: "dev.building.expansive", category: "store")
+                    @Published var selectedTab: AppTab = .dashboard
+                    @Published var expenses: [ExpenseItem] = [
+                        ExpenseItem(title: "Cloud Hosting", category: "Infra", amount: 120.0),
+                        ExpenseItem(title: "Design System", category: "Product", amount: 85.0)
+                    ]
+                    @Published var navPath = NavigationPath()
+                    @Published var showResetAlert: Bool = false
+
+                    init() {}
+
+                    func addSampleExpense() {
+                        logger.info("Adding sample expense")
+                        expenses.append(ExpenseItem(title: "New Cloud Node", category: "Infra", amount: 64.0))
+                    }
+                }
+                """.trimIndent(),
+            )
+
+            work.resolve("Views/ExpansiveDashboardView.swift").writeText(
+                """
+                import SwiftUI
+                import Charts
+                import MapKit
+                import SwiftData
+
+                struct ExpansiveDashboardView: View {
+                    @EnvironmentObject private var store: ExpenseStore
+                    @Environment(\.colorScheme) private var colorScheme
+                    @Query private var syncedItems: [ExpenseItem]
+
+                    var body: some View {
+                        TabView(selection: ${'$'}store.selectedTab) {
+                            NavigationStack(path: ${'$'}store.navPath) {
+                                ScrollView(showsIndicators: false) {
+                                    LazyVStack(spacing: 12) {
+                                        Text("Count: \(store.expenses.count)")
+                                            .foregroundColor(Color("BrandAccent"))
+                                            .foregroundStyle(.brandAccent)
+
+                                        Picker("Section", selection: ${'$'}store.selectedTab) {
+                                            ForEach(AppTab.allCases) { tab in
+                                                Text(tab.rawValue.capitalized).tag(tab)
+                                            }
+                                        }
+                                        .pickerStyle(.segmented)
+
+                                        Chart(store.expenses) { item in
+                                            BarMark(
+                                                x: .value("Category", item.category),
+                                                y: .value("Amount", item.amount)
+                                            )
+                                        }
+
+                                        List {
+                                            Section(header: Text("Recent Expenses")) {
+                                                ForEach(store.expenses) { item in
+                                                    LabeledContent(item.title, value: "${'$'}\(Int(item.amount))")
+                                                }
+                                            }
+                                        }
+                                        .listStyle(.insetGrouped)
+
+                                        AsyncImage(url: URL(string: "https://example.com/chart.png")) { image in
+                                            image.resizable()
+                                        } placeholder: {
+                                            ProgressView("Loading receipt...")
+                                        }
+
+                                        Map(position: .constant(.automatic)) {
+                                            Marker("HQ", coordinate: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194))
+                                        }
+
+                                        ContentUnavailableView(
+                                            "No Archived Reports",
+                                            systemImage: "doc.text.magnifyingglass",
+                                            description: Text("Archived quarterly reports will appear here.")
+                                        )
+
+                                        Button("Add Expense") {
+                                            store.addSampleExpense()
+                                        }
+                                    }
+                                    .padding()
+                                }
+                                .navigationTitle("Expansive iOS")
+                                .navigationBarTitleDisplayMode(.large)
+                            }
+                            .tabItem {
+                                Label("Dashboard", systemImage: "chart.pie.fill")
+                            }
+                            .tag(AppTab.dashboard)
+                        }
+                    }
+                }
+                """.trimIndent(),
+            )
+
+            // Uncompilable leaf companion file that should be automatically pruned
+            work.resolve("Services/BrokenHardwareLeaf.swift").writeText(
+                """
+                import SwiftUI
+
+                struct BrokenHardwareLeaf {
+                    func calibrate() {
+                        NonExistentProprietaryLiDARScanner.shared.startCalibration()
+                    }
+                }
+                """.trimIndent(),
+            )
+
+            val shadow = GuiBridgeRuntime.prepareCupertinoShadow(work, work.resolve(".scratch"))
+            val shadowMainText = shadow.resolve("CupertinoShadowMain.swift").readText()
+            assertTrue(
+                shadowMainText.contains(".environmentObject(ExpenseStore())"),
+                "Expected CupertinoShadowMain.swift to auto-inject .environmentObject(ExpenseStore()):\n$shadowMainText",
+            )
+            assertTrue(
+                Files.isRegularFile(shadow.resolve("XcassetsColorShims.swift")),
+                "Expected XcassetsColorShims.swift to be synthesized from Assets.xcassets",
+            )
+
+            val activeFiles = ArrayList(
+                Files.walk(shadow).use { s ->
+                    s.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".swift") }.toList()
+                },
+            )
+            val protectedFiles = activeFiles.filter {
+                it.fileName.toString() in setOf(
+                    "CupertinoBridgePrelude.swift",
+                    "CupertinoShadowMain.swift",
+                    "XcassetsColorShims.swift",
+                    "ExpansiveDashboardView.swift",
+                )
+            }.toSet()
+
+            val exe = work.resolve("ExpansiveIosApp")
+            val cltSdk = Path.of("/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk")
+            fun runSwiftc(sources: List<Path>): Pair<Int, List<String>> {
+                val cmd = buildList {
+                    add(swiftc)
+                    add("-parse-as-library")
+                    for (f in sources) add(f.toString())
+                    if (swiftc.contains(".swiftly") && Files.isDirectory(cltSdk)) {
+                        add("-sdk")
+                        add(cltSdk.toString())
+                    }
+                    add("-I$sdk")
+                    add("-L$sdk")
+                    add("-Xlinker")
+                    add("-rpath")
+                    add("-Xlinker")
+                    add(sdk.toString())
+                    add("-lSwiftUI")
+                    add("-o")
+                    add(exe.toString())
+                }
+                val proc = ProcessBuilder(cmd).directory(shadow.toFile()).redirectErrorStream(true).start()
+                val outLines = proc.inputStream.bufferedReader().readLines()
+                return proc.waitFor() to outLines
+            }
+
+            var (exitCode, outLines) = runSwiftc(activeFiles)
+            var pruneRounds = 0
+            while (exitCode != 0 && pruneRounds < 4) {
+                val failing = GuiBridgeRuntime.extractFailingSwiftFiles(outLines, activeFiles, protectedFiles)
+                if (failing.isEmpty()) break
+                activeFiles.removeAll(failing)
+                pruneRounds++
+                val retry = runSwiftc(activeFiles)
+                exitCode = retry.first
+                outLines = retry.second
+            }
+
+            assertEquals(0, exitCode, "Expected expansive iOS app to compile cleanly after pruning (pruneRounds=$pruneRounds):\n${outLines.joinToString("\n")}")
+            assertEquals(1, pruneRounds, "Expected BrokenHardwareLeaf.swift to be pruned in 1 pass")
+
+            val proc = ProcessBuilder(exe.toString()).redirectErrorStream(false).start()
+            try {
+                val reader = proc.inputStream.bufferedReader()
+                val writer = proc.outputStream.bufferedWriter()
+
+                val initialLine = reader.readLine()
+                assertNotNull(initialLine, "Expected initial ViewNode JSON line")
+                assertTrue(initialLine.contains("Count: 2"), "Expected initial Count: 2 in tree: $initialLine")
+                assertTrue(initialLine.contains("Cloud Hosting"), "Expected Cloud Hosting in tree: $initialLine")
+
+                val btnMatches = Regex(""""onTap":(\d+),"text":"Add Expense"""").find(initialLine)
+                    ?: Regex(""""text":"Add Expense".*?"onTap":(\d+)""").find(initialLine)
+                    ?: Regex(""""onTap":(\d+)""").findAll(initialLine).lastOrNull()
+                assertNotNull(btnMatches, "Expected onTap callback ID for Add Expense button")
+                val tapId = btnMatches.groupValues[1]
+
+                writer.write("{\"id\":\"$tapId\",\"kind\":\"void\"}\n")
+                writer.flush()
+
+                val updatedLine = reader.readLine()
+                assertNotNull(updatedLine, "Expected updated ViewNode JSON line after tapping Add Expense")
+                assertTrue(updatedLine.contains("Count: 3"), "Expected Count: 3 after tap: $updatedLine")
+                assertTrue(updatedLine.contains("New Cloud Node"), "Expected New Cloud Node in list after tap: $updatedLine")
             } finally {
                 proc.destroyForcibly()
             }
