@@ -35,17 +35,17 @@ class EditorColorSchemeTest {
         val dark = resolve().toSyntaxColors()
         // The values the editor was hardcoded to before schemes existed. If one of these moves, every
         // existing install's editor changes color on update, which is exactly the thing to be told about.
-        assertEquals(Color(0xFFC7C8CF), dark.default)
-        assertEquals(Color(0xFFCD7EE0), dark.keyword)
-        assertEquals(Color(0xFF98C97A), dark.string)
-        assertEquals(Color(0xFF61AFEF), dark.func)
+        assertEquals(Color(0xFFEDEDE6), dark.default)
+        assertEquals(Color(0xFFD6B4FF), dark.keyword)
+        assertEquals(Color(0xFFF2C98A), dark.string)
+        assertEquals(Color(0xFF7FD4FF), dark.func)
         assertEquals(Color(0xFF4FC1A6), dark.composable)
         assertEquals(Color(0xFF82AAFF), dark.extension)
 
         val light = resolve(isDark = false).toSyntaxColors()
-        assertEquals(Color(0xFF34363D), light.default)
-        assertEquals(Color(0xFFA32FB0), light.keyword)
-        assertEquals(Color(0xFF3F9C45), light.string)
+        assertEquals(Color(0xFF15171A), light.default)
+        assertEquals(Color(0xFF5B2A86), light.keyword)
+        assertEquals(Color(0xFF8A4B00), light.string)
         assertEquals(Color(0xFF1F8A77), light.composable)
     }
 
@@ -274,7 +274,7 @@ class EditorColorSchemeTest {
         // Removing rather than restoring would take the built-in out with the plugin that shadowed it, and
         // keywords would go uncolored and uneditable until the next launch.
         assertSame(original, ColorAttributes.byKey(ColorKeys.KEYWORD))
-        assertEquals(Color(0xFFCD7EE0), resolve().colorOf(ColorKeys.KEYWORD))
+        assertEquals(Color(0xFFD6B4FF), resolve().colorOf(ColorKeys.KEYWORD))
     }
 
     @Test
@@ -292,7 +292,7 @@ class EditorColorSchemeTest {
         } finally {
             second.dispose()
         }
-        assertEquals(Color(0xFFCD7EE0), resolve().colorOf(ColorKeys.KEYWORD))
+        assertEquals(Color(0xFFD6B4FF), resolve().colorOf(ColorKeys.KEYWORD))
     }
 
     @Test
@@ -325,7 +325,7 @@ class EditorColorSchemeTest {
     fun editingOneVariantLeavesTheOtherAlone() {
         val scheme = EditorColorScheme("t", "T").withStyle(true, ColorKeys.KEYWORD, AttributeStyle.fg(Color.Red))
         assertEquals(Color.Red, resolve(scheme, isDark = true).colorOf(ColorKeys.KEYWORD))
-        assertEquals(Color(0xFFA32FB0), resolve(scheme, isDark = false).colorOf(ColorKeys.KEYWORD))
+        assertEquals(Color(0xFF5B2A86), resolve(scheme, isDark = false).colorOf(ColorKeys.KEYWORD))
     }
 
     @Test

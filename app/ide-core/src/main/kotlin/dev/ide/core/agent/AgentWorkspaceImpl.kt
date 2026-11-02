@@ -667,7 +667,9 @@ internal class IdeAgentWorkspace(private val ctx: BackendContext) : AgentWorkspa
         val skipDirs = setOf(".git", "node_modules", "build", ".gradle", ".agent")
         fun walk(dir: Path, depth: Int) {
             if (depth > 4 || result.size >= 400) return
-            val entries = runCatching { Files.list(dir).use { it.toList() } }.getOrDefault(emptyList())
+            val entries = runCatching {
+                Files.list(dir).use { it.collect(java.util.stream.Collectors.toList()) }
+            }.getOrDefault(emptyList())
             for (entry in entries) {
                 if (result.size >= 400) break
                 val name = entry.fileName?.toString() ?: continue

@@ -32,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
+      checks: read
     outputs:
       allowed: ${{ steps.cap.outputs.allowed }}
     steps:
@@ -64,11 +66,11 @@ jobs:
             if [[ "${HEAD_SHA}" == "${RELEASED_SHA}" ]]; then
               echo "allowed=false" >> "${GITHUB_OUTPUT}"; echo "sweeper idle"; exit 0
             fi
-            ALREADY_FAILED="$(gh run list --workflow=android-release.yml --commit "${HEAD_SHA}" --limit 10 --json status,conclusion \
-              --jq '[.[] | select(.status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out"))] | length')"
+            ALREADY_FAILED="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
+              --jq '[.check_runs[] | select(.name == "Build debug APK and publish release" and .status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out"))] | length')"
             if [[ "${ALREADY_FAILED}" -gt 0 ]]; then
               echo "allowed=false" >> "${GITHUB_OUTPUT}"
-              echo "sweeper idle: HEAD ${HEAD_SHA} was already attempted and did not succeed; waiting for next commit"
+              echo "sweeper idle: HEAD ${HEAD_SHA} already ran Build debug APK and publish release and did not succeed; waiting for next commit"
               exit 0
             fi
           fi

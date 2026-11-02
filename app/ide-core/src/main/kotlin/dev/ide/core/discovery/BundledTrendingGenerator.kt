@@ -164,7 +164,7 @@ object BundledTrendingGenerator {
 
             val jsonText = BundledTrendingCatalog.encodeCatalogJson(catalogData)
             val catalogFile = discoveryDir.resolve("bundled-trending-catalog.json")
-            Files.writeString(catalogFile, jsonText)
+            Files.write(catalogFile, jsonText.toByteArray(Charsets.UTF_8))
             println("[BundledTrendingGenerator] Wrote ${catalogFile.toAbsolutePath()} (${listsMap.size} lists, ${enrichedBySlug.size} saved screenshots)")
         } finally {
             pool.shutdownNow()

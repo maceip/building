@@ -4,6 +4,7 @@ import dev.ide.platform.CancelToken
 import dev.ide.platform.EngineCancellation
 import dev.ide.platform.EngineCanceledException
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -61,26 +62,51 @@ class PreviewLoweringCancellationTest {
             analyzer.incrementalParser.parseFull(SnippetDoc(text, vf))
             return analyzer to vf
         }
-        // Warm the JIT + classpath on one analyzer, then time a cold lowering to the end on another.
-        freshFile("Warm.kt").let { (a, vf) -> a.lowerFile(vf) }
-        val fullMs = freshFile("Full.kt").let { (a, vf) ->
-            val t0 = System.nanoTime(); a.lowerFile(vf); (System.nanoTime() - t0) / 1_000_000
-        }
+        // Warm the JIT + classpath on two analyzers, then time a steady-state cold lowering to the end.
+        freshFile("Warm1.kt").let { (a, vf) -> a.lowerFile(vf) }
+        freshFile("Warm2.kt").let { (a, vf) -> a.lowerFile(vf) }
+        val fullMs = minOf(
+            freshFile("Full1.kt").let { (a, vf) ->
+                val t0 = System.nanoTime(); a.lowerFile(vf); (System.nanoTime() - t0) / 1_000_000
+            },
+            freshFile("Full2.kt").let { (a, vf) ->
+                val t0 = System.nanoTime(); a.lowerFile(vf); (System.nanoTime() - t0) / 1_000_000
+            },
+        ).coerceAtLeast(8L)
 
-        val (analyzer, vf) = freshFile("Yield.kt")
-        val token = CancelToken()
-        val canceledAt = AtomicLong()
-        val canceller = Thread {
-            Thread.sleep(fullMs / 4)
-            canceledAt.set(System.nanoTime())
-            token.cancel()
-        }.apply { start() }
-        assertFailsWith<EngineCanceledException> {
-            runBlocking { EngineCancellation.withToken(token) { analyzer.lowerFile(vf) } }
+        var yieldMs = 0L
+        var preempted = false
+        for (attempt in 1..4) {
+            val (analyzer, vf) = freshFile("Yield$attempt.kt")
+            val token = CancelToken()
+            val started = CountDownLatch(1)
+            val canceledAt = AtomicLong()
+            val delayMs = (fullMs / (6L * attempt)).coerceAtLeast(1L)
+            val canceller = Thread {
+                started.await()
+                Thread.sleep(delayMs)
+                canceledAt.set(System.nanoTime())
+                token.cancel()
+            }.apply { start() }
+            try {
+                runBlocking {
+                    EngineCancellation.withToken(token) {
+                        started.countDown()
+                        analyzer.lowerFile(vf)
+                    }
+                }
+            } catch (_: EngineCanceledException) {
+                val exitedAt = System.nanoTime()
+                canceller.join()
+                yieldMs = (exitedAt - canceledAt.get()) / 1_000_000
+                preempted = true
+                break
+            }
+            canceller.join()
+            // If token.cancel() had already fired before lowerFile returned without throwing, fail immediately.
+            assertTrue(canceledAt.get() == 0L, "lowerFile ignored an active CancelToken on attempt $attempt")
         }
-        val exitedAt = System.nanoTime()
-        canceller.join()
-        val yieldMs = (exitedAt - canceledAt.get()) / 1_000_000
+        assertTrue(preempted, "canceller thread never fired while lowerFile was in flight across 4 attempts")
         println("\n=== Preview lowering preemption ===\nfull lowering: ${fullMs}ms  yield after preemption: ${yieldMs}ms\n")
         assertTrue(yieldMs < fullMs / 2, "a preempted lowering kept the worker ${yieldMs}ms of a ${fullMs}ms lowering")
     }

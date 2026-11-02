@@ -71,7 +71,7 @@ class CodeLanguage(val profile: EditorLanguageProfile) {
         val Swift = CodeLanguage(
             EditorLanguageProfile(
                 id = "swift",
-                suffixes = listOf(".swift", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".m", ".mm", ".rs", ".go", ".cs", ".css", ".scss", ".gradle"),
+                suffixes = listOf(".swift"),
                 syntax = SyntaxFamily.C_FAMILY,
                 keywords = SWIFT_KEYWORDS, lineComment = "//",
                 blockCommentOpen = "/*", blockCommentClose = "*/",

@@ -20,7 +20,7 @@ import java.nio.file.Paths
  */
 object BundledKotlinStdlib {
     /** The bundled stdlib version. Kept in lockstep with `libs.versions.toml` `kotlin`. */
-    const val VERSION: String = "2.4.0"
+    const val VERSION: String = "2.5.0-Beta2"
 
     private const val RESOURCE = "/kotlin-stdlib.jar"
     private const val FILE_NAME = "kotlin-stdlib-$VERSION.jar"
@@ -37,8 +37,14 @@ object BundledKotlinStdlib {
      */
     fun extractTo(dir: Path): Path? = runCatching {
         val target = dir.resolve(FILE_NAME)
-        if (Files.isRegularFile(target) && Files.size(target) > 0L) return target
-        val stream = BundledKotlinStdlib::class.java.getResourceAsStream(RESOURCE) ?: return null
+        val url = BundledKotlinStdlib::class.java.getResource(RESOURCE) ?: return null
+        val expectedSize = runCatching { url.openConnection().contentLengthLong }.getOrDefault(-1L)
+        if (Files.isRegularFile(target) && Files.size(target) > 0L &&
+            (expectedSize <= 0L || Files.size(target) == expectedSize)
+        ) {
+            return target
+        }
+        val stream = url.openStream()
         Files.createDirectories(dir)
         val tmp = Files.createTempFile(dir, "kotlin-stdlib", ".tmp")
         stream.use { Files.copy(it, tmp, StandardCopyOption.REPLACE_EXISTING) }

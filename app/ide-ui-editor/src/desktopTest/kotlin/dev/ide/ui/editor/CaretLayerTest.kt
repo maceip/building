@@ -52,24 +52,36 @@ class CaretLayerTest {
         }
         try {
             var frame = 0L
-            fun pump(millis: Long) {
-                var slept = 0L
-                while (slept < millis) {
-                    Thread.sleep(FRAME_MS)
-                    slept += FRAME_MS
+            fun stepFrames(count: Int, sleepMs: Long = 0L) {
+                repeat(count) {
+                    if (sleepMs > 0L) Thread.sleep(sleepMs)
+                    androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
                     scene.render(frame)
                     frame += FRAME_NS
                 }
             }
-            pump(3 * FRAME_MS)
+            stepFrames(4)
             val at = Offset(600f, 20f) // past the end of the first line, so the caret lands at its end
             scene.sendPointerEvent(PointerEventType.Press, at, type = PointerType.Mouse)
             scene.sendPointerEvent(PointerEventType.Release, at, type = PointerType.Mouse)
-            pump(150)
+            // Advance 15 virtual frames (~240 ms of animation clock) without sleeping 240 ms of wall clock
+            // so the spring glide settles completely while the 530 ms wall-clock blink timer is still on `blinkOn = true`.
+            stepFrames(15, sleepMs = 2L)
             val shown = scene.render(frame)
-            // The caret hides 530 ms after it last moved and shows again 530 ms after that.
-            pump(650)
-            val hidden = scene.render(frame)
+            frame += FRAME_NS
+            // The caret hides 530 ms after it last moved; poll frames until the blink transition lands.
+            var hidden = shown
+            val deadlineNs = System.nanoTime() + 1_500_000_000L
+            while (System.nanoTime() < deadlineNs) {
+                Thread.sleep(FRAME_MS)
+                androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
+                val candidate = scene.render(frame)
+                frame += FRAME_NS
+                if (diffBounds(shown, candidate) != null) {
+                    hidden = candidate
+                    break
+                }
+            }
             return shown to hidden
         } finally {
             scene.close()

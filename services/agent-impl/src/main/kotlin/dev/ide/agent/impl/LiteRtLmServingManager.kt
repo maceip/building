@@ -2128,7 +2128,7 @@ class LiteRtLmServingManager(
     private fun loadPersistedState() {
         val manifestObj: JsonObject? = runCatching {
             if (Files.isRegularFile(manifestFile)) {
-                AgentJson.parseToJsonElement(Files.readString(manifestFile)).asObj()
+                AgentJson.parseToJsonElement(String(Files.readAllBytes(manifestFile), StandardCharsets.UTF_8)).asObj()
             } else null
         }.getOrNull()
 
@@ -2343,7 +2343,7 @@ class LiteRtLmServingManager(
                     },
                 )
             }.toString()
-            Files.writeString(manifestFile, json, StandardCharsets.UTF_8)
+            Files.write(manifestFile, json.toByteArray(StandardCharsets.UTF_8))
         }
     }
 

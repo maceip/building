@@ -140,7 +140,9 @@ object EnvironmentDoctor {
         // 4. Inspect symlinks across bin/ and lib/
         for (dir in (binDirs + libDirs)) {
             if (!Files.isDirectory(dir)) continue
-            val entries = runCatching { Files.list(dir).use { it.toList() } }.getOrDefault(emptyList())
+            val entries = runCatching {
+                Files.list(dir).use { it.collect(java.util.stream.Collectors.toList()) }
+            }.getOrDefault(emptyList())
             for (entry in entries) {
                 if (Files.isSymbolicLink(entry)) {
                     checkedSymlinks++
@@ -184,7 +186,9 @@ object EnvironmentDoctor {
         // 5. Inspect executable bits and shebangs in all bin/ directories
         for (binDir in binDirs) {
             if (!Files.isDirectory(binDir)) continue
-            val entries = runCatching { Files.list(binDir).use { it.toList() } }.getOrDefault(emptyList())
+            val entries = runCatching {
+                Files.list(binDir).use { it.collect(java.util.stream.Collectors.toList()) }
+            }.getOrDefault(emptyList())
             for (entry in entries) {
                 if (!Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) continue
                 checkedBinaries++

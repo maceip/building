@@ -5294,7 +5294,7 @@ class IdeServices private constructor(
                 val modDir = Paths.get(m.dir.path)
                 val script = listOf(modDir.resolve("build.gradle.kts"), modDir.resolve("build.gradle"))
                     .firstOrNull { Files.isRegularFile(it) }
-                    ?.let { runCatching { Files.readString(it) }.getOrNull() }
+                    ?.let { runCatching { String(Files.readAllBytes(it), Charsets.UTF_8) }.getOrNull() }
                     ?: return@filter false
                 (facet.productFlavors.isEmpty() && "productFlavors" in script) ||
                     (facet.manifestPlaceholders.isEmpty() && "manifestPlaceholders" in script)

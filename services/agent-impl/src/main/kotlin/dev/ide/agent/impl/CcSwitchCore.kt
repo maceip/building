@@ -2045,7 +2045,7 @@ class CcSwitchLiveConfigSyncer(
         backupBeforeFirstWrite("claude", settingsFile)
 
         val existingObj = if (Files.isRegularFile(settingsFile)) {
-            runCatching { AgentJson.parseToJsonElement(Files.readString(settingsFile)).asObj() }.getOrNull()
+            runCatching { AgentJson.parseToJsonElement(String(Files.readAllBytes(settingsFile), StandardCharsets.UTF_8)).asObj() }.getOrNull()
         } else null
 
         val existingEnv = existingObj?.get("env").asObj() ?: buildJsonObject {}
@@ -2077,7 +2077,7 @@ class CcSwitchLiveConfigSyncer(
             }
             put("env", newEnv)
         }
-        Files.writeString(settingsFile, patched.toString(), StandardCharsets.UTF_8)
+        Files.write(settingsFile, patched.toString().toByteArray(StandardCharsets.UTF_8))
     }
 
     private fun syncCodexConfig(
@@ -2141,16 +2141,16 @@ class CcSwitchLiveConfigSyncer(
         tomlBuilder.appendLine("""base_url = "$baseUrl"""")
         tomlBuilder.appendLine("""wire_api = "responses"""")
 
-        Files.writeString(configFile, tomlBuilder.toString(), StandardCharsets.UTF_8)
+        Files.write(configFile, tomlBuilder.toString().toByteArray(StandardCharsets.UTF_8))
 
         val existingAuth = if (Files.isRegularFile(authFile)) {
-            runCatching { AgentJson.parseToJsonElement(Files.readString(authFile)).asObj() }.getOrNull()
+            runCatching { AgentJson.parseToJsonElement(String(Files.readAllBytes(authFile), StandardCharsets.UTF_8)).asObj() }.getOrNull()
         } else null
         val authJson = buildJsonObject {
             existingAuth?.forEach { (k, v) -> put(k, v) }
             put("OPENAI_API_KEY", if (isProxy) "PROXY_MANAGED" else profile.apiKey.ifBlank { "LOCAL_PROVIDER" })
         }
-        Files.writeString(authFile, authJson.toString(), StandardCharsets.UTF_8)
+        Files.write(authFile, authJson.toString().toByteArray(StandardCharsets.UTF_8))
     }
 
     private fun syncGeminiConfig(
@@ -2193,10 +2193,10 @@ class CcSwitchLiveConfigSyncer(
         envBuilder.appendLine("GEMINI_API_KEY=$apiKey")
         envBuilder.appendLine("GEMINI_MODEL=$model")
         envBuilder.appendLine("CC_SWITCH_MODE=${mode.id}")
-        Files.writeString(envFile, envBuilder.toString(), StandardCharsets.UTF_8)
+        Files.write(envFile, envBuilder.toString().toByteArray(StandardCharsets.UTF_8))
 
         val existingSettings = if (Files.isRegularFile(settingsFile)) {
-            runCatching { AgentJson.parseToJsonElement(Files.readString(settingsFile)).asObj() }.getOrNull()
+            runCatching { AgentJson.parseToJsonElement(String(Files.readAllBytes(settingsFile), StandardCharsets.UTF_8)).asObj() }.getOrNull()
         } else null
         val settingsJson = buildJsonObject {
             existingSettings?.forEach { (k, v) -> if (k != "security") put(k, v) }
@@ -2207,6 +2207,6 @@ class CcSwitchLiveConfigSyncer(
                 },
             )
         }
-        Files.writeString(settingsFile, settingsJson.toString(), StandardCharsets.UTF_8)
+        Files.write(settingsFile, settingsJson.toString().toByteArray(StandardCharsets.UTF_8))
     }
 }

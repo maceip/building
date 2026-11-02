@@ -73,22 +73,22 @@ object GuiBridgeRuntime {
         val pkgNames = listOfNotNull(detectedPkg, "ai.building.dev", "dev.ide.android.dev").distinct()
         val dynamicCandidates = pkgNames.flatMap { pkg ->
             listOf(
-                Path.of("/sdcard/Android/data/$pkg/files/codeassist/swiftui-sdk/android-aarch64"),
-                Path.of("/sdcard/Android/data/$pkg/files/codeassist/swiftui-sdk"),
-                Path.of("/sdcard/Android/data/$pkg/files/swiftui-sdk/android-aarch64"),
-                Path.of("/sdcard/Android/data/$pkg/files/swiftui-sdk"),
-                Path.of("/data/user/0/$pkg/files/developer-runtime/swiftui-sdk/android-aarch64"),
-                Path.of("/data/data/$pkg/files/developer-runtime/swiftui-sdk/android-aarch64"),
+                java.nio.file.Paths.get("/sdcard/Android/data/$pkg/files/codeassist/swiftui-sdk/android-aarch64"),
+                java.nio.file.Paths.get("/sdcard/Android/data/$pkg/files/codeassist/swiftui-sdk"),
+                java.nio.file.Paths.get("/sdcard/Android/data/$pkg/files/swiftui-sdk/android-aarch64"),
+                java.nio.file.Paths.get("/sdcard/Android/data/$pkg/files/swiftui-sdk"),
+                java.nio.file.Paths.get("/data/user/0/$pkg/files/developer-runtime/swiftui-sdk/android-aarch64"),
+                java.nio.file.Paths.get("/data/data/$pkg/files/developer-runtime/swiftui-sdk/android-aarch64"),
             )
         }
         val backupCandidates = listOfNotNull(
             filesRoot?.resolve("developer-runtime/swiftui-sdk/android-aarch64"),
             filesRoot?.resolve("developer-runtime/swiftui-sdk"),
         ) + dynamicCandidates + listOfNotNull(
-            Path.of("/data/local/tmp/swiftui-sdk/android-aarch64"),
-            Path.of("/data/local/tmp/swiftui-sdk"),
-            Path.of(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk/android-aarch64"),
-            Path.of(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk"),
+            java.nio.file.Paths.get("/data/local/tmp/swiftui-sdk/android-aarch64"),
+            java.nio.file.Paths.get("/data/local/tmp/swiftui-sdk"),
+            java.nio.file.Paths.get(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk/android-aarch64"),
+            java.nio.file.Paths.get(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk"),
         )
         for (candidate in backupCandidates) {
             val backup = if (Files.isDirectory(candidate.resolve("android-aarch64"))) {
@@ -145,7 +145,7 @@ object GuiBridgeRuntime {
             return true
         }
         if (installation.packId == "host-system") {
-            val hostSdk = Path.of(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk")
+            val hostSdk = java.nio.file.Paths.get(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk")
             if (Files.isRegularFile(hostSdk.resolve("libSwiftUI.a")) && Files.isDirectory(hostSdk.resolve("SwiftUI.swiftmodule"))) {
                 return true
             }
@@ -594,7 +594,7 @@ object GuiBridgeRuntime {
         for (line in compileLines) {
             val m = errorRegex.find(line.trim()) ?: continue
             val rawPath = m.groupValues[1].trim()
-            val fileName = Path.of(rawPath).fileName?.toString().orEmpty()
+            val fileName = java.nio.file.Paths.get(rawPath).fileName?.toString().orEmpty()
             for (cand in candidates) {
                 val candNorm = cand.toAbsolutePath().normalize()
                 if (candNorm in protectedPaths || cand.fileName.toString() in protectedNames) continue
@@ -1166,7 +1166,7 @@ object GuiBridgeRuntime {
             val swiftAndroidLib = installation.prefix.resolve("lib/swift/android")
             val archInclude = installation.prefix.resolve("include/aarch64-linux-android")
             val archLib = installation.prefix.resolve("lib/aarch64-linux-android")
-            val hostBridgeSdk = Path.of(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk")
+            val hostBridgeSdk = java.nio.file.Paths.get(System.getProperty("user.home", ""), ".building/swiftui-bridge-sdk")
             val macroServer = installation.prefix.resolve("bin/OpenAppleMacrosServer")
             val hasMacroServer = Files.isRegularFile(macroServer) && Files.isExecutable(macroServer)
             fun buildSwiftcCommand(sources: List<Path>): List<String> = buildList {
@@ -1192,7 +1192,7 @@ object GuiBridgeRuntime {
                         add("-L$archLib")
                     }
                 } else if (Files.isDirectory(hostBridgeSdk)) {
-                    val cltSdk = Path.of("/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk")
+                    val cltSdk = java.nio.file.Paths.get("/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk")
                     if (swiftcBin.toString().contains(".swiftly") && Files.isDirectory(cltSdk)) {
                         add("-sdk")
                         add(cltSdk.toString())

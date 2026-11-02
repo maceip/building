@@ -164,15 +164,9 @@ class AgentHomeRowsTest {
             }
             val plainStrings = allTextStrings.map { it.text }
 
-            // 1. Onboarding gate ("What should we build?", "Continue", "Import or clone", "All projects") is gone;
-            //    real action buttons + QuickCloneBar are rendered directly on ProjectsHomeScreen.
-            assertFalse("What should we build?" in plainStrings, "Onboarding prompt gate must not be rendered")
-            assertFalse("Import or clone" in plainStrings, "Unstyled 'Import or clone' text must not be rendered")
-            assertFalse("Continue" in plainStrings, "Unstyled 'Continue' section must not be rendered")
-            assertTrue("Clone app" in plainStrings, "Expected 'Clone app' button on ProjectsHomeScreen (present: $plainStrings)")
-            assertTrue("Paste GitHub URL or owner/repo to clone…" in plainStrings, "Expected QuickCloneBar URL input on ProjectsHomeScreen")
-            assertTrue("Paste" in plainStrings, "Expected 'Paste' button in QuickCloneBar")
-            assertTrue("Clone" in plainStrings, "Expected 'Clone' button in QuickCloneBar")
+            // 1. Real provider & model chip is shown; fake "On-device" chip is NOT shown.
+            assertFalse("On-device" in plainStrings, "Hardcoded 'On-device' chip must not be rendered")
+            assertTrue("Antigravity (Google) · gemini-3.1-pro" in plainStrings, "Real configured provider and model must be rendered")
 
             // 2. Most recent project ("SignalAndroid") title has NO shimmer brush, while its inline subtitle DOES have shimmer brushes.
             val recentTitle = allTextStrings.firstOrNull { it.text == "SignalAndroid" }

@@ -131,48 +131,50 @@ subprojects {
                     if (name == "regressionTest") includeTags("regression") else excludeTags("regression")
                 }
             }
-            val testTaskName = when {
-                pluginId.endsWith("multiplatform") -> when {
-                    "jvmTest" in tasks.names -> "jvmTest"
-                    "desktopTest" in tasks.names -> "desktopTest"
+            afterEvaluate {
+                val testTaskName = when {
+                    pluginId.endsWith("multiplatform") -> when {
+                        "jvmTest" in tasks.names -> "jvmTest"
+                        "desktopTest" in tasks.names -> "desktopTest"
+                        else -> null
+                    }
+                    "test" in tasks.names -> "test"
                     else -> null
                 }
-                "test" in tasks.names -> "test"
-                else -> null
-            }
-            if (testTaskName != null) {
-                tasks.register<Test>("regressionTest") {
-                    group = "verification"
-                    description = "Runs the opt-in @Tag(\"regression\") completion benchmark/quality/memory suites."
-                    val testTask = tasks.named<Test>(testTaskName)
-                    testClassesDirs = testTask.get().testClassesDirs
-                    classpath = testTask.get().classpath
-                // Baselines are committed under <module>/baselines and compared on every run; point the suites
-                // at that directory (the Test working dir is the module dir, but be explicit) and give the
-                // memory suites headroom. Always re-run (perf isn't an up-to-date-able output) and surface the
-                // printed comparison tables without needing --info.
-                workingDir = projectDir
-                systemProperty("bench.baselineDir", layout.projectDirectory.dir("baselines").asFile.absolutePath)
-                System.getProperty("bench.updateBaselines")?.let { systemProperty("bench.updateBaselines", it) }
-                // `-Dbench.quick=true`: one timed batch instead of five, for iterating on a suite. Gates and
-                // baseline writes are off in that mode — see `Bench.quick`.
-                System.getProperty("bench.quick")?.let { systemProperty("bench.quick", it) }
-                // `-Dbench.gate=alloc,quality`: only those metric kinds can fail the run (see RegressionSuite).
-                System.getProperty("bench.gate")?.let { systemProperty("bench.gate", it) }
-                maxHeapSize = "1536m"
-                // Benchmarks must always run fresh: never UP-TO-DATE, and never served FROM-CACHE (a cached
-                // full run would otherwise replay regardless of a `--tests` filter, and cached perf numbers are
-                // meaningless). Together these force a real execution every time.
-                outputs.upToDateWhen { false }
-                outputs.doNotCacheIf("regression benchmarks must measure a fresh run") { true }
-                testLogging {
-                    showStandardStreams = true
-                    events("passed", "failed", "skipped")
+                if (testTaskName != null && "regressionTest" !in tasks.names) {
+                    tasks.register<Test>("regressionTest") {
+                        group = "verification"
+                        description = "Runs the opt-in @Tag(\"regression\") completion benchmark/quality/memory suites."
+                        val testTask = tasks.named<Test>(testTaskName)
+                        testClassesDirs = testTask.get().testClassesDirs
+                        classpath = testTask.get().classpath
+                        // Baselines are committed under <module>/baselines and compared on every run; point the suites
+                        // at that directory (the Test working dir is the module dir, but be explicit) and give the
+                        // memory suites headroom. Always re-run (perf isn't an up-to-date-able output) and surface the
+                        // printed comparison tables without needing --info.
+                        workingDir = projectDir
+                        systemProperty("bench.baselineDir", layout.projectDirectory.dir("baselines").asFile.absolutePath)
+                        System.getProperty("bench.updateBaselines")?.let { systemProperty("bench.updateBaselines", it) }
+                        // `-Dbench.quick=true`: one timed batch instead of five, for iterating on a suite. Gates and
+                        // baseline writes are off in that mode — see `Bench.quick`.
+                        System.getProperty("bench.quick")?.let { systemProperty("bench.quick", it) }
+                        // `-Dbench.gate=alloc,quality`: only those metric kinds can fail the run (see RegressionSuite).
+                        System.getProperty("bench.gate")?.let { systemProperty("bench.gate", it) }
+                        maxHeapSize = "1536m"
+                        // Benchmarks must always run fresh: never UP-TO-DATE, and never served FROM-CACHE (a cached
+                        // full run would otherwise replay regardless of a `--tests` filter, and cached perf numbers are
+                        // meaningless). Together these force a real execution every time.
+                        outputs.upToDateWhen { false }
+                        outputs.doNotCacheIf("regression benchmarks must measure a fresh run") { true }
+                        testLogging {
+                            showStandardStreams = true
+                            events("passed", "failed", "skipped")
+                        }
+                    }
                 }
             }
         }
     }
-}
 
 }
 

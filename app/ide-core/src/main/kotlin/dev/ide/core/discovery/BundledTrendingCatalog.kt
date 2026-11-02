@@ -288,7 +288,7 @@ object BundledTrendingCatalog {
         val bytes = loadBundledScreenshotBytes(resourcePath) ?: return null
         val fileName = resourcePath.substringAfterLast('/')
         val targetDir = cacheDir?.resolve("discovery/bundled_shots")
-            ?: Path.of(System.getProperty("java.io.tmpdir"), "building_discovery_bundled_shots")
+            ?: java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), "building_discovery_bundled_shots")
         return try {
             Files.createDirectories(targetDir)
             val outFile = targetDir.resolve(fileName)
@@ -312,9 +312,9 @@ object BundledTrendingCatalog {
             val text = runCatching { stream.bufferedReader(Charsets.UTF_8).use { it.readText() } }.getOrNull()
             if (!text.isNullOrBlank()) return sanitizeMarkdownForRenderer(text)
         }
-        val rootReadme = Path.of("README.md")
+        val rootReadme = java.nio.file.Paths.get("README.md")
         if (Files.isRegularFile(rootReadme)) {
-            val text = runCatching { Files.readString(rootReadme) }.getOrNull()
+            val text = runCatching { String(Files.readAllBytes(rootReadme), Charsets.UTF_8) }.getOrNull()
             if (!text.isNullOrBlank()) return sanitizeMarkdownForRenderer(text)
         }
         return null

@@ -452,7 +452,7 @@ class ZCodeAgentService(
             val configFile = workDir.resolve(".zcode/config.json")
             Files.createDirectories(configFile.parent)
             val root = if (Files.isRegularFile(configFile)) {
-                runCatching { JSONObject(Files.readString(configFile)) }.getOrDefault(JSONObject())
+                runCatching { JSONObject(String(Files.readAllBytes(configFile), Charsets.UTF_8)) }.getOrDefault(JSONObject())
             } else {
                 JSONObject()
             }
@@ -462,7 +462,7 @@ class ZCodeAgentService(
                 "building",
                 JSONObject().put("type", "http").put("url", "http://127.0.0.1:$port/mcp"),
             )
-            Files.writeString(configFile, root.toString())
+            Files.write(configFile, root.toString().toByteArray(Charsets.UTF_8))
         }
     }
 

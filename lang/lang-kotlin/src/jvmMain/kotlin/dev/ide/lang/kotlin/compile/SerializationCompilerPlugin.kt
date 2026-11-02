@@ -55,8 +55,14 @@ object SerializationCompilerPlugin : KotlinCompilerPlugin {
     /** Extract the bundled jar into [dir], reusing an already-extracted copy. Null when the resource is absent. */
     fun extractTo(dir: Path): Path? = runCatching {
         val target = dir.resolve(FILE_NAME)
-        if (Files.isRegularFile(target) && Files.size(target) > 0L) return target
-        val stream = SerializationCompilerPlugin::class.java.getResourceAsStream(RESOURCE) ?: return null
+        val url = SerializationCompilerPlugin::class.java.getResource(RESOURCE) ?: return null
+        val expectedSize = runCatching { url.openConnection().contentLengthLong }.getOrDefault(-1L)
+        if (Files.isRegularFile(target) && Files.size(target) > 0L &&
+            (expectedSize <= 0L || Files.size(target) == expectedSize)
+        ) {
+            return target
+        }
+        val stream = url.openStream()
         Files.createDirectories(dir)
         val tmp = Files.createTempFile(dir, "serialization-plugin", ".tmp")
         stream.use { Files.copy(it, tmp, StandardCopyOption.REPLACE_EXISTING) }

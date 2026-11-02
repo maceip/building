@@ -416,7 +416,7 @@ class ProjectManager private constructor(
             found += "swift"
             val pkgSwift = dir.resolve("Package.swift")
             if (Files.isRegularFile(pkgSwift)) {
-                val text = runCatching { Files.readString(pkgSwift) }.getOrDefault("")
+                val text = runCatching { String(Files.readAllBytes(pkgSwift), Charsets.UTF_8) }.getOrDefault("")
                 if (text.contains("SwiftUI", ignoreCase = true)) found += "swiftui"
                 if (text.contains(".iOS", ignoreCase = true)) found += "ios"
                 if (text.contains(".macOS", ignoreCase = true)) found += "macos"
@@ -426,7 +426,7 @@ class ProjectManager private constructor(
             for (f in listOf("pyproject.toml", "requirements.txt")) {
                 val p = dir.resolve(f)
                 if (Files.isRegularFile(p)) {
-                    val text = runCatching { Files.readString(p) }.getOrDefault("")
+                    val text = runCatching { String(Files.readAllBytes(p), Charsets.UTF_8) }.getOrDefault("")
                     for (token in listOf("fastapi", "gradio", "streamlit", "torch", "flask", "django", "cli")) {
                         if (text.contains(token, ignoreCase = true)) found += token
                     }
@@ -437,7 +437,7 @@ class ProjectManager private constructor(
             for (f in listOf("app/build.gradle.kts", "app/build.gradle", "build.gradle.kts", "build.gradle")) {
                 val p = dir.resolve(f)
                 if (Files.isRegularFile(p)) {
-                    val text = runCatching { Files.readString(p) }.getOrDefault("")
+                    val text = runCatching { String(Files.readAllBytes(p), Charsets.UTF_8) }.getOrDefault("")
                     if (text.contains("compose", ignoreCase = true)) found += "compose"
                     if (text.contains("material3", ignoreCase = true)) found += "material3"
                     if (text.contains("kotlin", ignoreCase = true)) found += "kotlin"

@@ -97,7 +97,9 @@ class DesktopRuntimeHost(
         val nvmBins = runCatching {
             val nvmDir = Paths.get(System.getProperty("user.home", ""), ".nvm/versions/node")
             if (Files.isDirectory(nvmDir)) {
-                Files.list(nvmDir).use { s -> s.sorted(Comparator.reverseOrder()).map { it.resolve("bin") }.toList() }
+                Files.list(nvmDir).use { s ->
+                    s.sorted(Comparator.reverseOrder()).map { it.resolve("bin") }.collect(java.util.stream.Collectors.toList())
+                }
             } else emptyList()
         }.getOrDefault(emptyList())
         fun findInPath(vararg names: String): Path? {

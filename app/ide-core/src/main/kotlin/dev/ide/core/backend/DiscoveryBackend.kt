@@ -43,7 +43,7 @@ class DiscoveryBackend(
             val tokenFile = cacheDir.resolve("discovery/pat.token")
             if (Files.exists(tokenFile)) {
                 runCatching {
-                    val token = Files.readString(tokenFile).trim()
+                    val token = String(Files.readAllBytes(tokenFile), Charsets.UTF_8).trim()
                     if (token.isNotBlank()) {
                         client.token = token
                         val verified = client.verifyToken(token)
@@ -206,7 +206,7 @@ class DiscoveryBackend(
                 val tokenFile = cacheDir.resolve("discovery/pat.token")
                 runCatching {
                     Files.createDirectories(tokenFile.parent)
-                    Files.writeString(tokenFile, trimmed)
+                    Files.write(tokenFile, trimmed.toByteArray(Charsets.UTF_8))
                 }
             }
             feedCache.clear()

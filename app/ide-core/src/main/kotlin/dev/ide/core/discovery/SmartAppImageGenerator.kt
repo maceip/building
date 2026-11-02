@@ -886,7 +886,7 @@ class SmartAppImageGenerator(
                         if (ext in setOf("kt", "swift", "xml", "py", "ts", "tsx", "js", "jsx", "java", "rs", "cpp", "h")) {
                             if (out.size < 8 && Files.size(file) < 64_000) {
                                 val rel = repoDir.relativize(file).toString()
-                                out[rel] = Files.readString(file)
+                                out[rel] = String(Files.readAllBytes(file), Charsets.UTF_8)
                             }
                         }
                     }

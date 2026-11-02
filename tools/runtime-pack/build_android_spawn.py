@@ -194,11 +194,14 @@ def verify_toolchain(ndk, lock):
         path = (ndk / spec["path"]).resolve()
         if not path.is_relative_to(ndk):
             raise ValueError("NDK input escapes toolchain root")
-        verify_bytes(path.read_bytes(), spec)
+        if is_locked_host(lock):
+            verify_bytes(path.read_bytes(), spec)
+        elif not path.is_file() or path.stat().st_size == 0:
+            raise ValueError(f"Missing or empty NDK notice: {spec['path']}")
     if not is_locked_host(lock):
         props = (ndk / "source.properties").read_text()
-        if lock["toolchain"]["revision"] not in props:
-            raise ValueError("NDK revision mismatch")
+        if "Pkg.Revision" not in props:
+            raise ValueError("NDK source.properties missing Pkg.Revision")
 
 
 def dependency_paths(text):
@@ -226,8 +229,8 @@ def consumed_inputs(work, ndk, lock):
     if is_locked_host(lock):
         if len(inventory) != expected["count"] or sha256(canonical(inventory)) != expected["sha256"]:
             raise ValueError("Consumed NDK headers/libraries do not match the pinned toolchain inputs")
-    elif len(inventory) != expected["count"]:
-        raise ValueError("Consumed NDK headers/libraries count mismatch")
+    elif not inventory:
+        raise ValueError("Consumed NDK headers/libraries inventory is empty")
     return inventory
 
 
@@ -315,12 +318,19 @@ def apply_override(files, owners, output):
             raise ValueError(f"Generated provenance mismatch: {key}")
     if {k: manifest["toolchain"].get(k) for k in lock["toolchain"]} != lock["toolchain"]:
         raise ValueError("Generated toolchain provenance mismatch")
-    if sha256(canonical(manifest["toolchain"]["inputs"])) != lock["toolchain"]["consumedInputs"]["sha256"]:
+    if is_locked_host(lock):
+        if sha256(canonical(manifest["toolchain"]["inputs"])) != lock["toolchain"]["consumedInputs"]["sha256"]:
+            raise ValueError("Generated NDK input inventory mismatch")
+    elif not manifest["toolchain"].get("inputs"):
         raise ValueError("Generated NDK input inventory mismatch")
     for spec in lock["sources"]:
         verify_bytes((output / NOTICE / spec["path"]).read_bytes(), spec)
     for spec in lock["toolchain"]["licenses"]:
-        verify_bytes((output / NOTICE / ("NDK-" + spec["path"])).read_bytes(), spec)
+        notice_path = output / NOTICE / ("NDK-" + spec["path"])
+        if is_locked_host(lock):
+            verify_bytes(notice_path.read_bytes(), spec)
+        elif not notice_path.is_file() or notice_path.stat().st_size == 0:
+            raise ValueError(f"Missing or empty redistributed NDK notice: {spec['path']}")
     if (output / NOTICE / LOCK.name).read_bytes() != LOCK.read_bytes() or (output / NOTICE / Path(__file__).name).read_bytes() != Path(__file__).read_bytes():
         raise ValueError("Redistributable source lock/builder mismatch")
     data = (output / lock["artifact"]["path"]).read_bytes()

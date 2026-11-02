@@ -847,7 +847,7 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         val targetFile = rootDir.resolve(language.relativeFilePath).normalize()
         runCatching {
             Files.createDirectories(targetFile.parent)
-            Files.writeString(targetFile, code)
+            Files.write(targetFile, code.toByteArray(Charsets.UTF_8))
         }
         val displayPath = if (ctx.servicesOrNull?.workspaceRoot != null) {
             language.relativeFilePath

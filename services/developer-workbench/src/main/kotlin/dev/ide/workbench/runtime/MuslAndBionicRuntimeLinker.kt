@@ -101,7 +101,7 @@ object MuslAndBionicRuntimeLinker {
         extraLibDirs: List<Path> = emptyList(),
     ): List<String> {
         if (command.isEmpty()) return command
-        val executable = runCatching { Path.of(command.first()) }.getOrNull() ?: return command
+        val executable = runCatching { java.nio.file.Paths.get(command.first()) }.getOrNull() ?: return command
         if (!Files.isRegularFile(executable)) return command
         val inspection = inspectElf(executable)
         if (inspection.flavor != ElfRuntimeFlavor.MUSL) return command

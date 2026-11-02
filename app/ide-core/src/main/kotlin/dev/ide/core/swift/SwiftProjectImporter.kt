@@ -135,7 +135,7 @@ class SwiftProjectImporter : ProjectImporter {
     }
 
     private fun extractPackageName(packageSwift: Path): String? = runCatching {
-        val text = Files.readString(packageSwift)
+        val text = String(Files.readAllBytes(packageSwift), Charsets.UTF_8)
         Regex("""Package\s*\(\s*name:\s*"([^"]+)"""").find(text)?.groupValues?.get(1)
             ?: Regex("""name:\s*"([^"]+)"""").find(text)?.groupValues?.get(1)
     }.getOrNull()

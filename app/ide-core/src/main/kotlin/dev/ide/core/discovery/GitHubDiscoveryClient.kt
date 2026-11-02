@@ -608,7 +608,7 @@ class GitHubDiscoveryClient(
         )
 
         val targetDir = cacheDir?.resolve("discovery/shots")
-            ?: Path.of(System.getProperty("java.io.tmpdir"), "building_discovery_shots")
+            ?: java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), "building_discovery_shots")
         return try {
             Files.createDirectories(targetDir)
             val safeOwner = owner.replace(Regex("[^a-zA-Z0-9._-]"), "_")
@@ -640,11 +640,11 @@ class GitHubDiscoveryClient(
         val safeOwner = owner.replace(Regex("[^a-zA-Z0-9._-]"), "_")
         val safeRepo = repoName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
         val readmeCacheDir = cacheDir?.resolve("discovery/readmes")
-            ?: Path.of(System.getProperty("java.io.tmpdir"), "building_discovery_readmes")
+            ?: java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), "building_discovery_readmes")
         val cachedFile = readmeCacheDir.resolve("${safeOwner}__${safeRepo}.md")
 
         if (Files.isRegularFile(cachedFile)) {
-            val cached = runCatching { Files.readString(cachedFile) }.getOrNull()
+            val cached = runCatching { String(Files.readAllBytes(cachedFile), Charsets.UTF_8) }.getOrNull()
             if (!cached.isNullOrBlank()) return BundledTrendingCatalog.sanitizeMarkdownForRenderer(cached)
         }
 
@@ -694,7 +694,7 @@ class GitHubDiscoveryClient(
 
         runCatching {
             Files.createDirectories(readmeCacheDir)
-            Files.writeString(cachedFile, finalMarkdown)
+            Files.write(cachedFile, finalMarkdown.toByteArray(Charsets.UTF_8))
         }
         return finalMarkdown
     }

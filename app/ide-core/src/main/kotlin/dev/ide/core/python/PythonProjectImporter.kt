@@ -146,7 +146,7 @@ class PythonProjectImporter : ProjectImporter {
     }
 
     private fun extractTomlName(toml: Path): String? = runCatching {
-        val text = Files.readString(toml)
+        val text = String(Files.readAllBytes(toml), Charsets.UTF_8)
         val match = Regex("""name\s*=\s*"([^"]+)"""").find(text)
         match?.groupValues?.get(1)
     }.getOrNull()

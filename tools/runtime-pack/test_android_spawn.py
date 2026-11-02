@@ -220,6 +220,22 @@ class SpawnOverrideTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "NDK input inventory"):
             spawn.apply_override(self.files, self.owners, self.output)
 
+    def test_cross_host_override_accepts_non_locked_ndk_inputs_and_notices(self):
+        self.lock["toolchain"]["host"] = "other-host"
+        self.lock["toolchain"]["licenses"] = [pin("NOTICE", b"darwin notice")]
+        (self.output / spawn.NOTICE / "NDK-NOTICE").write_bytes(b"linux ndk 27.3 notice")
+        (self.output / spawn.NOTICE / Path(spawn.__file__).name).write_bytes(Path(spawn.__file__).read_bytes())
+        self.manifest["builderSha256"] = spawn.sha256(Path(spawn.__file__).read_bytes())
+        self.manifest["toolchain"] = dict(
+            self.lock["toolchain"],
+            inputs=[{"path": "sysroot/usr/include/spawn.h", "sha256": "1" * 64, "size": 42}],
+        )
+        self.manifest["artifact"] = dict(self.lock["artifact"], **spawn.validate_artifact(self.binary, self.lock))
+        self.save_manifest()
+        provenance = spawn.apply_override(self.files, self.owners, self.output)
+        self.assertEqual(self.binary, self.files["lib/libandroid-spawn.so"])
+        self.assertEqual(1, len(provenance["toolchain"]["inputs"]))
+
 
 @unittest.skipUnless(os.environ.get("ANDROID_SPAWN_TEST_NDK"), "Set ANDROID_SPAWN_TEST_NDK to run real offline host compiles")
 class SpawnReproducibilityTests(unittest.TestCase):

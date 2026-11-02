@@ -278,7 +278,7 @@ class AgentSettingsHostTest {
             }
         }
 
-        val reportDir = File("build/reports/paparazzi/agent-settings")
+        val reportDir = File("build/reports/paparazzi/agent-settings").apply { deleteRecursively() }
         PaparazziSession(
             deviceConfig = DeviceConfig.PIXEL_9_PRO.withHeight(2400),
             reportDir = reportDir,

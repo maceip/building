@@ -73,7 +73,3 @@ dependencies {
     "jvmTestImplementation"(libs.junit.jupiter)
     "jvmTestRuntimeOnly"(libs.junit.platform.launcher)
 }
-
-tasks.named<Test>("jvmTest") {
-    useJUnitPlatform()
-}

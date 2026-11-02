@@ -409,7 +409,7 @@ class TermuxExtensionManager(
                             Files.createDirectories(target.parent)
                             Files.deleteIfExists(target)
                             val linkTarget = rewriteTermuxLinkTarget(entry.linkName, runtimePrefix)
-                            Files.createSymbolicLink(target, Path.of(linkTarget))
+                            Files.createSymbolicLink(target, java.nio.file.Paths.get(linkTarget))
                         }
                         entry.isLink -> {
                             val linkedRel = stripTermuxPrefix(entry.linkName)
