@@ -264,7 +264,7 @@ class InVmPreviewCorpusTest {
         VmPreviewEntry.pointer(direct, 2, 150f, 100f)
         val directAfter = directSettle()
         VmPreviewEntry.close(direct)
-        File(File(System.getProperty("java.io.tmpdir"), "codeassist-snapshots"), "in-vm-session-after-tap.png").writeBytes(after[0] as ByteArray)
+        File(File(System.getProperty("java.io.tmpdir"), "codeassist-snapshots").apply { mkdirs() }, "in-vm-session-after-tap.png").writeBytes(after[0] as ByteArray)
         kotlin.test.assertTrue((after[0] as ByteArray).contentEquals(directAfter[0] as ByteArray), "the VM's frame after the tap is the direct one")
     }
 
