@@ -48,7 +48,11 @@ jobs:
       - name: Disable Kotlin incremental compilation (CI)
         run: |
           mkdir -p ~/.gradle
-          echo "kotlin.incremental=false" >> ~/.gradle/gradle.properties
+          cat >> ~/.gradle/gradle.properties <<'EOF'
+          kotlin.incremental=false
+          org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+          kotlin.daemon.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=768m
+          EOF
 
       # 1) The fast correctness gate: every framework unit test. Regression suites are @Tag("regression")
       #    and excluded from `test`, so this stays quick.
@@ -91,7 +95,7 @@ jobs:
           :interp-compose:desktopTest
           :platform-core:jvmTest :project-model-impl:jvmTest :model-bridge:jvmTest
           :store-bridge:jvmTest :store-impl:jvmTest
-          --console=plain --stacktrace
+          --max-workers=1 --console=plain --stacktrace
 
       # 2) The quality gates: deterministic given the pinned JDK (same `jrt` class library + fixed indexes),
       #    so they gate ranking/recall regressions. One unambiguous invocation per module.
@@ -169,7 +173,11 @@ jobs:
       - name: Disable Kotlin incremental compilation (CI)
         run: |
           mkdir -p ~/.gradle
-          echo "kotlin.incremental=false" >> ~/.gradle/gradle.properties
+          cat >> ~/.gradle/gradle.properties <<'EOF'
+          kotlin.incremental=false
+          org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8
+          kotlin.daemon.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=768m
+          EOF
 
       # `default` rather than a Google-APIs image: nothing here touches Play services, and the plain image
       # is the smaller download. KVM is enabled by the step above it, or the emulator falls back to an
