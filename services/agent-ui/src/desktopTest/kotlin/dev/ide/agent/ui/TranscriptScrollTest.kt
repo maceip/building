@@ -59,7 +59,7 @@ class TranscriptScrollTest {
         var time = 0L
         fun frames(count: Int = 40) {
             Snapshot.sendApplyNotifications()
-            repeat(count) { time += 16_666_667L; scene.render(time) }
+            repeat(count) { time += 16_666_667L; scene.render(time).close() }
         }
         fun update(next: List<UiAgentMessage>) { messages = next; frames() }
         try {

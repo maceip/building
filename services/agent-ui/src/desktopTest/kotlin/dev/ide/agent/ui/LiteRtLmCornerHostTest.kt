@@ -546,7 +546,7 @@ class LiteRtLmCornerHostTest {
             Snapshot.sendApplyNotifications()
             repeat(count) {
                 time += 16_666_667L
-                scene.render(time)
+                scene.render(time).close()
             }
         }
 

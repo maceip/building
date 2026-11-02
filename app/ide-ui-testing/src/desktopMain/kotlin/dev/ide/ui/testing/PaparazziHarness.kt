@@ -73,19 +73,22 @@ class PaparazziSession(
         Snapshot.sendApplyNotifications()
         repeat(frameCount.coerceAtLeast(1)) {
             nanoTime += frameStepNanos
-            scene.render(nanoTime)
+            scene.render(nanoTime).close()
         }
         Snapshot.sendApplyNotifications()
-        scene.render(nanoTime)
+        scene.render(nanoTime).close()
     }
 
     /** Renders the current frame into a standard ARGB [BufferedImage]. */
     fun renderBitmap(): BufferedImage {
         Snapshot.sendApplyNotifications()
-        val skiaImage = scene.render(nanoTime)
-        val pngData = skiaImage.encodeToData()
-            ?: error("Failed to encode Skia surface to PNG bytes")
-        return ImageIO.read(ByteArrayInputStream(pngData.bytes))
+        return scene.render(nanoTime).use { skiaImage ->
+            val pngData = skiaImage.encodeToData()
+                ?: error("Failed to encode Skia surface to PNG bytes")
+            pngData.use { data ->
+                ImageIO.read(ByteArrayInputStream(data.bytes))
+            }
+        }
     }
 
     /** Collects all unmerged [SemanticsNode]s in the current scene. */
@@ -219,8 +222,6 @@ class PaparazziSession(
             if (idx > 0) {
                 nanoTime += stepNanos
             }
-            Snapshot.sendApplyNotifications()
-            scene.render(nanoTime)
             frames += renderBitmap()
         }
 

@@ -79,10 +79,14 @@ class StoreListingShots {
             }
         }
         try {
-            var img = scene.render()
-            for (f in 1..40) { Thread.sleep(20); img = scene.render(f * 16_666_667L) }
+            scene.render().close()
+            for (f in 1..40) { Thread.sleep(20); scene.render(f * 16_666_667L).close() }
             File(OUT_DIR).mkdirs()
-            File("$OUT_DIR/callout-completion.png").writeBytes(img.encodeToData(EncodedImageFormat.PNG)!!.bytes)
+            scene.render(41 * 16_666_667L).use { img ->
+                img.encodeToData(EncodedImageFormat.PNG)!!.use { data ->
+                    File("$OUT_DIR/callout-completion.png").writeBytes(data.bytes)
+                }
+            }
         } finally { scene.close() }
     }
 
@@ -181,10 +185,10 @@ class StoreListingShots {
             }
         }
         try {
-            var img = scene.render()
+            scene.render().close()
             for (f in 1..frames) {
                 Thread.sleep(25)
-                img = scene.render(f * 16_666_667L)
+                scene.render(f * 16_666_667L).close()
                 if (f == 25 && typeAt != null) {
                     val session = state.active!!.session
                     val at = session.doc.text.indexOf(typeAt.first) + typeAt.first.length
@@ -192,9 +196,12 @@ class StoreListingShots {
                     session.commitText(typeAt.second)
                 }
             }
-            img = scene.render(frames * 16_666_667L + 2_000_000_000L)
             File(OUT_DIR).mkdirs()
-            File("$OUT_DIR/$name").writeBytes(img.encodeToData(EncodedImageFormat.PNG)!!.bytes)
+            scene.render(frames * 16_666_667L + 2_000_000_000L).use { img ->
+                img.encodeToData(EncodedImageFormat.PNG)!!.use { data ->
+                    File("$OUT_DIR/$name").writeBytes(data.bytes)
+                }
+            }
             println("wrote $OUT_DIR/$name")
         } finally {
             scene.close()

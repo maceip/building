@@ -310,9 +310,11 @@ class ChatDrawerSnapshot {
             CodeAssistTheme(dark = true) { Chat() }
         }
         try {
-            var img = scene.render()
-            for (frame in 1..80) img = scene.render(frame * 16_666_667L)
-            val png = img.encodeToData(EncodedImageFormat.PNG)!!.bytes
+            scene.render().close()
+            for (frame in 1..79) scene.render(frame * 16_666_667L).close()
+            val png = scene.render(80 * 16_666_667L).use { img ->
+                img.encodeToData(EncodedImageFormat.PNG)!!.use { it.bytes }
+            }
             File(OUT_DIR).mkdirs()
             File("$OUT_DIR/chat-half-screen-dark.png").writeBytes(png)
         } finally {
@@ -327,9 +329,11 @@ class ChatDrawerSnapshot {
             CodeAssistTheme(dark = dark) { content() }
         }
         try {
-            var img = scene.render()
-            for (frame in 1..80) img = scene.render(frame * 16_666_667L)
-            val png = img.encodeToData(EncodedImageFormat.PNG)!!.bytes
+            scene.render().close()
+            for (frame in 1..79) scene.render(frame * 16_666_667L).close()
+            val png = scene.render(80 * 16_666_667L).use { img ->
+                img.encodeToData(EncodedImageFormat.PNG)!!.use { it.bytes }
+            }
             File(OUT_DIR).mkdirs()
             File("$OUT_DIR/$name").writeBytes(png)
             println("wrote $OUT_DIR/$name")
