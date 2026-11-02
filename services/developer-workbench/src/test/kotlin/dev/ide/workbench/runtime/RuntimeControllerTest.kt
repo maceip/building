@@ -507,12 +507,13 @@ class RuntimeControllerTest {
                 val child = base.start(command, workingDirectory, environment)
                 return object : RuntimeChild by child {
                     override suspend fun terminate() {
+                        // Claim `firstTermination` BEFORE killing the child process: once `child.terminate()`
+                        // signals the process, `execute()`'s `awaitExit()` wakes on `workerScope` and immediately
+                        // calls `process.terminate()` in its own cleanup path, which would otherwise steal
+                        // `firstTermination` on the worker coroutine and self-deadlock awaiting `terminal`.
+                        val waitForExit = firstTermination.compareAndSet(true, false)
                         child.terminate()
-                        // Let awaitExit fully finish before stop can cancel the coroutine.
-                        // The fake terminate and the surrounding stop share one load-tolerant
-                        // deadline: nested equal 5s caps raced under full-suite rebuild load
-                        // and starved the exit-delivery coroutine into a false timeout.
-                        if (firstTermination.compareAndSet(true, false)) withTimeout(30_000) { terminal.await() }
+                        if (waitForExit) withTimeout(30_000) { terminal.await() }
                     }
                 }
             }
