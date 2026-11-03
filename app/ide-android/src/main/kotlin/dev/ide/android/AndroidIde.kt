@@ -63,9 +63,45 @@ object AndroidIde {
     private val snortSinkRef = AtomicReference<SnortLogSink?>(null)
     private val cachedExternalHomeRef = AtomicReference<File?>(null)
     private val cachedUpdateStampRef = AtomicReference<String?>(null)
+    private val prewarmedBootstrapRef = AtomicReference<java.util.concurrent.CompletableFuture<Session>?>(null)
     private val assetProvisionLock = Any()
     @Volatile
     private var provisionedAssetsKey: String? = null
+
+    fun prewarmBootstrap(context: Context) {
+        val appContext = context.applicationContext
+        val future = java.util.concurrent.CompletableFuture<Session>()
+        if (!prewarmedBootstrapRef.compareAndSet(null, future)) return
+        Thread({
+            try {
+                future.complete(bootstrap(appContext))
+            } catch (t: Throwable) {
+                future.completeExceptionally(t)
+            }
+        }, "ide-bootstrap-prewarm").apply { isDaemon = true }.start()
+    }
+
+    fun peekPrewarmedSession(): Session? {
+        val future = prewarmedBootstrapRef.get() ?: return null
+        if (!future.isDone || future.isCompletedExceptionally) return null
+        return if (prewarmedBootstrapRef.compareAndSet(future, null)) {
+            runCatching { future.getNow(null) }.getOrNull()
+        } else {
+            null
+        }
+    }
+
+    fun consumePrewarmedOrBootstrap(context: Context): Session {
+        val future = prewarmedBootstrapRef.getAndSet(null)
+        if (future != null) {
+            return try {
+                future.join()
+            } catch (e: java.util.concurrent.CompletionException) {
+                throw (e.cause ?: e)
+            }
+        }
+        return bootstrap(context.applicationContext)
+    }
 
     private fun packageUpdateStamp(context: Context): String {
         cachedUpdateStampRef.get()?.let { return it }
@@ -243,9 +279,6 @@ object AndroidIde {
         // app alive (the MainActivity main-thread guard handles the UI looper). See IdeServicesBackend.
         backend.installCrashReporting()
         AndroidMemory.registerTrimHandler(appContext, backend)
-        // Promote the IDE process to a foreground service with CPU/Wi-Fi locks whenever a Git clone/sync is
-        // active so switching focused Android apps mid-clone never triggers OS socket termination (ECONNABORTED).
-        dev.ide.android.vcs.VcsForegroundService.bindToVcsActivity(appContext, backend.vcs.activity)
         // Plugins load once per process, so applying an installed plugin's change means starting again. Both
         // halves of that are wired here, and only in the UI process: the restart itself, and the watch that
         // notices a plugin app being installed, updated or uninstalled while the IDE is running (the `:build`
@@ -254,9 +287,14 @@ object AndroidIde {
         PluginPackageWatcher(appContext, ApkPluginSource(appContext), manager.pluginChanges).register()
         // Notifications that arrived by push while no engine existed (see CodeAssistMessagingService).
         runCatching { backend.adoptHostNotifications(PendingPushes.drain(appContext)) }
-        // Run non-blocking post-bootstrap housekeeping (legacy project recovery, previous native crash
-        // tombstone scan, and FCM push registration) on a daemon thread so the picker opens immediately.
+        // Warm the project list and agent config off the main thread so the first Home Screen frame renders
+        // without blocking on FUSE disk reads or AI Core Binder probes, then run non-blocking post-bootstrap
+        // housekeeping (VCS service binding, legacy project recovery, previous native crash tombstone scan,
+        // and FCM push registration).
         Thread({
+            runCatching { manager.list() }
+            runCatching { backend.agent.config() }
+            runCatching { dev.ide.android.vcs.VcsForegroundService.bindToVcsActivity(appContext, backend.vcs.activity) }
             runCatching { manager.importLegacyProjects() }
             runCatching { reportPreviousNativeCrash(appContext, manager, analytics, previousCrumb) }
             runCatching { registerForPush(appContext, manager, storeAccounts) }

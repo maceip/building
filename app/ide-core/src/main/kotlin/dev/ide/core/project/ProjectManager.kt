@@ -311,6 +311,15 @@ class ProjectManager private constructor(
     /** Directories a backup sweeps: the live projects, plus any legacy data still on disk. */
     private val backupRoots: List<Path> get() = listOf(projectsRoot) + legacyDataDirs
 
+    private data class CachedProjectSummary(
+        val wsStamp: PrefsStamp,
+        val unrecognizedMarker: Boolean,
+        val externalMarker: Boolean,
+        val summary: ProjectSummary,
+    )
+
+    private val summaryCache = java.util.concurrent.ConcurrentHashMap<Path, CachedProjectSummary>()
+
     /**
      * Existing projects (subdirs of [projectsRoot] holding a saved model), most-recently-opened first
      * (projects never opened since this was recorded fall to the bottom, ordered by name). The last-opened
@@ -331,33 +340,50 @@ class ProjectManager private constructor(
             .mapNotNull { runCatching { inPlaceFolder(Paths.get(it)) }.getOrNull() }
             .toList()
         return (dirs + linked).distinctBy { it.toAbsolutePath().normalize() }
-            .filter { runCatching { Files.isDirectory(it) && ModelPersistence.exists(it.toString()) }.getOrDefault(false) }
-            .map { dir ->
+            .mapNotNull { dir ->
+                val norm = dir.toAbsolutePath().normalize()
+                val wsStamp = stampOf(dir.resolve(".platform/workspace.json")) ?: return@mapNotNull null
+                val unrecMarker = UnrecognizedProjectMarker.exists(dir)
+                val extMarker = ExternalProjectMarker.exists(dir)
+                val lastOpened = prefs.getProperty(openedKey(dir))?.toLongOrNull() ?: 0L
+                val cached = summaryCache[norm]
+                if (cached != null &&
+                    cached.wsStamp == wsStamp &&
+                    cached.unrecognizedMarker == unrecMarker &&
+                    cached.externalMarker == extMarker
+                ) {
+                    return@mapNotNull cached.summary.copy(
+                        rootPath = dir.toString(),
+                        lastOpened = lastOpened,
+                    )
+                }
                 val proj = runCatching { ModelPersistence.load(dir.toString()) }.getOrNull()?.projects?.firstOrNull()
                 val isAndroid = proj?.modules?.any { m -> m.facets.any { it.tomlTable == AndroidFacetCodec.tomlTable } } ?: false
                 val isNode = proj?.buildSystemId == NodeModuleType.BUILD_SYSTEM.value
                 val isSwift = proj?.buildSystemId == SwiftModuleType.BUILD_SYSTEM.value
                 val isPython = proj?.buildSystemId == PythonModuleType.BUILD_SYSTEM.value
-                val compatibility = ExternalProjectMarker.exists(dir) && proj?.buildSystemId !in setOf(
+                val compatibility = extMarker && proj?.buildSystemId !in setOf(
                     NodeModuleType.BUILD_SYSTEM.value,
                     SwiftModuleType.BUILD_SYSTEM.value,
                     PythonModuleType.BUILD_SYSTEM.value,
                 )
-                ProjectSummary(
+                val summary = ProjectSummary(
                     proj?.name ?: dir.fileName.toString(),
                     dir.toString(),
                     proj?.modules?.size ?: 0,
                     compatibility = compatibility,
                     isAndroid = isAndroid,
-                    lastOpened = prefs.getProperty(openedKey(dir))?.toLongOrNull() ?: 0L,
+                    lastOpened = lastOpened,
                     // Same two conditions as IdeServices.isUnrecognizedProject, read without opening the engine.
-                    unrecognized = proj?.modules.isNullOrEmpty() && UnrecognizedProjectMarker.exists(dir),
+                    unrecognized = proj?.modules.isNullOrEmpty() && unrecMarker,
                     isNode = isNode,
                     isSwift = isSwift,
                     isPython = isPython,
                     ownerAvatarUrl = resolveGitHubOwnerAvatar(dir),
                     tags = resolveProjectTags(dir, isAndroid, isNode, isSwift, isPython, compatibility),
                 )
+                summaryCache[norm] = CachedProjectSummary(wsStamp, unrecMarker, extMarker, summary)
+                summary
             }
             .sortedWith(compareByDescending<ProjectSummary> { it.lastOpened }.thenBy { it.name.lowercase() })
     }

@@ -3,6 +3,7 @@ package dev.ide.android.litert
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Looper
 import android.util.Log
 import com.google.mlkit.genai.common.DownloadStatus
 import com.google.mlkit.genai.common.FeatureStatus
@@ -55,6 +56,9 @@ class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
         }.getOrNull()
     }
 
+    @Volatile
+    private var asyncProbeRunning: Boolean = false
+
     override fun probeStatus(): LiteRtAiCoreStatus {
         val nowNs = System.nanoTime()
         cachedStatus?.let { cached ->
@@ -62,6 +66,21 @@ class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
                 return cached
             }
         }
+        return probeStatusInternal(allowBlockingBinderCheck = false).also {
+            if ((it.available || it.systemServicePresent) && !asyncProbeRunning) {
+                asyncProbeRunning = true
+                Thread({
+                    try {
+                        probeStatusInternal(allowBlockingBinderCheck = true)
+                    } finally {
+                        asyncProbeRunning = false
+                    }
+                }, "ide-aicore-probe").apply { isDaemon = true }.start()
+            }
+        }
+    }
+
+    private fun probeStatusInternal(allowBlockingBinderCheck: Boolean): LiteRtAiCoreStatus {
         val pm = context.packageManager
         val pkgInfo = runCatching {
             pm.getPackageInfo(AICORE_PACKAGE, 0)
@@ -78,7 +97,9 @@ class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
 
         val aiCorePackagePresent = pkgInfo != null || serviceResolvable
         var checkError: Throwable? = null
-        val featureStatusCode = if (aiCorePackagePresent || odiServicePresent) {
+        // AiCoreClient's ServiceConnection callbacks post to the main looper, so calling runBlocking { checkStatus() }
+        // on the main thread deadlocks until timeout. Only run the Binder feature-status check off the main thread.
+        val featureStatusCode = if (allowBlockingBinderCheck && (aiCorePackagePresent || odiServicePresent)) {
             runCatching {
                 runBlocking {
                     withTimeoutOrNull(450L) {

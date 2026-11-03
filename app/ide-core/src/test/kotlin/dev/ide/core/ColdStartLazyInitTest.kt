@@ -53,9 +53,13 @@ class ColdStartLazyInitTest {
                 assertEquals(0, sdkProvisionCalls, "SDK provisioning must not block ProjectManager construction or project listing")
                 assertEquals(0, probeCalls.get(), "AI Core Binder probe must not run during IdeServicesBackend cold start")
 
+                val cfg = backend.agent.config()
+                assertTrue(cfg.providers.isNotEmpty())
+                assertEquals(1, probeCalls.get(), "Expected at most 1 AI Core probe across backend.agent.config(), got ${probeCalls.get()}")
+
                 val corner = backend.agent.liteRtCorner()
                 assertTrue(corner.models.isNotEmpty())
-                assertTrue(probeCalls.get() in 1..2, "Expected bounded AI Core probes when LiteRT Corner is opened, got ${probeCalls.get()}")
+                assertEquals(1, probeCalls.get(), "Expected cached AI Core status to be reused when LiteRT Corner is read, got ${probeCalls.get()}")
             } finally {
                 backend.close()
                 manager.dispose()

@@ -42,24 +42,22 @@ class DiscoveryBackend(
 
     init {
         if (cacheDir != null) {
-            val tokenFile = cacheDir.resolve("discovery/pat.token")
-            if (Files.exists(tokenFile)) {
-                runCatching {
-                    val token = String(Files.readAllBytes(tokenFile), Charsets.UTF_8).trim()
-                    if (token.isNotBlank()) {
-                        client.token = token
-                        authScope.launch {
-                            runCatching {
-                                val verified = client.verifyToken(token)
-                                if (verified != null) {
-                                    _authState.value = UiGitHubAuthState(
-                                        isAuthenticated = true,
-                                        username = verified.first,
-                                        tokenPreview = "..." + token.takeLast(4),
-                                        rateLimit = verified.second.first,
-                                        rateRemaining = verified.second.second
-                                    )
-                                }
+            authScope.launch {
+                val tokenFile = cacheDir.resolve("discovery/pat.token")
+                if (Files.exists(tokenFile)) {
+                    runCatching {
+                        val token = String(Files.readAllBytes(tokenFile), Charsets.UTF_8).trim()
+                        if (token.isNotBlank()) {
+                            client.token = token
+                            val verified = client.verifyToken(token)
+                            if (verified != null) {
+                                _authState.value = UiGitHubAuthState(
+                                    isAuthenticated = true,
+                                    username = verified.first,
+                                    tokenPreview = "..." + token.takeLast(4),
+                                    rateLimit = verified.second.first,
+                                    rateRemaining = verified.second.second
+                                )
                             }
                         }
                     }

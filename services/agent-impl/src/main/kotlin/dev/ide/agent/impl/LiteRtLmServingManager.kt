@@ -719,7 +719,7 @@ class LiteRtLmServingManager(
     @Synchronized
     fun provisionBuiltInModels() {
         userClearedAll = false
-        reconcileDiskArtifacts()
+        reconcileDiskArtifacts(forceAiCoreProbe = true)
         publishState()
     }
 
@@ -728,11 +728,14 @@ class LiteRtLmServingManager(
      * when present on the device) so [state] always reflects physical reality.
      */
     @Synchronized
-    fun reconcileDiskArtifacts() {
-        runCatching { Files.createDirectories(modelsDir) }
-        val aiCoreStatus = runCatching { aiCoreBridgeProvider().probeStatus() }
-            .getOrDefault(LiteRtAiCoreStatus(available = false))
-            .also { cachedAiCoreStatus = it }
+    fun reconcileDiskArtifacts(forceAiCoreProbe: Boolean = false) {
+        if (!Files.isDirectory(modelsDir)) {
+            runCatching { Files.createDirectories(modelsDir) }
+        }
+        val aiCoreStatus = (if (!forceAiCoreProbe) cachedAiCoreStatus else null)
+            ?: runCatching { aiCoreBridgeProvider().probeStatus() }
+                .getOrDefault(LiteRtAiCoreStatus(available = false))
+                .also { cachedAiCoreStatus = it }
 
         val validIds = mutableListOf<String>()
         for (spec in LiteRtLmCatalog.MODELS) {
@@ -756,7 +759,17 @@ class LiteRtLmServingManager(
             }
 
             val file = modelsDir.resolve(spec.artifactFileName)
-            val verified = LiteRtBinaryContainer.verify(file, expectedModelId = spec.id)
+            if (!Files.isRegularFile(file)) {
+                verifiedCache.remove(spec.id)
+                continue
+            }
+            val existing = verifiedCache[spec.id]
+            val currentSize = runCatching { Files.size(file) }.getOrDefault(-1L)
+            val verified = if (existing != null && existing.filePath == file && existing.sizeBytes == currentSize) {
+                existing
+            } else {
+                LiteRtBinaryContainer.verify(file, expectedModelId = spec.id)
+            }
             if (verified != null) {
                 verifiedCache[spec.id] = verified
                 validIds += spec.id
@@ -765,6 +778,8 @@ class LiteRtLmServingManager(
             }
         }
 
+        val prevActiveModelId = activeModelId
+        val prevSmoke = lastSmokeTestResponse
         if (activeModelId.isNotBlank() && activeModelId !in validIds) {
             activeModelId = validIds.firstOrNull().orEmpty()
         } else if (activeModelId.isBlank() && validIds.isNotEmpty()) {
@@ -776,7 +791,9 @@ class LiteRtLmServingManager(
         if (activeModelId.isNotBlank() && lastSmokeTestResponse.startsWith("Error: No LiteRT-LM model is installed")) {
             lastSmokeTestResponse = ""
         }
-        savePersistedState()
+        if (activeModelId != prevActiveModelId || lastSmokeTestResponse != prevSmoke) {
+            savePersistedState()
+        }
     }
 
     fun activeInstalledModel(): VerifiedLiteRtArtifact? {

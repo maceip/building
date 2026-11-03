@@ -27,8 +27,11 @@ import org.jetbrains.compose.resources.Font
  * the regular/medium/semibold/bold weights and the italic variants cover the syntax styles the
  * highlighter emits (bold tokens, italic comments). Built once per composition and remembered.
  */
+private var cachedJetBrainsMono: FontFamily? = null
+
 @Composable
 fun rememberJetBrainsMono(): FontFamily {
+    cachedJetBrainsMono?.let { return it }
     val regular = Font(Res.font.jetbrains_mono_regular, FontWeight.Normal, FontStyle.Normal)
     val italic = Font(Res.font.jetbrains_mono_italic, FontWeight.Normal, FontStyle.Italic)
     val medium = Font(Res.font.jetbrains_mono_medium, FontWeight.Medium, FontStyle.Normal)
@@ -37,7 +40,9 @@ fun rememberJetBrainsMono(): FontFamily {
     val bold = Font(Res.font.jetbrains_mono_bold, FontWeight.Bold, FontStyle.Normal)
     val boldItalic = Font(Res.font.jetbrains_mono_bold_italic, FontWeight.Bold, FontStyle.Italic)
     return remember(regular, italic, medium, mediumItalic, semibold, bold, boldItalic) {
-        FontFamily(regular, italic, medium, mediumItalic, semibold, bold, boldItalic)
+        cachedJetBrainsMono ?: FontFamily(regular, italic, medium, mediumItalic, semibold, bold, boldItalic).also {
+            cachedJetBrainsMono = it
+        }
     }
 }
 

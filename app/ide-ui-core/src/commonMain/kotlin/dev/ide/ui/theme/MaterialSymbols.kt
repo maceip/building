@@ -39,11 +39,16 @@ class SymbolFonts(val outline: FontFamily, val filled: FontFamily) {
     fun family(filled: Boolean): FontFamily = if (filled) this.filled else outline
 }
 
+private var cachedSymbolFonts: SymbolFonts? = null
+
 @Composable
 fun rememberMaterialSymbols(): SymbolFonts {
+    cachedSymbolFonts?.let { return it }
     val outline = Font(Res.font.material_symbols_rounded, FontWeight.Normal, FontStyle.Normal)
     val filled = Font(Res.font.material_symbols_rounded_filled, FontWeight.Normal, FontStyle.Normal)
-    return remember(outline, filled) { SymbolFonts(FontFamily(outline), FontFamily(filled)) }
+    return remember(outline, filled) {
+        cachedSymbolFonts ?: SymbolFonts(FontFamily(outline), FontFamily(filled)).also { cachedSymbolFonts = it }
+    }
 }
 
 /**

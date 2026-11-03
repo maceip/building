@@ -126,7 +126,14 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            var backend by remember { mutableStateOf<IdeBackend?>(null) }
+            val prewarmed = remember {
+                AndroidIde.peekPrewarmedSession()?.also { s ->
+                    session = s
+                    AndroidFrameMetrics.register(this@MainActivity, s.backend)
+                    deliverAuthRedirect()
+                }
+            }
+            var backend by remember { mutableStateOf<IdeBackend?>(prewarmed?.backend) }
             var error by remember { mutableStateOf<String?>(null) }
             LaunchedEffect(Unit) {
                 runCatching {
@@ -152,13 +159,15 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         dev.ide.android.workbench.runtime.RuntimeBrowserBridge.get(applicationContext)
-                        AndroidIde.bootstrap(applicationContext)
+                        prewarmed ?: AndroidIde.consumePrewarmedOrBootstrap(applicationContext)
                     }
                 }.onSuccess { s ->
-                    session = s; backend = s.backend
-                    AndroidFrameMetrics.register(this@MainActivity, s.backend)
-                    // A redirect that landed mid-bootstrap now has somewhere to go.
-                    deliverAuthRedirect()
+                    if (prewarmed == null) {
+                        session = s; backend = s.backend
+                        AndroidFrameMetrics.register(this@MainActivity, s.backend)
+                        // A redirect that landed mid-bootstrap now has somewhere to go.
+                        deliverAuthRedirect()
+                    }
                 }.onFailure { e -> error = e.stackTraceToString() }
             }
 
