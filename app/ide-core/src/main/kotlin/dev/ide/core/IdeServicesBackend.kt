@@ -228,11 +228,13 @@ class IdeServicesBackend(
             fun checkCurrent() {
                 caller.ensureActive()
                 if (activeServices !== captured || !authorized()) throw IncidentRepairPending("Project or repair authorization changed.")
-                if ((agent as? AgentBackend)?.hasExternalWorkspaceWriters() == true) {
-                    throw IncidentRepairPending("External workspace clients may still be active. Disable the MCP and FTP servers and restart the IDE before applying.")
-                }
-                if (agent.chatState.value.busy) {
-                    throw IncidentRepairPending("Finish the active AI request before applying the verified patch.")
+                if (agentDelegate.isInitialized()) {
+                    if ((agent as? AgentBackend)?.hasExternalWorkspaceWriters() == true) {
+                        throw IncidentRepairPending("External workspace clients may still be active. Disable the MCP and FTP servers and restart the IDE before applying.")
+                    }
+                    if (agent.chatState.value.busy) {
+                        throw IncidentRepairPending("Finish the active AI request before applying the verified patch.")
+                    }
                 }
                 buildRunnerFor(captured).sourceMutationBlocker()?.let { throw IncidentRepairPending(it) }
                 caller.ensureActive()
@@ -522,80 +524,93 @@ class IdeServicesBackend(
     fun adoptHostNotifications(incoming: List<dev.ide.ui.backend.UiNotification>) {
         notificationCenter.adopt(incoming)
     }
-    override val editor: EditorService = EditorBackend(this)
-    override val blocks: BlockService = BlockBackend(this)
-    override val preview: PreviewService = PreviewBackend(this)
-    override val search: SearchService = SearchBackend(this)
+    override val editor: EditorService by lazy { EditorBackend(this) }
+    override val blocks: BlockService by lazy { BlockBackend(this) }
+    override val preview: PreviewService by lazy { PreviewBackend(this) }
+    override val search: SearchService by lazy { SearchBackend(this) }
     override val build: BuildService = BuildBackend(this)
-    override val deps: DependencyService = DependencyBackend(this)
-    override val modules: ModuleService = ModuleBackend(this)
-    override val signing: SigningService = SigningBackend(this)
+    override val deps: DependencyService by lazy { DependencyBackend(this) }
+    override val modules: ModuleService by lazy { ModuleBackend(this) }
+    override val signing: SigningService by lazy { SigningBackend(this) }
     override val projects: ProjectService = ProjectBackend(this)
     /** The remote store catalog, resolved like [analytics]; absent → bundled-only. */
-    private val storeCatalogSource: dev.ide.store.StoreCatalogSource =
+    private val storeCatalogSource: dev.ide.store.StoreCatalogSource by lazy {
         manager?.applicationContainer?.getServiceOrNull(STORE_CATALOG_SOURCE)
             ?: dev.ide.store.StoreCatalogSource.Unconfigured
+    }
 
     /** Sign-in, resolved the same way. Absent → the store is readable but not publishable. */
-    private val storeAccountService: dev.ide.store.StoreAccountService =
+    private val storeAccountService: dev.ide.store.StoreAccountService by lazy {
         manager?.applicationContainer?.getServiceOrNull(STORE_ACCOUNT_SERVICE)
             ?: dev.ide.store.StoreAccountService.Unsupported
+    }
 
     /** Publishing, resolved the same way. Absent → the store is readable but not publishable. */
-    private val storeSubmissionService: dev.ide.store.StoreSubmissionService =
+    private val storeSubmissionService: dev.ide.store.StoreSubmissionService by lazy {
         manager?.applicationContainer?.getServiceOrNull(STORE_SUBMISSION_SERVICE)
             ?: dev.ide.store.StoreSubmissionService.Unsupported
+    }
 
     /** Ratings and reviews, resolved like the rest of the store ports. */
-    private val storeReviewService: dev.ide.store.StoreReviewService =
+    private val storeReviewService: dev.ide.store.StoreReviewService by lazy {
         manager?.applicationContainer?.getServiceOrNull(STORE_REVIEW_SERVICE)
             ?: dev.ide.store.StoreReviewService.Unsupported
+    }
 
     /** Moderation, resolved like the rest. Absent means this build shows no moderation surface at all. */
-    private val storeModerationService: dev.ide.store.StoreModerationService =
+    private val storeModerationService: dev.ide.store.StoreModerationService by lazy {
         manager?.applicationContainer?.getServiceOrNull(STORE_MODERATION_SERVICE)
             ?: dev.ide.store.StoreModerationService.Unsupported
+    }
 
-    override val store: StoreService = StoreBackend(
-        this, storeCatalogSource, storeAccountService, storeSubmissionService, notificationCenter,
-        storeModerationService, storeReviewService,
-    )
+    override val store: StoreService by lazy {
+        StoreBackend(
+            this, storeCatalogSource, storeAccountService, storeSubmissionService, notificationCenter,
+            storeModerationService, storeReviewService,
+        )
+    }
 
     /** Daily challenges, resolved like the rest of the online ports. */
-    private val dailyChallengeService: dev.ide.store.DailyChallengeService =
+    private val dailyChallengeService: dev.ide.store.DailyChallengeService by lazy {
         manager?.applicationContainer?.getServiceOrNull(DAILY_CHALLENGE_SERVICE)
             ?: dev.ide.store.DailyChallengeService.Unsupported
+    }
 
-    override val challenges: dev.ide.ui.backend.ChallengeService =
+    override val challenges: dev.ide.ui.backend.ChallengeService by lazy {
         dev.ide.core.backend.ChallengeBackend(this, dailyChallengeService)
+    }
     // Held as the concrete type so the Compose preview host can reach its ide-core-only lesson-lowering methods
     // ([lowerLessonComposePreview]) that return an ide-core type the [LearnService] UI interface can't name.
-    private val learnBackend = LearnBackend(this)
-    override val learn: LearnService = learnBackend
-    override val sdk: SdkService = SdkBackend(this)
+    private val learnBackend by lazy { LearnBackend(this) }
+    override val learn: LearnService get() = learnBackend
+    override val sdk: SdkService by lazy { SdkBackend(this) }
     override val settings: SettingsService = SettingsBackend(this)
-    override val customize: dev.ide.ui.backend.CustomizationService = CustomizationBackend(this)
-    override val actions: ActionService = ActionBackend(this)
-    override val icons: dev.ide.ui.backend.IconService = IconBackend(this)
+    override val customize: dev.ide.ui.backend.CustomizationService by lazy { CustomizationBackend(this) }
+    override val actions: ActionService by lazy { ActionBackend(this) }
+    override val icons: dev.ide.ui.backend.IconService by lazy { IconBackend(this) }
     // The AI agent is a disablable, non-essential plugin ([AgentPlugin.ID]). When the user turns it off in
     // Settings > Plugins the plugin isn't loaded, so we hand the UI the no-op service — the chat panel, the
     // sparkle toggle, and the agent loop all disappear (the UI keys these surfaces off this being Unsupported).
     // A manager-less backend (tests / single-project) has no catalog, so the agent stays wired.
-    override val agent: dev.ide.ui.backend.AgentService =
+    private val agentDelegate = lazy {
         if (manager?.env?.pluginCatalog?.isEnabled(AgentPlugin.ID) != false) {
             agentServiceFactory?.invoke(this) ?: AgentBackend(this)
         } else {
             dev.ide.ui.backend.AgentService.Unsupported
         }
+    }
+    override val agent: dev.ide.ui.backend.AgentService by agentDelegate
 
     // Version control is a disablable, non-essential plugin ([VcsPlugin.ID]). When it is off the plugin isn't
     // loaded, so the UI is handed the no-op service and every Git surface disappears. A manager-less backend
     // (tests / single-project) has no catalog, so it stays wired.
-    override val vcs: dev.ide.ui.backend.VcsService =
+    private val vcsDelegate = lazy {
         if (manager?.env?.pluginCatalog?.isEnabled(VcsPlugin.ID) != false) VcsBackend(this)
         else dev.ide.ui.backend.VcsService.Unsupported
+    }
+    override val vcs: dev.ide.ui.backend.VcsService by vcsDelegate
 
-    override val discovery: dev.ide.ui.backend.GitHubDiscoveryService =
+    override val discovery: dev.ide.ui.backend.GitHubDiscoveryService by lazy {
         DiscoveryBackend(
             client = dev.ide.core.discovery.GitHubDiscoveryClient(
                 token = null,
@@ -603,6 +618,7 @@ class IdeServicesBackend(
             ),
             cacheDir = manager?.projectsRoot?.parent,
         )
+    }
 
     // The Compose UI facets of the enabled built-in plugins (see BuiltInPlugins). The shell registers them into
     // UiPluginHost; a disabled plugin's facet isn't in this list, so its UI never appears. Empty with no manager.
@@ -612,6 +628,11 @@ class IdeServicesBackend(
     init {
         Log.addSink(errorDialogSink)
         followFileSystem(activeServices)
+        if (manager?.preference("settings.ai.mcpServer") == "true" ||
+            manager?.preference("settings.ai.ftpServer") == "true"
+        ) {
+            agent
+        }
 
         // The index-in-flight crash breadcrumb follows the status edges: a native crash this session is then
         // attributed to concurrent index churn (the leading hypothesis for the residual SIGSEGV).
@@ -896,7 +917,9 @@ class IdeServicesBackend(
         runCatching { analytics.flush() }
         runCatching { analytics.close() }
         // The version-control backend holds an open repository handle and its own refresh coroutine.
-        runCatching { (vcs as? VcsBackend)?.close() }
+        if (vcsDelegate.isInitialized()) {
+            runCatching { (vcs as? VcsBackend)?.close() }
+        }
         runCatching { fsEpochSubscription?.dispose() }
         runCatching { userMessageRelay?.dispose() }
         closing?.close()

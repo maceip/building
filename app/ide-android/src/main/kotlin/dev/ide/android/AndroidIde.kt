@@ -61,6 +61,38 @@ object AndroidIde {
 
     private val klogger = KotlinLogging.logger("dev.ide.android.AndroidIde")
     private val snortSinkRef = AtomicReference<SnortLogSink?>(null)
+    private val cachedExternalHomeRef = AtomicReference<File?>(null)
+    private val cachedUpdateStampRef = AtomicReference<String?>(null)
+    private val assetProvisionLock = Any()
+    @Volatile
+    private var provisionedAssetsKey: String? = null
+
+    private fun packageUpdateStamp(context: Context): String {
+        cachedUpdateStampRef.get()?.let { return it }
+        val resolved = runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+        }.getOrDefault(0L).toString()
+        cachedUpdateStampRef.compareAndSet(null, resolved)
+        return cachedUpdateStampRef.get() ?: resolved
+    }
+
+    fun ensureAssetsProvisioned(context: Context, home: File = appHomeDir(context)) {
+        val stamp = packageUpdateStamp(context)
+        val key = "${home.absolutePath}@$stamp"
+        if (provisionedAssetsKey == key) return
+        synchronized(assetProvisionLock) {
+            if (provisionedAssetsKey == key) return
+            home.mkdirs()
+            copyAsset(context, "android.jar", File(home, "android.jar"))
+            copyAsset(context, "core-lambda-stubs.jar", File(home, "core-lambda-stubs.jar"))
+            provisionKotlincHome(context, File(home, "kotlinc-home"))
+            copyAsset(context, "debug.keystore", File(home, "debug.keystore"))
+            runCatching {
+                copyAsset(context, "applog-runtime.jar", File(home, "applog-runtime.jar"))
+            }
+            provisionedAssetsKey = key
+        }
+    }
 
     fun ensureSnortConnected(context: Context): SnortLogSink {
         snortSinkRef.get()?.let { return it }
@@ -110,7 +142,7 @@ object AndroidIde {
                     "is_64_bit" to android.os.Process.is64Bit(),
                 )
             }
-            createProjectManager(context)
+            createProjectManager(context, asyncProvision = true)
         }
 
         // Measure the forked-VM R8 heap ceiling once per app version, in the background, and cache it. The
@@ -118,19 +150,14 @@ object AndroidIde {
         // limit) and the shrinker uses it as the default heap.
         detectR8CeilingAsync(context, manager)
 
-        // Recover projects left in internal storage by a build from before the move to external app storage
-        // (issues #1003 / #1024 / #1041 / #1042: projects vanishing from the picker after an update). Runs at
-        // most once; non-destructive.
-        runCatching { manager.importLegacyProjects() }
-
         val analytics = buildAnalytics(manager, home)
 
         // Crash breadcrumb: the 32-bit-ART SIGSEGV is a native fault, uncatchable in-process — so read what the
         // engine was doing if the PREVIOUS process died natively (via the OS exit reason), THEN arm the file for
         // this session's engine to write into. This is our only signal for that crash. See EngineBreadcrumb.
         val crumbFile = File(home, "last-engine-op.log")
+        val previousCrumb = dev.ide.platform.EngineBreadcrumb.readLast()
         dev.ide.platform.EngineBreadcrumb.init(crumbFile.toPath())
-        reportPreviousNativeCrash(context, manager, analytics, dev.ide.platform.EngineBreadcrumb.readLast())
 
         // Start with no project open (the picker is shown); opening one from it creates that project's engine
         // on demand. The download cache is shared across projects via the ProjectManager (sharedCachesRoot).
@@ -157,9 +184,10 @@ object AndroidIde {
         manager.applicationContainer.registerServiceIfAbsent(NOTIFICATION_PRESENTER) {
             AndroidNotificationPresenter(appContext)
         }
-        val supabaseAccounts = buildStoreAccounts(appContext)
-        val storeAccounts: dev.ide.store.StoreAccountService =
+        val supabaseAccounts by lazy { buildStoreAccounts(appContext) }
+        val storeAccounts: dev.ide.store.StoreAccountService by lazy {
             supabaseAccounts ?: dev.ide.store.StoreAccountService.Unsupported
+        }
         manager.applicationContainer.registerServiceIfAbsent(STORE_ACCOUNT_SERVICE) { storeAccounts }
         manager.applicationContainer.registerServiceIfAbsent(STORE_SUBMISSION_SERVICE) {
             buildStoreSubmissions(supabaseAccounts)
@@ -226,10 +254,13 @@ object AndroidIde {
         PluginPackageWatcher(appContext, ApkPluginSource(appContext), manager.pluginChanges).register()
         // Notifications that arrived by push while no engine existed (see CodeAssistMessagingService).
         runCatching { backend.adoptHostNotifications(PendingPushes.drain(appContext)) }
-        // Register this device for push. Off the main thread and best-effort: a launch that cannot reach
-        // the backend is simply not push-reachable until the next one, and nothing the user is doing should
-        // wait on it or fail because of it.
-        registerForPush(appContext, manager, storeAccounts)
+        // Run non-blocking post-bootstrap housekeeping (legacy project recovery, previous native crash
+        // tombstone scan, and FCM push registration) on a daemon thread so the picker opens immediately.
+        Thread({
+            runCatching { manager.importLegacyProjects() }
+            runCatching { reportPreviousNativeCrash(appContext, manager, analytics, previousCrumb) }
+            runCatching { registerForPush(appContext, manager, storeAccounts) }
+        }, "ide-post-bootstrap").apply { isDaemon = true }.start()
         // cold_start: time the whole on-device bootstrap (asset copy + project load + engine init). Emitted
         // once per launch for users who consented; no-op otherwise. Also serves as the per-launch anchor.
         if (backend.diagnostics.analyticsConsent() == true) {
@@ -261,39 +292,35 @@ object AndroidIde {
      * asset copies and the `kotlinc.art.home` system property are per-process, so calling it in the daemon
      * provisions that process correctly even though the main process already did so for its own.
      */
-    fun createProjectManager(context: Context): ProjectManager {
+    fun createProjectManager(context: Context, asyncProvision: Boolean = false): ProjectManager {
         // Classify the device first, in every process that stands up a manager, so caches sized at
         // construction already see the tier.
         AndroidMemory.detect(context)
         dev.ide.android.litert.AndroidAiCoreBridge.install(context)
         val home = appHomeDir(context).apply { mkdirs() }
-        val androidJar = copyAsset(context, "android.jar", File(home, "android.jar"))
-        // The Java 9+ desugar stubs (`java.lang.invoke.StringConcatFactory`/`LambdaMetafactory`): `android.jar`
-        // omits them, but the compiler emits an `invokedynamic` against `StringConcatFactory` for every string
-        // concatenation at source >= 9 (D8 desugars it at build time). Without this on the boot classpath the
-        // editor reports a spurious "StringConcatFactory cannot be resolved" on any Java 9+ buffer. Desktop
-        // pulls it from build-tools (IdeServices.detectAndroidSdk); on ART it ships as an asset.
-        val coreLambdaStubs =
-            copyAsset(context, "core-lambda-stubs.jar", File(home, "core-lambda-stubs.jar"))
+        val androidJar = File(home, "android.jar")
+        val coreLambdaStubs = File(home, "core-lambda-stubs.jar")
+        val kotlincHome = File(home, "kotlinc-home")
+        val debugKeystore = File(home, "debug.keystore")
+        val appLogRuntimeFile = File(home, "applog-runtime.jar")
+        System.setProperty("kotlinc.art.home", kotlincHome.absolutePath)
+
         // Index segments for android.jar, these stubs and kotlin-stdlib, generated at build time from the same
         // bytes (see :ide-android generatePrebuiltIndexAsset). Unpacked into the shared index cache just before a
         // project's first index pass, once per app version, so the phone never indexes android.jar itself.
-        val updateStamp = runCatching {
-            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
-        }.getOrDefault(0L).toString()
+        val updateStamp = packageUpdateStamp(context)
         dev.ide.core.PrebuiltIndexSegments.source = dev.ide.core.PrebuiltIndexSegments.Source(updateStamp) {
             context.assets.open(dev.ide.core.PrebuiltIndexSegments.ASSET)
         }
-        // The on-device Kotlin compiler (K2JVMCompiler) is dexed, but IntelliJ-core boots its extension
-        // registry by reading XML descriptors (META-INF/extensions/*.xml) from a real filesystem path, which
-        // a dex APK doesn't expose. Extract the bundled kotlinc-resources.zip (the compiler jar minus its
-        // .class entries) to a home dir and publish it via `kotlinc.art.home` — the value the ASM-patched
-        // PathUtil reads (see build-logic dev.ide.build.kotlinc.PathUtilSelfLocatePass). Without this, the
-        // first Kotlin compile throws "Unable to find extension point configuration .../compiler-cli-root.xml".
-        provisionKotlincHome(context, File(home, "kotlinc-home"))
-        // The debug keystore is a shared, non-secret credential; ART has no `keytool`, so a prebuilt
-        // PKCS12 keystore ships as an asset and is copied out for apksig (in-process) to sign with.
-        val debugKeystore = copyAsset(context, "debug.keystore", File(home, "debug.keystore"))
+        val appContext = context.applicationContext
+        if (asyncProvision) {
+            Thread({
+                runCatching { ensureAssetsProvisioned(appContext, home) }
+            }, "ide-asset-provision").apply { isDaemon = true }.start()
+        } else {
+            ensureAssetsProvisioned(context, home)
+        }
+        val appLogRuntimeJar: File? = appLogRuntimeFile.takeIf { it.exists() || asyncProvision }
         // The aapt2/zipalign prebuilts are packaged as lib*.so and extracted here at install time — the only
         // directory ART permits executing binaries from.
         val nativeLibDir = Paths.get(context.applicationInfo.nativeLibraryDir)
@@ -322,13 +349,6 @@ object AndroidIde {
         GradleEnvironment.host = gradleHost
         dev.ide.core.runtime.RuntimeBuildEnvironment.host =
             dev.ide.android.workbench.runtime.AndroidRuntimeHost(context.applicationContext)
-        // The debug-only in-app log bridge: extract the bundled runtime jar (woven into debug builds); the
-        // bridge inside the built app binds the IDE's exported AppLogSinkService over Binder and pushes its
-        // logs to the IDE's Logcat tab. Best-effort — a missing/failed asset must NEVER stop the IDE from
-        // starting; null just disables app-log forwarding (the Logcat tab stays empty).
-        val appLogRuntimeJar = runCatching {
-            copyAsset(context, "applog-runtime.jar", File(home, "applog-runtime.jar"))
-        }.getOrNull()
         val reliabilityCache = context.noBackupFilesDir.toPath().resolve("reliability-build")
         dev.ide.android.support.ReliabilityBuildEnvironment.runtimeJar = appLogRuntimeJar?.toPath()
         dev.ide.android.support.ReliabilityBuildEnvironment.privateCacheRoot = reliabilityCache
@@ -490,6 +510,7 @@ object AndroidIde {
             // read-only APK the system already installed and optimised.
             pluginSources = listOf(ApkPluginSource(context)),
             hostVersion = BuildConfig.VERSION_NAME,
+            onBeforeSdkUse = { ensureAssetsProvisioned(appContext, home) },
         ).also {
             managerRef.set(it)
             it.applyMemoryMode()
@@ -881,6 +902,7 @@ object AndroidIde {
      * treats as a valid home — see `legacyInternalHome` / `importLegacyProjects`).
      */
     fun externalHome(context: Context): File {
+        cachedExternalHomeRef.get()?.takeIf { it.isDirectory && it.canWrite() }?.let { return it }
         val external = context.getExternalFilesDir(null)
         if (external != null &&
             Environment.getExternalStorageState(external) == Environment.MEDIA_MOUNTED &&
@@ -893,9 +915,14 @@ object AndroidIde {
                 (codeassist.isDirectory || codeassist.mkdirs()) &&
                     probe.apply { writeText("ok"); delete() }.let { true }
             }.getOrDefault(false)
-            if (writable) return external
+            if (writable) {
+                cachedExternalHomeRef.set(external)
+                return external
+            }
         }
-        return context.filesDir
+        val fallback = context.filesDir
+        cachedExternalHomeRef.set(fallback)
+        return fallback
     }
 
     /** The whole CodeAssist app directory (`<external-files>/codeassist`): projects, the SDK `android.jar`,
@@ -910,9 +937,7 @@ object AndroidIde {
      *  it as the heap slider's MAX and the shrinker as its default heap. Forks a few short-lived VMs, so it
      *  runs off the main thread; re-measures only when the app updates (a new APK may carry a new R8). */
     private fun detectR8CeilingAsync(context: Context, manager: ProjectManager) {
-        val stamp = runCatching {
-            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
-        }.getOrDefault(0L).toString()
+        val stamp = packageUpdateStamp(context)
         if (manager.preference(R8_CEILING_STAMP_PREF) == stamp) return
         val appContext = context.applicationContext
         Thread {
@@ -943,9 +968,7 @@ object AndroidIde {
         // but a freshly-written file on this device's emulated external storage reports an unreliable mtime, so
         // the guard fired every launch and re-copied with a fresh mtime — which re-keyed (and so re-indexed)
         // android.jar on every cold start. The marker is mtime-independent. Mirrors [provisionKotlincHome].
-        val stamp = runCatching {
-            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
-        }.getOrDefault(0L).toString()
+        val stamp = packageUpdateStamp(context)
         val marker = File(dest.parentFile, "${dest.name}.provisioned")
         val upToDate =
             dest.exists() && dest.length() > 0L && marker.exists() && marker.readText() == stamp
@@ -976,9 +999,7 @@ object AndroidIde {
      * holding the package's `lastUpdateTime`.
      */
     private fun provisionKotlincHome(context: Context, home: File) {
-        val stamp = runCatching {
-            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
-        }.getOrDefault(0L).toString()
+        val stamp = packageUpdateStamp(context)
         val marker = File(home, ".provisioned")
         if (marker.exists() && marker.readText() == stamp) {
             System.setProperty("kotlinc.art.home", home.absolutePath)

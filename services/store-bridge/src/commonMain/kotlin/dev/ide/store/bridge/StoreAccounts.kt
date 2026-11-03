@@ -77,8 +77,9 @@ class StoreAccounts(
         // signed-out store to someone who never signed out. Restoring it is a network exchange, so it is
         // started here and lands in the flow when it answers rather than holding up construction — which
         // runs during app startup, where a slow or unreachable network would be a visible stall.
-        // [hasStoredSession] is the cheap half: nothing is launched for a user who never signed in.
-        if (accounts.hasStoredSession()) scope.launch {
+        // [hasStoredSession] is checked inside the background launch so AndroidKeyStore IPC never blocks startup.
+        scope.launch {
+            if (!accounts.hasStoredSession()) return@launch
             accounts.current()?.let {
                 // Signed in is published before [adopt] runs, because adopting is two network calls and a
                 // store that reads as signed out for the length of them is worse than one whose name

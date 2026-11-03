@@ -42,6 +42,12 @@ class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
     @Volatile
     private var cachedClient: GenerativeModel? = null
 
+    @Volatile
+    private var cachedStatus: LiteRtAiCoreStatus? = null
+
+    @Volatile
+    private var cachedStatusAtNs: Long = 0L
+
     private fun getOrCreateClient(): GenerativeModel? {
         cachedClient?.let { return it }
         return runCatching {
@@ -50,6 +56,12 @@ class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
     }
 
     override fun probeStatus(): LiteRtAiCoreStatus {
+        val nowNs = System.nanoTime()
+        cachedStatus?.let { cached ->
+            if (nowNs - cachedStatusAtNs < 10_000_000_000L) {
+                return cached
+            }
+        }
         val pm = context.packageManager
         val pkgInfo = runCatching {
             pm.getPackageInfo(AICORE_PACKAGE, 0)
@@ -64,14 +76,19 @@ class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
             context.getSystemService("on_device_intelligence") != null
         }.getOrDefault(false)
 
+        val aiCorePackagePresent = pkgInfo != null || serviceResolvable
         var checkError: Throwable? = null
-        val featureStatusCode = runCatching {
-            runBlocking {
-                withTimeoutOrNull(2_000L) {
-                    getOrCreateClient()?.checkStatus()
+        val featureStatusCode = if (aiCorePackagePresent || odiServicePresent) {
+            runCatching {
+                runBlocking {
+                    withTimeoutOrNull(450L) {
+                        getOrCreateClient()?.checkStatus()
+                    }
                 }
-            }
-        }.onFailure { checkError = it }.getOrNull()
+            }.onFailure { checkError = it }.getOrNull()
+        } else {
+            null
+        }
 
         val featureStatusLabel = when (featureStatusCode) {
             FeatureStatus.AVAILABLE -> "AVAILABLE"
@@ -81,7 +98,6 @@ class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
             else -> null
         }
 
-        val aiCorePackagePresent = pkgInfo != null || serviceResolvable
         val statusRejected = checkError?.message?.let { msg ->
             msg.contains("-101") || msg.contains("not installed", ignoreCase = true)
         } == true || featureStatusCode == FeatureStatus.UNAVAILABLE
@@ -106,7 +122,10 @@ class AndroidAiCoreBridge(private val context: Context) : LiteRtAiCoreBridge {
             versionName = versionName,
             systemServicePresent = odiServicePresent,
             modelName = "Gemini Nano (Android AI Core)",
-        )
+        ).also {
+            cachedStatus = it
+            cachedStatusAtNs = System.nanoTime()
+        }
     }
 
     override fun generate(

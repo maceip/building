@@ -18,6 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
 import java.nio.file.Path
@@ -35,6 +36,7 @@ class DiscoveryBackend(
 
     private val feedCache = ConcurrentHashMap<String, UiDiscoveryFeed>()
     private val relatedCache = ConcurrentHashMap<String, List<UiPeerProject>>()
+    private val authScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
     private val _authState = MutableStateFlow(UiGitHubAuthState())
     override val authState: StateFlow<UiGitHubAuthState> = _authState.asStateFlow()
 
@@ -46,15 +48,19 @@ class DiscoveryBackend(
                     val token = String(Files.readAllBytes(tokenFile), Charsets.UTF_8).trim()
                     if (token.isNotBlank()) {
                         client.token = token
-                        val verified = client.verifyToken(token)
-                        if (verified != null) {
-                            _authState.value = UiGitHubAuthState(
-                                isAuthenticated = true,
-                                username = verified.first,
-                                tokenPreview = "..." + token.takeLast(4),
-                                rateLimit = verified.second.first,
-                                rateRemaining = verified.second.second
-                            )
+                        authScope.launch {
+                            runCatching {
+                                val verified = client.verifyToken(token)
+                                if (verified != null) {
+                                    _authState.value = UiGitHubAuthState(
+                                        isAuthenticated = true,
+                                        username = verified.first,
+                                        tokenPreview = "..." + token.takeLast(4),
+                                        rateLimit = verified.second.first,
+                                        rateRemaining = verified.second.second
+                                    )
+                                }
+                            }
                         }
                     }
                 }

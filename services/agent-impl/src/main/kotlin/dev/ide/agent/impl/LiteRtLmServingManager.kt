@@ -112,10 +112,8 @@ class JvmLiteRtEngineBridge(
     private val engineLock = Any()
     private var cachedKey: EngineKey? = null
     private var cachedEngine: Engine? = null
-
-    init {
-        runCatching { Engine.setNativeMinLogSeverity(LogSeverity.ERROR) }
-    }
+    @Volatile
+    private var logSeverityConfigured = false
 
     private fun resolveBackend(delegate: LiteRtHardwareDelegate): Backend = when (delegate) {
         LiteRtHardwareDelegate.CPU -> Backend.CPU(4, null)
@@ -130,6 +128,10 @@ class JvmLiteRtEngineBridge(
         modelFile: File,
         candidate: LiteRtHardwareDelegate,
     ): Engine {
+        if (!logSeverityConfigured) {
+            logSeverityConfigured = true
+            runCatching { Engine.setNativeMinLogSeverity(LogSeverity.ERROR) }
+        }
         val canonical = modelFile.canonicalPath
         val key = EngineKey(canonical, candidate.id)
         cachedEngine?.let { existing ->
@@ -660,14 +662,10 @@ class LiteRtLmServingManager(
     @Volatile private var circuitBreakerEnabled: Boolean = true
 
     @Volatile private var localServer: LiteRtLmLocalServer? = null
+    @Volatile private var cachedAiCoreStatus: LiteRtAiCoreStatus? = null
 
-    private val _state = MutableStateFlow(
-        run {
-            seedDefaultProviderProfiles()
-            buildSnapshot()
-        },
-    )
-    val state: StateFlow<LiteRtCornerSnapshot> = _state.asStateFlow()
+    private val _state: MutableStateFlow<LiteRtCornerSnapshot>
+    val state: StateFlow<LiteRtCornerSnapshot>
 
     init {
         runCatching { Files.createDirectories(modelsDir) }
@@ -679,7 +677,9 @@ class LiteRtLmServingManager(
             startLoopbackServerInternal(configuredServerPort)
         }
         if (statusBanner.isBlank() && activeModelId.isNotBlank()) {
-            val aiCoreStatus = aiCoreBridgeProvider().probeStatus()
+            val aiCoreStatus = cachedAiCoreStatus ?: runCatching { aiCoreBridgeProvider().probeStatus() }
+                .getOrDefault(LiteRtAiCoreStatus(available = false))
+                .also { cachedAiCoreStatus = it }
             statusBanner = when {
                 activeModelId == LiteRtLmCatalog.AICORE_MODEL_ID && aiCoreStatus.available -> {
                     val v = aiCoreStatus.versionName.take(24).ifBlank { "Gemini Nano" }
@@ -691,7 +691,8 @@ class LiteRtLmServingManager(
                 }
             }
         }
-        publishState()
+        _state = MutableStateFlow(buildSnapshot())
+        state = _state.asStateFlow()
     }
 
     @Synchronized
@@ -731,6 +732,7 @@ class LiteRtLmServingManager(
         runCatching { Files.createDirectories(modelsDir) }
         val aiCoreStatus = runCatching { aiCoreBridgeProvider().probeStatus() }
             .getOrDefault(LiteRtAiCoreStatus(available = false))
+            .also { cachedAiCoreStatus = it }
 
         val validIds = mutableListOf<String>()
         for (spec in LiteRtLmCatalog.MODELS) {
@@ -2022,8 +2024,9 @@ class LiteRtLmServingManager(
     }
 
     private fun buildSnapshot(): LiteRtCornerSnapshot {
-        val aiCoreStatus = runCatching { aiCoreBridgeProvider().probeStatus() }
+        val aiCoreStatus = cachedAiCoreStatus ?: runCatching { aiCoreBridgeProvider().probeStatus() }
             .getOrDefault(LiteRtAiCoreStatus(available = false))
+            .also { cachedAiCoreStatus = it }
         val entries = LiteRtLmCatalog.MODELS.mapNotNull { spec ->
             val verified = verifiedCache[spec.id]
             if (spec.isSystemAiCore && !aiCoreStatus.available && verified == null) {

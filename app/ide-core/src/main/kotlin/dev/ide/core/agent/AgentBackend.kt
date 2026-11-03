@@ -100,11 +100,13 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
     private val transport = OkHttpLlmTransport()
     private val workspace = IdeAgentWorkspace(ctx)
 
-    internal val liteRtManager: LiteRtLmServingManager = LiteRtLmServingRegistry.getOrCreate(
-        storageRoot = resolveLiteRtStorageRoot(),
-        preferenceReader = { key -> pref(key) },
-        preferenceWriter = { key, value -> ctx.manager?.setPreference("settings.$AI_PAGE.$key", value) },
-    )
+    internal val liteRtManager: LiteRtLmServingManager by lazy {
+        LiteRtLmServingRegistry.getOrCreate(
+            storageRoot = resolveLiteRtStorageRoot(),
+            preferenceReader = { key -> pref(key) },
+            preferenceWriter = { key, value -> ctx.manager?.setPreference("settings.$AI_PAGE.$key", value) },
+        )
+    }
 
     private val registry = AgentProviders.registry(
         transport = transport,
@@ -227,8 +229,16 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val log = Log.logger("ide.agent")
 
-    private val _liteRtCornerState = MutableStateFlow(liteRtManager.currentSnapshot().toUi())
-    override val liteRtCornerState: StateFlow<UiLiteRtCornerState> = _liteRtCornerState.asStateFlow()
+    private val _liteRtCornerState: MutableStateFlow<UiLiteRtCornerState> by lazy {
+        val flow = MutableStateFlow(liteRtManager.currentSnapshot().toUi())
+        scope.launch {
+            liteRtManager.state.collect { snap ->
+                flow.value = snap.toUi()
+            }
+        }
+        flow
+    }
+    override val liteRtCornerState: StateFlow<UiLiteRtCornerState> by lazy { _liteRtCornerState.asStateFlow() }
 
     /** The in-app MCP-over-HTTP server, started when the "MCP server" AI setting is on. The server is
      *  opt-in: enabling it is itself the permission to edit the open project, so its tools run under
@@ -251,11 +261,6 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         }
         if (prefBool(FTP_PREF, default = false)) {
             ftpServer = startFtpServer()
-        }
-        scope.launch {
-            liteRtManager.state.collect { snap ->
-                _liteRtCornerState.value = snap.toUi()
-            }
         }
     }
 

@@ -101,26 +101,6 @@ class MainActivity : ComponentActivity() {
         // `SystemBarStyle.dark` here forced light icons even in light mode.
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        AndroidIde.ensureSnortConnected(applicationContext)
-        Log.logger("dev.ide.android.MainActivity").traceSpan(
-            operation = "android.activity.onCreate",
-            initialAttributes = mapOf(
-                "device.manufacturer" to (Build.MANUFACTURER ?: ""),
-                "device.model" to (Build.MODEL ?: ""),
-                "os.sdk_int" to Build.VERSION.SDK_INT.toString(),
-            ),
-        ) {
-            klogger.atInfo {
-                message = "MainActivity launched on physical Android device"
-                payload = mapOf(
-                    "device.manufacturer" to (Build.MANUFACTURER ?: ""),
-                    "device.model" to (Build.MODEL ?: ""),
-                    "os.release" to (Build.VERSION.RELEASE ?: ""),
-                    "os.sdk_int" to Build.VERSION.SDK_INT,
-                    "package" to packageName,
-                )
-            }
-        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes = window.attributes.apply {
                 layoutInDisplayCutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -137,7 +117,6 @@ class MainActivity : ComponentActivity() {
         val runtimeReliability = dev.ide.android.reliability.AndroidRuntimeReliability(applicationContext)
         workbenchRuntime = RuntimeController(AndroidRuntimeHost(applicationContext), workbenchScope, observer = runtimeReliability.runtimeObserver)
         UiPluginHost.register(WorkbenchUiPlugin)
-        dev.ide.android.workbench.runtime.RuntimeBrowserBridge.get(applicationContext)
         // Before extractStream: a sign-in redirect is an ACTION_VIEW with a URI, which would otherwise be
         // taken for a file to import.
         if (!takeAuthRedirect(intent) && !takeStoreLink(intent) && !takeRuntimeCallback(intent)) inbound.value = extractStream(intent)
@@ -150,7 +129,32 @@ class MainActivity : ComponentActivity() {
             var backend by remember { mutableStateOf<IdeBackend?>(null) }
             var error by remember { mutableStateOf<String?>(null) }
             LaunchedEffect(Unit) {
-                runCatching { withContext(Dispatchers.IO) { AndroidIde.bootstrap(applicationContext) } }.onSuccess { s ->
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        AndroidIde.ensureSnortConnected(applicationContext)
+                        Log.logger("dev.ide.android.MainActivity").traceSpan(
+                            operation = "android.activity.onCreate",
+                            initialAttributes = mapOf(
+                                "device.manufacturer" to (Build.MANUFACTURER ?: ""),
+                                "device.model" to (Build.MODEL ?: ""),
+                                "os.sdk_int" to Build.VERSION.SDK_INT.toString(),
+                            ),
+                        ) {
+                            klogger.atInfo {
+                                message = "MainActivity launched on physical Android device"
+                                payload = mapOf(
+                                    "device.manufacturer" to (Build.MANUFACTURER ?: ""),
+                                    "device.model" to (Build.MODEL ?: ""),
+                                    "os.release" to (Build.VERSION.RELEASE ?: ""),
+                                    "os.sdk_int" to Build.VERSION.SDK_INT,
+                                    "package" to packageName,
+                                )
+                            }
+                        }
+                        dev.ide.android.workbench.runtime.RuntimeBrowserBridge.get(applicationContext)
+                        AndroidIde.bootstrap(applicationContext)
+                    }
+                }.onSuccess { s ->
                     session = s; backend = s.backend
                     AndroidFrameMetrics.register(this@MainActivity, s.backend)
                     // A redirect that landed mid-bootstrap now has somewhere to go.

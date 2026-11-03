@@ -39,9 +39,12 @@ object SwingApiStubs {
     fun bundled(): Path? = extracted ?: extractTo(Paths.get(System.getProperty("java.io.tmpdir"), "codeassist-swing-api"))
         ?.also { extracted = it }
 
-    /** Write the bundled jar into [cachesRoot], replacing whatever was there. */
+    /** Write the bundled jar into [cachesRoot] when absent or empty. */
     private fun extractTo(cachesRoot: Path): Path? {
         val target = cachesRoot.resolve("swing-api-stubs.jar")
+        if (runCatching { Files.isRegularFile(target) && Files.size(target) > 0L }.getOrDefault(false)) {
+            return target
+        }
         val stream = javaClass.classLoader.getResourceAsStream(RESOURCE) ?: run {
             log.warn("no bundled $RESOURCE; java.awt/javax.swing will not resolve for compilation")
             return null

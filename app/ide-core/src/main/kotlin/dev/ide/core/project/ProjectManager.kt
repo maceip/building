@@ -747,6 +747,7 @@ class ProjectManager private constructor(
      */
     fun warmKotlinCompiler() {
         val compiler = kotlinCompiler ?: return
+        runCatching { sdk() }
         val boot = listOfNotNull(androidTools?.androidJar) + (androidTools?.desugarStubs ?: emptyList())
         runCatching { compiler.warmUp(boot) }
     }
@@ -1054,7 +1055,7 @@ class ProjectManager private constructor(
      * incompatible older app is left for [exportBackup] / the file manager.
      */
     fun importLegacyProjects(): Int {
-        if (preference(LEGACY_IMPORTED_PREF) == "true") return 0
+        if (legacyDataDirs.isEmpty() || preference(LEGACY_IMPORTED_PREF) == "true") return 0
         var imported = 0
         for (legacy in legacyDataDirs) {
             // Current-format workspaces (e.g. this app's earlier internal-storage projects): copy verbatim.
@@ -1219,17 +1220,22 @@ class ProjectManager private constructor(
             hostVersion: String? = null,
             /** Host-private linked workspace roots; only <root>/<binding-id>/project can open in place. */
             permittedInPlaceRoots: List<Path> = emptyList(),
+            /** Optional hook invoked once before the platform SDK / bootClasspath is first used to open, create, or build a project. */
+            onBeforeSdkUse: () -> Unit = {},
         ): ProjectManager {
 
 
             // android.jar carries no java.awt/javax.swing, so a Swing project could not be compiled on
             // device without the owned toolkit's API on the platform classpath (see [SwingApiStubs]).
-            val sdk = SdkData(
-                "android",
-                bootClasspath + listOfNotNull(SwingApiStubs.bundled()?.toString()),
-                buildToolsPath = null,
-                kind = PlatformKind.ANDROID,
-            )
+            val sdk by lazy {
+                onBeforeSdkUse()
+                SdkData(
+                    "android",
+                    bootClasspath + listOfNotNull(SwingApiStubs.bundled()?.toString()),
+                    buildToolsPath = null,
+                    kind = PlatformKind.ANDROID,
+                )
+            }
             // android.jar is the first boot entry; later entries (the desugar stubs) join the compile platform.
             val tools = AndroidDeviceTools(Paths.get(bootClasspath.first()), androidToolsDir, debugKeystore, deviceApiLevel,
                 desugarStubs = bootClasspath.drop(1).map { Paths.get(it) }, r8Shrinker = r8Shrinker, r8MergeDexer = r8MergeDexer,
