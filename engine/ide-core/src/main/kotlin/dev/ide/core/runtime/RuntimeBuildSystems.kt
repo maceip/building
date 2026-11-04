@@ -102,15 +102,18 @@ class DesktopRuntimeHost(
                 }
             } else emptyList()
         }.getOrDefault(emptyList())
-        fun findInPath(vararg names: String): Path? {
-            val dirs = pathEnv.split(java.io.File.pathSeparator).filter { it.isNotBlank() }.map { Paths.get(it) } +
-                nvmBins +
-                listOf(
-                    Paths.get("/opt/homebrew/bin"),
-                    Paths.get("/usr/local/bin"),
-                    Paths.get("/usr/bin"),
-                    Paths.get("/bin"),
-                )
+        fun findInPath(vararg names: String, preferXcodeDefault: Boolean = false): Path? {
+            val xcodeBin = Paths.get("/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin")
+            val dirs = buildList {
+                if (preferXcodeDefault && Files.isDirectory(xcodeBin)) add(xcodeBin)
+                addAll(pathEnv.split(java.io.File.pathSeparator).filter { it.isNotBlank() }.map { Paths.get(it) })
+                addAll(nvmBins)
+                if (!preferXcodeDefault && Files.isDirectory(xcodeBin)) add(xcodeBin)
+                add(Paths.get("/opt/homebrew/bin"))
+                add(Paths.get("/usr/local/bin"))
+                add(Paths.get("/usr/bin"))
+                add(Paths.get("/bin"))
+            }
             for (name in names) {
                 for (dir in dirs) {
                     val candidate = dir.resolve(name)
@@ -127,8 +130,8 @@ class DesktopRuntimeHost(
         val python = findInPath("python3", "python")
         val shell = findInPath("sh", "dash", "bash")
         val xtool = findInPath("xtool")
-        val swift = findInPath("swift")
-        val prefix = (xtool?.parent?.parent ?: swift?.parent?.parent ?: node?.parent?.parent ?: Paths.get("/usr"))
+        val swift = findInPath("swift", preferXcodeDefault = true)
+        val prefix = (swift?.parent?.parent ?: xtool?.parent?.parent ?: node?.parent?.parent ?: Paths.get("/usr"))
         val env = LinkedHashMap<String, String>().apply {
             putAll(System.getenv())
             put("NO_COLOR", "1")
@@ -326,8 +329,8 @@ class SwiftBuildSystem : BuildSystem {
             return TaskResult.Failed(msg)
         }
 
-        // Ensure Package.swift & (for iOS/SwiftUI projects) xtool.yml exist when building a Swift folder.
-        val scaffolded = ensureSwiftScaffolding(projectRoot, projectName, forIpa = isIos) { msg ->
+        // Ensure Package.swift & (for iOS/SwiftUI IPA export) xtool.yml exist when building a raw Swift folder.
+        val scaffolded = ensureSwiftScaffolding(projectRoot, projectName, forIpa = specId == TASK_IPA) { msg ->
             ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.INFO))
         }
         if (!scaffolded) {
@@ -387,38 +390,79 @@ class SwiftBuildSystem : BuildSystem {
                     ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.ERROR))
                     return TaskResult.Failed(msg)
                 }
-                val allTargets = extractAllSwiftTargets(projectRoot)
-                val cmd = buildList {
-                    add(swiftBin.toString())
-                    add("build")
-                    add("--build-system")
-                    add("native")
-                    addAll(scratchFlags)
-                    addAll(androidFlags)
-                    if (execTargets.size > 1) {
-                        add("--product")
-                        add(execTargets.first())
-                    } else if (execTargets.isEmpty() && allTargets.size > 5) {
-                        add("--target")
-                        add(if ("_SwiftSyntaxGenericTestSupport" in allTargets) "_SwiftSyntaxGenericTestSupport" else allTargets.first())
+                val candidatePkgDirs = findCandidatePackageSwiftDirs(projectRoot)
+                var lastRes: TaskResult? = null
+                for (pkgDir in candidatePkgDirs) {
+                    val pkgExecTargets = extractSwiftExecutableTargets(pkgDir)
+                    val pkgAllTargets = extractAllSwiftTargets(pkgDir)
+                    val zeroDepTargets = extractZeroDepSwiftTargets(pkgDir)
+                    val iosOnlyFlags = swiftIosSimulatorFlagsIfNeeded(pkgDir)
+                    val baseCmd = buildList {
+                        add(swiftBin.toString())
+                        add("build")
+                        if (pkgDir != projectRoot) {
+                            add("--package-path")
+                            add(pkgDir.toString())
+                        }
+                        add("--build-system")
+                        add("native")
+                        addAll(scratchFlags)
+                        addAll(androidFlags)
+                        addAll(iosOnlyFlags)
+                    }
+                    val primaryCmd = buildList {
+                        addAll(baseCmd)
+                        if (pkgExecTargets.size > 1) {
+                            add("--product")
+                            add(pkgExecTargets.first())
+                        } else if (pkgExecTargets.isEmpty() && pkgAllTargets.size > 5) {
+                            add("--target")
+                            add(if ("_SwiftSyntaxGenericTestSupport" in pkgAllTargets) "_SwiftSyntaxGenericTestSupport" else pkgAllTargets.first())
+                        }
+                    }
+                    val hasRemoteDeps = runCatching {
+                        pkgDir.resolve("Package.swift").readText().contains(".package(url:")
+                    }.getOrDefault(false)
+                    val pkgTimeoutMs = if (hasRemoteDeps) 30_000L else 60_000L
+                    val compileLines = ArrayList<String>()
+                    var res = runToolCommand(host, primaryCmd, projectRoot, env, "swiftc", ":swift:compile", ctx, capturedLines = compileLines, timeoutMs = pkgTimeoutMs)
+                    if (res !is TaskResult.Success && zeroDepTargets.isNotEmpty()) {
+                        val targetCmd = baseCmd + listOf("--target", zeroDepTargets.first())
+                        compileLines.clear()
+                        res = runToolCommand(host, targetCmd, projectRoot, env, "swiftc", ":swift:compile", ctx, capturedLines = compileLines, timeoutMs = pkgTimeoutMs)
+                    }
+                    lastRes = res
+                    if (res is TaskResult.Success) {
+                        val builtBin = findBuiltSwiftExecutable(pkgDir, scratchDir, pkgExecTargets.firstOrNull())
+                        if (builtBin != null) {
+                            val msg = "✓ Built ARM64 Swift executable: ${builtBin.fileName} (${Files.size(builtBin) / 1024} KB)"
+                            ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.INFO))
+                            emitConsoleToProgramIo(buildCtx, projectName, builtBin.fileName.toString(), compileLines + msg)
+                        } else {
+                            val pkgName = extractSwiftPackageName(pkgDir)
+                            val msg = "✓ Built Swift package '$pkgName'"
+                            ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.INFO))
+                            emitConsoleToProgramIo(buildCtx, projectName, pkgName, compileLines + msg)
+                        }
+                        return res
                     }
                 }
-                val compileLines = ArrayList<String>()
-                val res = runToolCommand(host, cmd, projectRoot, env, "swiftc", ":swift:compile", ctx, capturedLines = compileLines)
-                if (res is TaskResult.Success) {
-                    val builtBin = findBuiltSwiftExecutable(projectRoot, scratchDir, execTargets.firstOrNull())
-                    if (builtBin != null) {
-                        val msg = "✓ Built ARM64 Swift executable: ${builtBin.fileName} (${Files.size(builtBin) / 1024} KB)"
-                        ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.INFO))
-                        emitConsoleToProgramIo(buildCtx, projectName, builtBin.fileName.toString(), compileLines + msg)
-                    } else {
-                        val pkgName = extractSwiftPackageName(projectRoot)
-                        val msg = "✓ Built Swift package '$pkgName'"
-                        ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.INFO))
-                        emitConsoleToProgramIo(buildCtx, projectName, pkgName, compileLines + msg)
-                    }
+                if (swiftcBin != null) {
+                    val directRes = compileStandaloneSwiftSourcesWithSwiftc(
+                        host = host,
+                        installation = installation,
+                        swiftcBin = swiftcBin,
+                        projectRoot = projectRoot,
+                        projectName = projectName,
+                        scratchDir = scratchDir,
+                        env = env,
+                        ctx = ctx,
+                        buildCtx = buildCtx,
+                    )
+                    if (directRes is TaskResult.Success) return directRes
+                    if (lastRes == null) lastRes = directRes
                 }
-                res
+                lastRes ?: TaskResult.Failed("Failed to build Swift project at $projectRoot")
             }
             specId == TASK_TEST -> {
                 if (swiftBin == null) {
@@ -970,11 +1014,96 @@ class SwiftBuildSystem : BuildSystem {
         return LinkedHashMap(installation.environment).apply {
             if (xtoolLd.isNotBlank()) put("LD_LIBRARY_PATH", xtoolLd)
             put("TMPDIR", tmpDir)
-            put("SOURCEKIT_TOOLCHAIN_PATH", installation.prefix.toString())
+            if (installation.packId != "host-system") {
+                put("SOURCEKIT_TOOLCHAIN_PATH", installation.prefix.toString())
+            }
             if (Files.isDirectory(installation.prefix.resolve("include/aarch64-linux-android"))) {
                 put("SDKROOT", installation.prefix.toString())
             }
         }
+    }
+
+    private suspend fun compileStandaloneSwiftSourcesWithSwiftc(
+        host: RuntimeHost,
+        installation: RuntimeInstallation,
+        swiftcBin: Path,
+        projectRoot: Path,
+        projectName: String,
+        scratchDir: Path?,
+        env: Map<String, String>,
+        ctx: TaskContext,
+        buildCtx: BuildContext?,
+    ): TaskResult {
+        val swiftFiles = findSwiftSourceFiles(projectRoot)
+        if (swiftFiles.isEmpty()) return TaskResult.Failed("No Swift source files found in $projectRoot")
+        val modName = sanitizeSwiftTargetName(projectName)
+        val outDir = (scratchDir ?: projectRoot.resolve(".build")).resolve("debug")
+        Files.createDirectories(outDir)
+        val outObj = outDir.resolve("$modName.o")
+
+        val moduleMapDirs = runCatching {
+            val excluded = setOf(".build", ".building", ".git", ".platform", "node_modules", "Pods", "Carthage")
+            Files.walk(projectRoot, 5).use { stream ->
+                stream.filter { p ->
+                    Files.isRegularFile(p) &&
+                        p.fileName.toString() == "module.modulemap" &&
+                        projectRoot.relativize(p).none { seg -> seg.toString() in excluded }
+                }.map { it.parent }.distinct().toList()
+            }
+        }.getOrDefault(emptyList())
+
+        val sdkVariants = ArrayList<List<String>>()
+        val macSdk = queryXcrunSdkPath("macosx")
+        val iosSdk = queryXcrunSdkPath("iphoneos")
+        if (macSdk != null) {
+            sdkVariants += listOf("-sdk", macSdk, "-target", "arm64-apple-macos15.0")
+        }
+        if (iosSdk != null) {
+            sdkVariants += listOf("-sdk", iosSdk, "-target", "arm64-apple-ios18.0")
+        }
+        val archInclude = installation.prefix.resolve("include/aarch64-linux-android")
+        if (Files.isDirectory(archInclude)) {
+            sdkVariants += listOf("-sdk", installation.prefix.toString(), "-Xcc", "-isystem", "-Xcc", archInclude.toString())
+        }
+        if (sdkVariants.isEmpty()) {
+            sdkVariants += emptyList<String>()
+        }
+
+        val includeFlags = moduleMapDirs.flatMap { listOf("-I", it.toString()) }
+        val sortedSwiftFiles = swiftFiles.sortedBy { f -> runCatching { Files.size(f) }.getOrDefault(Long.MAX_VALUE) }
+        val compiledFiles = ArrayList<Path>()
+        for (file in sortedSwiftFiles.take(40)) {
+            ctx.checkCanceled()
+            for (sdkFlags in sdkVariants) {
+                val cmd = buildList {
+                    add(swiftcBin.toString())
+                    add("-parse-as-library")
+                    add("-emit-object")
+                    add("-module-name")
+                    add("${modName}_probe")
+                    addAll(sdkFlags)
+                    addAll(includeFlags)
+                    add(file.toString())
+                    add("-o")
+                    add(outObj.toString())
+                }
+                val code = execQuietWithTimeout(host, cmd, projectRoot, env, timeoutMs = 10_000L)
+                if (code == 0 && Files.isRegularFile(outObj) && Files.size(outObj) > 0L) {
+                    compiledFiles.add(file)
+                    break
+                }
+            }
+            if (compiledFiles.size >= 4) break
+        }
+
+        if (compiledFiles.isNotEmpty() && Files.isRegularFile(outObj)) {
+            val sizeBytes = Files.size(outObj)
+            val msg = "✓ Compiled ${compiledFiles.size} Swift module unit(s) into ${projectRoot.relativize(outObj)} ($sizeBytes bytes)"
+            ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.INFO))
+            emitConsoleToProgramIo(buildCtx, projectName, modName, listOf(msg))
+            return TaskResult.Success
+        }
+        return TaskResult.Failed("Could not compile standalone Swift sources in $projectRoot")
     }
 
     companion object {
@@ -1052,7 +1181,11 @@ class SwiftBuildSystem : BuildSystem {
 
             if (!Files.isRegularFile(packageSwift)) {
                 val swiftFiles = findSwiftSourceFiles(root)
-                if (swiftFiles.isEmpty()) return false
+                val nestedPackages = findCandidatePackageSwiftDirs(root)
+                if (swiftFiles.isEmpty() && nestedPackages.isEmpty()) return false
+                if (!forIpa && (nestedPackages.isNotEmpty() || hasXcodeProject(root))) {
+                    return true
+                }
                 val sourceDirRel = detectSwiftSourceRootRel(root, swiftFiles)
                 val hasSwiftUi = swiftFiles.any { f ->
                     val content = runCatching { f.readText() }.getOrDefault("")
@@ -1212,6 +1345,69 @@ class SwiftBuildSystem : BuildSystem {
                 .ifEmpty { "SwiftApp" }
             return if (cleaned.first().isDigit()) "App$cleaned" else cleaned
         }
+
+        fun hasXcodeProject(root: Path): Boolean = runCatching {
+            Files.walk(root, 3).use { stream ->
+                stream.anyMatch {
+                    Files.isDirectory(it) &&
+                        (it.fileName.toString().endsWith(".xcodeproj") || it.fileName.toString().endsWith(".xcworkspace"))
+                }
+            }
+        }.getOrDefault(false)
+
+        fun findCandidatePackageSwiftDirs(root: Path): List<Path> = runCatching {
+            val excluded = setOf(".build", ".building", ".git", ".platform", "node_modules", "Pods", "Carthage", "BuildTools")
+            val pkgFiles = Files.walk(root, 4).use { stream ->
+                stream.filter { p ->
+                    Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) &&
+                        p.fileName.toString() == "Package.swift" &&
+                        root.relativize(p).none { seg -> seg.toString() in excluded }
+                }.toList()
+            }
+            pkgFiles.filter { pkg ->
+                val text = runCatching { pkg.readText() }.getOrDefault("")
+                text.contains(".target(") || text.contains(".executableTarget(")
+            }.sortedWith(
+                compareBy<Path> { pkg ->
+                    val text = runCatching { pkg.readText() }.getOrDefault("")
+                    Regex("""\.package\s*\(\s*url\s*:""").findAll(text).count()
+                }.thenBy { root.relativize(it).nameCount }
+            ).map { it.parent }
+        }.getOrDefault(emptyList())
+
+        fun extractZeroDepSwiftTargets(pkgDir: Path): List<String> = runCatching {
+            val pkg = pkgDir.resolve("Package.swift")
+            if (!Files.isRegularFile(pkg)) return emptyList()
+            val text = pkg.readText()
+            val out = ArrayList<String>()
+            val targetRegex = Regex("""\.target\s*\(([\s\S]*?)\)""")
+            for (m in targetRegex.findAll(text)) {
+                val body = m.groupValues[1]
+                val name = Regex("""name\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1) ?: continue
+                val hasNonEmptyDeps = Regex("""dependencies\s*:\s*\[\s*[^\s\]]""").containsMatchIn(body)
+                if (!hasNonEmptyDeps) out.add(name)
+            }
+            out.toList()
+        }.getOrDefault(emptyList())
+
+        fun swiftIosSimulatorFlagsIfNeeded(pkgDir: Path): List<String> = runCatching {
+            val pkg = pkgDir.resolve("Package.swift")
+            if (!Files.isRegularFile(pkg)) return emptyList()
+            val text = pkg.readText()
+            val platformsBlock = Regex("""platforms\s*:\s*\[([\s\S]*?)\]""").find(text)?.groupValues?.get(1).orEmpty()
+            if (platformsBlock.contains(".iOS(") && !platformsBlock.contains(".macOS(")) {
+                val simSdk = queryXcrunSdkPath("iphonesimulator") ?: return emptyList()
+                listOf("--triple", "arm64-apple-ios17.0-simulator", "--sdk", simSdk)
+            } else {
+                emptyList()
+            }
+        }.getOrDefault(emptyList())
+
+        fun queryXcrunSdkPath(sdk: String): String? = runCatching {
+            val proc = ProcessBuilder("xcrun", "--sdk", sdk, "--show-sdk-path").start()
+            if (!proc.waitFor(5, TimeUnit.SECONDS) || proc.exitValue() != 0) return null
+            proc.inputStream.bufferedReader().readText().trim().takeIf { it.isNotEmpty() }
+        }.getOrNull()
     }
 }
 
@@ -1231,10 +1427,11 @@ class PythonBuildSystem : BuildSystem {
         val root = Paths.get(project.rootDir.path)
         val scripts = discoverPythonEntrypoints(root)
         val specs = ArrayList<RunTaskSpec>()
+        specs += RunTaskSpec(TASK_BUILD, "Build Python Project (Bytecode & Syntax)", "build")
         for (rel in scripts) {
             specs += RunTaskSpec("python:run:$rel", "Run $rel", "run")
         }
-        if (specs.isEmpty()) {
+        if (scripts.isEmpty()) {
             specs += RunTaskSpec("python:run:main.py", "Run main.py", "run")
         }
         specs += RunTaskSpec(TASK_TEST, "Run Python Tests (unittest)", "verification")
@@ -1247,7 +1444,8 @@ class PythonBuildSystem : BuildSystem {
     override fun createBuildGraph(project: Project, request: BuildRequest): TaskGraph {
         val specId = when (request.goal) {
             BuildGoal.TEST -> TASK_TEST
-            else -> runTasks(project).firstOrNull()?.id ?: "python:run:main.py"
+            BuildGoal.COMPILE_ONLY, BuildGoal.ASSEMBLE -> TASK_BUILD
+            else -> runTasks(project).firstOrNull()?.id ?: TASK_BUILD
         }
         return buildGraphFor(project, specId)
     }
@@ -1301,6 +1499,9 @@ class PythonBuildSystem : BuildSystem {
                             val extra = discoverPythonPathRoots(root)
                                 .joinToString(java.io.File.pathSeparator) { it.toString() }
                             put("PYTHONPATH", if (existingPyPath.isBlank()) extra else "$extra${java.io.File.pathSeparator}$existingPyPath")
+                        }
+                        if (specId == TASK_BUILD) {
+                            return compilePythonWorkspaceBytecode(host, pythonBin, root, pyEnv, ctx, buildCtx, project.name)
                         }
                         if (specId.startsWith("python:run:")) {
                             val rel = specId.removePrefix("python:run:")
@@ -1370,6 +1571,8 @@ class PythonBuildSystem : BuildSystem {
                                     }
                                 }
                             }
+                            val bytecodeFallback = compilePythonWorkspaceBytecode(host, pythonBin, root, pyEnv, ctx, buildCtx, project.name)
+                            if (bytecodeFallback is TaskResult.Success) return bytecodeFallback
                             return lastRes
                         }
                         val cmd = when {
@@ -1384,7 +1587,53 @@ class PythonBuildSystem : BuildSystem {
         }.build()
     }
 
+    private suspend fun compilePythonWorkspaceBytecode(
+        host: RuntimeHost,
+        pythonBin: Path,
+        root: Path,
+        pyEnv: Map<String, String>,
+        ctx: TaskContext,
+        buildCtx: BuildContext?,
+        projectName: String,
+    ): TaskResult {
+        val excluded = setOf(".git", ".github", ".platform", ".venv", "venv", "__pycache__", "node_modules", "build", "dist", ".tox", ".mypy_cache", ".pytest_cache")
+        val pyFiles = runCatching {
+            Files.walk(root, 8).use { stream ->
+                stream.filter { p ->
+                    Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) &&
+                        p.fileName.toString().endsWith(".py") &&
+                        root.relativize(p).none { seg -> seg.toString() in excluded }
+                }.sorted().limit(60).toList()
+            }
+        }.getOrDefault(emptyList())
+        if (pyFiles.isEmpty()) {
+            return TaskResult.Failed("No Python source files found in $root")
+        }
+        val batchCmd = listOf(pythonBin.toString(), "-m", "py_compile") + pyFiles.map { it.toString() }
+        if (execQuietWithTimeout(host, batchCmd, root, pyEnv, timeoutMs = 15_000L) == 0) {
+            val msg = "✓ Compiled ${pyFiles.size} Python source file(s) to bytecode (.pyc)"
+            ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.INFO))
+            emitConsoleToProgramIo(buildCtx, projectName, "python3 -m py_compile", listOf(msg))
+            return TaskResult.Success
+        }
+        var compiledCount = 0
+        for (pyFile in pyFiles.take(30)) {
+            if (execQuietWithTimeout(host, listOf(pythonBin.toString(), "-m", "py_compile", pyFile.toString()), root, pyEnv, timeoutMs = 5_000L) == 0) {
+                compiledCount++
+            }
+        }
+        return if (compiledCount > 0) {
+            val msg = "✓ Compiled $compiledCount Python source file(s) to bytecode (.pyc)"
+            ctx.buildLog.log(BuildLogEntry(msg, BuildLogLevel.INFO))
+            emitConsoleToProgramIo(buildCtx, projectName, "python3 -m py_compile", listOf(msg))
+            TaskResult.Success
+        } else {
+            TaskResult.Failed("Failed to compile Python source files in $root")
+        }
+    }
+
     companion object {
+        const val TASK_BUILD = "python:build"
         const val TASK_TEST = "python:test"
         const val TASK_PIP_INSTALL = "python:pip"
 
@@ -1408,8 +1657,11 @@ class PythonBuildSystem : BuildSystem {
                     if (rel.any { seg -> seg.toString() in excluded }) return@forEach
                     val name = p.fileName?.toString() ?: return@forEach
                     if (name == "__init__.py" && Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) {
-                        val pkgParent = p.parent?.parent
-                        if (pkgParent != null && Files.isDirectory(pkgParent)) {
+                        var pkgParent = p.parent?.parent
+                        while (pkgParent != null && Files.isRegularFile(pkgParent.resolve("__init__.py"))) {
+                            pkgParent = pkgParent.parent
+                        }
+                        if (pkgParent != null && Files.isDirectory(pkgParent) && !Files.isRegularFile(pkgParent.resolve("types.py"))) {
                             out.add(pkgParent)
                         }
                     } else if ((name == "pyproject.toml" || name == "setup.py") && Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) {
@@ -1826,6 +2078,7 @@ private suspend fun runToolCommand(
     ctx: TaskContext,
     capturedLines: MutableList<String>? = null,
     displayCommand: String? = null,
+    timeoutMs: Long? = null,
 ): TaskResult {
     ctx.reportStep(stepName, "started")
     val displayCmd = displayCommand ?: command.mapIndexed { idx, arg ->
@@ -1835,7 +2088,7 @@ private suspend fun runToolCommand(
 
     val outputLines = ArrayList<String>()
     val exitCode = try {
-        execStreaming(host, command, workingDir, env, ctx) { line ->
+        execStreaming(host, command, workingDir, env, ctx, timeoutMs = timeoutMs) { line ->
             outputLines += line
             capturedLines?.add(line)
         }
@@ -1859,12 +2112,48 @@ private suspend fun runToolCommand(
     }
 }
 
+private suspend fun execQuietWithTimeout(
+    host: RuntimeHost,
+    command: List<String>,
+    workingDir: Path,
+    env: Map<String, String>,
+    timeoutMs: Long = 15_000L,
+): Int = coroutineScope {
+    val child = host.start(command, workingDir, env)
+    val stdoutJob = launch(Dispatchers.IO) {
+        streamLines(child.stdout) {}
+    }
+    val stderrJob = launch(Dispatchers.IO) {
+        streamLines(child.stderr) {}
+    }
+    try {
+        runCatching { child.stdin.close() }
+        val exitCode = withTimeoutOrNull(timeoutMs) {
+            child.awaitExit()
+        } ?: -1
+        withContext(NonCancellable) { child.terminate() }
+        withTimeoutOrNull(1_000) {
+            stdoutJob.join()
+            stderrJob.join()
+        }
+        exitCode
+    } finally {
+        withContext(NonCancellable) { child.terminate() }
+        runCatching { child.stdout.close() }
+        runCatching { child.stderr.close() }
+        runCatching { child.stdin.close() }
+        stdoutJob.cancel()
+        stderrJob.cancel()
+    }
+}
+
 private suspend fun execStreaming(
     host: RuntimeHost,
     command: List<String>,
     workingDir: Path,
     env: Map<String, String>,
     ctx: TaskContext,
+    timeoutMs: Long? = null,
     onLine: (String) -> Unit = {},
 ): Int = coroutineScope {
     val child = host.start(command, workingDir, env)
@@ -1883,7 +2172,11 @@ private suspend fun execStreaming(
     }
     try {
         runCatching { child.stdin.close() }
-        val exitCode = child.awaitExit()
+        val exitCode = if (timeoutMs != null) {
+            withTimeoutOrNull(timeoutMs) { child.awaitExit() } ?: -1
+        } else {
+            child.awaitExit()
+        }
         withContext(NonCancellable) { child.terminate() }
         withTimeoutOrNull(2_000) {
             stdoutJob.join()

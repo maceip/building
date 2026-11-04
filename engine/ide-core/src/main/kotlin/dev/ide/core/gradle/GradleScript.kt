@@ -45,7 +45,7 @@ internal object GradleScript {
         blockBodyRanges(text, name).map { text.substring(it.first, it.last + 1) }
 
     private val ANDROID_CONFIGURE_RE = Regex(
-        """(?:extensions\s*\.\s*)?configure\s*(?:<\s*[\w.]*(?:Application|Library|Common|Base|Tested|Android)\w*Extension[\w.<>,\s]*>\s*(?:\(\s*\))?|\(\s*[\w.]*(?:Application|Library|Common|Base|Tested|Android)\w*Extension[\w.:\s,()]*\))\s*\{"""
+        """(?:(?:extensions\s*\.\s*)?configure\s*(?:<\s*[\w.]*(?:Application|Library|Common|Base|Tested|Android)\w*Extension[\w.<>,\s]*>\s*(?:\(\s*\))?|\(\s*[\w.]*(?:Application|Library|Common|Base|Tested|Android)\w*Extension[\w.:\s,()]*\))|android\s*\.\s*apply)\s*\{"""
     )
 
     /** Every `android { … }` or `(extensions.)configure<…Extension> { … }` block body in [text]. */

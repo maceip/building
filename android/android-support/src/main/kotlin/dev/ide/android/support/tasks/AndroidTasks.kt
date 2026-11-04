@@ -361,6 +361,7 @@ internal class GenerateLibraryRTask(
     private val aapt2: Aapt2,
     /** When set, aapt2 also writes the R symbol table (`R.txt`) here — the AAR ships it for consumers. */
     private val rTxt: Path? = null,
+    private val depResDirs: List<Path> = emptyList(),
 ) : Task {
     override val inputs: TaskInputs
         get() = TaskInputsImpl().apply {
@@ -393,6 +394,29 @@ internal class GenerateLibraryRTask(
             nonFinalIds = true,
             rTxt = rTxt,
         )
+        if (!r.success && depResDirs.isNotEmpty()) {
+            val mergedResDir = compiledResDir.resolveSibling("merged-res")
+            mergeResourceDirs(depResDirs + resDirs, mergedResDir)
+            val mergedCompiledDir = compiledResDir.resolveSibling("merged-compiled-res")
+            val mergedCompile = aapt2.compile(listOf(mergedResDir), mergedCompiledDir)
+            if (mergedCompile.result.success) {
+                val mergedLink = aapt2.link(
+                    mergedCompile.archives,
+                    m,
+                    androidJar,
+                    packageName,
+                    emptyList(),
+                    minSdk,
+                    minSdk,
+                    genDir,
+                    throwawayAp,
+                    nonFinalIds = true,
+                    rTxt = rTxt,
+                )
+                ctx.reportTool("aapt2", mergedLink, DiagnosticKind.RESOURCE)
+                return if (mergedLink.success) TaskResult.Success else TaskResult.Failed("aapt2 link (library R) failed")
+            }
+        }
         ctx.reportTool("aapt2", r, DiagnosticKind.RESOURCE)
         return if (r.success) TaskResult.Success else TaskResult.Failed("aapt2 link (library R) failed")
     }
@@ -2273,7 +2297,22 @@ internal class GenerateBuildConfigTask(
 
     private val scriptFiles: List<Path>
         get() = moduleDir?.let { dir ->
-            listOf(dir.resolve("build.gradle.kts"), dir.resolve("build.gradle")).filter { Files.isRegularFile(it) }
+            val root = dir.parent ?: dir
+            val conventionDirs = listOf(
+                root.resolve("buildSrc/src/main/kotlin"),
+                root.resolve("buildSrc/src/main/java"),
+                root.resolve("build-logic"),
+            ).filter { Files.isDirectory(it) }
+            val conventionFiles = conventionDirs.flatMap { cdir ->
+                runCatching {
+                    Files.walk(cdir, 5).use { s ->
+                        s.filter { Files.isRegularFile(it) && (it.toString().endsWith(".kt") || it.toString().endsWith(".gradle")) }
+                            .sorted()
+                            .collect(Collectors.toList())
+                    }
+                }.getOrDefault(emptyList())
+            }
+            (listOf(dir.resolve("build.gradle.kts"), dir.resolve("build.gradle")).filter { Files.isRegularFile(it) } + conventionFiles).distinct()
         } ?: emptyList()
 
     override val inputs: TaskInputs
@@ -2317,9 +2356,7 @@ internal class GenerateBuildConfigTask(
                 sb.appendLine("  public static final String APPLICATION_ID = \"${escapeJavaString(applicationId)}\";")
             }
             sb.appendLine("  public static final String BUILD_TYPE = \"${escapeJavaString(buildType)}\";")
-            if (flavor.isNotBlank() || flavorNames.isNotEmpty()) {
-                sb.appendLine("  public static final String FLAVOR = \"${escapeJavaString(flavor)}\";")
-            }
+            sb.appendLine("  public static final String FLAVOR = \"${escapeJavaString(flavor)}\";")
             if (!isLibrary) {
                 sb.appendLine("  public static final int VERSION_CODE = $versionCode;")
                 sb.appendLine("  public static final String VERSION_NAME = \"${escapeJavaString(versionName)}\";")
@@ -2338,7 +2375,9 @@ internal class GenerateBuildConfigTask(
             "DEBUG", "APPLICATION_ID", "LIBRARY_PACKAGE_NAME", "BUILD_TYPE", "FLAVOR", "VERSION_CODE", "VERSION_NAME"
         )
         val out = LinkedHashMap<String, CustomField>()
-        val script = scriptFiles.firstOrNull()?.let { runCatching { String(Files.readAllBytes(it), Charsets.UTF_8) }.getOrNull() }
+        val script = scriptFiles.mapNotNull { runCatching { String(Files.readAllBytes(it), Charsets.UTF_8) }.getOrNull() }
+            .joinToString("\n")
+            .takeIf { it.isNotBlank() }
             ?: return out
         val activeScopes = LinkedHashSet<String>().apply {
             add("defaultConfig")
@@ -2491,7 +2530,7 @@ internal class GenerateBuildConfigTask(
 
     companion object {
         private val BUILD_CONFIG_FIELD_RE = Regex(
-            """buildConfigField\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*([^\n;]+?)\s*\)"""
+            """buildConfigField\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*([^\n;]+)\s*\)"""
         )
     }
 }

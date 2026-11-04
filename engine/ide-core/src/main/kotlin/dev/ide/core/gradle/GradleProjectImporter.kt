@@ -90,13 +90,14 @@ class GradleProjectImporter : ProjectImporter {
 
     private fun module(root: Path, spec: GradleImport.ModuleSpec): ExternalModule {
         val dirRel = spec.dirRel.ifBlank { spec.name }
+        val moduleDir = root.resolve(dirRel)
         return ExternalModule(
             name = spec.name,
             dirRelPath = dirRel,
             typeId = typeIdFor(spec.kind),
-            sourceSets = sourceSets(spec, root.resolve(dirRel)),
+            sourceSets = sourceSets(spec, moduleDir),
             dependencies = dependencies(spec),
-            facets = facets(spec),
+            facets = facets(spec, moduleDir),
         )
     }
 
@@ -177,14 +178,21 @@ class GradleProjectImporter : ProjectImporter {
             coordinateOrNull(d.coordinate)?.let { add(ExternalPlatform(it, d.scope, d.variant)) }
         }
         for (d in spec.mavenDeps) add(ExternalLibrary(d.coordinate, d.scope, d.variant))
+        val existingGa = spec.mavenDeps.mapTo(HashSet()) { it.coordinate.substringBeforeLast(':') }
+        if (spec.parcelize && "org.jetbrains.kotlin:kotlin-parcelize-runtime" !in existingGa) {
+            add(ExternalLibrary("org.jetbrains.kotlin:kotlin-parcelize-runtime:2.4.0", DependencyScope.IMPLEMENTATION, null))
+        }
+        if (spec.viewBinding && "androidx.databinding:viewbinding" !in existingGa) {
+            add(ExternalLibrary("androidx.databinding:viewbinding:8.7.3", DependencyScope.IMPLEMENTATION, null))
+        }
     }
 
     /** The `android { }` block as the `[android]` facet table (absent for a plain JVM module), plus a KMP
      *  module's `[kotlin]` and `[composeResources]`. */
-    private fun facets(spec: GradleImport.ModuleSpec): List<ExternalFacet> = listOfNotNull(
+    private fun facets(spec: GradleImport.ModuleSpec, dir: Path): List<ExternalFacet> = listOfNotNull(
         if (spec.kind == GradleImport.Kind.JAVA) null
         else ExternalFacet(AndroidFacetCodec.tomlTable, AndroidFacetCodec.encode(androidFacet(spec))),
-        kotlinFacet(spec),
+        kotlinFacet(spec, dir),
         spec.composeResources?.let {
             val facet = ComposeResourcesFacet(it.packageName, it.publicResClass, it.dirs)
             ExternalFacet(ComposeResourcesFacetCodec.tomlTable, ComposeResourcesFacetCodec.encode(facet))
@@ -195,8 +203,19 @@ class GradleProjectImporter : ProjectImporter {
      * `[kotlin]` for a KMP module whose modeled target sits under common code: the common sets' Kotlin roots,
      * which is what lets an `expect` in `commonMain` and its `actual` in the platform set compile as one.
      */
-    private fun kotlinFacet(spec: GradleImport.ModuleSpec): ExternalFacet? {
-        val common = spec.kmp?.sourceSets.orEmpty().filter { it.common }.map { "src/${it.name}/kotlin" }
+    private fun kotlinFacet(spec: GradleImport.ModuleSpec, dir: Path): ExternalFacet? {
+        val kmp = spec.kmp ?: return null
+        val mainSets = kmp.sourceSets.filter { !it.test }
+        val existingMainRoots = mainSets
+            .map { "src/${it.name}/kotlin" }
+            .filter { Files.isDirectory(dir.resolve(it)) }
+        val common = if (existingMainRoots.size >= 2) {
+            existingMainRoots.dropLast(1)
+        } else {
+            kmp.sourceSets.filter { it.common }
+                .map { "src/${it.name}/kotlin" }
+                .filter { Files.isDirectory(dir.resolve(it)) }
+        }
         if (common.isEmpty()) return null
         return ExternalFacet(KotlinFacetCodec.tomlTable, KotlinFacetCodec.encode(KotlinFacet(commonSourceRoots = common)))
     }

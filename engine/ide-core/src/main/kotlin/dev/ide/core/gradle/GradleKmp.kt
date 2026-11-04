@@ -82,7 +82,7 @@ object GradleKmp {
 
     /** The name a source-set statement configures: `val x by getting|creating`, `getByName("x")`, or `x…`. */
     private val SET_BY_DELEGATE = Regex("""^val\s+(\w+)\s+by\s+(?:getting|creating)\b""")
-    private val SET_BY_CALL = Regex("""^(?:getByName|create|maybeCreate|named|register)\s*\(\s*["'](\w+)["']""")
+    private val SET_BY_CALL = Regex("""^(?:val\s+\w+\s*=\s*)?(?:getByName|create|maybeCreate|named|register)\s*\(\s*["'](\w+)["']""")
 
     private val DEPENDS_ON = Regex(
         """dependsOn\s*\(\s*(?:sourceSets\s*\[\s*["'](\w+)["']\s*]|(?:getByName|named)\s*\(\s*["'](\w+)["']\s*\)|(\w+))"""

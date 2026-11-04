@@ -182,7 +182,8 @@ object JdtBatchCompiler {
 
         // Explicit boot library if given; otherwise the compile classpath on ART (carries android.jar),
         // since the running VM exposes no platform classes ecj can read. Empty on desktop → host JDK.
-        val boot = bootClasspath.ifEmpty { if (isAndroidRuntime) classpath else emptyList() }
+        val hasAndroidJar = classpath.any { it.fileName?.toString() == "android.jar" }
+        val boot = bootClasspath.ifEmpty { if (isAndroidRuntime || hasAndroidJar) classpath else emptyList() }
 
         // When a boot library is the platform (android.jar, the ART path) at compliance >= 9, the batch
         // front-end is unusable: it would put android.jar on `-bootclasspath`, which ecj rejects at >= 9, and a

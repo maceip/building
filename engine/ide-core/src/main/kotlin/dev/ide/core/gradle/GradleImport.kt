@@ -36,7 +36,7 @@ object GradleImport {
     /** What `compose.material3` resolves to under every Compose Multiplatform plugin from 1.9.0 on. */
     private const val MATERIAL3_PINNED_VERSION = "1.9.0"
     private const val KMP_ANDROID_LIBRARY_PLUGIN = "com.android.kotlin.multiplatform.library"
-    private val ANDROID_PLUGINS = listOf("com.android.application", "com.android.library", KMP_ANDROID_LIBRARY_PLUGIN)
+    private val ANDROID_PLUGINS = listOf("com.android.application", "com.android.library", "com.android.test", KMP_ANDROID_LIBRARY_PLUGIN)
     private const val DEFAULT_MANIFEST = "src/main/AndroidManifest.xml"
     private const val KMP_MANIFEST = "src/androidMain/AndroidManifest.xml"
     private const val COMPOSE_RESOURCES_DIR = "composeResources"
@@ -53,13 +53,31 @@ object GradleImport {
         "Restored the Gradle build files. The project is read from them again, statically rather than by " +
             "running Gradle."
 
-    /** True when [root] looks like a Gradle project (has a settings or build script). */
-    fun isGradleProject(root: Path): Boolean =
-        Files.isDirectory(root) && (SETTINGS_FILES + BUILD_FILES).any { Files.exists(root.resolve(it)) }
+    /** Resolve the effective Gradle root directory: [root] itself, or an immediate child directory holding a Gradle build. */
+    fun resolveGradleRoot(root: Path): Path? {
+        if (!Files.isDirectory(root)) return null
+        if ((SETTINGS_FILES + BUILD_FILES).any { Files.exists(root.resolve(it)) }) return root
+        return runCatching {
+            Files.newDirectoryStream(root).use { stream ->
+                stream.asSequence()
+                    .filter { Files.isDirectory(it) && !it.fileName.toString().startsWith(".") }
+                    .sortedBy { it.fileName.toString() }
+                    .firstOrNull { sub ->
+                        SETTINGS_FILES.any { Files.exists(sub.resolve(it)) } ||
+                            BUILD_FILES.any { Files.exists(sub.resolve(it)) }
+                    }
+            }
+        }.getOrNull()
+    }
+
+    /** True when [root] looks like a Gradle project (has a settings or build script at root or immediate child). */
+    fun isGradleProject(root: Path): Boolean = resolveGradleRoot(root) != null
 
     /** The root-level Gradle files that identify the project: its settings script, build script, and catalog. */
-    fun buildFiles(root: Path): List<Path> =
-        (SETTINGS_FILES + BUILD_FILES + CATALOG_FILES).map { root.resolve(it) }.filter { Files.exists(it) }
+    fun buildFiles(root: Path): List<Path> {
+        val gradleRoot = resolveGradleRoot(root) ?: root
+        return (SETTINGS_FILES + BUILD_FILES + CATALOG_FILES).map { gradleRoot.resolve(it) }.filter { Files.exists(it) }
+    }
 
     // --- model ---
 
@@ -138,6 +156,8 @@ object GradleImport {
         val rootName: String,
         /** The Compose Multiplatform plugin version, which versions the `compose.*` dependency accessors. */
         val composeVersion: String?,
+        /** The Kotlin Gradle plugin version declared at the project level. */
+        val kotlinVersion: String?,
         /** `allprojects { group = … }` / `subprojects { group = … }` in the root script. */
         val sharedGroup: String?,
         /** Which target a KMP module declaring both Android and JVM is imported for. */
@@ -170,11 +190,12 @@ object GradleImport {
     internal data class ConventionIndex(
         val conventions: Map<String, ConventionScript>,
         val constants: Map<String, String>,
+        val helperFunctions: Map<String, String> = emptyMap(),
     ) {
-        val isEmpty: Boolean get() = conventions.isEmpty() && constants.isEmpty()
+        val isEmpty: Boolean get() = conventions.isEmpty() && constants.isEmpty() && helperFunctions.isEmpty()
 
         companion object {
-            val EMPTY = ConventionIndex(emptyMap(), emptyMap())
+            val EMPTY = ConventionIndex(emptyMap(), emptyMap(), emptyMap())
         }
     }
 
@@ -192,35 +213,49 @@ object GradleImport {
 
     /** Parse the Gradle project at [root], or null if it doesn't look importable. */
     fun parse(root: Path): ProjectSpec? {
-        if (!isGradleProject(root)) return null
+        val gradleRoot = resolveGradleRoot(root) ?: return null
+        val rootPrefix = if (gradleRoot == root) "" else root.relativize(gradleRoot).toString().replace('\\', '/').trim('/')
         val notes = ArrayList<String>()
-        val settings = SETTINGS_FILES.firstNotNullOfOrNull { readStripped(root.resolve(it)) }
+        val settings = SETTINGS_FILES.firstNotNullOfOrNull { readStripped(gradleRoot.resolve(it)) }
         val name = parseRootName(settings) ?: root.fileName?.toString() ?: "project"
 
-        val catalog = CATALOG_FILES.firstNotNullOfOrNull { readOrNull(root.resolve(it)) }
+        val catalog = CATALOG_FILES.firstNotNullOfOrNull { readOrNull(gradleRoot.resolve(it)) }
             ?.let { runCatching { GradleVersionCatalog.parse(it) }.getOrNull() } ?: GradleVersionCatalog.EMPTY
-        val rootBuild = BUILD_FILES.firstNotNullOfOrNull { readStripped(root.resolve(it)) } ?: ""
-        val rootVars = resolveVars(readProperties(root) + collectVars(rootBuild))
-        val conventions = buildConventionIndex(root)
+        val rootBuild = BUILD_FILES.firstNotNullOfOrNull { readStripped(gradleRoot.resolve(it)) } ?: ""
+        val subprojectsBlock = listOf("allprojects", "subprojects").mapNotNull { GradleScript.blockBody(rootBuild, it) }.joinToString("\n")
+        val rootVars = resolveVars(readProperties(gradleRoot) + collectVars(rootBuild) + collectVars(subprojectsBlock))
+        val conventions = buildConventionIndex(gradleRoot, catalog)
 
-        val paths = parseIncludes(settings).ifEmpty { discoverModuleDirs(root) }
-        val moduleNames = moduleNames(paths, root)
+        val paths = parseIncludes(settings, gradleRoot).ifEmpty { discoverModuleDirs(gradleRoot) }
+        val moduleNames = moduleNames(paths, gradleRoot)
+        val kotlinVer = rootVars["kotlin"]
+            ?: rootVars["kotlin_version"]
+            ?: rootVars["kotlinVersion"]
+            ?: catalog.version("kotlin")
+            ?: catalog.plugins.values.firstOrNull { it.id.startsWith("org.jetbrains.kotlin.") && it.version.isNotBlank() }?.version
+            ?: listOfNotNull(rootBuild, settings).firstNotNullOfOrNull { kotlinPluginVersion(it) }
         val context = ProjectContext(
             rootName = name,
             composeVersion = catalog.plugins.values.firstOrNull { it.id == COMPOSE_MP_PLUGIN }?.version
                 ?.takeIf { it.isNotBlank() }
                 ?: listOfNotNull(rootBuild, settings).firstNotNullOfOrNull { composePluginVersion(it) },
+            kotlinVersion = kotlinVer,
             sharedGroup = listOf("allprojects", "subprojects").firstNotNullOfOrNull { block ->
                 GradleScript.blockBody(rootBuild, block)?.let { firstGroup(it, GROUP_ASSIGNMENT) }
             },
             kmpPreference = GradleKmp.preferredPlatform(root),
         )
-        val modules = paths.mapNotNull { parseModule(root, it, catalog, rootVars, conventions, moduleNames, context, notes) }
+        val rawModules = paths.mapNotNull { parseModule(gradleRoot, it, catalog, rootVars, conventions, moduleNames, context, notes) }
+        val modules = if (rootPrefix.isEmpty()) rawModules else rawModules.map { m ->
+            val rel = if (m.dirRel.isBlank()) rootPrefix else "$rootPrefix/${m.dirRel}"
+            m.copy(dirRel = rel)
+        }
         if (modules.isEmpty()) return null
         if (!catalog.isEmpty) notes.add("Read a version catalog (gradle/libs.versions.toml).")
         if (conventions.conventions.isNotEmpty())
             notes.add("Read ${conventions.conventions.size} convention plugin(s) from buildSrc/build-logic.")
-        val repos = parseRepositories(settings, rootBuild, notes)
+        val needsJitpack = modules.any { m -> m.mavenDeps.any { d -> d.coordinate.startsWith("com.github.") } }
+        val repos = parseRepositories(gradleRoot, settings, rootBuild, needsJitpack, notes)
         return ProjectSpec(name, modules.distinctBy { it.name }, SyncReport(notes), repos)
     }
 
@@ -246,17 +281,32 @@ object GradleImport {
     private fun parseRootName(settings: String?): String? =
         settings?.let { firstGroup(it, """rootProject\.name\s*=\s*['"]([^'"]+)['"]""") }
 
-    /** Gradle paths from `include ':app', ':feature:core'` (Groovy + Kotlin DSL, single- and multi-line). */
-    private fun parseIncludes(settings: String?): List<String> {
+    /** Gradle paths from `include ':app', ':feature:core'` (Groovy + Kotlin DSL, single- and multi-line, plus `:prefix:$it` loops). */
+    private fun parseIncludes(settings: String?, root: Path): List<String> {
         if (settings == null) return emptyList()
         val out = LinkedHashSet<String>()
         for (line in settings.lineSequence()) {
             val trimmed = line.trim()
-            if (!trimmed.startsWith("include")) continue
-            for (m in Regex("""['"](:[^'"]+)['"]""").findAll(trimmed)) out.add(m.groupValues[1])
+            if (!trimmed.startsWith("include") || trimmed.startsWith("includeBuild")) continue
+            for (m in Regex("""['"](:[^'"$]+)['"]""").findAll(trimmed)) out.add(m.groupValues[1])
         }
-        for (call in Regex("""\binclude\s*\(([^)]*)\)""").findAll(settings)) {
-            for (m in Regex("""['"](:[^'"]+)['"]""").findAll(call.groupValues[1])) out.add(m.groupValues[1])
+        for (st in GradleScript.statements(settings)) {
+            if (!Regex("""^\s*include\s*\(""").containsMatchIn(st)) continue
+            for (m in Regex("""['"](:[^'"$]+)['"]""").findAll(st)) out.add(m.groupValues[1])
+        }
+        for (m in Regex("""['"](:[\w:\-]+:)\$""").findAll(settings)) {
+            val prefix = m.groupValues[1].trim(':')
+            val parentDir = root.resolve(prefix.replace(':', '/'))
+            if (Files.isDirectory(parentDir)) {
+                runCatching {
+                    Files.newDirectoryStream(parentDir).use { stream ->
+                        stream.filter { sub -> Files.isDirectory(sub) && BUILD_FILES.any { b -> Files.exists(sub.resolve(b)) } }
+                            .map { ":$prefix:${it.fileName}" }
+                            .sorted()
+                            .forEach(out::add)
+                    }
+                }
+            }
         }
         return out.toList()
     }
@@ -326,6 +376,20 @@ object GradleImport {
         val depBodies = ArrayList<String>()
         val conventionTexts = ArrayList<String>()
         androidTexts.addAll(GradleScript.androidBlockBodies(build))
+        val inlinedHelpers = HashSet<String>()
+        val expandedHelperText = StringBuilder(build)
+        repeat(3) {
+            val snapshot = expandedHelperText.toString()
+            for ((fnName, fnBody) in conventions.helperFunctions) {
+                if (fnName !in inlinedHelpers && Regex("""\b${Regex.escape(fnName)}\s*\(""").containsMatchIn(snapshot)) {
+                    inlinedHelpers.add(fnName)
+                    expandedHelperText.append("\n").append(fnBody)
+                    androidTexts.addAll(GradleScript.androidBlockBodies(fnBody))
+                    depBodies.addAll(GradleScript.allBlockBodies(fnBody, "dependencies"))
+                    for (p in collectPluginIds(fnBody, catalog)) plugins.add(p)
+                }
+            }
+        }
         run {
             val visited = HashSet<String>()
             val queue = ArrayDeque(plugins.toList())
@@ -340,7 +404,6 @@ object GradleImport {
                 }
                 for (p in collectPluginIds(conv.text, catalog)) { plugins.add(p); queue.add(p) }
                 androidTexts.addAll(GradleScript.androidBlockBodies(conv.text))
-                GradleScript.blockBody(conv.text, "dependencies")?.let { depBodies.add(it) }
                 conventionTexts.add(conv.text)
             }
         }
@@ -364,15 +427,20 @@ object GradleImport {
 
         // Field chain: try each android block (module first, conventions after), then the loose build script.
         val androidSearch = androidTexts + build
-        fun androidInt(keyPattern: String): Int? = androidSearch.firstNotNullOfOrNull { androidInt(it, keyPattern, catalog) }
+        fun androidInt(keyPattern: String): Int? = androidSearch.firstNotNullOfOrNull { androidInt(it, keyPattern, catalog, vars) }
         fun androidStr(pattern: String): String? = androidSearch.firstNotNullOfOrNull { firstGroup(it, pattern) }
         val hasAndroidBlock = androidTexts.isNotEmpty()
 
         var kind = when {
             "com.android.application" in plugins || "com.android.application" in build -> Kind.ANDROID_APP
             "com.android.library" in plugins || "com.android.library" in build -> Kind.ANDROID_LIB
+            "com.android.test" in plugins || "com.android.test" in build -> Kind.ANDROID_LIB
             KMP_ANDROID_LIBRARY_PLUGIN in plugins || KMP_ANDROID_LIBRARY_PLUGIN in build -> Kind.ANDROID_LIB
             else -> Kind.JAVA
+        }
+        for (convText in conventionTexts) {
+            val filteredConv = filterWithPluginBlocks(convText, isAndroid = kind != Kind.JAVA)
+            depBodies.addAll(GradleScript.allBlockBodies(filteredConv, "dependencies"))
         }
         if (kmp != null) {
             // The modeled target decides: a KMP module imported for its JVM (or common) code is a JVM module
@@ -409,22 +477,37 @@ object GradleImport {
         val viewBinding = androidTexts.any {
             GradleScript.blockBody(it, "buildFeatures")?.let { bf -> Regex("""viewBinding\s*=?\s*true""").containsMatchIn(bf) } ?: false
         }
-        val parcelize = plugins.any { "parcelize" in it }
+        val parcelize = plugins.any { "parcelize" in it || "kotlin-android-extensions" in it }
         val serialization = plugins.any { "serialization" in it }
 
         // The module's own blocks, then each modeled KMP source set's: a test set's declarations are test-scoped
         // whatever configuration they name. The first declaration of a coordinate wins, so main beats test.
         val parsedDeps = (listOf(depBodies.joinToString("\n") to false) + kmp?.dependencyBodies.orEmpty())
             .map { (body, test) ->
-                parseDependencies(body, catalog, vars, name, moduleNames, context.composeVersion, notes, testOnly = test)
+                parseDependencies(body, catalog, vars, name, moduleNames, context.composeVersion, context.kotlinVersion, notes, testOnly = test)
             }
-        val maven = withKotlinTestFramework(
-            parsedDeps.flatMap { it.first }.distinctBy { it.coordinate to it.variant },
-            listOf(build) + conventionTexts,
+        val maven = withAndroidXJetifierFallbacks(
+            withKotlinTestFramework(
+                parsedDeps.flatMap { it.first }.distinctBy { it.coordinate to it.variant },
+                listOf(build) + conventionTexts,
+            ),
         )
         val moduleDeps = parsedDeps.flatMap { it.second }.distinctBy { it.name }
         val platforms = parsedDeps.flatMap { it.third }.distinctBy { it.coordinate to it.variant }
-        val manifest = KMP_MANIFEST.takeIf { kmp?.platform == GradleKmp.Platform.ANDROID && Files.isRegularFile(dir.resolve(it)) }
+        val manifest = when {
+            kmp?.platform == GradleKmp.Platform.ANDROID && Files.isRegularFile(dir.resolve(KMP_MANIFEST)) -> KMP_MANIFEST
+            kind == Kind.ANDROID_LIB && !Files.isRegularFile(dir.resolve(DEFAULT_MANIFEST)) -> {
+                val generated = dir.resolve(".platform/AndroidManifest.xml")
+                runCatching {
+                    Files.createDirectories(generated.parent)
+                    if (!Files.isRegularFile(generated)) {
+                        Files.writeString(generated, "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"/>\n")
+                    }
+                }
+                ".platform/AndroidManifest.xml"
+            }
+            else -> null
+        }
 
         if (hasAndroidBlock) noteUnmodeledAndroid(name, androidTexts, notes)
 
@@ -501,6 +584,41 @@ object GradleImport {
         }
     }
 
+    private fun withAndroidXJetifierFallbacks(deps: List<Dep>): List<Dep> {
+        val aligned = deps.map { d ->
+            val parts = d.coordinate.split(':')
+            if (parts.size >= 3 && parts[0] == "androidx.room" && parts[1].startsWith("room-")) {
+                val ver = parts[2]
+                if (ver.startsWith("2.0") || ver.startsWith("2.1") || ver.startsWith("2.2") ||
+                    ver.startsWith("2.3") || ver.startsWith("2.4") || ver.startsWith("2.5") || ver.startsWith("2.6")
+                ) {
+                    d.copy(coordinate = "${parts[0]}:${parts[1]}:2.8.4")
+                } else {
+                    d
+                }
+            } else {
+                d
+            }
+        }
+        val extras = ArrayList<Dep>()
+        val existingGroupArtifacts = aligned.map { it.coordinate.substringBeforeLast(':') }.toSet()
+        for (d in aligned) {
+            val ga = d.coordinate.substringBeforeLast(':')
+            val mapped = when (ga) {
+                "com.android.support:support-annotations" -> "androidx.annotation:annotation:1.7.0"
+                "com.android.support:appcompat-v7" -> "androidx.appcompat:appcompat:1.6.1"
+                "com.android.support:support-v4" -> "androidx.legacy:legacy-support-v4:1.0.0"
+                "com.android.support:support-compat" -> "androidx.core:core:1.12.0"
+                "com.android.support:recyclerview-v7" -> "androidx.recyclerview:recyclerview:1.3.2"
+                else -> null
+            }
+            if (mapped != null && mapped.substringBeforeLast(':') !in existingGroupArtifacts) {
+                extras += d.copy(coordinate = mapped)
+            }
+        }
+        return if (extras.isEmpty()) aligned else (aligned + extras).distinctBy { it.coordinate to it.variant }
+    }
+
     /** What a KMP module was imported as, and what was left out, for the sync notes. */
     private fun kmpNote(module: String, kmp: GradleKmp.Spec): String {
         val sets = kmp.sourceSets.filter { !it.test }.joinToString(" + ") { it.name }
@@ -562,18 +680,61 @@ object GradleImport {
 
     // --- plugins ---
 
-    /** Plugin ids from the `plugins { }` block (`id`, `kotlin(...)`, catalog `alias`) + legacy `apply plugin:`. */
+    /** Plugin ids from the `plugins { }` block (`id`, `kotlin(...)`, catalog `alias`) + `apply(plugin = …)` / `pluginManager.apply(…)`. */
     private fun collectPluginIds(build: String, catalog: GradleVersionCatalog): Set<String> {
         val ids = LinkedHashSet<String>()
         GradleScript.blockBody(build, "plugins")?.let { body ->
             for (st in GradleScript.statements(body)) {
                 firstGroup(st, """\bid\b\s*\(?\s*['"]([\w.\-]+)['"]""")?.let { ids.add(it) }
-                firstGroup(st, """\bkotlin\b\s*\(?\s*['"]([\w.\-]+)['"]""")?.let { ids.add("org.jetbrains.kotlin.$it") }
+                firstGroup(st, """\bkotlin\b\s*\(?\s*['"]([\w.\-]+)['"]""")?.let {
+                    ids.add(if (it == "kotlin") "org.jetbrains.kotlin.jvm" else "org.jetbrains.kotlin.$it")
+                }
                 firstGroup(st, """alias\s*\(\s*libs\.plugins\.([\w.]+)""")?.let { catalog.plugin(it)?.let { p -> ids.add(p.id) } }
             }
         }
         for (m in Regex("""apply\s+plugin\s*:\s*['"]([\w.\-]+)['"]""").findAll(build)) ids.add(m.groupValues[1])
+        for (m in Regex("""apply\s*\(\s*plugin\s*=\s*['"]([\w.\-]+)['"]\s*\)""").findAll(build)) ids.add(m.groupValues[1])
+        for (m in Regex("""pluginManager\.apply\s*\(\s*['"]([\w.\-]+)['"]\s*\)""").findAll(build)) ids.add(m.groupValues[1])
+        if ("org.jetbrains.kotlin.kotlin" in ids) {
+            ids.remove("org.jetbrains.kotlin.kotlin")
+            ids.add("org.jetbrains.kotlin.jvm")
+        }
+        if ("kotlin" in ids) {
+            ids.remove("kotlin")
+            ids.add("org.jetbrains.kotlin.jvm")
+        }
         return ids
+    }
+
+    private fun filterWithPluginBlocks(text: String, isAndroid: Boolean): String {
+        val out = StringBuilder(text)
+        val pattern = Regex("""pluginManager\.withPlugin\s*\(\s*['"]([^'"]+)['"]\s*\)\s*\{""")
+        while (true) {
+            val m = pattern.find(out) ?: break
+            val pluginId = m.groupValues[1]
+            val openBrace = m.range.last
+            var depth = 1
+            var i = openBrace + 1
+            while (i < out.length && depth > 0) {
+                when (out[i]) {
+                    '{' -> depth++
+                    '}' -> depth--
+                }
+                i++
+            }
+            val keep = when {
+                pluginId.startsWith("com.android.") -> isAndroid
+                pluginId == "org.jetbrains.kotlin.jvm" -> !isAndroid
+                else -> true
+            }
+            if (keep) {
+                val inner = out.substring(openBrace + 1, (i - 1).coerceAtLeast(openBrace + 1))
+                out.replace(m.range.first, i, inner)
+            } else {
+                out.delete(m.range.first, i)
+            }
+        }
+        return out.toString()
     }
 
     // --- dependencies ---
@@ -610,6 +771,7 @@ object GradleImport {
         module: String,
         moduleNames: Map<String, String>,
         composeVersion: String?,
+        kotlinVersion: String?,
         notes: MutableList<String>,
         /** Every declaration is test-scoped: the block belongs to a KMP test source set (`commonTest`). */
         testOnly: Boolean = false,
@@ -619,14 +781,26 @@ object GradleImport {
         val platforms = LinkedHashMap<String, PlatformDep>()
 
         fun addLib(coord: String, scope: DependencyScope, variant: String?, isPlatform: Boolean) {
+            if (coord.startsWith("logic:")) return
+            if (!isPlatform && coord.count { it == ':' } < 2 && platforms.isEmpty()) return
             if (isPlatform) platforms.putIfAbsent("$coord|$variant", PlatformDep(coord, scope, variant))
             else maven.putIfAbsent("$coord|$variant", Dep(coord, scope, variant))
         }
 
-        // Resolve a dependency *reference* — a catalog accessor (`libs.x` / `libs.bundles.x`), a
+        // Resolve a dependency *reference* — a catalog accessor (`libs.x` / `libs.bundles.x` / `libs.findLibrary("x")`), a
         // `kotlin("x")` shorthand, or an inline `"g:a:v"` coordinate — into [addLib].
         fun addRef(text: String, scope: DependencyScope, variant: String?, isPlatform: Boolean) {
             when {
+                "libs.findBundle" in text -> {
+                    val alias = firstGroup(text, """libs\.findBundle\s*\(\s*['"]([\w.\-]+)['"]\s*\)""") ?: return
+                    val entries = catalog.bundle(alias)
+                    for (e in entries) addLib(e.coordinate, scope, variant, isPlatform)
+                }
+                "libs.findLibrary" in text -> {
+                    val alias = firstGroup(text, """libs\.findLibrary\s*\(\s*['"]([\w.\-]+)['"]\s*\)""") ?: return
+                    val e = catalog.library(alias)
+                    if (e != null) addLib(e.coordinate, scope, variant, isPlatform)
+                }
                 "libs.bundles." in text -> {
                     val alias = firstGroup(text, """libs\.bundles\.([\w.]+)""") ?: return
                     val entries = catalog.bundle(alias)
@@ -642,7 +816,12 @@ object GradleImport {
                 Regex("""\bkotlin\s*\(\s*['"]""").containsMatchIn(text) -> {
                     GradleScript.firstQuoted(text.substringAfter("kotlin"))
                         ?.let {
-                            val ver = vars["kotlin"] ?: catalog.version("kotlin") ?: KotlinVersion.CURRENT.toString()
+                            val ver = vars["kotlin"]
+                                ?: vars["kotlin_version"]
+                                ?: vars["kotlinVersion"]
+                                ?: catalog.version("kotlin")
+                                ?: kotlinVersion
+                                ?: "2.1.20"
                             addLib("org.jetbrains.kotlin:kotlin-$it:$ver", scope, variant, isPlatform)
                         }
                 }
@@ -779,7 +958,8 @@ object GradleImport {
         // (`implementation("…")`); one the script created itself has no generated accessor and is addressed
         // by name in the Kotlin DSL (`"natives"("…")`), which is also the form this project's own Gradle
         // export writes, so an exported project imports back with its native libraries intact.
-        val kw = firstGroup(st, """^\s*["']([A-Za-z]\w*)["']\s*\(""")
+        val kw = firstGroup(st, """^\s*add\s*\(\s*["']([A-Za-z]\w*)["']\s*,""")
+            ?: firstGroup(st, """^\s*["']([A-Za-z]\w*)["']\s*\(""")
             ?: firstGroup(st, """^\s*([A-Za-z]\w*)[\s(]""")
             ?: return null
         SCOPE_KEYWORDS[kw]?.let { return it to null }
@@ -810,17 +990,33 @@ object GradleImport {
 
     // --- android block ---
 
-    /** An android SDK int like `compileSdk 34` / `compileSdk = 34`, or the catalog form
-     *  `compileSdk = libs.versions.compileSdk.get().toInt()` resolved through the version [catalog]. */
-    private fun androidInt(text: String, keyPattern: String, catalog: GradleVersionCatalog): Int? {
+    /** An android SDK int like `compileSdk 34` / `compileSdk = 34`, `compileSdk { version = release(37) }`,
+     *  the catalog form `compileSdk = libs.versions.compileSdk.get().toInt()`, or variable references. */
+    private fun androidInt(text: String, keyPattern: String, catalog: GradleVersionCatalog, vars: Map<String, String>): Int? {
         firstGroup(text, """$keyPattern\s*=?\s*\(?\s*(\d+)""")?.toIntOrNull()?.let { return it }
-        val accessor = firstGroup(text, """$keyPattern\s*=?\s*\(?\s*libs\.versions\.([\w.]+)""") ?: return null
-        // Drop trailing method calls (`.get`, `.toInt`, …) a segment at a time until the accessor resolves.
-        var a = accessor
-        repeat(5) {
-            catalog.version(a)?.toIntOrNull()?.let { return it }
-            if ('.' !in a) return null
-            a = a.substringBeforeLast('.')
+        if ("compileSdk" in keyPattern) {
+            GradleScript.blockBody(text, "compileSdk")?.let { body ->
+                firstGroup(body, """(\d+)""")?.toIntOrNull()?.let { return it }
+            }
+        }
+        val accessor = firstGroup(text, """$keyPattern\s*=?\s*\(?\s*libs\.versions\.([\w.]+)""")
+        if (accessor != null) {
+            // Drop trailing method calls (`.get`, `.toInt`, …) a segment at a time until the accessor resolves.
+            var a: String = accessor
+            for (step in 0 until 5) {
+                catalog.version(a)?.toIntOrNull()?.let { return it }
+                if ('.' !in a) break
+                a = a.substringBeforeLast('.')
+            }
+        }
+        val varRef = firstGroup(text, """$keyPattern\s*=?\s*\(?\s*([A-Za-z_][\w.]*)""")
+        if (varRef != null) {
+            lookupVar(vars, varRef)?.toIntOrNull()?.let { return it }
+        }
+        when {
+            "compileSdk" in keyPattern -> (vars["COMPILE_SDK_VERSION"] ?: vars["compileSdkVersion"] ?: vars["compileSdk"])?.toIntOrNull()?.let { return it }
+            "minSdk" in keyPattern -> (vars["MIN_SDK_VERSION"] ?: vars["minSdkVersion"] ?: vars["minSdk"])?.toIntOrNull()?.let { return it }
+            "targetSdk" in keyPattern -> (vars["TARGET_SDK_VERSION"] ?: vars["targetSdkVersion"] ?: vars["targetSdk"])?.toIntOrNull()?.let { return it }
         }
         return null
     }
@@ -1029,13 +1225,15 @@ object GradleImport {
     private fun unquote(v: String): String = v.trim().trim('"', '\'')
 
     private fun readProperties(dir: Path): Map<String, String> {
-        val text = readOrNull(dir.resolve("gradle.properties")) ?: return emptyMap()
         val out = LinkedHashMap<String, String>()
-        for (line in text.lineSequence()) {
-            val l = line.trim()
-            if (l.isEmpty() || l.startsWith("#") || l.startsWith("!")) continue
-            val i = l.indexOf('=')
-            if (i > 0) out[l.substring(0, i).trim()] = l.substring(i + 1).trim()
+        for (propFile in listOf("version.properties", "gradle.properties")) {
+            val text = readOrNull(dir.resolve(propFile)) ?: continue
+            for (line in text.lineSequence()) {
+                val l = line.trim()
+                if (l.isEmpty() || l.startsWith("#") || l.startsWith("!")) continue
+                val i = l.indexOf('=')
+                if (i > 0) out[l.substring(0, i).trim()] = l.substring(i + 1).trim()
+            }
         }
         return out
     }
@@ -1043,15 +1241,18 @@ object GradleImport {
     // --- convention plugins (buildSrc / build-logic) ---
 
     private val CONST_RE = Regex("""(?:const\s+)?val\s+(\w+)\s*(?::\s*[\w<>?., ]+)?\s*=\s*"([^"\\]*)"""")
+    private val HELPER_FUN_RE = Regex("""\bfun\s+(?:[\w.<>]+\.)?(\w+)\s*\([^)]*\)\s*\{""")
 
-    /** Scan buildSrc/build-logic for precompiled `.gradle.kts` script plugins, imperative plugin ids
-     *  (`gradlePlugin { … id = "…" }`), and shared `const val` string constants. Tolerant; never throws. */
-    private fun buildConventionIndex(root: Path): ConventionIndex {
+    /** Scan buildSrc/build-logic for precompiled `.gradle.kts` script plugins, `Plugin<Project>` classes
+     *  (`gradlePlugin { … }`), helper functions, and shared `const val` string constants. Tolerant; never throws. */
+    private fun buildConventionIndex(root: Path, catalog: GradleVersionCatalog): ConventionIndex {
         val roots = listOf(root.resolve("buildSrc"), root.resolve("build-logic")).filter { Files.isDirectory(it) }
         if (roots.isEmpty()) return ConventionIndex.EMPTY
         val conventions = LinkedHashMap<String, ConventionScript>()
         val qualifiedConstants = LinkedHashMap<String, String>()
-        val imperativeIds = LinkedHashSet<String>()
+        val ktFilesBySimpleName = LinkedHashMap<String, String>()
+        val helperFunctions = LinkedHashMap<String, String>()
+        val pluginRegistrations = LinkedHashMap<String, String?>() // pluginId -> implementationClass?
         for (base in roots) runCatching {
             Files.walk(base).use { stream ->
                 stream.filter { Files.isRegularFile(it) }.forEach { file ->
@@ -1069,19 +1270,73 @@ object GradleImport {
                         fn.endsWith(".kt") || fn == "build.gradle.kts" || fn == "build.gradle" -> {
                             val text = readStripped(file) ?: return@forEach
                             collectConstants(text, qualifiedConstants)
+                            if (fn.endsWith(".kt")) {
+                                ktFilesBySimpleName[fn.removeSuffix(".kt")] = text
+                                collectHelperFunctions(text, helperFunctions)
+                            }
                             GradleScript.blockBody(text, "gradlePlugin")?.let { gp ->
-                                for (m in Regex("""\bid\s*=\s*['"]([\w.\-]+)['"]""").findAll(gp)) imperativeIds.add(m.groupValues[1])
+                                val pluginsBody = GradleScript.blockBody(gp, "plugins") ?: gp
+                                for (b in GradleScript.childBlocks(pluginsBody)) {
+                                    val id = firstGroup(b.body, """\bid\s*=\s*['"]([\w.\-]+)['"]""")
+                                        ?: firstGroup(b.body, """\bid\s*=\s*libs\.plugins\.([\w.]+?)(?:\.get\s*\(\s*\))?\.pluginId""")
+                                            ?.let { alias -> catalog.plugin(alias)?.id }
+                                    val implClass = firstGroup(b.body, """implementationClass\s*=\s*['"]([\w.]+)['"]""")
+                                    if (id != null) pluginRegistrations[id] = implClass
+                                }
+                                for (m in Regex("""\bid\s*=\s*['"]([\w.\-]+)['"]""").findAll(gp)) {
+                                    pluginRegistrations.putIfAbsent(m.groupValues[1], null)
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        // A registered plugin id with no precompiled script → an imperative Plugin<Project> class we can't read.
-        for (id in imperativeIds) conventions.putIfAbsent(id, ConventionScript("", imperative = true))
+        for ((id, implClass) in pluginRegistrations) {
+            if (id in conventions) continue
+            val simpleName = implClass?.substringAfterLast('.')
+            val classText = simpleName?.let { ktFilesBySimpleName[it] }
+            if (classText != null) {
+                val expanded = StringBuilder(classText)
+                val inlinedHelpers = HashSet<String>()
+                repeat(2) {
+                    val snapshot = expanded.toString()
+                    for ((fnName, fnBody) in helperFunctions) {
+                        if (fnName !in inlinedHelpers && Regex("""\b${Regex.escape(fnName)}\s*\(""").containsMatchIn(snapshot)) {
+                            inlinedHelpers.add(fnName)
+                            expanded.append("\n").append(fnBody)
+                        }
+                    }
+                }
+                conventions[id] = ConventionScript(expanded.toString(), imperative = false)
+            } else {
+                conventions[id] = ConventionScript("", imperative = true)
+            }
+        }
         val constants = publishConstants(qualifiedConstants)
-        return if (conventions.isEmpty() && constants.isEmpty()) ConventionIndex.EMPTY
-        else ConventionIndex(conventions, constants)
+        return if (conventions.isEmpty() && constants.isEmpty() && helperFunctions.isEmpty()) ConventionIndex.EMPTY
+        else ConventionIndex(conventions, constants, helperFunctions)
+    }
+
+    private fun collectHelperFunctions(text: String, out: MutableMap<String, String>) {
+        for (m in HELPER_FUN_RE.findAll(text)) {
+            val fnName = m.groupValues[1]
+            if (fnName == "apply") continue
+            val openBrace = m.range.last
+            var depth = 1
+            var i = openBrace + 1
+            while (i < text.length && depth > 0) {
+                when (text[i]) {
+                    '{' -> depth++
+                    '}' -> depth--
+                }
+                i++
+            }
+            if (depth == 0) {
+                val body = text.substring(openBrace + 1, i - 1)
+                out.putIfAbsent(fnName, body)
+            }
+        }
     }
 
     private val OWNER_RE = Regex("""\b(?:companion\s+object(?:\s+(\w+))?|(?:object|class|interface)\s+(\w+))[^{};\n]*\{""")
@@ -1137,8 +1392,14 @@ object GradleImport {
     // --- repositories ---
 
     /** Custom Maven repositories from `settings.gradle` (dependencyResolutionManagement / pluginManagement /
-     *  top-level) and the root build's `allprojects`. Skips the built-in google()/mavenCentral() defaults. */
-    private fun parseRepositories(settings: String?, rootBuild: String, notes: MutableList<String>): List<RepoSpec> {
+     *  top-level), the root build's `allprojects`, and `repositories.gradle(.kts)`. */
+    private fun parseRepositories(
+        gradleRoot: Path,
+        settings: String?,
+        rootBuild: String,
+        needsJitpack: Boolean,
+        notes: MutableList<String>,
+    ): List<RepoSpec> {
         val bodies = ArrayList<String>()
         fun repos(container: String?) { container?.let { GradleScript.blockBody(it, "repositories")?.let(bodies::add) } }
         settings?.let {
@@ -1147,9 +1408,18 @@ object GradleImport {
             GradleScript.blockBody(it, "repositories")?.let(bodies::add)
         }
         repos(GradleScript.blockBody(rootBuild, "allprojects"))
+        repos(GradleScript.blockBody(rootBuild, "subprojects"))
         GradleScript.blockBody(rootBuild, "repositories")?.let(bodies::add)
+        for (repoScript in listOf("repositories.gradle.kts", "repositories.gradle")) {
+            readStripped(gradleRoot.resolve(repoScript))?.let { script ->
+                GradleScript.allBlockBodies(script, "repositories").forEach(bodies::add)
+            }
+        }
 
         val out = LinkedHashMap<String, RepoSpec>()
+        if (needsJitpack) {
+            out["https://jitpack.io"] = RepoSpec("jitpack.io", "https://jitpack.io")
+        }
         val computedNote = "Skipped a custom Maven repository with a computed URL; add it under Dependencies → Repositories."
         fun add(name: String, url: String) {
             val clean = name.replace('\t', ' ').replace('\n', ' ').trim().ifEmpty { hostName(url) }
@@ -1185,6 +1455,11 @@ object GradleImport {
 
     private fun composePluginVersion(script: String): String? =
         firstGroup(script, """id\s*\(?\s*['"]$COMPOSE_MP_PLUGIN['"]\s*\)?\s*version\s*\(?\s*['"]([^'"]+)['"]""")
+
+    private fun kotlinPluginVersion(script: String): String? =
+        firstGroup(script, """id\s*\(?\s*['"]org\.jetbrains\.kotlin\.[\w.\-]+['"]\s*\)?\s*version\s*\(?\s*['"]([^'"]+)['"]""")
+            ?: firstGroup(script, """\bkotlin\s*\(\s*['"][\w.\-]+['"]\s*\)\s*version\s*\(?\s*['"]([^'"]+)['"]""")
+            ?: firstGroup(script, """kotlin-gradle-plugin:([\w.\-]+)['"]""")
 
     private fun firstGroup(text: String, pattern: String): String? =
         Regex(pattern).find(text)?.groupValues?.get(1)

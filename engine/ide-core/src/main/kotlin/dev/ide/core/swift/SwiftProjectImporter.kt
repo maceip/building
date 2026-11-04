@@ -90,12 +90,19 @@ class SwiftProjectImporter : ProjectImporter {
                 confidence = 6,
             )
         }
-        val swiftSource = dev.ide.core.runtime.SwiftBuildSystem.findSwiftSourceFiles(root).firstOrNull()
+        val swiftSources = dev.ide.core.runtime.SwiftBuildSystem.findSwiftSourceFiles(root)
+        val swiftSource = swiftSources.firstOrNull()
         if (swiftSource != null) {
+            val pyCount = Files.walk(root, 4).use { stream ->
+                stream.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".py") }
+                    .limit((swiftSources.size + 1).toLong())
+                    .count()
+                    .toInt()
+            }
             return Detection(
                 name = root.fileName?.toString() ?: "swift-project",
                 markers = listOf(swiftSource.toAbsolutePath()),
-                confidence = 6,
+                confidence = if (pyCount > swiftSources.size) 4 else 6,
             )
         }
         null
@@ -107,10 +114,8 @@ class SwiftProjectImporter : ProjectImporter {
         request.progress.checkCanceled()
         val packageSwift = request.root.resolve("Package.swift")
         val fallbackName = request.root.fileName?.toString() ?: "swift-project"
-        // If a cloned SwiftUI / Xcode repo does not yet have Package.swift or xtool.yml, scaffold them
-        // on import so the project immediately compiles with `swift build` and `xtool dev build --ipa`.
-        val isIos = dev.ide.core.runtime.SwiftBuildSystem.isIosOrSwiftUiProject(request.root)
-        dev.ide.core.runtime.SwiftBuildSystem.ensureSwiftScaffolding(request.root, fallbackName, forIpa = isIos)
+        // Scaffold Package.swift only for raw Swift source folders that have neither a Package.swift nor an Xcode project.
+        dev.ide.core.runtime.SwiftBuildSystem.ensureSwiftScaffolding(request.root, fallbackName, forIpa = false)
         val name = if (Files.isRegularFile(packageSwift)) {
             extractPackageName(packageSwift) ?: fallbackName
         } else {

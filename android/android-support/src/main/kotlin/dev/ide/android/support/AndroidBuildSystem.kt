@@ -1163,6 +1163,10 @@ class AndroidBuildSystem(
         val rRoot = buildDir.resolve("intermediates").resolve("r")
         val generateR = TaskName(":${m.name}:generateR")
         val compileR = TaskName(":${m.name}:compileR")
+        val depLibRes = depAndroidLibs.flatMap {
+            val lv = AndroidVariants.matchLibraryVariant(it, consumerVariant, consumerFacet)
+            contentRoots(it, lv, ContentRole.ANDROID_RES)
+        }
         tasks.task(generateR) {
             GenerateLibraryRTask(
                 generateR,
@@ -1177,6 +1181,7 @@ class AndroidBuildSystem(
                 rRoot.resolve("AndroidManifest.xml"),
                 aapt2,
                 rTxt = rRoot.resolve("R.txt"),   // the symbol table an AAR ships (assembleAar reads it)
+                depResDirs = depLibRes + libs.resDirs,
             )
         }
         // The lib's own (non-final) R as R.jar bytecode — compile-only, kept OUT of the dexed output, so the

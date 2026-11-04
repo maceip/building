@@ -39,6 +39,12 @@ class HeadlessEngine private constructor(private val ide: IdeServices) : AutoClo
     /** The module names in the workspace, in model order. */
     fun moduleNames(): List<String> = ide.modules().map { it.name }
 
+    /** The modules in the workspace, in model order. */
+    fun modules(): List<Module> = ide.modules()
+
+    /** The primary build system ID of the workspace. */
+    fun buildSystemId(): String = ide.store.workspace.projects.firstOrNull()?.buildSystemId?.value ?: "unknown"
+
     /**
      * Pick the task to run from a [variant] (and an optional [module]) the way the Run picker's default
      * does: the Android `assemble:<module>:<variant>` for the named module, or the first app module's when

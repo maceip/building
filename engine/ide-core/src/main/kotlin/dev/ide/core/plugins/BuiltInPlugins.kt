@@ -562,7 +562,21 @@ private class KspSupportPlugin(private val env: ApplicationEnvironment) : Plugin
                 },
                 // The processor options a library's own Gradle plugin would contribute (Hilt's
                 // `disableAndroidSuperclassValidation`), which no project build file spells out.
-                processorOptions = { req -> catalog.optionsFor(req.classpath, req.declaredDependencies) },
+                processorOptions = { req ->
+                    val opts = LinkedHashMap(catalog.optionsFor(req.classpath, req.declaredDependencies))
+                    val moduleDir = req.sourceRoots.firstNotNullOfOrNull { sr ->
+                        var cur: java.nio.file.Path? = sr
+                        while (cur != null && cur.fileName?.toString() != "src") cur = cur.parent
+                        cur?.parent
+                    } ?: req.outputDir.parent?.parent?.parent?.parent
+                    if (moduleDir != null) {
+                        val schemasDir = moduleDir.resolve("schemas")
+                        if (Files.isDirectory(schemasDir)) {
+                            opts.putIfAbsent("room.schemaLocation", schemasDir.toString())
+                        }
+                    }
+                    opts
+                },
                 loader = loader,
                 jdkHome = jdkHome,
             ),

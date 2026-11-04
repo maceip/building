@@ -206,7 +206,7 @@ object AndroidVariants {
         if (facet.productFlavors.isEmpty() || dims.isEmpty()) return listOf(emptyList())
         var acc: List<List<ProductFlavor>> = listOf(emptyList())
         for (dim in dims) {
-            val choices = facet.productFlavors.filter { it.dimension == dim }
+            val choices = facet.productFlavors.filter { it.dimension == dim || (dims.size == 1 && it.dimension == null) }
             if (choices.isEmpty()) continue
             acc = acc.flatMap { prefix -> choices.map { prefix + it } }
         }

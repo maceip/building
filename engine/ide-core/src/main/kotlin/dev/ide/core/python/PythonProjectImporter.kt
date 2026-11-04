@@ -80,7 +80,8 @@ class PythonProjectImporter : ProjectImporter {
         var pyCount = 0
         var tsJsCount = 0
         var swiftCount = 0
-        Files.walk(root, 6).use { stream ->
+        var jvmCount = 0
+        Files.walk(root, 8).use { stream ->
             stream.filter { p ->
                 Files.isRegularFile(p) &&
                     root.relativize(p).none { seg -> seg.toString() in excluded }
@@ -94,6 +95,9 @@ class PythonProjectImporter : ProjectImporter {
                     fileName.endsWith(".swift") -> {
                         swiftCount++
                     }
+                    fileName.endsWith(".kt") || fileName.endsWith(".java") -> {
+                        jvmCount++
+                    }
                     (fileName.endsWith(".ts") || fileName.endsWith(".tsx") || fileName.endsWith(".js") || fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) &&
                         !fileName.endsWith(".d.ts") -> {
                         tsJsCount++
@@ -104,7 +108,7 @@ class PythonProjectImporter : ProjectImporter {
                 }
             }
         }
-        if (swiftCount > pyCount) {
+        if (swiftCount > pyCount || jvmCount > pyCount) {
             return null
         }
         if (subPyManifest != null && pyCount > tsJsCount) {
@@ -116,7 +120,7 @@ class PythonProjectImporter : ProjectImporter {
         }
         val anyPy = firstPy
         if (anyPy != null) {
-            val conf = if (pyCount > tsJsCount) 4 else 3
+            val conf = if (pyCount > tsJsCount) 6 else 3
             return Detection(name = root.fileName?.toString() ?: "python-project", markers = listOf(anyPy.toAbsolutePath()), confidence = conf)
         }
         null

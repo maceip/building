@@ -3,6 +3,7 @@ package dev.ide.android.support
 import dev.ide.android.support.tools.AarExtractor
 import dev.ide.android.support.tools.AarMetadata
 import dev.ide.android.support.tools.ArtProfiles
+import dev.ide.build.engine.moduleDir
 import dev.ide.model.ClasspathEntryKind
 import dev.ide.model.DependencyScope
 import dev.ide.model.MavenClasspath
@@ -59,15 +60,24 @@ class ResolvedLibraries(
  */
 object AndroidLibraries {
 
-    fun resolve(module: Module, explodeRoot: Path, variant: Set<String>? = null): ResolvedLibraries =
-        classify(
-            compileRoots = libraryRoots(module, DependencyScope.IMPLEMENTATION, variant),
-            runtimeRoots = libraryRoots(module, DependencyScope.RUNTIME_ONLY, variant),
+    fun resolve(module: Module, explodeRoot: Path, variant: Set<String>? = null): ResolvedLibraries {
+        val localLibsDir = moduleDir(module).resolve("libs")
+        val localFiles = if (Files.isDirectory(localLibsDir)) {
+            runCatching {
+                Files.list(localLibsDir).use { s ->
+                    s.filter { Files.isRegularFile(it) && (isJar(it) || isAar(it)) }.sorted().toList()
+                }
+            }.getOrDefault(emptyList())
+        } else emptyList()
+        return classify(
+            compileRoots = (libraryRoots(module, DependencyScope.IMPLEMENTATION, variant) + localFiles).distinct(),
+            runtimeRoots = (libraryRoots(module, DependencyScope.RUNTIME_ONLY, variant) + localFiles).distinct(),
             // `natives` is on no classpath at all: those artifacts are unpacked into the packaged `lib/<abi>/`
             // and never compiled or dexed against. See [DependencyScope.NATIVES].
             nativeRoots = libraryRoots(module, DependencyScope.NATIVES, variant),
             explodeRoot = explodeRoot,
         )
+    }
 
     /**
      * The libraries an instrumented test APK adds to the app it tests: the test-scoped ones the app does not
