@@ -46,7 +46,6 @@ class VcsUiContributionTest {
             VcsService.SCREEN_HISTORY,
             VcsService.SCREEN_DIFF,
             VcsService.SCREEN_ACCOUNTS,
-            VcsService.SCREEN_CLONE,
             VcsService.SCREEN_STASHES,
             VcsService.SCREEN_GITHUB,
         )

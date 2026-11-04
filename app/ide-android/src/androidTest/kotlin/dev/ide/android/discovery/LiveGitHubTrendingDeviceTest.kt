@@ -7,7 +7,6 @@ import android.os.Build
 import android.util.Log
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import dev.ide.android.widget.TrendingReposAppWidgetProvider
 import dev.ide.core.backend.DiscoveryBackend
 import dev.ide.core.discovery.BundledTrendingCatalog
 import dev.ide.core.discovery.DeveloperGraphEngine
@@ -492,50 +491,6 @@ class LiveGitHubTrendingDeviceTest {
                     "repoReadme(${topRepo.owner}/${topRepo.name})=${repoReadme.length} chars ==="
             )
         }
-    }
-
-    @Test
-    fun test08_trendingReposAppWidgetProviderLiveBroadcastsOnDevice() {
-        val prefs = context.getSharedPreferences("trending_repos_widget_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putString("period", "daily").putString("language", "all").commit()
-
-        val provider = TrendingReposAppWidgetProvider()
-
-        // Cycle period: daily -> weekly -> monthly -> daily
-        provider.onReceive(
-            context,
-            Intent(context, TrendingReposAppWidgetProvider::class.java).apply {
-                action = TrendingReposAppWidgetProvider.ACTION_CYCLE_PERIOD
-            }
-        )
-        assertEquals("weekly", prefs.getString("period", null))
-
-        provider.onReceive(
-            context,
-            Intent(context, TrendingReposAppWidgetProvider::class.java).apply {
-                action = TrendingReposAppWidgetProvider.ACTION_CYCLE_PERIOD
-            }
-        )
-        assertEquals("monthly", prefs.getString("period", null))
-
-        // Cycle language: all -> kotlin -> swift
-        provider.onReceive(
-            context,
-            Intent(context, TrendingReposAppWidgetProvider::class.java).apply {
-                action = TrendingReposAppWidgetProvider.ACTION_CYCLE_LANGUAGE
-            }
-        )
-        assertEquals("kotlin", prefs.getString("language", null))
-
-        provider.onReceive(
-            context,
-            Intent(context, TrendingReposAppWidgetProvider::class.java).apply {
-                action = TrendingReposAppWidgetProvider.ACTION_CYCLE_LANGUAGE
-            }
-        )
-        assertEquals("swift", prefs.getString("language", null))
-
-        Log.i(TAG, "=== [TEST 08 PASS] TrendingReposAppWidgetProvider period & language cycling verified on device ===")
     }
 
     @Test

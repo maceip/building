@@ -8,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -64,6 +65,9 @@ class AgentHomeDualActionsUiTest {
         onNodeWithText("Open ProjectX", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithText("Rebuild project", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithText("Submit to the Google Play Store for inclusion", useUnmergedTree = true).assertIsDisplayed()
+        assertTrue(onAllNodesWithText("New project", useUnmergedTree = true).fetchSemanticsNodes().isEmpty())
+        assertTrue(onAllNodesWithText("Import or clone", useUnmergedTree = true).fetchSemanticsNodes().isEmpty())
+        assertTrue(onAllNodesWithText("Scaffold a new app with AI", useUnmergedTree = true).fetchSemanticsNodes().isEmpty())
 
         // Tap Row 1: Open ProjectX
         onNodeWithTag("agent-quick-action-open-recent-project", useUnmergedTree = true).performClick()
@@ -105,6 +109,8 @@ class AgentHomeDualActionsUiTest {
         onNodeWithTag("agent-dual-action-rows", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithTag("agent-action-row-navigation", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithTag("agent-action-row-task", useUnmergedTree = true).assertIsDisplayed()
+        assertTrue(onAllNodesWithText("New project", useUnmergedTree = true).fetchSemanticsNodes().isEmpty())
+        assertTrue(onAllNodesWithText("Clone from Git", useUnmergedTree = true).fetchSemanticsNodes().isEmpty())
 
         onNodeWithTag("agent-quick-action-wide_nav_open_recent", useUnmergedTree = true).performClick()
         waitForIdle()

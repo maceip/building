@@ -56,21 +56,8 @@ object VcsUiPlugin : UiPlugin {
         scope.screen(ScreenContribution(VcsService.SCREEN_HISTORY, "History") { ctx -> HistoryScreen(ctx) })
         scope.screen(ScreenContribution(VcsService.SCREEN_DIFF, "Diff") { ctx -> DiffScreen(ctx) })
         scope.screen(ScreenContribution(VcsService.SCREEN_ACCOUNTS, "Accounts") { ctx -> AccountsScreen(ctx) })
-        scope.screen(ScreenContribution(VcsService.SCREEN_CLONE, "Clone") { ctx -> CloneScreen(ctx) })
         scope.screen(ScreenContribution(VcsService.SCREEN_STASHES, "Stashes") { ctx -> StashesScreen(ctx) })
         scope.screen(ScreenContribution(VcsService.SCREEN_GITHUB, "GitHub") { ctx -> GitHubScreen(ctx) })
-        scope.action(
-            SimpleUiAction(
-                id = VcsService.SCREEN_CLONE,
-                text = "Clone repository",
-                places = setOf(UiActionPlaces.MORE_MENU, UiActionPlaces.COMMAND_PALETTE, UiActionPlaces.TOOL_STRIPE),
-                description = "Clone from GitHub or paste any Git repository URL",
-                iconId = "git",
-                order = 15,
-            ) { host ->
-                host.navigate(VcsService.SCREEN_CLONE)
-            },
-        )
         contributeTabDecorations(scope)
     }
 

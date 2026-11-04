@@ -151,16 +151,6 @@ private fun StoreBrowse(
             }
         }
 
-        if (state.backend.discovery.supported()) {
-            item("githubExplorer") {
-                GitHubExplorerFeed(
-                    backend = state.backend,
-                    onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) },
-                    modifier = Modifier.padding(bottom = 14.dp)
-                )
-            }
-        }
-
         if (ticker.isNotEmpty()) {
             item("ticker") {
                 TrendingTicker(

@@ -57,7 +57,6 @@ import dev.ide.ui.screens.StoreSignInSheet
 import dev.ide.ui.screens.SubmitProjectScreen
 import dev.ide.ui.screens.CodeStyleScreen
 import dev.ide.ui.screens.ColorSchemeScreen
-import dev.ide.ui.screens.CreateProjectScreen
 import dev.ide.ui.screens.EditorScreen
 import dev.ide.ui.screens.ExportProjectScreen
 import dev.ide.ui.screens.HomeScreen
@@ -264,20 +263,11 @@ private fun AppRoute(
 ) {
     val backend = app.backend
     when (s) {
-        Screen.Projects -> if (app.resumingLastProject) {
+        Screen.Projects, Screen.CreateProject -> if (app.resumingLastProject) {
             Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
         } else {
             HomeRoute(app, fileActions)
         }
-
-        Screen.CreateProject -> CreateProjectScreen(
-            backend = backend,
-            onCancel = { app.navigateTo(Screen.Projects) },
-            onCreated = { app.navigateTo(Screen.Editor) },
-            initialTemplateId = app.createTemplateId,
-            onCloneRepository = { app.openPluginScreen(VcsService.SCREEN_CLONE) },
-            onImportProject = if (fileActions.canPickDirectory || fileActions.canPickFile) app::requestProjectImport else null,
-        )
 
         Screen.ImportProject -> {
             val preview = app.importPreview
@@ -751,9 +741,8 @@ private fun ProjectPickerRoute(
         // Straight to the full-screen Create-Project gallery, which owns the template picker.
         onNewProject = { app.createProject() },
         onDeleteProject = app::deleteProject,
-        // One "Import project" entry for both sources; it asks which when the host can do both.
-        onImportProject = if (fileActions.canPickDirectory || fileActions.canPickFile) app::requestProjectImport else null,
-        onCloneRepository = { app.openPluginScreen(VcsService.SCREEN_CLONE) },
+        onImportProject = null,
+        onCloneRepository = null,
         onExportProject = if (fileActions.canShare || fileActions.canExport || fileActions.canReveal) {
             app::startExport
         } else null,
@@ -781,14 +770,11 @@ private fun ProjectPickerRoute(
         loadIcon = { backend.projects.projectIcon(it.rootPath) },
         loadIconImage = { backend.projects.imageBytes(it) },
         backend = backend,
-        onCloneAndOpen = { url, _ ->
-            dev.ide.ui.ext.ScreenArgumentHandoff.pending = url
-            app.openPluginScreen(VcsService.SCREEN_CLONE)
-        },
+        onCloneAndOpen = null,
         // Agent-first Home: the agent icon opens the redesigned Agent settings (also in the Settings hub).
         onOpenAgentSettings = { app.openPluginScreen(dev.ide.ui.screens.SCREEN_AGENT_SETTINGS) },
-        onCloneGit = { app.openPluginScreen(VcsService.SCREEN_CLONE) },
-        onImportPackage = if (fileActions.canPickFile) app::requestProjectImport else null,
+        onCloneGit = null,
+        onImportPackage = null,
         onSubmitToStore = { project ->
             dev.ide.ui.ext.ScreenArgumentHandoff.pending = project
             app.openPluginScreen("store.submit")
@@ -853,10 +839,7 @@ private fun StoreRoute(app: CodeAssistAppState, fileActions: FileActions) {
                 backend = app.backend,
                 onOpenItem = app::openStoreItem,
                 onOpenHub = { app.openHub(Screen.Projects) },
-                onCloneAndOpen = { url, _ ->
-                    dev.ide.ui.ext.ScreenArgumentHandoff.pending = url
-                    app.openPluginScreen(VcsService.SCREEN_CLONE)
-                },
+                onCloneAndOpen = null,
             )
             return
         }
@@ -918,10 +901,7 @@ private fun StoreRoute(app: CodeAssistAppState, fileActions: FileActions) {
             // Where the cards fetch a published screenshot from. Without it every shelf draws the abstract
             // code motif, including for projects that shipped six screenshots.
             backend = app.backend,
-            onCloneAndOpen = { url, _ ->
-                dev.ide.ui.ext.ScreenArgumentHandoff.pending = url
-                app.openPluginScreen(VcsService.SCREEN_CLONE)
-            },
+            onCloneAndOpen = null,
         )
         if (searching) {
             StoreSearchScreen(

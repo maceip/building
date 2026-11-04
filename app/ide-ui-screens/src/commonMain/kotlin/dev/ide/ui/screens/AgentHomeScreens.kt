@@ -156,22 +156,6 @@ fun AgentHomeContent(
                         onClick = onSeeAllProjects,
                     ),
                 )
-                add(
-                    ChatQuickAction(
-                        id = "go-new-project",
-                        label = "New project",
-                        purpose = ChatActionPurpose.Navigation,
-                        onClick = onNewProject,
-                    ),
-                )
-                add(
-                    ChatQuickAction(
-                        id = "go-import-clone",
-                        label = "Import or clone",
-                        purpose = ChatActionPurpose.Navigation,
-                        onClick = onImportOrClone,
-                    ),
-                )
             }
         }
     }
@@ -190,7 +174,7 @@ fun AgentHomeContent(
                             } else if (mostRecent != null) {
                                 onOpenItem(mostRecent)
                             } else {
-                                onNewProject()
+                                onSeeAllProjects()
                             }
                         },
                     ),
@@ -209,14 +193,6 @@ fun AgentHomeContent(
                                 onSeeAllProjects()
                             }
                         },
-                    ),
-                )
-                add(
-                    ChatQuickAction(
-                        id = "scaffold-app-ai",
-                        label = "Scaffold a new app with AI",
-                        purpose = ChatActionPurpose.Task,
-                        onClick = onStart,
                     ),
                 )
             }
@@ -281,7 +257,6 @@ fun AgentHomeContent(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                AgentChip("New project", selected = false, onClick = onNewProject)
                 Spacer(Modifier.weight(1f))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -306,13 +281,6 @@ fun AgentHomeContent(
                     .padding(horizontal = 4.dp, vertical = 6.dp),
             ) {
                 AgentSectionLabel("Continue")
-                Spacer(Modifier.weight(1f))
-                Text(
-                    "Import or clone",
-                    fontSize = 14.sp,
-                    color = AgentUi.chrome.textMuted,
-                    modifier = Modifier.clickable(onClick = onImportOrClone),
-                )
             }
             continueItems.forEach { item ->
                 AgentProjectRow(
@@ -340,258 +308,7 @@ fun AgentHomeContent(
                     .padding(12.dp),
             )
         }
-        trendingWidgetSlot?.invoke()
         Spacer(Modifier.height(12.dp))
-    }
-}
-
-/**
- * "Start something new" bottom sheet: describe-it prompt, stack chips, primary CTA,
- * then bring-existing-code rows.
- */
-@Composable
-fun NewProjectSheetContent(
-    prompt: String,
-    onPromptChange: (String) -> Unit,
-    onStartBuilding: () -> Unit,
-    onClose: () -> Unit = {},
-    stacks: List<String> = listOf("Android app", "Python", "Node.js", "Let agent decide"),
-    selectedStack: Int = 0,
-    onSelectStack: (Int) -> Unit = {},
-    /** Paste a Git/GitHub URL and clone + open — same contract as the home QuickCloneBar. */
-    onCloneUrl: (String) -> Unit = {},
-    onCloneGit: () -> Unit = {},
-    onOpenFolder: () -> Unit = {},
-    onImportPackage: () -> Unit = {},
-    modifier: Modifier = Modifier,
-) {
-    val c = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
-    var cloneUrl by rememberSaveable { mutableStateOf("") }
-    val fieldShape = RoundedCornerShape(10.dp)
-
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(c.surfaceContainer)
-            .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
-    ) {
-        Box(
-            Modifier
-                .align(Alignment.CenterHorizontally)
-                .width(36.dp)
-                .height(4.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(c.outlineVariant),
-        )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                "New project",
-                style = MaterialTheme.typography.titleLarge,
-                color = c.onSurface,
-                modifier = Modifier.weight(1f),
-            )
-            IconButtonCa(
-                icon = CaIcons.close,
-                contentDescription = "Close",
-                onClick = onClose,
-                iconSize = 18,
-                boxSize = 40,
-            )
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                "Describe it — the agent picks the stack",
-                style = MaterialTheme.typography.bodySmall,
-                color = c.onSurfaceVariant,
-            )
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(c.surfaceContainerLow)
-                    .border(1.dp, c.outlineVariant, RoundedCornerShape(12.dp))
-                    .padding(12.dp),
-            ) {
-                BasicTextField(
-                    value = prompt,
-                    onValueChange = onPromptChange,
-                    singleLine = false,
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = c.onSurface),
-                    cursorBrush = SolidColor(c.primary),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 72.dp),
-                    decorationBox = { inner ->
-                        Box(Modifier.fillMaxWidth()) {
-                            if (prompt.isEmpty()) {
-                                Text(
-                                    "A habit tracker with a home-screen widget…",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = c.outline,
-                                )
-                            }
-                            inner()
-                        }
-                    },
-                )
-            }
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                stacks.forEachIndexed { i, label ->
-                    val selected = i == selectedStack
-                    FilterChip(
-                        selected = selected,
-                        onClick = { onSelectStack(i) },
-                        label = {
-                            Text(
-                                label,
-                                style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        },
-                    )
-                }
-            }
-            Button(
-                onClick = onStartBuilding,
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 18.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp),
-            ) {
-                Text("Start building", style = MaterialTheme.typography.labelLarge)
-            }
-        }
-
-        Text(
-            "Or clone a repository",
-            style = MaterialTheme.typography.labelSmall,
-            color = c.onSurfaceVariant,
-        )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Row(
-                Modifier
-                    .weight(1f)
-                    .height(38.dp)
-                    .clip(fieldShape)
-                    .background(c.surfaceContainerLow)
-                    .border(1.dp, c.outlineVariant, fieldShape)
-                    .padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Symbol(CaSymbols.forkRight, contentDescription = null, size = 16.dp, tint = c.onSurfaceVariant)
-                BasicTextField(
-                    value = cloneUrl,
-                    onValueChange = { cloneUrl = it },
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = c.onSurface),
-                    cursorBrush = SolidColor(c.primary),
-                    modifier = Modifier.weight(1f),
-                    decorationBox = { inner ->
-                        Box(contentAlignment = Alignment.CenterStart) {
-                            if (cloneUrl.isEmpty()) {
-                                Text(
-                                    "Paste GitHub URL or owner/repo to clone…",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = c.outline,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            inner()
-                        }
-                    },
-                )
-                if (cloneUrl.isNotEmpty()) {
-                    IconButtonCa(
-                        CaIcons.close,
-                        "Clear",
-                        { cloneUrl = "" },
-                        iconSize = 14,
-                        boxSize = 24,
-                    )
-                }
-            }
-            OutlinedButton(
-                onClick = {
-                    val clip = clipboard.getText()?.text?.trim().orEmpty()
-                    if (clip.isNotBlank()) cloneUrl = clip
-                },
-                shape = fieldShape,
-                border = BorderStroke(1.dp, c.outlineVariant),
-                contentPadding = PaddingValues(horizontal = 12.dp),
-                modifier = Modifier.height(38.dp),
-            ) {
-                Text("Paste", style = MaterialTheme.typography.labelLarge)
-            }
-            Button(
-                onClick = {
-                    val url = cloneUrl.trim()
-                    if (url.isNotEmpty()) onCloneUrl(url)
-                },
-                shape = fieldShape,
-                contentPadding = PaddingValues(horizontal = 14.dp),
-                modifier = Modifier.height(38.dp),
-                enabled = cloneUrl.isNotBlank(),
-            ) {
-                Symbol(CaSymbols.forkRight, contentDescription = null, size = 16.dp)
-                Spacer(Modifier.width(6.dp))
-                Text("Clone", style = MaterialTheme.typography.labelLarge)
-            }
-        }
-
-        Text(
-            "Or bring existing code",
-            style = MaterialTheme.typography.labelSmall,
-            color = c.onSurfaceVariant,
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            NewProjectSheetAction(CaSymbols.forkRight, "Clone a Git repository", onCloneGit)
-            NewProjectSheetAction(CaSymbols.folderOpen, "Open a folder on this phone", onOpenFolder)
-            NewProjectSheetAction(CaSymbols.download, "Import a .caproj package", onImportPackage)
-        }
-    }
-}
-
-/** Sheet row matching [SheetAction]: icon tile + title, full-width tap target. */
-@Composable
-private fun NewProjectSheetAction(glyph: Char, label: String, onClick: () -> Unit) {
-    val c = MaterialTheme.colorScheme
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(20.dp),
-        color = Color.Transparent,
-        contentColor = c.onSurface,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            Modifier.padding(vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Box(
-                Modifier.size(40.dp).clip(CircleShape).background(c.surfaceContainerHighest),
-                contentAlignment = Alignment.Center,
-            ) {
-                Symbol(glyph, contentDescription = null, size = 20.dp, tint = c.onSurfaceVariant)
-            }
-            Text(label, style = MaterialTheme.typography.titleSmall, color = c.onSurface)
-        }
     }
 }
 

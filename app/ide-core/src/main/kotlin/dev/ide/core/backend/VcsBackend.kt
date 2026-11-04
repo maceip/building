@@ -489,7 +489,7 @@ internal class VcsBackend(private val ctx: BackendContext) : VcsService {
                         runCatching { targetDir.deleteRecursively() }
                     }
                     val auth = store?.credentialsFor(url) ?: VcsCredentials.Anonymous
-                    val cloneDepth = if (url.trim().startsWith("http://") || url.trim().startsWith("https://")) 1 else 0
+                    val cloneDepth = 0
                     withContext(Dispatchers.IO) {
                         try {
                             git.clone(url.trim(), target, depth = cloneDepth, auth = auth, progress = progressSink()).close()

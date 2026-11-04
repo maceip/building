@@ -190,16 +190,6 @@ fun ExploreFeed(
                 )
             }
 
-            if (backend != null && backend.discovery.supported()) {
-                item("githubExplorer") {
-                    GitHubExplorerFeed(
-                        backend = backend,
-                        onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) },
-                        modifier = Modifier.padding(bottom = 14.dp),
-                    )
-                }
-            }
-
             feed.sections.forEachIndexed { index, section ->
                 when (section) {
                     is UiFeedSection.Ticker -> item(section.id) {
@@ -765,16 +755,6 @@ private fun ExploreEmpty(
                     onAccount = onAccount,
                     signedIn = signedIn,
                 )
-            }
-
-            if (backend != null && backend.discovery.supported()) {
-                item("githubExplorer") {
-                    GitHubExplorerFeed(
-                        backend = backend,
-                        onCloneAndOpen = { url, name -> onCloneAndOpen?.invoke(url, name) },
-                        modifier = Modifier.padding(bottom = 14.dp),
-                    )
-                }
             }
 
             // Above the hero: once the user has submitted, their own submission outranks the pitch.

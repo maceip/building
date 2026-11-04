@@ -489,13 +489,15 @@ internal class GitRepository(
         // Pull the same-named branch instead and record it as the upstream, as a first push would.
         val untracked = runCatching { repo.branch }.getOrNull()?.takeIf { upstreamOf(it) == null }
         return try {
-            val command = git.pull()
-                .setRemote(remote)
-                .setCredentialsProvider(auth.toJGit())
-                .setProgressMonitor(GitProgressMonitor(progress))
-            command.setTimeout(NETWORK_TIMEOUT_SECONDS)
-            if (untracked != null) command.setRemoteBranchName(untracked)
-            val result = command.call()
+            val result = withTransientNetworkRetry(maxAttempts = 3, initialDelayMs = 500L) {
+                val command = git.pull()
+                    .setRemote(remote)
+                    .setCredentialsProvider(auth.toJGit())
+                    .setProgressMonitor(GitProgressMonitor(progress))
+                command.setTimeout(NETWORK_TIMEOUT_SECONDS)
+                if (untracked != null) command.setRemoteBranchName(untracked)
+                command.call()
+            }
             if (untracked != null && result.isSuccessful) recordUpstream(untracked, remote)
             // A repository set to pull with rebase reports through rebaseResult and leaves mergeResult null.
             val merge = result.mergeResult?.toVcsMergeResult() ?: result.rebaseResult?.toVcsMergeResult()

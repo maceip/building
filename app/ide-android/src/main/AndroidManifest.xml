@@ -288,21 +288,6 @@
                 android:authorities="${applicationId}.litertlm"
                 android:exported="true"
                 android:grantUriPermissions="true" />
-
-        <!-- Home-screen AppWidget showing Daily / Weekly / Monthly GitHub Trending repos + JIT app previews. -->
-        <receiver
-                android:name=".widget.TrendingReposAppWidgetProvider"
-                android:exported="true"
-                android:label="GitHub Trending Repos">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="dev.ide.android.widget.ACTION_CYCLE_PERIOD" />
-                <action android:name="dev.ide.android.widget.ACTION_CYCLE_LANGUAGE" />
-            </intent-filter>
-            <meta-data
-                    android:name="android.appwidget.provider"
-                    android:resource="@xml/trending_repos_widget_info" />
-        </receiver>
     </application>
 
 </manifest>
