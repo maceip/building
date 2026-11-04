@@ -1,0 +1,132 @@
+package dev.ide.ui.backend
+
+/**
+ * Platform file-system bridges the reusable UI can't express itself — picking files to import (Android
+ * SAF / desktop `JFileChooser`) and sharing a file out (Android `FileProvider` chooser / desktop reveal).
+ * The host supplies a concrete implementation to [dev.ide.ui.CodeAssistApp]; the byte-copy on import
+ * ultimately routes through [IdeBackend.createFile], so the model/VFS layer stays untouched.
+ */
+interface FileActions {
+    /** Whether this host can import external files (shows the Import affordance). */
+    val canImport: Boolean
+
+    /**
+     * Launch the platform file picker and copy the chosen file(s) into [targetDir] (a project directory).
+     * [onImported] is called on the UI thread with the new files' paths so the caller can refresh the tree
+     * and open them — empty if the user cancelled or nothing was copied.
+     */
+    fun importInto(targetDir: String, onImported: (List<String>) -> Unit)
+
+    /** Whether this host can pick a single existing file and hand back its path (shows the keystore Import affordance). */
+    val canPickFile: Boolean get() = false
+
+    /**
+     * Launch the platform file picker for ONE existing file and return its absolute path via [onPicked]
+     * (null if cancelled). Unlike [importInto], this does NOT copy the file into the project — the caller
+     * reads it directly (e.g. importing a `.jks`/`.keystore` into the keystore registry, or a `.caproj`
+     * project package). [extensions] (lowercase, no dot) narrows the picker to those file types; empty =
+     * any file. Default no-op.
+     */
+    fun pickFile(extensions: List<String> = emptyList(), onPicked: (String?) -> Unit) = onPicked(null)
+
+    /** Whether this host can take a photo with the device camera (shows the chat's "Take photo" affordance). */
+    val canTakePhoto: Boolean get() = false
+
+    /**
+     * Launch the camera and return the saved photo's absolute path via [onTaken] (null if cancelled or no camera
+     * app). The file is a temporary copy the caller reads and may discard. Default no-op.
+     */
+    fun takePhoto(onTaken: (String?) -> Unit) = onTaken(null)
+
+    /** Whether this host can read an image from the system clipboard (shows "Paste image"). */
+    val canPasteImage: Boolean get() = false
+
+    /** Whether the clipboard holds an image right now. Cheap enough to ask on a key press, so a paste shortcut
+     *  can claim the key only when there is an image to paste and leave text paste alone otherwise. */
+    fun hasClipboardImage(): Boolean = false
+
+    /** Save the clipboard's image to a temporary file and return its path via [onPasted] (null when there is
+     *  none). Default no-op. */
+    fun pasteImage(onPasted: (String?) -> Unit) = onPasted(null)
+
+    /** Whether this host can pick an existing directory (shows the "Import Gradle project" affordance). */
+    val canPickDirectory: Boolean get() = false
+
+    /**
+     * Launch the platform folder picker for ONE existing directory and return its absolute filesystem path
+     * via [onPicked] (null if cancelled). Desktop hands back the chosen folder directly; Android's SAF gives
+     * a `content://` tree rather than a path, so the host first copies that tree into local storage
+     * (off the main thread) and returns the copy's path — the returned path is always a real filesystem
+     * directory the engine can read. Used to import an external Gradle project. Default no-op.
+     */
+    fun pickDirectory(onPicked: (String?) -> Unit) = onPicked(null)
+
+    /** Whether this host can share/export a file out (shows the Share affordance). */
+    val canShare: Boolean
+
+    /** Share/export the file at [path] to another app (Android) or reveal it in the file manager (desktop). */
+    fun share(path: String)
+
+    /**
+     * Open [url] in the platform browser (Android `Intent.ACTION_VIEW` / desktop `Desktop.browse`).
+     * Used by the Beta notice's "Submit suggestions" action. Defaults to a no-op so hosts that don't
+     * support external links degrade gracefully (the affordance is hidden when [canOpenUrl] is false).
+     */
+    fun openUrl(url: String) = Unit
+
+    /** Whether this host can open external URLs (shows link affordances like "Submit suggestions"). */
+    val canOpenUrl: Boolean get() = false
+
+    /** Whether this host can export/save a copy of a file to a user-chosen location (shows the Export affordance). */
+    val canExport: Boolean get() = false
+
+    /**
+     * Save a copy of the file at [path] to a user-chosen destination via the platform "Save As" flow —
+     * Android `ACTION_CREATE_DOCUMENT` (the system Files app / Drive / Downloads), desktop `JFileChooser`.
+     * Unlike [share] (a transient hand-off), this writes a durable copy the user picks the location for —
+     * the way to get a built APK/AAB off the device. Default no-op (hidden when [canExport] is false).
+     */
+    fun exportFile(path: String) = Unit
+
+    /** Whether this host can open a folder in the system file manager (shows the "Open in Files" affordance). */
+    val canReveal: Boolean get() = false
+
+    /**
+     * Open [path] (a directory) in the system file manager so the user can browse and manage it there.
+     * On Android this launches the system Files app at CodeAssist's projects root — surfaced by a
+     * DocumentsProvider — so any SAF file manager can browse it and import files (icons/layouts/assets)
+     * into a project; on desktop it reveals the folder. Default no-op (the affordance is hidden when
+     * [canReveal] is false).
+     */
+    fun reveal(path: String) = Unit
+
+    /** Whether this host can hand an APK to the system package installer (Android only). */
+    val canInstallApk: Boolean get() = false
+
+    /**
+     * Prompt the platform package installer for the APK at [path] — on Android the system install
+     * confirmation UI (`ACTION_VIEW` of a FileProvider URI). Used when the user taps a built `.apk` in the
+     * tree instead of opening it as text. Default no-op (the affordance is hidden when [canInstallApk] is false).
+     */
+    fun installApk(path: String) = Unit
+
+    companion object {
+        /**
+         * Whether [path] is an APK the IDE's own build wrote: one under a module's `build/outputs/apk/`.
+         * Only those are offered to the installer. An `.apk` anywhere else in a project arrived from outside
+         * it (a clone, a copied file) and is revealed instead, like any other binary.
+         */
+        fun isBuiltApk(path: String): Boolean {
+            val p = path.replace('\\', '/')
+            return p.endsWith(".apk", ignoreCase = true) && "/build/outputs/apk/" in p
+        }
+    }
+
+    /** A no-op bridge for hosts without file integration (the default). */
+    object None : FileActions {
+        override val canImport: Boolean = false
+        override fun importInto(targetDir: String, onImported: (List<String>) -> Unit) = Unit
+        override val canShare: Boolean = false
+        override fun share(path: String) = Unit
+    }
+}

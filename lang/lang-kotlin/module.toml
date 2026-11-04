@@ -1,0 +1,31 @@
+version = 2
+
+[module]
+type = "java-lib"
+name = "lang-kotlin"
+languageLevel = "JAVA_17"
+output = "build/codeassist/classes"
+
+[sourceSets.commonMain]
+scope = "IMPLEMENTATION"
+java = ["src/commonMain/kotlin"]
+
+[sourceSets.commonTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/commonTest/kotlin"]
+
+[sourceSets.jvmMain]
+scope = "IMPLEMENTATION"
+java = ["src/jvmMain/kotlin"]
+
+[sourceSets.jvmTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/jvmTest/java", "src/jvmTest/kotlin"]
+
+[dependencies]
+api = [{ module = "language-api" }, { module = "lang-kotlin-index" }, { module = "kotlin-syntax" }]
+implementation = [{ module = "kotlin-classfile" }, { module = "index-api" }, { module = "analysis-api" }, { module = "build-engine" }, { module = "kotlin-compiler-deps" }, "org.jetbrains.kotlin:kotlin-metadata-jvm:2.5.0-Beta2", "org.ow2.asm:asm:9.7", "kotlin-stdlib"]
+testImplementation = ["org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0", { module = "kotlin-classfile" }, { module = "test-support" }, { module = "project-model-impl" }, { module = "index-impl" }, { module = "bench-support" }, "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0", "org.jetbrains.compose.runtime:runtime-desktop:1.11.1", "org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1", "org.jetbrains.kotlin:kotlin-parcelize-runtime:2.4.0", { platform = "org.junit:junit-bom:5.11.4" }]
+
+[kotlin]
+commonSourceRoots = ["src/commonMain/kotlin"]

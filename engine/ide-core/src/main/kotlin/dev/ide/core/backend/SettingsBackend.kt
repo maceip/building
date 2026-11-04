@@ -1,0 +1,576 @@
+package dev.ide.core.backend
+
+import dev.ide.analysis.AnalyzerId
+import dev.ide.core.BackendContext
+import dev.ide.core.completion.CompletionOptions
+import dev.ide.core.plugins.PluginChangeKind
+import dev.ide.core.settings.BuiltInSettingsPages
+import dev.ide.core.settings.CodeStyleSettings
+import dev.ide.core.settings.IdeSettings
+import dev.ide.core.settings.SettingsStore
+import dev.ide.lang.dom.Severity
+import dev.ide.platform.log.PerfTrace
+import dev.ide.plugin.impl.PluginLoadFailure
+import dev.ide.platform.settings.PreferenceReader
+import dev.ide.platform.settings.SettingControl
+import dev.ide.platform.settings.SettingsPage
+import dev.ide.platform.settings.SettingsScope
+import dev.ide.platform.settings.settingsKey
+import dev.ide.ui.backend.SettingsService
+import dev.ide.ui.backend.UiAccent
+import dev.ide.ui.backend.UiCodeStyle
+import dev.ide.ui.backend.UiInspection
+import dev.ide.ui.backend.UiPluginChange
+import dev.ide.ui.backend.UiPluginChangeKind
+import dev.ide.ui.backend.UiPluginInfo
+import dev.ide.ui.backend.UiSettingControl
+import dev.ide.ui.ext.UiPluginHost
+import dev.ide.ui.ext.displayShortcut
+import dev.ide.ui.backend.UiSettings
+import dev.ide.ui.backend.UiSettingsPage
+import dev.ide.ui.backend.UiSeverity
+import kotlin.io.path.writeText
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+/**
+ * [SettingsService]: the app-global typed settings ([settingsStore], prefs-backed) + per-project settings
+ * (engine-backed) + the extensible settings-page model + the inspection catalogue + app preferences. Writes
+ * route by page scope and re-apply the effect. The analytics toggle is special-cased to the consent decision
+ * (cross-cutting; reached through [BackendContext]).
+ */
+internal class SettingsBackend(private val ctx: BackendContext) : SettingsService {
+
+    override fun preference(key: String): String? = ctx.manager?.preference(key)
+
+    override fun setPreference(key: String, value: String) {
+        ctx.manager?.setPreference(key, value)
+    }
+
+    /**
+     * Under the storage root rather than the system temp directory: on Android a share/save hand-off reads
+     * the file back through the app's own FileProvider, which only exposes paths the app owns.
+     */
+    override fun writeSharedFile(fileName: String, content: String): String? {
+        val root = ctx.manager?.storageRoot ?: return null
+        return runCatching {
+            val dir = root.resolve("export")
+            java.nio.file.Files.createDirectories(dir)
+            val file = dir.resolve(fileName.substringAfterLast('/').ifBlank { "export.txt" })
+            file.writeText(content)
+            file.toString()
+        }.getOrNull()
+    }
+
+    override fun pluginCatalog(): List<UiPluginInfo> {
+        val manager = ctx.manager ?: return emptyList()
+        val catalog = manager.env.pluginCatalog
+        val disabled = manager.disabledPlugins()
+        // Read from the PERSISTED sets, not from the catalog. The catalog is the decision as it stood at
+        // startup (it is what actually loaded), so reading consent off it would leave a row still saying
+        // "not running yet" straight after the user allowed it. `enabled` already works this way.
+        val consented = manager.consentedPlugins()
+        val installed = manager.env.installedPlugins.associateBy { it.manifest.id }
+        val catalogued = catalog.all.map { m ->
+            val fromSource = installed[m.id]
+            val essential = catalog.isEssential(m.id)
+            UiPluginInfo(
+                id = m.id, name = m.name, version = m.version, description = m.description,
+                essential = essential, enabled = essential || m.id !in disabled, dependsOn = m.dependsOn,
+                builtIn = fromSource == null,
+                origin = fromSource?.origin?.label ?: "",
+                // A facet whose `contribute` threw at startup was withdrawn by the UI host; say why on its row.
+                error = fromSource?.error ?: UiPluginHost.failures[m.id]?.let {
+                    "UI could not be loaded: ${PluginLoadFailure.describe(it)}"
+                },
+                needsConsent = fromSource != null && m.id !in consented && m.id !in disabled,
+                capabilities = m.capabilities,
+                // The certificate of the package as installed, from the package manager, not a claim the
+                // plugin makes about itself.
+                signature = fromSource?.origin?.signature,
+            )
+        }
+        // Plugins with no usable manifest are not in the catalog and have no id to persist a choice against,
+        // so they list as informational rows. The origin is dropped when it is the name already shown, which
+        // is what happens when the app's own label could not be read.
+        val unusable = manager.env.rejectedPlugins.map { r ->
+            UiPluginInfo(
+                id = r.origin.label, name = r.name, version = "", description = "",
+                essential = false, enabled = false, builtIn = false,
+                origin = r.origin.label.takeIf { it != r.name } ?: "",
+                error = r.reason, togglable = false,
+            )
+        }
+        return (catalogued + unusable)
+            .sortedWith(compareByDescending<UiPluginInfo> { it.essential }.thenBy { it.name.lowercase() })
+    }
+
+    override fun setPluginConsent(id: String, granted: Boolean) {
+        val manager = ctx.manager ?: return
+        val consented = manager.consentedPlugins().toMutableSet()
+        val disabled = manager.disabledPlugins().toMutableSet()
+        if (granted) {
+            // Accepting also clears an earlier refusal, so a change of mind does not leave it disabled.
+            consented.add(id)
+            disabled.remove(id)
+        } else {
+            // A refusal is recorded as a disable as well: that is what stops the question coming back, and
+            // it reads correctly in the list as a plugin that is off.
+            consented.remove(id)
+            disabled.add(id)
+        }
+        manager.setConsentedPlugins(consented)
+        manager.setDisabledPlugins(disabled)
+    }
+
+    override fun setPluginEnabled(id: String, enabled: Boolean) {
+        val manager = ctx.manager ?: return
+        if (manager.env.pluginCatalog.isEssential(id)) return  // essentials can't be disabled
+        val disabled = manager.disabledPlugins().toMutableSet()
+        if (enabled) disabled.remove(id) else disabled.add(id)
+        manager.setDisabledPlugins(disabled)
+    }
+
+    override fun pendingPluginChanges(): List<UiPluginChange> {
+        val manager = ctx.manager ?: return emptyList()
+        // The catalog holds the display names; the tracker keeps only the installed plugin apps' own, so
+        // that a plugin uninstalled mid-session can still be named.
+        val names = manager.env.pluginCatalog.all.associate { it.id to it.name }
+        return manager.pluginChanges.pending { names[it] }.map { UiPluginChange(it.name, it.kind.toUi()) }
+    }
+
+    override fun canRestartApplication(): Boolean = ctx.manager?.appRestarter() != null
+
+    override fun restartApplication() {
+        ctx.manager?.appRestarter()?.restart()
+    }
+
+    private fun PluginChangeKind.toUi(): UiPluginChangeKind = when (this) {
+        PluginChangeKind.INSTALLED -> UiPluginChangeKind.INSTALLED
+        PluginChangeKind.UPDATED -> UiPluginChangeKind.UPDATED
+        PluginChangeKind.UNINSTALLED -> UiPluginChangeKind.UNINSTALLED
+        PluginChangeKind.ENABLED -> UiPluginChangeKind.ENABLED
+        PluginChangeKind.DISABLED -> UiPluginChangeKind.DISABLED
+    }
+
+    private val settingsStore = SettingsStore(
+        get = { k -> ctx.manager?.preference(k) },
+        set = { k, v -> ctx.manager?.setPreference(k, v) },
+        setAll = { ctx.manager?.setPreferences(it) },
+    )
+
+    override fun settings(): UiSettings {
+        val s = settingsStore.load()
+        // Startup / re-read apply for the diagnostic timing flag (there's no separate init hook the backend
+        // reliably runs before the first pass; the app reads settings() at launch). Idempotent, and OR-ed
+        // with any `-D` seed inside [PerfTrace.applyUserPreference], so this never clears a desktop flag.
+        PerfTrace.applyUserPreference(s.analysisPerfLogging)
+        return s.toUi()
+    }
+
+    override fun settingsPages(): List<UiSettingsPage> {
+        val svc = ctx.servicesOrNull
+        val builtIn = BuiltInSettingsPages.all(ctx.analyticsAvailable())
+        // With no project open (the picker's Settings & Tools hub) only the app-scoped built-in pages are
+        // available — the project-scoped built-ins (e.g. Build) and any plugin-contributed pages need an
+        // engine, so they're added only once a project is open. (The hub shows the app pages; the in-project
+        // Project Settings surface shows the project pages — see UiSettingsPage.scope.)
+        val pages = if (svc == null) builtIn.filter { it.scope != SettingsScope.PROJECT }
+        else builtIn + svc.settingsPages()
+        return pages.sortedBy { it.order }.map { toUiPage(it) }
+    }
+
+    override fun setSetting(pageId: String, key: String, value: String) {
+        // The analytics toggle isn't a generic-store value — it routes to the persisted consent decision.
+        if (pageId == BuiltInSettingsPages.PRIVACY && key == BuiltInSettingsPages.ANALYTICS) {
+            ctx.setAnalyticsConsent(value.toBooleanStrictOrNull() ?: false)
+            return
+        }
+        val page = findPage(pageId) ?: return
+        val fullKey = settingKey(pageId, key)
+        if (page.scope == SettingsScope.PROJECT) ctx.servicesOrNull?.setProjectPref(fullKey, value)
+        else ctx.manager?.setPreference(fullKey, value)
+        // Picking a custom accent color implies the Custom accent is active (so it takes effect immediately).
+        if (pageId == BuiltInSettingsPages.APPEARANCE && key == "accentColor") {
+            ctx.manager?.setPreference(settingKey(pageId, "accent"), IdeSettings.ACCENT_CUSTOM)
+        }
+        applyAfterChange(page, key)
+    }
+
+    override suspend fun invokeSettingAction(pageId: String, key: String): String? {
+        if (pageId == BuiltInSettingsPages.PRIVACY && key == BuiltInSettingsPages.CLEAR_CACHES) {
+            return withContext(Dispatchers.IO) { ctx.servicesOrNull?.clearProjectCaches() }
+        }
+        // viewLogs / backup are wired to UI flows by the screen, not here.
+        val page = findPage(pageId) ?: return null
+        return if (isBuiltIn(pageId)) null else page.onAction(key, scopedReader(page))
+    }
+
+    override fun codeStyle(languageId: String): UiCodeStyle = settingsStore.loadCodeStyle(languageId).toUi()
+
+    override fun setCodeStyle(languageId: String, style: UiCodeStyle) {
+        settingsStore.saveCodeStyle(languageId, style.toSettings())
+    }
+
+    override suspend fun formatStylePreview(languageId: String, style: UiCodeStyle): String =
+        withContext(Dispatchers.Default) {
+            ctx.servicesOrNull?.formatStylePreview(languageId, style.toSettings().toFormatStyle()) ?: ""
+        }
+
+    private fun CodeStyleSettings.toUi() = UiCodeStyle(
+        preset = preset, indentSize = indentSize, continuationIndent = continuationIndent,
+        maxLineLength = maxLineLength, useTabs = useTabs, braceStyle = braceStyle,
+        spaceBeforeParens = spaceBeforeParens, spaceWithinParens = spaceWithinParens,
+        spaceAfterComma = spaceAfterComma, spaceAroundOperators = spaceAroundOperators,
+        spaceBeforeBrace = spaceBeforeBrace, blankLinesToKeep = blankLinesToKeep,
+        wrapMethodParameters = wrapMethodParameters, wrapMethodArguments = wrapMethodArguments,
+        wrapChainedCalls = wrapChainedCalls, wrapBinaryExpressions = wrapBinaryExpressions,
+        blankLinesAfterImports = blankLinesAfterImports, blankLinesBeforeMethod = blankLinesBeforeMethod,
+        blankLinesBeforeField = blankLinesBeforeField, blankLinesBeforeFirstMember = blankLinesBeforeFirstMember,
+        blankLinesBetweenTypes = blankLinesBetweenTypes, spaceBeforeSemicolon = spaceBeforeSemicolon,
+        spaceAroundLambdaArrow = spaceAroundLambdaArrow, spaceAroundTernary = spaceAroundTernary,
+        spaceAfterTypeCast = spaceAfterTypeCast, formatComments = formatComments, wrapComments = wrapComments,
+    )
+
+    private fun UiCodeStyle.toSettings() = CodeStyleSettings(
+        preset = preset, indentSize = indentSize, continuationIndent = continuationIndent,
+        maxLineLength = maxLineLength, useTabs = useTabs, braceStyle = braceStyle,
+        spaceBeforeParens = spaceBeforeParens, spaceWithinParens = spaceWithinParens,
+        spaceAfterComma = spaceAfterComma, spaceAroundOperators = spaceAroundOperators,
+        spaceBeforeBrace = spaceBeforeBrace, blankLinesToKeep = blankLinesToKeep,
+        wrapMethodParameters = wrapMethodParameters, wrapMethodArguments = wrapMethodArguments,
+        wrapChainedCalls = wrapChainedCalls, wrapBinaryExpressions = wrapBinaryExpressions,
+        blankLinesAfterImports = blankLinesAfterImports, blankLinesBeforeMethod = blankLinesBeforeMethod,
+        blankLinesBeforeField = blankLinesBeforeField, blankLinesBeforeFirstMember = blankLinesBeforeFirstMember,
+        blankLinesBetweenTypes = blankLinesBetweenTypes, spaceBeforeSemicolon = spaceBeforeSemicolon,
+        spaceAroundLambdaArrow = spaceAroundLambdaArrow, spaceAroundTernary = spaceAroundTernary,
+        spaceAfterTypeCast = spaceAfterTypeCast, formatComments = formatComments, wrapComments = wrapComments,
+    )
+
+    override fun inspections(): List<UiInspection> {
+        val svc = ctx.servicesOrNull ?: return emptyList()
+        val profile = svc.inspectionProfile()
+        return svc.registeredAnalyzers().map { a ->
+            UiInspection(
+                id = a.id.value,
+                displayName = a.displayName,
+                language = a.languages.firstOrNull()?.id?.let(::prettyLang) ?: "All",
+                tier = a.tier.name.lowercase().replaceFirstChar { it.uppercase() },
+                enabled = profile.isEnabled(a.id),
+                severity = (profile.severityOverrides[a.id] ?: a.defaultSeverity).toUiSeverity(),
+                defaultSeverity = a.defaultSeverity.toUiSeverity(),
+            )
+        }.sortedWith(compareBy({ it.language }, { it.displayName }))
+    }
+
+    override fun setInspection(id: String, enabled: Boolean, severity: UiSeverity) {
+        ctx.servicesOrNull?.setInspection(AnalyzerId(id), enabled, severity.toDomSeverity())
+    }
+
+    // --- settings helpers ---
+
+    private fun settingKey(pageId: String, key: String) = settingsKey(pageId, key)
+
+    private fun findPage(pageId: String): SettingsPage? =
+        BuiltInSettingsPages.all(ctx.analyticsAvailable()).firstOrNull { it.id == pageId }
+            ?: ctx.servicesOrNull?.settingsPages()?.firstOrNull { it.id == pageId }
+
+    private fun isBuiltIn(pageId: String): Boolean =
+        BuiltInSettingsPages.all(ctx.analyticsAvailable()).any { it.id == pageId }
+
+    /** Read a control's raw stored value (scoped store), or null to fall back to the control default. */
+    private fun readSetting(pageId: String, key: String, project: Boolean): String? {
+        val fullKey = settingKey(pageId, key)
+        return if (project) ctx.servicesOrNull?.projectPref(fullKey) else ctx.manager?.preference(fullKey)
+    }
+
+    /** A page-local reader handed to a plugin page's hooks (it reads its own control keys). */
+    private fun scopedReader(page: SettingsPage): PreferenceReader = object : PreferenceReader {
+        override fun raw(key: String) = readSetting(page.id, key, page.scope == SettingsScope.PROJECT)
+    }
+
+    private fun applyAfterChange(page: SettingsPage, key: String) {
+        // Publish the change on the workspace event spine FIRST (config stamp + the out-of-process hint
+        // fan-out), then apply the engine-side effects below. No engine open → nothing to notify or apply.
+        ctx.servicesOrNull?.events?.settingChanged(page.id, key, page.scope == SettingsScope.PROJECT)
+        when (page.id) {
+            // Completion knobs feed the engine; everything else built-in is applied UI-side (the UI re-reads
+            // settings()), so there's nothing to push here.
+            BuiltInSettingsPages.COMPLETION -> ctx.servicesOrNull?.let { it.completionOptions = currentCompletionOptions() }
+            BuiltInSettingsPages.BUILD -> if (key == BuiltInSettingsPages.CONFLICT_POLICY) {
+                ctx.servicesOrNull?.setConflictPolicy(parseConflictPolicy(readSetting(page.id, key, project = true)))
+            }
+            BuiltInSettingsPages.ANALYSIS -> if (key == BuiltInSettingsPages.PERF_LOGGING) {
+                PerfTrace.applyUserPreference(readSetting(page.id, key, project = false)?.toBooleanStrictOrNull() ?: false)
+            }
+            else -> if (!isBuiltIn(page.id)) page.onChanged(key, scopedReader(page)) // plugin pages react themselves
+        }
+    }
+
+    private fun currentCompletionOptions(): CompletionOptions {
+        val s = settingsStore.load()
+        return CompletionOptions(
+            maxItems = s.completionMaxItems,
+            postfixTemplates = s.postfixTemplates,
+            wordCompletion = s.wordCompletion,
+        )
+    }
+
+    private fun parseConflictPolicy(value: String?): dev.ide.deps.ConflictPolicy = when (value) {
+        BuiltInSettingsPages.CONFLICT_PINNED -> dev.ide.deps.ConflictPolicy.PINNED
+        BuiltInSettingsPages.CONFLICT_FAIL -> dev.ide.deps.ConflictPolicy.FAIL_ON_CONFLICT
+        else -> dev.ide.deps.ConflictPolicy.NEWEST
+    }
+
+    private fun toUiPage(page: SettingsPage): UiSettingsPage {
+        val project = page.scope == SettingsScope.PROJECT
+        val controls =
+            if (page.id == BuiltInSettingsPages.BUILD_RUNTIME) buildRuntimeControls()
+            else if (page.id == dev.ide.core.agent.AgentBackend.AI_PAGE) aiSettingsControls(page, project)
+            else page.controls().map { toUiControl(page.id, it, project) }
+        return UiSettingsPage(
+            id = page.id,
+            title = page.title,
+            iconId = page.iconId,
+            scope = if (project) "project" else "app",
+            controls = controls,
+            inspectionsSection = BuiltInSettingsPages.isInspectionsPage(page),
+        )
+    }
+
+    private fun aiSettingsControls(page: SettingsPage, project: Boolean): List<UiSettingControl> {
+        val selectedProvider = readSetting(page.id, "provider", project) ?: "anthropic"
+        val providerKeys = setOf(
+            "antigravityKey", "anthropicKey", "openaiKey", "museKey",
+            "mimoKey", "geminiKey", "openrouterKey",
+            "gatewayKey", "gatewayBaseUrl", "gatewayModel",
+        )
+        val activeKeys = when (selectedProvider) {
+            "antigravity" -> setOf("antigravityKey")
+            "openai" -> setOf("openaiKey")
+            "gemini" -> setOf("geminiKey")
+            "muse" -> setOf("museKey")
+            "mimo" -> setOf("mimoKey")
+            "openrouter" -> setOf("openrouterKey")
+            "gateway" -> setOf("gatewayBaseUrl", "gatewayKey", "gatewayModel")
+            else -> setOf("anthropicKey")
+        }
+        return page.controls().filter { c ->
+            if (c.key in providerKeys) c.key in activeKeys
+            else true
+        }.map { c ->
+            toUiControl(page.id, c, project)
+        }
+    }
+
+    /**
+     * The Build Runtime page is rendered dynamically: the R8 forked-VM heap slider's MAX is this device's
+     * measured forked-VM ceiling (so the user can only scale DOWN from the real limit), the slider is HIDDEN
+     * in In-process mode (replaced by the app's memory limit in the mode description), and a warning shows if a
+     * saved value exceeds the device limit. The ceiling is read from [BuiltInSettingsPages.R8_CEILING_PREF]
+     * (measured once in the background by the host): null = not yet measured, 0 = forking unavailable here.
+     */
+    private val R8_MIN_MB = 768
+    private val FALLBACK_R8_MAX_MB = 2048 // slider max before the device limit has been measured
+
+    private fun buildRuntimeControls(): List<UiSettingControl> {
+        val pid = BuiltInSettingsPages.BUILD_RUNTIME
+        val appHeapMb = (Runtime.getRuntime().maxMemory() / (1024L * 1024L)).toInt()
+        val ceiling = ctx.manager?.preference(BuiltInSettingsPages.R8_CEILING_PREF)?.trim()?.toIntOrNull()
+        val mode = ctx.manager?.preference(settingKey(pid, BuiltInSettingsPages.R8_MODE)) ?: BuiltInSettingsPages.R8_MODE_DEFAULT
+        val sepOn = ctx.manager?.preference(settingKey(pid, BuiltInSettingsPages.SEPARATE_PROCESS))?.toBooleanStrictOrNull() ?: true
+
+        val out = ArrayList<UiSettingControl>()
+        out += UiSettingControl.Toggle(
+            BuiltInSettingsPages.SEPARATE_PROCESS, "Build in a separate process",
+            "Run builds in an isolated process to protect the IDE from memory crashes.",
+            sepOn, false, null,
+        )
+
+        // Re-request the notification permission the isolated build process needs. Shown only where separate-
+        // process builds are possible (Android); handled entirely in the SettingsScreen (it needs the platform
+        // permission launcher), so this descriptor carries no engine-side effect.
+        if (ctx.separateProcessBuildsSupported) {
+            out += UiSettingControl.Action(
+                BuiltInSettingsPages.BUILD_NOTIFICATIONS, "Build notifications",
+                "Show progress notifications during background builds. Required for isolated builds.",
+                "Enable", false, false, null,
+            )
+        }
+
+        val modeDesc = when {
+            mode == BuiltInSettingsPages.R8_MODE_INPROCESS ->
+                "R8 runs inside the IDE process (~$appHeapMb MB). Switch to Forked VM for large apps."
+            ceiling == 0 ->
+                "Separate VM execution is unavailable on this device; R8 runs in-process (~$appHeapMb MB)."
+            else ->
+                "Forked VM runs R8 in a separate VM with extra heap memory to prevent out-of-memory crashes on large apps."
+        }
+        out += UiSettingControl.Choice(
+            BuiltInSettingsPages.R8_MODE, "R8 execution", modeDesc, mode,
+            listOf(
+                UiSettingControl.Choice.Option(BuiltInSettingsPages.R8_MODE_FORKED, "Forked VM"),
+                UiSettingControl.Choice.Option(BuiltInSettingsPages.R8_MODE_INPROCESS, "In-process"),
+            ),
+            false, null,
+        )
+
+        // The heap slider applies only to the forked VM; hide it in In-process and when forking is unavailable.
+        if (mode != BuiltInSettingsPages.R8_MODE_INPROCESS && ceiling != 0) {
+            val max = (ceiling ?: FALLBACK_R8_MAX_MB).coerceAtLeast(R8_MIN_MB)
+            val saved = ctx.manager?.preference(settingKey(pid, BuiltInSettingsPages.R8_MAX_HEAP))?.trim()?.toIntOrNull()
+            // Default to the device limit (the max) so the user only ever scales DOWN; clamp the displayed value.
+            val value = (saved ?: max).coerceIn(R8_MIN_MB, max)
+            val limitNote = if (ceiling != null) "This device's limit is $ceiling MB." else "Measuring this device's limit…"
+            val warn = if (ceiling != null && saved != null && saved > ceiling)
+                " ⚠ Your saved value ($saved MB) is above the device limit; R8 will use $ceiling MB."
+            else ""
+            out += UiSettingControl.Slider(
+                BuiltInSettingsPages.R8_MAX_HEAP, "R8 forked-VM heap",
+                "Heap for R8's forked VM. $limitNote$warn",
+                value, R8_MIN_MB, max, 128, "MB", false, null,
+            )
+        }
+
+        // Debug-build dexing memory knobs (the R8 controls above govern the release/minify path). Both are
+        // advanced and Android-only, grouped apart so they don't read as part of R8.
+        val dexGroup = "Debug build (dexing)"
+        val forkable = mode != BuiltInSettingsPages.R8_MODE_INPROCESS && ceiling != 0
+        val offHeap = (ctx.manager?.preference(settingKey(pid, BuiltInSettingsPages.DEX_OFFHEAP_MB))?.trim()?.toIntOrNull()
+            ?: BuiltInSettingsPages.DEX_OFFHEAP_MB_DEFAULT).coerceIn(2, 64)
+        val offHeapDesc = if (forkable)
+            "Dex heavy dependencies in a separate VM when step size exceeds this threshold to save IDE memory."
+        else
+            "Moves large dex steps off-heap into a separate VM. Inactive while running in-process."
+        out += UiSettingControl.Slider(
+            BuiltInSettingsPages.DEX_OFFHEAP_MB, "Off-heap dexing threshold",
+            offHeapDesc, offHeap, 2, 64, 2, "MB", true, dexGroup,
+        )
+
+        val mergeBatch = (ctx.manager?.preference(settingKey(pid, BuiltInSettingsPages.DEX_MERGE_BATCH))?.trim()?.toIntOrNull()
+            ?: BuiltInSettingsPages.DEX_MERGE_BATCH_DEFAULT).coerceIn(1000, 20000)
+        out += UiSettingControl.Slider(
+            BuiltInSettingsPages.DEX_MERGE_BATCH, "Dex merge batch size",
+            "Number of classes merged per batch during final dexing. Smaller batches use less RAM.",
+            mergeBatch, 1000, 20000, 1000, "classes", true, dexGroup,
+        )
+
+        val forkConc = (ctx.manager?.preference(settingKey(pid, BuiltInSettingsPages.DEX_FORK_CONCURRENCY))?.trim()?.toIntOrNull()
+            ?: BuiltInSettingsPages.DEX_FORK_CONCURRENCY_DEFAULT).coerceIn(0, 4)
+        val forkConcDesc = if (forkable)
+            "Max parallel dexing VMs. 0 chooses automatically based on available device RAM."
+        else
+            "Caps concurrent dexing VMs. Inactive while running in-process."
+        out += UiSettingControl.Slider(
+            BuiltInSettingsPages.DEX_FORK_CONCURRENCY, "Max concurrent dex forks",
+            forkConcDesc, forkConc, 0, 4, 1, null, true, dexGroup,
+        )
+        return out
+    }
+
+    private fun toUiControl(pageId: String, c: SettingControl, project: Boolean): UiSettingControl {
+        val raw = readSetting(pageId, c.key, project)
+        return when (c) {
+            is SettingControl.Toggle -> {
+                val v = if (pageId == BuiltInSettingsPages.PRIVACY && c.key == BuiltInSettingsPages.ANALYTICS) ctx.analyticsConsent() == true
+                else raw?.toBooleanStrictOrNull() ?: c.default
+                UiSettingControl.Toggle(c.key, c.title, c.description, v, c.advanced, c.group)
+            }
+            is SettingControl.IntSlider -> UiSettingControl.Slider(
+                c.key, c.title, c.description, (raw?.trim()?.toIntOrNull() ?: c.default).coerceIn(c.min, c.max),
+                c.min, c.max, c.step, c.unit, c.advanced, c.group,
+            )
+            is SettingControl.Choice -> UiSettingControl.Choice(
+                c.key, c.title, c.description, raw ?: c.default,
+                c.options.map { UiSettingControl.Choice.Option(it.value, it.label) }, c.advanced, c.group,
+            )
+            is SettingControl.Text -> UiSettingControl.Text(c.key, c.title, c.description, raw ?: c.default, c.placeholder, c.advanced, c.group)
+            is SettingControl.Action -> UiSettingControl.Action(c.key, c.title, c.description, c.buttonLabel, c.destructive, c.advanced, c.group)
+            is SettingControl.Color -> UiSettingControl.Color(c.key, c.title, c.description, raw?.trim()?.toLongOrNull() ?: c.default, c.advanced, c.group)
+            is SettingControl.Shortcut -> {
+                // A STORED blank is a shortcut the user removed, which is different from nothing stored, so
+                // the default only applies when the key is absent entirely.
+                val value = raw ?: c.default
+                UiSettingControl.Shortcut(
+                    key = c.key,
+                    title = c.title,
+                    description = c.description,
+                    value = value,
+                    defaultValue = c.default,
+                    display = if (value.isEmpty()) "" else displayShortcut(value),
+                    advanced = c.advanced,
+                    group = c.group,
+                )
+            }
+        }
+    }
+
+    private fun IdeSettings.toUi(): UiSettings = UiSettings(
+        themeMode = themeMode,
+        accent = when (accent) {
+            IdeSettings.ACCENT_DYNAMIC -> UiAccent.Dynamic
+            IdeSettings.ACCENT_LIME -> UiAccent.Lime
+            IdeSettings.ACCENT_TEAL -> UiAccent.Teal
+            IdeSettings.ACCENT_ORANGE -> UiAccent.Orange
+            IdeSettings.ACCENT_CUSTOM -> UiAccent.Custom
+            IdeSettings.ACCENT_VIOLET -> UiAccent.Violet
+            else -> UiAccent.Lime
+        },
+        customAccentColor = accentColor,
+        alwaysShowToolWindowActions = alwaysShowToolWindowActions,
+        editorFontScale = editorFontScale,
+        codeFont = codeFont,
+        fontLigatures = fontLigatures,
+        inlayHints = inlayHints,
+        semanticHighlighting = semanticHighlighting,
+        codeFolding = codeFolding,
+        completionAutoPopup = completionAutoPopup,
+        completionDelayMs = completionDelayMs,
+        completionMaxItems = completionMaxItems,
+        postfixTemplates = postfixTemplates,
+        wordCompletion = wordCompletion,
+        analyzeOnTheFly = analyzeOnTheFly,
+        // A low-memory device is usually a slow one too: waiting a little longer after the last keystroke
+        // means fewer analysis runs started and cancelled mid-burst. A longer user choice still wins.
+        reparseDelayMs = if (dev.ide.platform.DeviceMemory.isLow) maxOf(reparseDelayMs, LOW_MEMORY_MIN_REPARSE_DELAY_MS) else reparseDelayMs,
+        wordWrap = wordWrap,
+        wrapIndent = wrapIndent,
+        horizontalScrollbar = horizontalScrollbar,
+        twoAxisScroll = twoAxisScroll,
+        pinchZoom = pinchZoom,
+        softKeyboardSuggestions = softKeyboardSuggestions,
+        formatOnSave = formatOnSave,
+        hapticsEnabled = hapticsEnabled,
+        hapticsProfile = hapticsProfile,
+        hapticsIntensity = hapticsIntensity,
+        hapticsUiInteractions = hapticsUiInteractions,
+        hapticsGitClone = hapticsGitClone,
+        hapticsBuildEngine = hapticsBuildEngine,
+        hapticsGestureDetents = hapticsGestureDetents,
+        hapticsClonePulseMs = hapticsClonePulseMs,
+    )
+
+    private fun Severity.toUiSeverity(): UiSeverity = when (this) {
+        Severity.ERROR -> UiSeverity.Error
+        Severity.WARNING -> UiSeverity.Warning
+        Severity.INFO -> UiSeverity.Info
+        Severity.HINT -> UiSeverity.Hint
+    }
+
+    private fun UiSeverity.toDomSeverity(): Severity = when (this) {
+        UiSeverity.Error -> Severity.ERROR
+        UiSeverity.Warning -> Severity.WARNING
+        UiSeverity.Info -> Severity.INFO
+        UiSeverity.Hint -> Severity.HINT
+    }
+
+    private fun prettyLang(id: String): String = when (id.lowercase()) {
+        "java" -> "Java"
+        "kotlin" -> "Kotlin"
+        "xml" -> "XML"
+        else -> id.replaceFirstChar { it.uppercase() }
+    }
+}
+
+/** The shortest reparse debounce the editor uses on a [dev.ide.platform.MemoryTier.LOW] device. */
+private const val LOW_MEMORY_MIN_REPARSE_DELAY_MS = 500

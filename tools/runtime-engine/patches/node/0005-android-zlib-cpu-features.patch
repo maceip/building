@@ -1,0 +1,15 @@
+--- a/deps/zlib/zlib.gyp
++++ b/deps/zlib/zlib.gyp
+@@ -185,6 +185,12 @@
+             'include_dirs': [ '<(ZLIB_ROOT)' ],
+           },
+           'conditions': [
++            ['OS=="android"', {
++              # The Android CRC probe calls this NDK source, not a system DSO.
++              # Its source and notice are retained in the corresponding-source bundle.
++              'sources': [ '<(android_ndk_path)/sources/android/cpufeatures/cpu-features.c' ],
++              'include_dirs': [ '<(android_ndk_path)/sources/android/cpufeatures' ],
++            }],
+             ['OS!="win"', {
+               'cflags!': [ '-ansi' ],
+               'cflags': [ '-Wno-implicit-fallthrough' ],

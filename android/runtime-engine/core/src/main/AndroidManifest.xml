@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- No permission is added. Network use requires the generated app's explicit INTERNET grant. -->
+    <application>
+        <!-- Crash containment only: same UID, NOT isolatedProcess and NOT a security sandbox. -->
+        <service android:name="dev.ide.runtime.engine.RuntimeService"
+            android:exported="false" android:process=":runtime" android:stopWithTask="true" />
+    </application>
+</manifest>

@@ -1,0 +1,27 @@
+--- a/deps/uv/uv.gyp
++++ b/deps/uv/uv.gyp
+@@ -153,6 +153,24 @@
+     {
+       'target_name': 'libuv',
+       'toolsets': ['host', 'target'],
++      # GYP's OS describes the Android target, not tools executed during a
++      # macOS cross build (node_js2c links host libuv).
++      'target_conditions': [
++        ['_toolset=="host" and host_os=="mac" and OS=="android"', {
++          'sources!': [
++            'src/unix/linux.c',
++            'src/unix/procfs-exepath.c',
++            'src/unix/random-getrandom.c',
++            'src/unix/random-sysctl-linux.c',
++          ],
++          'sources': [
++            'src/unix/darwin.c', 'src/unix/fsevents.c',
++            'src/unix/darwin-proctitle.c',
++            'src/unix/bsd-ifaddrs.c', 'src/unix/kqueue.c',
++          ],
++          'defines': ['_DARWIN_USE_64_BIT_INODE=1', '_DARWIN_UNLIMITED_SELECT=1'],
++        }],
++      ],
+       'type': '<(uv_library)',
+       'include_dirs': [
+         'include',

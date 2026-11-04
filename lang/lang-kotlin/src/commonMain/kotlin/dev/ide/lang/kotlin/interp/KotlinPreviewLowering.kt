@@ -1,0 +1,427 @@
+package dev.ide.lang.kotlin.interp
+
+import dev.ide.kotlin.syntax.psi.KtAnnotationEntry
+import dev.ide.kotlin.syntax.psi.KtClass
+import dev.ide.kotlin.syntax.psi.KtDeclaration
+import dev.ide.kotlin.syntax.psi.KtFile
+import dev.ide.kotlin.syntax.psi.KtNamedFunction
+import dev.ide.kotlin.syntax.psi.KtObjectLiteralExpression
+import dev.ide.kotlin.syntax.psi.KtProperty
+import dev.ide.kotlin.syntax.psi.KtTokens
+import dev.ide.kotlin.syntax.psi.collectDescendantsOfType
+import dev.ide.kotlin.syntax.psi.hasErrorElements
+import dev.ide.kotlin.syntax.psi.siblings
+import dev.ide.lang.kotlin.KotlinPerf
+import dev.ide.lang.kotlin.parse.KotlinParsedFile
+import dev.ide.lang.kotlin.parse.KotlinParserHost
+import dev.ide.lang.kotlin.symbols.KotlinSymbolService
+import dev.ide.platform.EngineCancellation
+
+/**
+ * Lowers a parsed Kotlin file into the [ResolvedTree] program the Compose-preview interpreter runs (see
+ * docs/compose-interpreter.md). Split out of the editor analyzer: preview lowering is interpreter
+ * integration with its own per-function memoization, independent of the diagnostics/completion paths that
+ * share the same [KotlinSymbolService].
+ */
+class KotlinPreviewLowering(
+    private val service: KotlinSymbolService,
+    /** Supplies the per-snapshot memo caches shared with the editor's diagnostics resolver, so lowering reuses
+     *  the inference/overload work analyze already did for the same keystroke instead of recomputing it cold.
+     *  Null → each lowering builds a private cache (standalone use / tests). */
+    private val cachesFor: ((KotlinParsedFile) -> dev.ide.lang.kotlin.resolve.KotlinResolverCaches)? = null,
+    /** Persists lowered declarations across sessions, so a project reopen decodes instead of re-resolving —
+     *  the dominant cold-preview cost on a big project. Null → in-memory caching only (tests / no host dir). */
+    private val diskCache: PreviewLoweringStore? = null,
+) {
+
+    /** The `@Preview @Composable` functions in [parsed] (the editor's preview targets), expanded to one entry
+     *  per variant. A custom MultiPreview annotation declared in another source file is resolved through the
+     *  symbol service so its constituent `@Preview`s expand too. */
+    fun previews(parsed: KotlinParsedFile): List<PreviewInfo> =
+        KotlinComposePreviews.find(parsed.ktFile) { entry -> resolveMultiPreview(entry, parsed.ktFile) }
+
+    /** Expand a non-builtin, non-same-file MultiPreview annotation [entry] by locating its annotation class in
+     *  the module's sources and reading the `@Preview`s it carries. One level of cross-file indirection (the
+     *  common project-defined-wrapper case); null when it isn't a resolvable MultiPreview. */
+    private fun resolveMultiPreview(entry: KtAnnotationEntry, file: KtFile): List<PreviewConfig>? = runCatching {
+        val short = entry.shortName?.asString() ?: return null
+        val fqn = annotationFqn(short, file) ?: return null
+        val pf = service.sourceFileDeclaringType(fqn) ?: return null
+        val declFile = parseDependency(pf) ?: return null
+        val annClass = declFile.ktFile.declarations.filterIsInstance<KtClass>()
+            .firstOrNull { it.isAnnotation() && (it.fqName?.asString() == fqn || it.name == short) } ?: return null
+        PreviewAnnotationParser.configsForAnnotations(annClass.annotationEntries, declFile.ktFile).ifEmpty { null }
+    }.getOrNull()
+
+    /** Best-effort FQN of a type used by simple [simpleName] in [parsed] (an explicit import wins, else same
+     *  package). Used to locate a `@PreviewParameter` provider class declared in a library or another file. */
+    fun typeFqn(parsed: KotlinParsedFile, simpleName: String): String? = annotationFqn(simpleName, parsed.ktFile)
+
+    /** Best-effort FQN for an annotation used by simple [short] name: an explicit import wins, else same package. */
+    private fun annotationFqn(short: String, file: KtFile): String? {
+        file.importDirectives.forEach { imp ->
+            val fq = imp.importedFqName?.asString() ?: return@forEach
+            if (fq.substringAfterLast('.') == short) return fq
+        }
+        val pkg = file.packageFqName.asString()
+        return if (pkg.isEmpty()) short else "$pkg.$short"
+    }
+
+    /**
+     * Whether [parsed] contains syntax errors (`PsiErrorElement`s). A file that doesn't parse cleanly must
+     * NOT be interpreted for a preview: the error-tolerant parser still yields a whole tree, but a
+     * stray/incomplete token mis-shapes declarations — e.g. `data class Project(dsad val id: …)` parses into a
+     * constructor whose parameters are all shifted, so the interpreter builds objects with wrong-typed fields
+     * (a `Float` slot holding a `String`). That garbage program then crashes the real Compose runtime deep in
+     * its measure/semantics pass (a `ClassCastException` Compose throws AFTER the interpreter returned), which
+     * no interpreter-level guard can catch. So the preview gates on this and shows "fix errors" instead.
+     */
+    fun hasSyntaxErrors(parsed: KotlinParsedFile): Boolean = parsed.ktFile.hasErrorElements()
+
+    /** Lower every top-level function in [parsed] to a [ResolvedFunction], keyed `"name/arity"` — the program
+     *  the interpreter runs a preview against (same-file composables included). */
+    fun program(parsed: KotlinParsedFile): Map<String, ResolvedFunction> = loweredFor(parsed).materializedProgram()
+
+    /** Lower every source class/object/enum in [parsed] to a [ResolvedClass] — the project-source types a
+     *  preview's program may construct or reference (they aren't compiled at preview time, so the interpreter
+     *  materializes them from this). Empty when lowering throws (the preview then hits the honest boundary for
+     *  those types rather than losing the whole render). */
+    fun classes(parsed: KotlinParsedFile): List<ResolvedClass> = loweredFor(parsed).classes()
+
+    // A reachable cross-file/module expansion follows at most this many OTHER files. A real preview reaches a
+    // handful (the data classes / helpers it constructs); the cap is only a runaway guard for a pathological graph.
+    private val maxCrossFileFiles = 200
+
+    // Parse cache for cross-file dependency files, keyed by path → (textHash, parsed). The preview re-renders
+    // per keystroke; without this each render reparses every reached sibling (parsing is the dominant cost).
+    private class ParsedEntry(val textHash: Int, val parsed: KotlinParsedFile)
+    private val crossFileParseCache = concurrentMap<String, ParsedEntry>()
+
+    private fun parseDependency(pf: KotlinSymbolService.PreviewSourceFile): KotlinParsedFile? {
+        val h = pf.text.hashCode()
+        crossFileParseCache[pf.file.path]?.let { if (it.textHash == h) return it.parsed }
+        val kt = runCatching { KotlinParserHost.parse(pf.file.name, pf.text) }.getOrNull() ?: return null
+        if (kt.hasErrorElements()) return null // a malformed dep would lower into wrong-typed instances
+        val parsed = KotlinParsedFile(kt, pf.file, 0)
+        crossFileParseCache[pf.file.path] = ParsedEntry(h, parsed)
+        return parsed
+    }
+
+    /** Lower a single source file [pf] (its top-level functions + classes) to a path-tagged [PreviewFileModel]
+     *  — the fully-materialized per-file primitive (compat path; the expander itself pulls per declaration via
+     *  [lazyFile]). Null when the file doesn't parse cleanly. */
+    fun loweredFile(pf: KotlinSymbolService.PreviewSourceFile): PreviewFileModel? {
+        val parsed = parseDependency(pf) ?: return null
+        val low = loweredFor(parsed)
+        return PreviewFileModel(low.path, low.materializedProgram(), low.classes(), low.packageName)
+    }
+
+    /** The lazily-lowering handle for [pf]: the cross-file expander requests exactly the reached declaration
+     *  through it, so a pull into a big file lowers one helper, not the whole file. Null when the file doesn't
+     *  parse cleanly. */
+    fun lazyFile(pf: KotlinSymbolService.PreviewSourceFile): PreviewLazyFile? {
+        val parsed = parseDependency(pf) ?: return null
+        val low = loweredFor(parsed)
+        return object : PreviewLazyFile {
+            override val path: String get() = low.path
+            override val packageName: String get() = low.packageName
+            override fun functionKeys(name: String) = low.functionKeys(name)
+            override fun function(key: String) = low.function(key)
+            override fun anonymousClassesFor(key: String) = low.anonymousClassesFor(key)
+            override fun classesFor(nameOrFqn: String) = low.classesFor(nameOrFqn)
+        }
+    }
+
+    /** This module's [PreviewDeclProvider]: resolves + lowers a reached type/function declared in THIS module
+     *  (via its [KotlinSymbolService]) — eager compat form of [lazyDeclProvider]. */
+    fun declProvider(): PreviewDeclProvider = object : PreviewDeclProvider {
+        override fun fileDeclaringType(fqn: String): PreviewFileModel? =
+            service.sourceFileDeclaringType(fqn)?.let(::loweredFile)
+
+        override fun filesDeclaringFunction(name: String): List<PreviewFileModel> =
+            service.sourceFilesDeclaringFunction(name).mapNotNull(::loweredFile)
+    }
+
+    /** This module's [LazyPreviewDeclProvider] — what [crossFileModel] expands over. The cross-MODULE path
+     *  builds its own ownership-routed provider in `ComposePreviewService` instead. */
+    fun lazyDeclProvider(): LazyPreviewDeclProvider = object : LazyPreviewDeclProvider {
+        override fun fileDeclaringType(fqn: String): PreviewLazyFile? =
+            service.sourceFileDeclaringType(fqn)?.let(::lazyFile)
+
+        override fun filesDeclaringFunction(name: String): List<PreviewLazyFile> =
+            service.sourceFilesDeclaringFunction(name).mapNotNull(::lazyFile)
+    }
+
+    /** The entry file's own lowered program + classes (no cross-file expansion) — the seed [expandPreviewModel]
+     *  grows from. Used by the cross-module preview path, which supplies its own multi-module provider. */
+    fun loweredEntryFile(entryParsed: KotlinParsedFile): PreviewFileModel {
+        val entry = loweredFor(entryParsed)
+        return PreviewFileModel(entry.path, entry.materializedProgram(), entry.classes(), entry.packageName)
+    }
+
+    /**
+     * The preview program + source classes for [entryParsed], EXPANDED across files: every project-source type
+     * the preview constructs/references and every top-level function it calls that is declared in ANOTHER file
+     * is lowered and merged in (transitively), so the interpreter can build a `data class` or call a helper
+     * defined elsewhere instead of failing to construct it (the multi-file preview case).
+     *
+     * Same-MODULE expansion (this analyzer's [lazyDeclProvider]). A cross-module source dependency is followed
+     * by the host wiring (`ComposePreviewService`), which builds an ownership-routed provider over the
+     * dependency-module closure and calls [expand] directly. The entry file's declarations win on collision.
+     */
+    fun crossFileModel(entryParsed: KotlinParsedFile): PreviewModel =
+        expandPreviewModel(loweredEntryFile(entryParsed), maxCrossFileFiles, lazyDeclProvider())
+
+    /** [expandPreviewModel] over a host-supplied [provider], seeded from [seed] (the entry file). The
+     *  cross-MODULE entry point: `ComposePreviewService` supplies a provider that LOCATES a reached `data
+     *  class`/helper across the dependency-module closure and LOWERS it with its owning module's analyzer. */
+    fun expand(seed: PreviewFileModel, provider: LazyPreviewDeclProvider): PreviewModel =
+        expandPreviewModel(seed, maxCrossFileFiles, provider)
+
+    /** [expand] over an eager [PreviewDeclProvider] (compat — tests and whole-file providers). */
+    fun expand(seed: PreviewFileModel, provider: PreviewDeclProvider): PreviewModel =
+        expandPreviewModel(seed, maxCrossFileFiles, provider.asLazy())
+
+    // The lowered preview declarations, cached per file and materialized LAZILY per declaration. The preview
+    // re-renders on every keystroke AND redundantly without a text change (the pane renders light + dark frames,
+    // detection runs alongside render, and zoom/device switches re-fire) — PSI→ResolvedTree lowering (overload
+    // resolution against the classpath) is the dominant interpreter-side cost, so it's memoized; and a
+    // cross-file pull lowers ONLY the requested declaration, so following one helper into a big screen file
+    // doesn't lower its twenty siblings (the cold-Jetsnack profile: 173 functions lowered, 59 reachable).
+    // Granularity is PER DECLARATION: a function's lowering depends only on its own body + the file's
+    // *signatures* (a callee's params/return, a class header, a top-level val's type), so editing one function's
+    // BODY (the hot case — typing inside a @Composable) only re-lowers that function; siblings + the classes
+    // carry over between generations while `fileSigHash` (the file text with all top-level function bodies
+    // stripped) is unchanged. Any signature/import/class edit moves it (→ re-lower everything, conservative). A
+    // classpath change disposes the analyzer (host's invalidateAnalyzers), dropping this with it. Cross-file
+    // source edits are best-effort (unchanged from the prior per-file cache). textHash gates each carried
+    // function: it is reused only if its text is unchanged, and startOffset keeps the lowered tree's SourceSpans
+    // valid — an edit that SHIFTS a sibling (typing in an earlier function) moves its offset, so the carried tree
+    // is span-shifted to the new position ([shiftedBy]) rather than served stale or re-lowered. With a [diskCache], a fresh
+    // instance (project reopen / IDE restart) prefills the carried entries from disk under the SAME validity
+    // rules, and every fresh lower schedules an async write-through snapshot.
+    /** One materialized declaration: the lowered function plus the anonymous `object : Foo {}` classes its
+     *  body synthesized — carried and persisted ATOMICALLY with it, so a reused/decoded function's
+     *  object-literal constructor always has its class (the anon FQN numbering is per-resolver, so the pair
+     *  must never mix generations). */
+    private class FnEntry(
+        val textHash: Int, val startOffset: Int, val fn: ResolvedFunction,
+        val anons: List<ResolvedClass> = emptyList(),
+    )
+
+    private inner class Lowered(
+        val path: String,
+        val fileSigHash: Int,
+        val fileTextHash: Int,
+        val parsed: KotlinParsedFile,
+        /** Prior-generation / disk entries reusable under the signature match — each validated against the
+         *  CURRENT declaration's text hash + offset at materialization. */
+        private val carried: Map<String, FnEntry>,
+        private val carriedClasses: List<ResolvedClass>?,
+    ) {
+        private val resolver by lazy(LazyThreadSafetyMode.NONE) {
+            KotlinTreeResolver(parsed.ktFile, parsed, service, cachesFor?.invoke(parsed))
+        }
+
+        /** The file's `package` ("" for the default package), what the cross-file expander matches a callee's
+         *  declaring package against (see [expandPreviewModel]). */
+        val packageName: String get() = parsed.ktFile.packageFqName.asString()
+
+        /** Top-level declarations by program key, in declaration order. Functions first; a valued top-level
+         *  `val`/`var` (including an extension property — see [KotlinTreeResolver.lowerTopLevelProperty])
+         *  contributes a synthetic zero-arg getter `name/0` unless a function already claimed that key.
+         *
+         *  An `expect` function is left out: it has no body, and the one to run is its `actual` in the platform
+         *  source set (`androidMain`, `desktopMain`), which the cross-file expander then finds as the only file
+         *  declaring the name. Registered, the bodiless `expect` won the key and a Kotlin Multiplatform preview
+         *  failed on "empty body". (An `expect val` has no initializer, so the property rule already skips it.) */
+        private val decls: Map<String, KtDeclaration> = buildMap {
+            parsed.ktFile.declarations.filterIsInstance<KtNamedFunction>().forEach { fn ->
+                if (fn.hasModifier(KtTokens.EXPECT_KEYWORD)) return@forEach
+                put("${fn.name}/${fn.valueParameters.size}", fn)
+            }
+            parsed.ktFile.declarations.filterIsInstance<KtProperty>().forEach { prop ->
+                val name = prop.name ?: return@forEach
+                val hasValue = prop.initializer != null || prop.getter?.bodyExpression != null || prop.getter?.bodyBlockExpression != null
+                if (hasValue && !containsKey("$name/0")) put("$name/0", prop)
+            }
+        }
+
+        private val fns = concurrentMap<String, FnEntry>()
+
+        private val classesLazy = lazy(LazyThreadSafetyMode.NONE) {
+            carriedClasses
+                ?: KotlinPerf.span("lowerClasses") { runCatching { resolver.lowerClasses() }.getOrDefault(emptyList()) }
+        }
+
+        /** The file's declared classes, plus every anonymous class the SO-FAR-materialized functions
+         *  synthesized (a fresh `lowerClasses` already contains the ones known to ITS resolver; carried/decoded
+         *  functions bring their own). Not memoized as a union — the anon set grows with materialization. */
+        fun classes(): List<ResolvedClass> {
+            val fresh = !classesLazy.isInitialized()
+            val base = classesLazy.value
+            if (fresh && carriedClasses == null) scheduleStore()
+            val anons = fns.values.flatMap { it.anons }
+            if (anons.isEmpty()) return base
+            // The copy that travels with its function wins: a carried class list keeps the generation it was
+            // lowered in, so its copy of an object literal holds that generation's spans, while the function's own
+            // copy was re-lowered or shifted along with the function.
+            val own = anons.associateBy { it.fqn }
+            return base.map { own[it.fqn] ?: it } + anons.filter { a -> base.none { it.fqn == a.fqn } }.distinctBy { it.fqn }
+        }
+
+        fun classesIfMaterialized(): List<ResolvedClass>? =
+            if (classesLazy.isInitialized()) classesLazy.value else null
+
+        fun functionKeys(name: String): List<String> = decls.keys.filter { it.substringBeforeLast('/') == name }
+
+        fun function(key: String): ResolvedFunction? {
+            fns[key]?.let { return it.fn }
+            val decl = decls[key] ?: return null
+            val ownHash = decl.text.hashCode()
+            val start = decl.textRange.startOffset
+            // Same text is enough: an edit ABOVE the declaration only moves it, and a moved declaration lowers to
+            // the same tree with its spans shifted (see [shiftedBy]) — far cheaper than lowering it again.
+            val reused = carried[key]?.takeIf { it.textHash == ownHash }?.let { e ->
+                val d = start - e.startOffset
+                if (d == 0) e else FnEntry(e.textHash, start, e.fn.shiftedBy(d), e.anons.map { it.shiftedBy(d) })
+            }
+            val entry = reused ?: run {
+                // The one safe point to give the engine back: between declarations, every finished one already
+                // cached in [fns] and nothing half-built, so the retry resumes here instead of starting over. A
+                // poll INSIDE the resolver could be caught by [lowerOneFunction]'s catch-all and cached as a
+                // "lowering failed" diagnostic, so there are none. A full re-lower (a signature edit, a cold
+                // file) otherwise held the worker for its whole length while completion waited behind it.
+                EngineCancellation.checkCanceled()
+                val mark = resolver.anonymousClassMark()
+                val fn = KotlinPerf.span("lowerFn") { lowerDecl(decl) }
+                FnEntry(ownHash, start, fn, resolver.anonymousClassesSince(mark))
+            }
+            fns[key] = entry
+            if (reused == null) scheduleStore()
+            return entry.fn
+        }
+
+        fun anonymousClassesFor(key: String): List<ResolvedClass> = fns[key]?.anons ?: emptyList()
+
+        private fun lowerDecl(decl: KtDeclaration): ResolvedFunction = when (decl) {
+            is KtNamedFunction -> lowerOneFunction(resolver, decl)
+            is KtProperty -> lowerOneTopLevelProperty(resolver, decl)
+            else -> error("not a lowerable top-level declaration: ${decl::class.simpleName}")
+        }
+
+        fun materializedProgram(): Map<String, ResolvedFunction> =
+            decls.keys.associateWithTo(LinkedHashMap()) { function(it)!! }
+
+        /** The lazy cross-file class match: exact FQN, else simple name; the match first, then its nested
+         *  classes (companion, inner enums, …) so runtime `fqn.Companion`-style lookups resolve. */
+        fun classesFor(nameOrFqn: String): List<ResolvedClass> {
+            val cs = classes()
+            val simple = nameOrFqn.substringAfterLast('.')
+            val matched = cs.firstOrNull { it.fqn == nameOrFqn } ?: cs.firstOrNull { it.simpleName == simple }
+                ?: return emptyList()
+            return listOf(matched) + cs.filter { it !== matched && it.fqn.startsWith("${matched.fqn}.") }
+        }
+
+        /** Entries the NEXT generation (same signature hash) may reuse: everything materialized here, plus the
+         *  still-unclaimed carried ones (so a decl untouched for several generations keeps its disk prefill). */
+        fun carryForward(): Map<String, FnEntry> =
+            if (carried.isEmpty()) HashMap(fns) else HashMap(carried).also { it.putAll(fns) }
+
+        private fun scheduleStore() {
+            val cache = diskCache ?: return
+            val snapshot = LinkedHashMap<String, PreviewLoweringStore.CachedFn>()
+            fns.forEach { (k, e) -> snapshot[k] = PreviewLoweringStore.CachedFn(e.textHash, e.startOffset, e.fn, e.anons) }
+            cache.store(path, PreviewLoweringStore.Entry(fileSigHash, snapshot, classesIfMaterialized()))
+        }
+    }
+
+    private val loweredCache = concurrentMap<String, Lowered>()
+
+    /** The file text with every TOP-LEVEL function body elided — a hash of everything a sibling's lowering can
+     *  depend on (signatures, imports, properties, class bodies). Stable across function-body edits.
+     *
+     *  A body that contains an anonymous object literal (`object : Foo { }`) is NOT elided: such a literal is
+     *  lowered into the file's CLASS list (see [KotlinTreeResolver.lowerClasses]), which is reused whole on a
+     *  signature match — so an edit inside it must move the hash to force the classes to re-lower. */
+    private fun fileSignatureHash(ktFile: KtFile): Int {
+        val text = ktFile.text
+        val sb = StringBuilder(text.length)
+        var pos = 0
+        for (fn in ktFile.declarations.filterIsInstance<KtNamedFunction>()) {
+            val body = fn.bodyExpression ?: continue
+            if (body.collectDescendantsOfType<KtObjectLiteralExpression>().isNotEmpty()) continue
+            val r = body.textRange
+            if (r.startOffset >= pos) { sb.append(text, pos, r.startOffset); pos = r.endOffset }
+        }
+        sb.append(text, pos, text.length)
+        return sb.toString().hashCode()
+    }
+
+    private fun loweredFor(parsed: KotlinParsedFile): Lowered {
+        val path = parsed.file.path
+        val prev = loweredCache[path]
+        // Same snapshot object (the dominant warm case — the pane re-renders without a text change), or same
+        // text via a fresh parse: the cached generation, with its lazily-materialized subset, serves as-is.
+        if (prev != null && prev.parsed === parsed) return prev
+        val textHash = parsed.ktFile.text.hashCode()
+        if (prev != null && prev.fileTextHash == textHash) return prev
+        val sigHash = KotlinPerf.span("sigHash") { fileSignatureHash(parsed.ktFile) }
+        var carried: Map<String, FnEntry> = emptyMap()
+        var carriedClasses: List<ResolvedClass>? = null
+        if (prev != null) {
+            // Signature unchanged → the prior generation's entries are reusable (validated per declaration at
+            // materialization); the classes carry whole (only function bodies can change without moving the
+            // signature hash, and those never affect a class's lowering).
+            if (prev.fileSigHash == sigHash) {
+                carried = prev.carryForward()
+                carriedClasses = prev.classesIfMaterialized()
+            }
+        } else {
+            // First touch of this path this session: prefill from the disk cache under the same signature gate.
+            diskCache?.load(path)?.takeIf { it.sigHash == sigHash }?.let { disk ->
+                carried = disk.fns.mapValues { (_, f) -> FnEntry(f.textHash, f.startOffset, f.fn, f.anons) }
+                carriedClasses = disk.classes
+            }
+        }
+        return Lowered(path, sigHash, textHash, parsed, carried, carriedClasses)
+            .also { loweredCache[path] = it }
+    }
+
+    private fun lowerOneFunction(
+        resolver: KotlinTreeResolver,
+        fn: KtNamedFunction,
+    ): ResolvedFunction = try {
+        resolver.lowerFunction(fn)
+    } catch (t: Throwable) {
+        // A resolver gap can THROW (an unhandled PSI shape, a null in inference) rather than produce an
+        // Unsupported node — which would lose the whole file's lowering and leave the preview with no
+        // reason. Turn it into a diagnostic so the cause is reported, not swallowed.
+        val span = SourceSpan(fn.textRange.startOffset, fn.textRange.endOffset)
+        val reason = "lowering failed (${t::class.simpleName}): ${t.message ?: "no message"}"
+        val params = fn.valueParameters.mapIndexed { i, p ->
+            RParam(SlotId(i), p.name ?: "_", null)
+        }
+        ResolvedFunction(
+            fn.name ?: "?", params,
+            RNode.Unsupported(reason, fn.name ?: "", span),
+            listOf(LoweringDiagnostic(reason, span)),
+        )
+    }
+
+    private fun lowerOneTopLevelProperty(
+        resolver: KotlinTreeResolver,
+        prop: KtProperty,
+    ): ResolvedFunction = try {
+        resolver.lowerTopLevelProperty(prop)
+    } catch (t: Throwable) {
+        // As in lowerOneFunction: a resolver gap that THROWS becomes a diagnostic so the cause is reported.
+        val span = SourceSpan(prop.textRange.startOffset, prop.textRange.endOffset)
+        val reason = "lowering failed (${t::class.simpleName}): ${t.message ?: "no message"}"
+        ResolvedFunction(
+            prop.name ?: "?", emptyList(),
+            RNode.Unsupported(reason, prop.name ?: "", span),
+            listOf(LoweringDiagnostic(reason, span)),
+        )
+    }
+}

@@ -1,0 +1,23 @@
+version = 2
+
+[module]
+type = "java-lib"
+name = "model-bridge"
+languageLevel = "JAVA_17"
+output = "build/codeassist/classes"
+
+[sourceSets.commonMain]
+scope = "IMPLEMENTATION"
+java = ["src/commonMain/kotlin"]
+
+[sourceSets.jvmTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/jvmTest/kotlin"]
+
+[dependencies]
+api = [{ module = "project-model-api" }, { module = "project-model-impl" }, { module = "ide-ui-api" }, { module = "deps-api" }]
+implementation = [{ module = "model-api" }, { module = "deps-impl" }, "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0", "kotlin-stdlib"]
+testImplementation = ["org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0", { module = "platform-core" }, { module = "project-templates" }, { platform = "org.junit:junit-bom:5.11.4" }]
+
+[kotlin]
+commonSourceRoots = ["src/commonMain/kotlin"]

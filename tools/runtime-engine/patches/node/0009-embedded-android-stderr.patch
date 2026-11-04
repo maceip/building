@@ -1,0 +1,15 @@
+--- a/src/debug_utils.cc
++++ b/src/debug_utils.cc
+@@ -531,10 +531,8 @@
+   WriteConsoleW(handle, wbuf.data(), n, nullptr, nullptr);
+   return;
+ #elif defined(__ANDROID__)
+-  if (file == stderr) {
+-    __android_log_print(ANDROID_LOG_ERROR, "nodejs", "%s", str.data());
+-    return;
+-  }
++  // Embedded service owns bounded stdout/stderr pipes. Do not divert uncaught
++  // exceptions (including async ones) exclusively to Android logcat.
+ #endif
+   simple_fwrite();
+ }

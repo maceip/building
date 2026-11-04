@@ -1,0 +1,91 @@
+package dev.ide.android.support.tasks
+
+import dev.ide.android.support.AarMetadataRef
+import dev.ide.android.support.AndroidApiLevels
+import dev.ide.android.support.tools.AarMetadata
+import dev.ide.build.BuildDiagnostic
+import dev.ide.build.BuildSeverity
+import dev.ide.build.DiagnosticKind
+import dev.ide.build.Task
+import dev.ide.build.TaskContext
+import dev.ide.build.TaskInputs
+import dev.ide.build.TaskInputsImpl
+import dev.ide.build.TaskName
+import dev.ide.build.TaskOutputs
+import dev.ide.build.TaskOutputsImpl
+import dev.ide.build.TaskResult
+import dev.ide.build.engine.debug
+import dev.ide.build.engine.reportAll
+import dev.ide.build.engine.warn
+import java.nio.file.Files
+import java.nio.file.Path
+
+/**
+ * `checkAarMetadata`: the on-device analogue of AGP's `CheckAarMetadataTask`. Reads each compile-scope AAR's
+ * `aar-metadata.properties` ([AarMetadata]) and fails the build when a dependency requires a higher
+ * `minCompileSdk` than the app compiles against — before compilation, so the error is a clear "raise
+ * compileSdk" message rather than a cascade of missing-symbol compile errors. Runs ahead of `processManifest`.
+ *
+ * It also warns when the platform the build RESOLVED is older than [compileSdk]: `AndroidSdk.detect` falls
+ * back to the highest installed platform when the requested one is absent, so a module set to compile against
+ * API 36 on a machine that has only `android-34` silently builds against 34 and fails later on a symbol that
+ * does not exist there. A warning, not a failure: the build is still the best one this machine can do, and
+ * installing the platform is the user's call (the SDK Manager offers it).
+ *
+ * The output [stamp] is a marker (no real product); it exists only so the check is up-to-date-cacheable and
+ * so downstream tasks can depend on it. Re-runs when a dependency's metadata changes or [compileSdk] moves.
+ */
+internal class CheckAarMetadataTask(
+    override val name: TaskName,
+    private val aarMetadata: List<AarMetadataRef>,
+    private val compileSdk: Int,
+    private val stamp: Path,
+    /** The `platforms/android-<level>/android.jar` the build resolved, whose directory names its real level. */
+    private val platformJar: Path? = null,
+) : Task {
+    override val inputs: TaskInputs
+        get() = TaskInputsImpl().apply {
+            filePaths("metadata", aarMetadata.map { it.propertiesFile }.filter { Files.exists(it) })
+            // Names back the diagnostics; a rename (e.g. a version bump in the coordinate) should re-run the check.
+            property("names", aarMetadata.joinToString(";") { it.name })
+            property("compileSdk", compileSdk)
+            // The resolved platform is part of the answer, so a newly installed SDK re-runs the check.
+            property("platform", platformJar?.parent?.fileName?.toString().orEmpty())
+        }
+    override val outputs: TaskOutputs get() = TaskOutputsImpl().apply { filePath("stamp", stamp) }
+
+    override suspend fun execute(ctx: TaskContext): TaskResult {
+        ctx.checkCanceled()
+        resolvedLevel()?.takeIf { it < compileSdk }?.let { level ->
+            ctx.warn(
+                "compileSdk $compileSdk is not installed; compiling against API $level instead. " +
+                    "Install Android SDK Platform $compileSdk in the SDK Manager, or lower compileSdk in Module Settings.",
+            )
+        }
+        val errors = ArrayList<String>()
+        for (ref in aarMetadata) {
+            ctx.checkCanceled()
+            val info = AarMetadata.read(ref.propertiesFile)
+            if (info.isEmpty) continue
+            errors += AarMetadata.check(compileSdk, ref.name, info)
+        }
+        if (errors.isNotEmpty()) {
+            // Reported once, as problems; the log line is rendered from the diagnostic, not printed alongside it.
+            ctx.reportAll(errors.map {
+                BuildDiagnostic(BuildSeverity.ERROR, it, DiagnosticKind.GENERIC, source = "aar-metadata")
+            })
+            return TaskResult.Failed(
+                if (errors.size == 1) errors.first()
+                else "${errors.size} dependencies are incompatible with this module"
+            )
+        }
+        stamp.parent?.let { Files.createDirectories(it) }
+        Files.write(stamp, "ok".toByteArray(Charsets.UTF_8))
+        ctx.debug("checkAarMetadata -> ${aarMetadata.size} library metadata file(s) OK (compileSdk $compileSdk)")
+        return TaskResult.Success
+    }
+
+    /** The API level of the platform jar the build resolved (`platforms/android-36/android.jar` -> 36, the
+     *  bundled jar's level for one outside a platform dir), or null when there is no jar. */
+    private fun resolvedLevel(): Int? = platformJar?.let(AndroidApiLevels::levelOfPlatformJar)
+}

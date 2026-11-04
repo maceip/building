@@ -1,0 +1,445 @@
+package dev.ide.lang.java
+
+import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiExpression
+import com.intellij.psi.PsiField
+import com.intellij.psi.PsiJavaCodeReferenceElement
+import com.intellij.psi.PsiLocalVariable
+import com.intellij.psi.PsiMethod
+import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.PsiNameIdentifierOwner
+import com.intellij.psi.PsiNewExpression
+import com.intellij.psi.PsiReferenceExpression
+import com.intellij.psi.PsiReturnStatement
+import com.intellij.psi.PsiVariable
+import com.intellij.psi.util.PsiTreeUtil
+import dev.ide.index.ClassNameIndex
+import dev.ide.index.ClassNameValue
+import dev.ide.index.IndexService
+import dev.ide.index.prefixAll
+import dev.ide.lang.AnalysisResult
+import dev.ide.lang.CacheInvalidation
+import dev.ide.lang.JvmIndexScopeProvider
+import dev.ide.lang.SourceAnalyzer
+import dev.ide.lang.completion.CompletionContribution
+import dev.ide.lang.folding.FoldingService
+import dev.ide.lang.highlight.SemanticHighlightService
+import dev.ide.lang.hints.InlayHintService
+import dev.ide.lang.java.resolve.JavaApiLevelCheck
+import dev.ide.lang.java.resolve.JavaLibraryDocs
+import dev.ide.lang.resolve.SourceDocProvider
+import dev.ide.lang.resolve.ApiLevelContext
+import dev.ide.lang.signature.SignatureHelpService
+import dev.ide.lang.java.completion.JavaCompletion
+import dev.ide.lang.java.services.JavaFolder
+import dev.ide.lang.java.services.JavaInlayHints
+import dev.ide.lang.java.services.JavaSemanticHighlighter
+import dev.ide.lang.java.services.JavaSignatureHelp
+import dev.ide.lang.dom.DomNode
+import dev.ide.lang.dom.ParsedFile
+import dev.ide.lang.incremental.IncrementalParser
+import dev.ide.lang.java.env.JavaEnvironment
+import dev.ide.lang.java.parse.JavaDomNode
+import dev.ide.lang.java.parse.JavaIncrementalParser
+import dev.ide.lang.java.parse.JavaParsedFile
+import dev.ide.lang.java.resolve.JavaScope
+import dev.ide.lang.java.resolve.JavaSymbol
+import dev.ide.lang.java.resolve.JavaTypeRef
+import dev.ide.lang.java.resolve.symbolKindOf
+import dev.ide.psi.IntellijPsiHost
+import dev.ide.lang.resolve.DocFormat
+import dev.ide.lang.resolve.QuickDocInfo
+import dev.ide.lang.resolve.ResolveResult
+import dev.ide.lang.resolve.Scope
+import dev.ide.lang.resolve.StructureItem
+import dev.ide.lang.resolve.TypeRef
+import dev.ide.platform.ContentHash
+import dev.ide.platform.Disposable
+import dev.ide.vfs.VirtualFile
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * The Java [SourceAnalyzer] over IntelliJ's native resolution engine (held by [env]). Reference resolution,
+ * expression typing, and member enumeration all delegate to PSI (`resolve()`, `getType()`, the Cls/source
+ * supertype graph), so the backend inherits IntelliJ's Java semantics rather than re-deriving them.
+ *
+ * This first cut lands parse + DOM + resolution + structure/quick-doc. Semantic diagnostics beyond syntax,
+ * completion, and the editor-QoL services (folding, highlight, signature, formatting) layer on next.
+ */
+class JavaSourceAnalyzer private constructor(
+    classpath: List<java.io.File>,
+    sourceRoots: List<java.io.File>,
+    jdkHome: java.io.File?,
+    createEnv: () -> JavaEnvironment,
+) : SourceAnalyzer, JvmIndexScopeProvider, Disposable {
+
+    /** An analyzer over an already-built [env]. */
+    constructor(env: JavaEnvironment) : this(env.classpath, env.sourceRoots, env.jdkHome, { env })
+
+    companion object {
+        /** An analyzer whose environment is created by [JavaEnvironment.create] on first use. */
+        fun deferred(classpath: List<java.io.File>, sourceRoots: List<java.io.File>, jdkHome: java.io.File?) =
+            JavaSourceAnalyzer(classpath, sourceRoots, jdkHome) {
+                JavaEnvironment.create(classpath, sourceRoots, jdkHome)
+            }
+    }
+
+    /**
+     * The IntelliJ environment, built on the first request that needs PSI rather than with the analyzer. The
+     * host builds an analyzer per module just to read its index scope (the jars and source roots below), and
+     * a module whose Java files are never opened must not pay a full project environment for that.
+     */
+    private val envLazy = lazy {
+        createEnv().also { e ->
+            // Forward only what the host actually set here; an environment built by the caller keeps its own.
+            syntheticProviderValue?.let { e.syntheticProvider = it }
+            overlayProviderValue?.let { e.overlayProvider = it }
+        }
+    }
+    private val env: JavaEnvironment by envLazy
+
+    private val javaIncrementalParser by lazy { JavaIncrementalParser(env, { apiContext() }, { languageLevel }) }
+    override val incrementalParser: IncrementalParser get() = javaIncrementalParser
+
+    // --- JvmIndexScopeProvider: the roots this analyzer contributes to the workspace index scope ----------
+
+    /** Library jars on the classpath (dirs / non-jar entries are excluded — those index via source roots). */
+    override val classpathJarPaths: List<java.nio.file.Path> by lazy {
+        JavaEnvironment.usableClasspath(classpath).filter { it.isFile && it.name.endsWith(".jar") }.map { it.toPath() }
+    }
+
+    override val sourceRootPaths: List<java.nio.file.Path> =
+        sourceRoots.filter { it.isDirectory }.map { it.toPath() }
+
+    override val jdkHome: java.nio.file.Path? = jdkHome?.toPath()
+
+    /** Close the environment if one was ever built; an analyzer that only served its index scope has none. */
+    override fun dispose() {
+        if (envLazy.isInitialized()) IntellijPsiHost.withParseLock { runCatching { env.close() } }
+    }
+
+    /** Attached library/SDK SOURCE archives. Seeded by [JavaLanguageBackend] from the compilation context
+     *  (`-sources.jar`s + the derived JDK `src.zip` / Android `sources/`) and grown by the host via
+     *  [addSourceJars] / [addSourceDirs] for the roots it alone knows. Mirrors the JDT analyzer. */
+    override var librarySourceArchives: List<java.nio.file.Path> = emptyList()
+        private set
+
+    /** Attach a mixed list of source archives and dirs (whatever exists), deduped. */
+    fun addSourceArchives(extra: List<java.nio.file.Path>) {
+        librarySourceArchives = (librarySourceArchives + extra.filter { java.nio.file.Files.exists(it) }).distinct()
+    }
+
+    /** Host hook: attach library/JDK source archives (parity with `JdtSourceAnalyzer.addSourceJars`). */
+    fun addSourceJars(extra: List<java.nio.file.Path>) =
+        addSourceArchives(extra.filter { java.nio.file.Files.isRegularFile(it) })
+
+    /** Host hook: attach SDK source dirs (parity with `JdtSourceAnalyzer.addSourceDirs`). */
+    fun addSourceDirs(extra: List<java.nio.file.Path>) =
+        addSourceArchives(extra.filter { java.nio.file.Files.isDirectory(it) })
+
+    /** The workspace index, injected by the host (ide-core) after construction; powers unimported-type /
+     *  auto-import completion via the `java.classNames` index (mirrors the JDT/Kotlin analyzers). */
+    var indexService: IndexService? = null
+
+    /** Synthetic classes (Android R/BuildConfig/…) the facade should resolve, injected by the host. Forwarded
+     *  to the env's injected element finder. */
+    var syntheticClassProvider: () -> List<dev.ide.lang.synthetic.SyntheticClass>
+        get() = if (envLazy.isInitialized()) env.syntheticProvider else syntheticProviderValue ?: { emptyList() }
+        set(value) {
+            syntheticProviderValue = value
+            if (envLazy.isInitialized()) env.syntheticProvider = value
+        }
+    private var syntheticProviderValue: (() -> List<dev.ide.lang.synthetic.SyntheticClass>)? = null
+
+    /** Open-buffer overlay (FQN → live editor text) so a dependent resolves a not-yet-saved edit, injected by
+     *  the host. Forwarded to the env's injected element finder. */
+    var overlayProvider: () -> Map<String, CharArray>
+        get() = if (envLazy.isInitialized()) env.overlayProvider else overlayProviderValue ?: { emptyMap() }
+        set(value) {
+            overlayProviderValue = value
+            if (envLazy.isInitialized()) env.overlayProvider = value
+        }
+    private var overlayProviderValue: (() -> Map<String, CharArray>)? = null
+
+    /** Inheritor lookup for `new`-position subtype completion, injected by the host (a subtype-index BFS over
+     *  a supertype FQN). Default empty keeps completion working index-free. */
+    var subtypeIndexQuery: (String) -> List<JavaCompletion.IndexedType> = { emptyList() }
+
+    /** The module's API-level check inputs, injected by the host: minSdk + the platform table for an Android
+     *  module, the Java release + the JDK table for a JVM module. Read on every diagnostics pass, so a minSdk
+     *  edit takes effect without rebuilding the analyzer. */
+    @Volatile
+    var apiContext: () -> ApiLevelContext? = { null }
+
+    /** The module's Java language level (`8`, `17`, ...): syntax newer than it is reported, as the build's
+     *  compiler would. Files are still parsed at the highest level so a newer construct reads as itself.
+     *  Unset (the default) reports nothing. */
+    @Volatile
+    var languageLevel: Int = Int.MAX_VALUE
+
+    /** Real parameter names and javadoc for COMPILED classpath symbols (attached sources, the source-doc index,
+     *  the bundled Android docs), injected by the host. Source symbols answer from their own PSI. */
+    @Volatile
+    var sourceDocProvider: SourceDocProvider = SourceDocProvider.NONE
+
+    private val libraryDocs = JavaLibraryDocs { sourceDocProvider }
+
+    private val completion: JavaCompletion by lazy {
+        JavaCompletion(
+            env,
+            typeSearch = { prefix ->
+                // Read `indexService` lazily (host sets it after construction). Simple-name prefix → candidate types.
+                indexService?.prefixAll<ClassNameValue>(ClassNameIndex.ALL, prefix, JavaCompletion.TYPE_SEARCH_LIMIT)
+                    ?.map { JavaCompletion.IndexedType(it.value.fqn, it.value.kind) }
+                    ?.toList()
+                    ?: emptyList()
+            },
+            subtypeSearch = { superFqn -> subtypeIndexQuery(superFqn) },
+            paramNames = libraryDocs::paramNames,
+        )
+    }
+
+    override fun completionContributions(): List<CompletionContribution> =
+        listOf(CompletionContribution(completion))
+
+    /** The current parsed PSI for a file, for the editor-QoL services (folding / highlight / inlay hints).
+     *  Prefers the host's most recent LIVE-buffer parse (via the incremental parser) so tokens land on the
+     *  unsaved text the editor shows; falls back to the on-disk content-hashed parse when none exists yet. */
+    internal fun psiFor(file: VirtualFile) =
+        javaIncrementalParser.latestFor(file)?.javaFile ?: cachedParse(file).javaFile
+
+    /** Rename support for the host's RefactorService — kept behind neutral types (no PSI leaks to ide-core).
+     *  [renameTargetAt] resolves the symbol under the caret; [renameReferencesIn] finds its occurrences in a
+     *  file, given the target from a (possibly different) file. Both parse [text] in the resolution env. */
+    fun renameTargetAt(name: String, text: CharSequence, offset: Int): dev.ide.lang.java.rename.JavaRenameTarget? =
+        IntellijPsiHost.withParseLock { dev.ide.lang.java.rename.JavaRename.targetAt(env.parse(name, text), offset) }
+
+    fun renameReferencesIn(
+        name: String, text: CharSequence, target: dev.ide.lang.java.rename.JavaRenameTarget,
+    ): List<dev.ide.lang.dom.TextRange> =
+        IntellijPsiHost.withParseLock { dev.ide.lang.java.rename.JavaRename.referencesIn(env.parse(name, text), target) }
+
+    override val importOrganizer: dev.ide.lang.imports.ImportOrganizerService = JavaImportOrganizer { name, text -> env.parse(name, text) }
+    override val folding: FoldingService = JavaFolder(::psiFor)
+    override val semanticHighlighter: SemanticHighlightService = JavaSemanticHighlighter(::psiFor)
+    override val signatureHelp: SignatureHelpService by lazy { JavaSignatureHelp(env, libraryDocs::paramNames, libraryDocs::plainDoc) }
+    override val inlayHints: InlayHintService = JavaInlayHints(::psiFor, libraryDocs::paramNames)
+
+    private val version = AtomicLong(0)
+    // On-disk parses by path, least recently used first out: a project-wide pass reaches every file, and each
+    // entry is a full PSI tree.
+    private val cacheLimit = dev.ide.platform.DeviceMemory.pick(normal = 32, low = 8)
+    private val cache: MutableMap<String, Pair<ContentHash, JavaParsedFile>> = java.util.Collections.synchronizedMap(
+        object : LinkedHashMap<String, Pair<ContentHash, JavaParsedFile>>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: Map.Entry<String, Pair<ContentHash, JavaParsedFile>>) =
+                size > cacheLimit
+        },
+    )
+
+    /**
+     * Drop cached synthetic/overlay class resolution (e.g. an Android `R` regenerated after a resource edit).
+     * Without this the facade keeps resolving the STALE `R`, so a just-added `R.string.foo` stays unresolved in
+     * code even though the resource exists. The host calls this on a synthetic/resource change (which does NOT
+     * dispose the analyzer, to keep the warm classpath env). Also drops the per-file parse cache, whose
+     * diagnostics were computed against the old `R`.
+     */
+    /**
+     * The neutral host hook ([SourceAnalyzer.invalidateCaches]). This analyzer holds a live IntelliJ env
+     * whose facade caches resolved synthetic classes by modification count, so SYNTHETIC_CLASSES has to drop
+     * them.
+     *
+     * BINDINGS deliberately does NOT: it fires on every batch of file changes, and [cachedParse] already
+     * re-parses on a content-hash change, so the only thing dropping the env would add is throwing away the
+     * warm PSI caches on each save.
+     */
+    override fun invalidateCaches(reason: CacheInvalidation) {
+        when (reason) {
+            CacheInvalidation.SYNTHETIC_CLASSES -> invalidateSyntheticClasses()
+            // Memory pressure: the on-disk parse cache, every live parse but the file on screen, and the
+            // environment's resolve caches all rebuild on demand.
+            CacheInvalidation.MEMORY_PRESSURE -> {
+                cache.clear()
+                if (envLazy.isInitialized()) {
+                    javaIncrementalParser.trimToLatest()
+                    env.dropCaches()
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    fun invalidateSyntheticClasses() {
+        cache.clear()
+        if (envLazy.isInitialized()) env.dropCaches()
+    }
+
+    /** Parse (and cache) [file] from its current on-disk bytes; re-parses when the content hash changes. */
+    private fun cachedParse(file: VirtualFile): JavaParsedFile {
+        val hash = file.contentHash()
+        cache[file.path]?.let { if (it.first == hash) return it.second }
+        val tree = JavaParsedFile(env.parse(file.name, file.readText()), file, version.incrementAndGet(), { apiContext() }, { languageLevel })
+        cache[file.path] = hash to tree
+        return tree
+    }
+
+    override suspend fun parsedFile(file: VirtualFile): ParsedFile = cachedParse(file)
+
+    override suspend fun analyze(file: VirtualFile): AnalysisResult {
+        val tree = cachedParse(file)
+        // First cut: syntax diagnostics (PsiErrorElements, collected by the DOM). Semantic diagnostics
+        // (unresolved symbol / type errors) require care to avoid false positives and land in a later step.
+        return AnalysisResult(file, tree.diagnostics)
+    }
+
+    // --- resolution ---------------------------------------------------------------------------------------
+
+    // Resolution walks scopes and, for a cross-file reference, LAZILY parses the referenced class's source file
+    // (a `buildTree`). That must hold the one global parse lock, or it can race the background index build's
+    // parse → native SIGSEGV on 32-bit ART. So every SPI method below that calls `.resolve()`/`.getType()`/
+    // `facade.*` runs under [IntellijPsiHost.withParseLock] (reentrant with `env.parse`). See [IntellijPsiHost].
+    override fun resolve(node: DomNode): ResolveResult {
+        val psi = (node as? JavaDomNode)?.psi ?: return ResolveResult.Unresolved
+        val target = IntellijPsiHost.withParseLock { resolveTarget(psi) } ?: return ResolveResult.Unresolved
+        return ResolveResult.Resolved(JavaSymbol(target, node.owner))
+    }
+
+    /** Resolve the reference at (or just above) [psi] to its declaration, via IntelliJ's resolver. */
+    private fun resolveTarget(psi: PsiElement): PsiElement? {
+        var e: PsiElement? = psi
+        var hops = 0
+        while (e != null && hops++ < 4) {
+            when (e) {
+                is PsiMethodCallExpression -> return e.resolveMethod()
+                is PsiNewExpression -> return e.classReference?.resolve() ?: e.resolveConstructor()
+                is PsiReferenceExpression -> return e.resolve()
+                is PsiJavaCodeReferenceElement -> return e.resolve()
+            }
+            e = e.parent
+        }
+        return null
+    }
+
+    override fun resolveType(node: DomNode): TypeRef? {
+        val psi = (node as? JavaDomNode)?.psi ?: return null
+        val expr = psi as? PsiExpression
+            ?: PsiTreeUtil.getParentOfType(psi, PsiExpression::class.java, false)
+            ?: return null
+        // `getType()` can trigger overload/generic resolution → a lazy cross-file `buildTree`; hold the lock.
+        return IntellijPsiHost.withParseLock { expr.type }?.let { JavaTypeRef(it) }
+    }
+
+    override fun scopeAt(file: VirtualFile, offset: Int): Scope {
+        val tree = cachedParse(file)
+        val len = tree.javaFile.textLength
+        val leaf = if (len == 0) null
+        else tree.javaFile.findElementAt(offset.coerceIn(0, (len - 1).coerceAtLeast(0)))
+        return JavaScope(leaf, offset, tree, env.facade, env.project)
+    }
+
+    override fun expectedTypeAt(file: VirtualFile, offset: Int): TypeRef? {
+        val tree = cachedParse(file)
+        val len = tree.javaFile.textLength
+        if (len == 0) return null
+        val leaf = tree.javaFile.findElementAt(offset.coerceIn(0, len - 1)) ?: return null
+        // `v.type` / method `returnType` can resolve a type reference → a lazy cross-file `buildTree`; lock it.
+        return IntellijPsiHost.withParseLock {
+            // Variable initializer -> the declared type; a `return` -> the enclosing method's return type.
+            PsiTreeUtil.getParentOfType(leaf, PsiVariable::class.java, false)?.let { v ->
+                if (v.initializer != null) return@withParseLock JavaTypeRef(v.type)
+            }
+            PsiTreeUtil.getParentOfType(leaf, PsiReturnStatement::class.java, false)?.let {
+                PsiTreeUtil.getParentOfType(it, PsiMethod::class.java)?.returnType?.let { rt ->
+                    return@withParseLock JavaTypeRef(rt)
+                }
+            }
+            null
+        }
+    }
+
+    // --- structure & quick-doc ----------------------------------------------------------------------------
+
+    /** The last [fileStructure] answer and the text it was built from. The sticky headers and the breadcrumb
+     *  both ask after every edit, and the breadcrumb again on every caret move, always for the same text. */
+    private class StructureMemo(val path: String, val text: String, val items: List<StructureItem>)
+
+    @Volatile
+    private var structureMemo: StructureMemo? = null
+
+    override fun fileStructure(file: VirtualFile, text: CharSequence): List<StructureItem> {
+        structureMemo?.let { m ->
+            if (m.path == file.path && m.text.length == text.length && m.text.contentEquals(text)) return m.items
+        }
+        return computeFileStructure(file, text).also { structureMemo = StructureMemo(file.path, text.toString(), it) }
+    }
+
+    private fun computeFileStructure(file: VirtualFile, text: CharSequence): List<StructureItem> {
+        // Reuse the editor's own parse when it is of this exact text, instead of parsing again under the lock.
+        val psi = javaIncrementalParser.latestIfText(file.path, text)?.javaFile ?: env.parse(file.name, text)
+        val out = ArrayList<StructureItem>()
+        fun nameOffset(e: PsiElement): Int =
+            (e as? PsiNameIdentifierOwner)?.nameIdentifier?.textOffset ?: e.textOffset
+        fun add(e: PsiElement, name: String, detail: String?, depth: Int) {
+            out += StructureItem(
+                name = name,
+                detail = detail,
+                kind = symbolKindOf(e),
+                nameOffset = nameOffset(e),
+                endOffset = e.textRange.endOffset,
+                depth = depth,
+            )
+        }
+        fun visit(cls: PsiClass, depth: Int) {
+            add(cls, cls.name ?: "<anonymous>", null, depth)
+            cls.fields.forEach { f -> add(f, f.name, f.type.presentableText, depth + 1) }
+            cls.methods.forEach { m ->
+                val params = m.parameterList.parameters.joinToString(", ") { it.type.presentableText }
+                add(m, m.name, "($params)", depth + 1)
+            }
+            cls.innerClasses.forEach { visit(it, depth + 1) }
+        }
+        psi.classes.forEach { visit(it, 0) }
+        return out
+    }
+
+    override fun quickDoc(file: VirtualFile, text: CharSequence, offset: Int): QuickDocInfo? =
+        // Parse + resolve (+ read the target's doc/signature, which resolve types) all under the one parse lock:
+        // resolving the symbol under the caret can lazily `buildTree` its declaring source file. `env.parse` is
+        // reentrant under the same lock.
+        IntellijPsiHost.withParseLock {
+            val psi = env.parse(file.name, text)
+            val len = psi.textLength
+            if (len == 0) return@withParseLock null
+            val leaf = psi.findElementAt(offset.coerceIn(0, len - 1)) ?: return@withParseLock null
+            val target = resolveTarget(leaf) ?: return@withParseLock null
+            val sym = JavaSymbol(target)
+            val owner = (target.parent as? PsiClass)?.qualifiedName
+                ?: PsiTreeUtil.getParentOfType(target, PsiClass::class.java)?.qualifiedName
+            QuickDocInfo(
+                signature = signatureOf(target),
+                name = sym.name,
+                kind = sym.kind,
+                container = owner,
+                // A platform API's doc opens with the level that added it ("Added in API 26"). A compiled symbol
+                // has no comment of its own, so its doc comes from sources or the bundled docs.
+                doc = (sym.documentation() ?: libraryDocs.rawDoc(target)).let { doc ->
+                    apiContext()?.let { api -> JavaApiLevelCheck.levelOf(target, api.levels)?.prependTo(doc, api.platform) } ?: doc
+                },
+                docFormat = DocFormat.JAVADOC,
+            )
+        }
+
+    private fun signatureOf(psi: PsiElement): String = when (psi) {
+        is PsiMethod -> {
+            val names = libraryDocs.paramNames(psi)
+            val params = psi.parameterList.parameters.withIndex().joinToString(", ") { (i, p) ->
+                "${p.type.presentableText} ${names[i]}"
+            }
+            "${psi.returnType?.presentableText ?: "void"} ${psi.name}($params)"
+        }
+        is PsiField -> "${psi.type.presentableText} ${psi.name}"
+        is PsiLocalVariable -> "${psi.type.presentableText} ${psi.name}"
+        is PsiClass -> psi.qualifiedName ?: (psi.name ?: "<anonymous>")
+        else -> (psi as? com.intellij.psi.PsiNamedElement)?.name ?: psi.text
+    }
+}

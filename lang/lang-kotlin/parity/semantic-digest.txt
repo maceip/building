@@ -1,0 +1,293 @@
+file Flow.kt
+  diagnostics
+  references
+    [8] parity -> <unresolved>
+    [181] Shape -> CLASS Shape
+    [190] Kind -> ENUM Kind
+    [208] shape -> PARAMETER shape
+    [225] Kind -> ENUM Kind
+    [230] UNKNOWN -> ENUM_CONSTANT UNKNOWN
+    [242] shape -> PARAMETER shape
+    [248] isBig -> METHOD isBig
+    [259] Kind -> ENUM Kind
+    [264] LARGE -> ENUM_CONSTANT LARGE
+    [282] Kind -> ENUM Kind
+    [287] SMALL -> ENUM_CONSTANT SMALL
+    [319] Any -> CLASS Any
+    [326] String -> CLASS String
+    [343] value -> PARAMETER value
+    [352] Circle -> CLASS Circle
+    [478] value -> PARAMETER value
+    [484] radius -> FIELD radius
+    [516] value -> PARAMETER value
+    [536] Rect -> CLASS Rect
+    [552] value -> PARAMETER value
+    [558] width -> FIELD width
+    [567] value -> PARAMETER value
+    [573] height -> FIELD height
+    [593] String -> CLASS String
+    [603] value -> PARAMETER value
+    [609] uppercase -> METHOD uppercase
+    [632] Int -> CLASS Int
+    [640] value -> PARAMETER value
+    [651] toString -> METHOD toString
+    [704] value -> PARAMETER value
+    [710] toString -> METHOD toString
+    [752] List -> CLASS List
+    [757] Shape -> CLASS Shape
+    [766] String -> CLASS String
+    [798] shapes -> PARAMETER shapes
+    [805] partition -> METHOD partition
+    [817] it -> PARAMETER it
+    [820] isBig -> METHOD isBig
+    [847] big -> LOCAL_VARIABLE big
+    [851] joinToString -> METHOD joinToString
+    [864] prefix -> PARAMETER prefix
+    [878] postfix -> PARAMETER postfix
+    [895] it -> PARAMETER it
+    [898] name -> FIELD name
+    [916] buildString -> METHOD buildString
+    [938] append -> METHOD append
+    [945] header -> LOCAL_VARIABLE header
+    [961] append -> METHOD append
+    [983] append -> METHOD append
+    [990] small -> LOCAL_VARIABLE small
+    [996] size -> FIELD size
+    [1024] shapes -> PARAMETER shapes
+    [1046] appendLine -> METHOD appendLine
+    [1057] shape -> PARAMETER shape
+    [1063] describe -> METHOD describe
+    [1120] List -> CLASS List
+    [1125] Shape -> CLASS Shape
+    [1134] String -> CLASS String
+    [1148] shapes -> PARAMETER shapes
+    [1155] firstOrNull -> METHOD firstOrNull
+    [1169] it -> PARAMETER it
+    [1172] name -> FIELD name
+    [1177] length -> FIELD length
+    [1191] name -> FIELD name
+    [1197] trim -> METHOD trim
+    [1205] takeIf -> METHOD takeIf
+    [1214] it -> PARAMETER it
+    [1217] isNotEmpty -> METHOD isNotEmpty
+  completion
+    [230] 6 items: entries, valueOf(value: String), values(), LARGE, SMALL, UNKNOWN
+    [248] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [264] 6 items: entries, valueOf(value: String), values(), LARGE, SMALL, UNKNOWN
+    [287] 6 items: entries, valueOf(value: String), values(), LARGE, SMALL, UNKNOWN
+    [484] 19 items: area(), component1(), copy(radius: Double), describe(), name, radius, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R)
+    [558] 22 items: area(), component1(), component2(), copy(width: Double, height: Double), describe(), height, longest, name, width, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit)
+    [573] 22 items: area(), component1(), component2(), copy(width: Double, height: Double), describe(), height, longest, name, width, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit)
+    [609] 184 items: length, isEmpty(), isNotEmpty(), isBlank(), isNotBlank(), substring(startIndex: Int, endIndex: Int), substring(range: IntRange), substring(startIndex: Int), contains(other: CharSequence, ignoreCase: Boolean), contains(char: Char, ignoreCase: Boolean), contains(regex: Regex), trim(predicate: (Char) -> Boolean)
+    [651] 132 items: and(other: Int), compareTo(other: Byte), compareTo(other: Short), compareTo(other: Int), compareTo(other: Long), compareTo(other: Float), compareTo(other: Double), compareTo(other: T), dec(), div(other: Byte), div(other: Short), div(other: Int)
+    [710] 12 items: also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean), to(that: B), equals(other: Any?), hashCode(), toString()
+    [805] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [820] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [851] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [898] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [996] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [1063] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [1205] 184 items: length, isEmpty(), isNotEmpty(), isBlank(), isNotBlank(), substring(startIndex: Int, endIndex: Int), substring(range: IntRange), substring(startIndex: Int), contains(other: CharSequence, ignoreCase: Boolean), contains(char: Char, ignoreCase: Boolean), contains(regex: Regex), trim(predicate: (Char) -> Boolean)
+    [1197] 184 items: length, isEmpty(), isNotEmpty(), isBlank(), isNotBlank(), substring(startIndex: Int, endIndex: Int), substring(range: IntRange), substring(startIndex: Int), contains(other: CharSequence, ignoreCase: Boolean), contains(char: Char, ignoreCase: Boolean), contains(regex: Regex), trim(predicate: (Char) -> Boolean)
+    [1191] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [1155] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [1177] 184 items: length, isEmpty(), isNotEmpty(), isBlank(), isNotBlank(), substring(startIndex: Int, endIndex: Int), substring(range: IntRange), substring(startIndex: Int), contains(other: CharSequence, ignoreCase: Boolean), contains(char: Char, ignoreCase: Boolean), contains(regex: Regex), trim(predicate: (Char) -> Boolean)
+    [1172] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [1217] 184 items: length, isEmpty(), isNotEmpty(), isBlank(), isNotBlank(), substring(startIndex: Int, endIndex: Int), substring(range: IntRange), substring(startIndex: Int), contains(other: CharSequence, ignoreCase: Boolean), contains(char: Char, ignoreCase: Boolean), contains(regex: Regex), trim(predicate: (Char) -> Boolean)
+
+file Members.kt
+  diagnostics
+  references
+    [8] parity -> <unresolved>
+    [166] mutableMapOf -> METHOD mutableMapOf
+    [179] String -> CLASS String
+    [187] Shape -> CLASS Shape
+    [216] Shape -> CLASS Shape
+    [225] known -> FIELD known
+    [231] shape -> PARAMETER shape
+    [237] name -> FIELD name
+    [245] shape -> PARAMETER shape
+    [271] String -> CLASS String
+    [280] Shape -> CLASS Shape
+    [289] known -> FIELD known
+    [295] name -> PARAMETER name
+    [315] Int -> CLASS Int
+    [327] known -> FIELD known
+    [333] size -> FIELD size
+    [428] Counter -> CLASS Counter
+    [438] Counter -> CLASS Counter
+    [470] Int -> CLASS Int
+    [476] START -> FIELD START
+    [532] Int -> CLASS Int
+    [538] Counter -> CLASS Counter
+    [548] Counter -> CLASS Counter
+    [558] also -> METHOD also
+    [565] it -> PARAMETER it
+    [568] value -> FIELD value
+    [576] value -> FIELD value
+    [584] other -> PARAMETER other
+    [620] Int -> CLASS Int
+    [626] Int -> CLASS Int
+    [632] value -> FIELD value
+    [640] index -> PARAMETER index
+    [673] Int -> CLASS Int
+    [679] value -> FIELD value
+    [729] Named -> INTERFACE Named
+    [738] Named -> INTERFACE Named
+    [747] delegate -> FIELD delegate
+    [780] List -> CLASS List
+    [798] List -> CLASS List
+    [803] T -> TYPE_PARAMETER T
+    [808] filterIsInstance -> METHOD filterIsInstance
+    [825] T -> TYPE_PARAMETER T
+    [854] Map -> CLASS Map
+    [858] String -> CLASS String
+    [866] Shape -> CLASS Shape
+    [892] List -> CLASS List
+    [897] Shape -> CLASS Shape
+    [906] ShapeTable -> CLASS ShapeTable
+    [919] shapes -> PARAMETER shapes
+    [926] associateBy -> METHOD associateBy
+    [940] it -> PARAMETER it
+    [943] name -> FIELD name
+    [979] Shape -> CLASS Shape
+    [987] Double -> CLASS Double
+    [1011] shape -> PARAMETER shape
+    [1017] area -> METHOD area
+    [1035] base -> LOCAL_VARIABLE base
+    [1066] List -> CLASS List
+    [1071] Shape -> CLASS Shape
+    [1099] Counter -> CLASS Counter
+    [1107] zero -> METHOD zero
+    [1131] counter -> LOCAL_VARIABLE counter
+    [1159] table -> METHOD table
+    [1165] shapes -> PARAMETER shapes
+    [1191] shapes -> PARAMETER shapes
+    [1198] ofType -> METHOD ofType
+    [1205] Circle -> CLASS Circle
+    [1219] Registry -> CLASS Registry
+    [1228] put -> METHOD put
+    [1232] shapes -> PARAMETER shapes
+    [1239] first -> METHOD first
+    [1252] println -> METHOD println
+    [1260] bumped -> LOCAL_VARIABLE bumped
+    [1275] println -> METHOD println
+    [1283] table -> LOCAL_VARIABLE table
+    [1289] keys -> FIELD keys
+    [1294] sorted -> METHOD sorted
+    [1308] println -> METHOD println
+    [1316] circles -> LOCAL_VARIABLE circles
+    [1324] map -> METHOD map
+    [1330] it -> PARAMETER it
+    [1333] radius -> FIELD radius
+    [1347] println -> METHOD println
+    [1355] Registry -> CLASS Registry
+    [1364] size -> FIELD size
+  completion
+    [237] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [333] 127 items: put(key: K, value: V), get(key: K), getOrPut(key: K, defaultValue: () -> V), remove(key: K), remove(key: K, value: V), containsKey(key: K), keys, values, entries, getOrDefault(key: K, defaultValue: V), size, getOrElse(key: K, defaultValue: () -> V)
+    [558] 16 items: get(index: Int), invoke(), plus(other: Int), value, also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [568] 16 items: get(index: Int), invoke(), plus(other: Int), value, also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [926] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [943] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [1017] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [1107] 12 items: START, zero(), Companion, also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean), to(that: B)
+    [1198] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [1228] 15 items: get(name: String), put(shape: Shape), size, also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean), to(that: B)
+    [1239] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [1294] 170 items: contains(element: E), contains(element: T), size, isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean)
+    [1289] 105 items: get(key: K), containsKey(key: K), keys, values, entries, size, isEmpty(), getOrDefault(key: K, defaultValue: V), getOrElse(key: K, defaultValue: () -> V), forEach(action: (Entry<K, V>) -> Unit), filter(predicate: (Entry<K, V>) -> Boolean), map(transform: (Entry<K, V>) -> R)
+    [1324] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [1333] 19 items: area(), component1(), copy(radius: Double), describe(), name, radius, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R)
+    [1364] 15 items: get(name: String), put(shape: Shape), size, also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean), to(that: B)
+
+file Shapes.kt
+  diagnostics
+    ERROR kt.cannotInferType [1152..1160] Not enough information to infer type variable T
+  references
+    [8] parity -> <unresolved>
+    [23] kotlin -> <unresolved>
+    [30] math -> <unresolved>
+    [35] max -> METHOD max
+    [168] String -> CLASS String
+    [203] Double -> CLASS Double
+    [235] String -> CLASS String
+    [246] name -> FIELD name
+    [261] area -> METHOD area
+    [303] Double -> CLASS Double
+    [313] Shape -> CLASS Shape
+    [356] Double -> CLASS Double
+    [375] radius -> FIELD radius
+    [384] radius -> FIELD radius
+    [420] String -> CLASS String
+    [429] super -> <unresolved>
+    [435] describe -> METHOD describe
+    [454] radius -> FIELD radius
+    [493] Double -> CLASS Double
+    [513] Double -> CLASS Double
+    [523] Shape -> CLASS Shape
+    [564] Double -> CLASS Double
+    [573] width -> FIELD width
+    [581] height -> FIELD height
+    [605] Double -> CLASS Double
+    [620] max -> METHOD max
+    [624] width -> FIELD width
+    [631] height -> FIELD height
+    [681] String -> CLASS String
+    [705] String -> CLASS String
+    [723] displayName -> FIELD displayName
+    [753] Shape -> CLASS Shape
+    [779] List -> CLASS List
+    [784] T -> TYPE_PARAMETER T
+    [790] Named -> INTERFACE Named
+    [828] String -> CLASS String
+    [853] items -> FIELD items
+    [859] size -> FIELD size
+    [886] T -> TYPE_PARAMETER T
+    [891] items -> FIELD items
+    [897] maxByOrNull -> METHOD maxByOrNull
+    [911] it -> PARAMETER it
+    [914] area -> METHOD area
+    [945] Double -> CLASS Double
+    [954] items -> FIELD items
+    [960] sumOf -> METHOD sumOf
+    [968] it -> PARAMETER it
+    [971] area -> METHOD area
+    [998] List -> CLASS List
+    [1003] String -> CLASS String
+    [1013] items -> FIELD items
+    [1019] map -> METHOD map
+    [1025] it -> PARAMETER it
+    [1028] name -> FIELD name
+    [1035] sorted -> METHOD sorted
+    [1051] Shape -> CLASS Shape
+    [1066] Boolean -> CLASS Boolean
+    [1076] area -> METHOD area
+    [1100] Iterable -> CLASS Iterable
+    [1109] T -> TYPE_PARAMETER T
+    [1128] T -> TYPE_PARAMETER T
+    [1152] iterator -> METHOD iterator
+    [1172] iterator -> LOCAL_VARIABLE iterator
+    [1181] hasNext -> METHOD hasNext
+    [1208] iterator -> LOCAL_VARIABLE iterator
+    [1217] next -> METHOD next
+    [1239] iterator -> LOCAL_VARIABLE iterator
+    [1248] hasNext -> METHOD hasNext
+    [1259] iterator -> LOCAL_VARIABLE iterator
+    [1268] next -> METHOD next
+  completion
+    [35] 0 items: 
+    [30] 0 items: 
+    [435] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [859] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [897] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [914] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [960] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [971] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [1035] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [1019] 180 items: size, get(index: Int), isEmpty(), isNotEmpty(), forEach(action: (T) -> Unit), map(transform: (T) -> R), filter(predicate: (T) -> Boolean), first(), first(predicate: (T) -> Boolean), firstOrNull(), firstOrNull(predicate: (T) -> Boolean), last()
+    [1028] 16 items: area(), describe(), name, isBig(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R), takeIf(predicate: (T) -> Boolean), takeUnless(predicate: (T) -> Boolean)
+    [1181] 18 items: hasNext(), next(), asSequence(), forEach(operation: (T) -> Unit), iterator(), withIndex(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R)
+    [1217] 18 items: hasNext(), next(), asSequence(), forEach(operation: (T) -> Unit), iterator(), withIndex(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R)
+    [1248] 18 items: hasNext(), next(), asSequence(), forEach(operation: (T) -> Unit), iterator(), withIndex(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R)
+    [1268] 18 items: hasNext(), next(), asSequence(), forEach(operation: (T) -> Unit), iterator(), withIndex(), also(block: (T) -> Unit), apply(block: (T) -> Unit), javaClass, let(block: (T) -> R), run(block: (T) -> R), runCatching(block: (T) -> R)

@@ -1,0 +1,125 @@
+// Copyright (C) 2026 tyron12233
+// SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+// See LICENSE-EXCEPTION: a plugin linking against this file may use any license.
+package dev.ide.plugin.ui
+
+/**
+ * The UI facet of a plugin: what it implements to contribute Compose-bearing UI.
+ *
+ * A plugin has up to two facets, and they are separate *types* only because a `@Composable` body cannot live
+ * in the engine module. The **engine facet** (`dev.ide.plugin.Plugin`) contributes data: services, analyzers,
+ * actions, settings pages. This one contributes UI that renders itself: a tool window, a screen, an overlay.
+ *
+ * ```toml
+ * # res/raw/codeassist_plugin.toml
+ * entryPoints = ["com.example.hello.HelloPlugin"]      # the engine facet
+ * uiEntryPoints = ["com.example.hello.HelloUiPlugin"]  # this one
+ * ```
+ *
+ * Nothing says they have to be two classes. One class may implement both and be named in both lists, and the
+ * IDE instantiates it once: the halves then share ordinary fields, and a panel reads what `register` set up
+ * with no ceremony at all. Two classes are worth keeping when the halves are genuinely separate, since they
+ * then fail independently: a UI facet that throws is reported against the plugin while its engine facet
+ * loads, where one class means one failure takes both.
+ *
+ * Either way both are loaded off the same APK, so **they share a classloader**: two classes can hold a common
+ * `object`, read each other's state and call each other directly, with no bridge and nothing crossing a
+ * boundary as data. (Two *different* plugins cannot: each gets its own classloader over its own APK.)
+ *
+ * A facet with no state of its own can be written as an `object`; the IDE takes the singleton rather than
+ * constructing a second one.
+ *
+ * Either list may be empty, so a plugin can be engine-only, UI-only, or both. The engine facet's
+ * enable/disable and consent decision gates both: a plugin the user has not allowed contributes no UI, and a
+ * plugin whose engine facet failed to load contributes none either (its UI would be talking to services that
+ * never registered).
+ *
+ * [contribute] runs once, at IDE startup, on the main thread, before the first frame. It should only
+ * register; the work belongs in the bodies, which run when something is actually shown.
+ */
+interface UiPlugin {
+
+    /**
+     * This plugin's id. It must equal the `id` in the packaged manifest, which is what the IDE attributes
+     * every contribution to.
+     */
+    val id: String
+
+    /** Register this plugin's UI. Called once; see the note on [UiPlugin]. */
+    fun contribute(ui: UiRegistration)
+}
+
+/**
+ * What a [UiPlugin] registers through. Each call returns a [UiHandle] that removes the contribution again;
+ * holding on to one is optional, since unloading the plugin disposes them all.
+ */
+interface UiRegistration {
+
+    /** The contributing plugin's id, as the IDE knows it (the packaged manifest's `id`). */
+    val pluginId: String
+
+    /** Add a dockable panel. See [ToolWindow]. */
+    fun toolWindow(toolWindow: ToolWindow): UiHandle
+
+    /** Add a full screen, reachable by its id. See [Screen]. */
+    fun screen(screen: Screen): UiHandle
+
+    /** Add a floating layer drawn above every screen. See [Overlay]. */
+    fun overlay(overlay: Overlay): UiHandle
+
+    /** Add a preview pane for the files this plugin can render. See [EditorPreview]. */
+    fun editorPreview(preview: EditorPreview): UiHandle
+
+    /** Place composables at document positions in the code editor. See [EditorLayer]. Prefer an engine-tier
+     *  `platform.editorDecoration` provider for anything expressible as data. */
+    fun editorLayer(layer: EditorLayer): UiHandle
+
+    /** Draw into the code editor's canvas. See [EditorPainter]. Runs per frame, and a painter that throws is
+     *  retired for the session. */
+    fun editorPainter(painter: EditorPainter): UiHandle
+
+    /** Add a surface for a tab beside Code / Blocks / Preview / Split. See [EditorViewMode]. */
+    fun viewMode(mode: EditorViewMode): UiHandle
+
+    /**
+     * Teach the editor how to color, comment and indent a language. See [EditorLanguage].
+     *
+     * This is the text-level layer, and it is the one contribution a new language cannot do without: a
+     * `LanguageBackend` alone leaves files grey while the user types, because semantic highlighting is
+     * asynchronous. Registering a profile for a suffix a built-in already claims overrides it, if the
+     * profile's `order` is lower.
+     */
+    fun editorLanguage(language: EditorLanguage): UiHandle
+
+    /**
+     * Add a colorable thing to the editor's color model. See [ColorAttribute].
+     *
+     * The editor's colors are a user-editable scheme, and the set of entries in one is open. Register the
+     * constructs this plugin's language has that the shared scanners have no name for, and point the
+     * language's token types at them through [EditorLanguage.tokenColorKeys]; they then appear in
+     * Settings → Editor Colors under a group of this plugin's choosing.
+     */
+    fun colorAttribute(attribute: ColorAttribute): UiHandle
+
+    /**
+     * Give a file type an icon, in the tree, on tabs and in breadcrumbs. See [FileIcon].
+     *
+     * A file type with no icon is not a neutral default: it is the generic grey document, the same one an
+     * unrecognised binary gets, which reads as "the IDE does not know what this is".
+     */
+    fun fileIcon(icon: FileIcon): UiHandle
+
+    /**
+     * Add a kind of file to the file tree's **New ▸** menu. See [NewFileTemplate].
+     *
+     * Since SPI 3.1.0. On an older host this throws `AbstractMethodError` or `NoSuchMethodError`; a plugin
+     * that supports one calls it inside `catch (LinkageError)`. The default here, a no-op, is what a host that
+     * has no file tree answers.
+     */
+    fun newFileTemplate(template: NewFileTemplate): UiHandle = UiHandle { }
+}
+
+/** Removes one contribution. */
+fun interface UiHandle {
+    fun dispose()
+}

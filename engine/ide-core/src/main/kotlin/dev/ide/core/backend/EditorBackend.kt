@@ -1,0 +1,867 @@
+package dev.ide.core.backend
+
+import dev.ide.analysis.CaretSnapshot
+import dev.ide.analysis.CodeActionKind
+import dev.ide.analysis.DiagnosticTag
+import dev.ide.analytics.Events
+import dev.ide.core.BackendContext
+import dev.ide.core.settings.CodeStyleSettings
+import dev.ide.core.settings.SettingsStore
+import dev.ide.lang.completion.CaretAction
+import dev.ide.lang.formatting.FormatStyle
+import dev.ide.lang.completion.CompletionItemKind
+import dev.ide.lang.dom.Severity
+import dev.ide.lang.highlight.HighlightModifier
+import dev.ide.lang.hints.InlayHintKind
+import dev.ide.platform.EngineCanceledException
+import dev.ide.plugin.editor.DecorationStyle
+import dev.ide.plugin.editor.DecorationTint
+import dev.ide.plugin.editor.EditorEvent
+import dev.ide.plugin.editor.EditorTopics
+import dev.ide.plugin.editor.InlayKind as PluginInlayKind
+import dev.ide.ui.backend.AnalysisPreempted
+import dev.ide.ui.backend.EditorService
+import dev.ide.ui.backend.UiProjectIcon
+import dev.ide.ui.backend.UiResourceSwatch
+import dev.ide.ui.backend.UiAction
+import dev.ide.ui.backend.UiActionContext
+import dev.ide.ui.backend.UiActionPlaces
+import dev.ide.ui.backend.UiCaretAncestor
+import dev.ide.ui.backend.UiCaretContext
+import dev.ide.ui.backend.UiActionKind
+import dev.ide.ui.backend.UiCaret
+import dev.ide.ui.backend.UiCompletionItem
+import dev.ide.ui.backend.UiCompletionKind
+import dev.ide.ui.backend.UiCompletionResult
+import dev.ide.ui.backend.UiDecorationStyle
+import dev.ide.ui.backend.UiDecorationTint
+import dev.ide.ui.backend.UiDefinition
+import dev.ide.ui.backend.UiEditorDecorations
+import dev.ide.ui.backend.UiGutterMark
+import dev.ide.ui.backend.UiTextDecoration
+import dev.ide.ui.backend.UiLibraryContent
+import dev.ide.ui.backend.UiNavKind
+import dev.ide.ui.backend.UiNavOption
+import dev.ide.ui.backend.UiNavTarget
+import dev.ide.ui.backend.UiFileSymbol
+import dev.ide.ui.backend.UiInheritorMarker
+import dev.ide.ui.backend.UiInheritorTarget
+import dev.ide.ui.backend.UiQuickDoc
+import dev.ide.ui.backend.UiDiagnostic
+import dev.ide.ui.backend.UiFoldRegion
+import dev.ide.ui.backend.UiHighlightModifier
+import dev.ide.ui.backend.UiInlayHint
+import dev.ide.ui.backend.UiInlayKind
+import dev.ide.ui.backend.UiInlayPart
+import dev.ide.ui.backend.UiRenameResult
+import dev.ide.ui.backend.UiRenameTarget
+import dev.ide.ui.backend.UiSemanticToken
+import dev.ide.ui.backend.UiSeverity
+import dev.ide.ui.backend.UiSignature
+import dev.ide.ui.backend.UiSignatureHelp
+import dev.ide.ui.backend.UiSignatureParam
+import dev.ide.ui.backend.UiSnippet
+import dev.ide.ui.backend.UiSnippetStop
+import dev.ide.ui.backend.UiTextEdit
+import dev.ide.ui.backend.UiTextRange
+import java.io.IOException
+import java.nio.file.Paths
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
+import dev.ide.lang.incremental.DocumentEdit
+import dev.ide.ui.backend.UiActionEdits
+
+/**
+ * [EditorService]: the editor-time language features for the active buffer. Runs on the shared serialized
+ * engine dispatcher via the priority lanes ([BackendContext.interactive] for completion,
+ * [BackendContext.background] for analysis/hints/etc.); a preemption surfaces as [AnalysisPreempted] for the
+ * host to retry. Maps the framework results onto the neutral UI DTOs.
+ */
+/** Quiet period after a per-file pass before the project-wide sweep runs, and its preemption retry policy. */
+private const val PROJECT_ANALYSIS_DELAY_MS = 800L
+private const val PROJECT_ANALYSIS_RETRY_MS = 150L
+private const val PROJECT_ANALYSIS_MAX_RETRIES = 8
+
+/** File extensions an engine-op label may carry. A closed set, so the label can never leak a file name. */
+private val REPORTABLE_EXTENSIONS = setOf(
+    "kt", "kts", "java", "xml", "gradle", "toml", "json", "properties", "txt", "md", "pro", "cfg",
+    "c", "cc", "cpp", "h", "hpp", "aidl", "proto", "yaml", "yml", "html", "css", "js", "ts", "sh",
+)
+
+internal class EditorBackend(private val ctx: BackendContext) : EditorService {
+
+    private val log = dev.ide.platform.log.Log.logger("ide.editor")
+
+    /**
+     * The engine-op label for a pass over [path]: the pass name with the file's extension appended
+     * (`folding:kt`, `analysis:xml`).
+     *
+     * The label is what [dev.ide.platform.EngineBreadcrumb] persists, and it is the only thing a native crash
+     * leaves behind about what the engine was doing. Without the extension every reading of the top native
+     * cluster -- a SIGSEGV inside IntelliJ's `PsiBuilderImpl.buildTree`, 544 rows in the Aug/Sep window and
+     * confined to Android 12 -- could say the pass but not the language, and the three backends that build a
+     * tree (Java and XML through the shared IntelliJ PSI host, Kotlin through its own parser) are the first
+     * thing that has to be told apart to localise it.
+     *
+     * An extension is not user content: it comes from a closed set of file types, never a name or a path. An
+     * unusual one is dropped rather than reported, so a file called `Secret.myprivatething` contributes
+     * nothing.
+     */
+    private fun op(pass: String, path: String): String {
+        val ext = path.substringAfterLast('.', "").lowercase()
+        return if (ext in REPORTABLE_EXTENSIONS) "$pass:$ext" else pass
+    }
+
+    /**
+     * A read-only request the user is waiting on (go to, expand selection, format). It runs on the interactive
+     * lane so it preempts a background pass already holding the worker, instead of queuing behind it; the
+     * preempted pass runs again afterwards. Calls that write files (rename, actions) and per-caret-move calls
+     * stay off this lane: the first must not be cut short, and the second would keep preempting analysis.
+     */
+    private suspend fun <T> userRequest(pass: String, path: String, block: suspend () -> T): T =
+        ctx.interactive(op = op(pass, path), block = block)
+
+    /** The file-type dimension of a perf sample: the extension when it is a reportable one, else `other`. */
+    private fun langOf(path: String): String {
+        val ext = path.substringAfterLast('.', "").lowercase()
+        return if (ext in REPORTABLE_EXTENSIONS) ext else "other"
+    }
+
+    /**
+     * Run [block] on the background lane and record how long it took as [event], split into the time spent
+     * waiting for the engine and the total, keyed by [pass] (when given) and the file's language. A preempted
+     * run throws before recording, so a cut-short pass never reads as a fast one.
+     */
+    private suspend fun <T> measuredBackground(
+        event: String, pass: String?, path: String, opName: String, block: suspend () -> T,
+    ): T {
+        val t0 = System.nanoTime()
+        var started = 0L
+        val r = ctx.background(op = op(opName, path)) {
+            started = System.nanoTime()
+            block()
+        }
+        recordLatency(event, pass, path, t0, started)
+        return r
+    }
+
+    private fun recordLatency(event: String, pass: String?, path: String, t0: Long, started: Long) {
+        val end = System.nanoTime()
+        val dims = if (pass == null) mapOf("lang" to langOf(path)) else mapOf("pass" to pass, "lang" to langOf(path))
+        ctx.recordPerf(event, (end - t0) / 1_000_000, dims, queuedMs = ((started - t0) / 1_000_000).coerceAtLeast(0))
+    }
+
+    override suspend fun breadcrumbAt(path: String, text: String, offset: Int): List<String> = try {
+        ctx.background(op = op("docBreadcrumb", path)) { ctx.services.breadcrumbAt(Paths.get(path), text, offset) }
+    } catch (_: EngineCanceledException) {
+        emptyList()
+    } // re-runs on the next caret move
+
+    override suspend fun fileStructure(path: String, text: String): List<UiFileSymbol> = try {
+        // XML elements reuse the class/field kinds for container/leaf; the outline badges them as elements.
+        val isXml = path.endsWith(".xml")
+        ctx.background(op = op("fileStructure", path)) {
+            ctx.services.fileStructure(Paths.get(path), text).map {
+                UiFileSymbol(
+                    it.name,
+                    it.detail,
+                    if (isXml) "element" else it.kind.name.lowercase(),
+                    it.nameOffset,
+                    it.endOffset,
+                    it.depth
+                )
+            }
+        }
+    } catch (_: EngineCanceledException) {
+        emptyList()
+    }
+
+    override suspend fun definitionAt(path: String, text: String, offset: Int): UiDefinition? =
+        userRequest("definition", path) {
+            ctx.services.definitionAt(
+                Paths.get(path), text, offset
+            )
+        }?.let { (p, o) -> UiDefinition(p.toString(), o) }
+
+    override suspend fun navigationTargets(path: String, text: String, offset: Int, kind: UiNavKind): List<UiNavTarget> =
+        userRequest("navigation", path) {
+            ctx.services.navigationTargets(Paths.get(path), text, offset, toNavKind(kind))
+        }.map { UiNavTarget(it.file.path, it.offset, it.label, it.kind) }
+
+    override suspend fun navigationOptions(path: String, text: String, offset: Int): List<UiNavOption> =
+        userRequest("navigation", path) { ctx.services.navigationOptions(Paths.get(path), text, offset) }
+            .map { (kind, targets) ->
+                UiNavOption(fromNavKind(kind), targets.map { UiNavTarget(it.file.path, it.offset, it.label, it.kind) })
+            }
+
+    override suspend fun libraryContent(contextPath: String, fqn: String, forceJava: Boolean): UiLibraryContent? =
+        // Decompilation reads jars + runs Vineflower — keep it off the engine's serialized dispatcher (IO).
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            ctx.services.libraryContent(Paths.get(contextPath), fqn, forceJava)
+        }?.let {
+            UiLibraryContent(
+                path = "library://$fqn" + if (forceJava) "?java" else "",
+                name = it.name,
+                text = it.text,
+                kind = it.kind.name.lowercase(),
+            )
+        }
+
+    private fun toNavKind(kind: UiNavKind): dev.ide.lang.kotlin.NavKind = when (kind) {
+        UiNavKind.DECLARATION -> dev.ide.lang.kotlin.NavKind.DECLARATION
+        UiNavKind.IMPLEMENTATION -> dev.ide.lang.kotlin.NavKind.IMPLEMENTATION
+        UiNavKind.TYPE_DECLARATION -> dev.ide.lang.kotlin.NavKind.TYPE_DECLARATION
+        UiNavKind.SUPER -> dev.ide.lang.kotlin.NavKind.SUPER
+        UiNavKind.USAGES -> dev.ide.lang.kotlin.NavKind.USAGES
+        UiNavKind.RELATED -> dev.ide.lang.kotlin.NavKind.RELATED
+    }
+
+    private fun fromNavKind(kind: dev.ide.lang.kotlin.NavKind): UiNavKind = when (kind) {
+        dev.ide.lang.kotlin.NavKind.DECLARATION -> UiNavKind.DECLARATION
+        dev.ide.lang.kotlin.NavKind.IMPLEMENTATION -> UiNavKind.IMPLEMENTATION
+        dev.ide.lang.kotlin.NavKind.TYPE_DECLARATION -> UiNavKind.TYPE_DECLARATION
+        dev.ide.lang.kotlin.NavKind.SUPER -> UiNavKind.SUPER
+        dev.ide.lang.kotlin.NavKind.USAGES -> UiNavKind.USAGES
+        dev.ide.lang.kotlin.NavKind.RELATED -> UiNavKind.RELATED
+    }
+
+    override suspend fun inheritorMarkers(path: String, text: String): List<UiInheritorMarker> =
+        withContext(ctx.engineDispatcher) { ctx.services.inheritorMarkers(Paths.get(path), text) }
+            .map { m -> UiInheritorMarker(m.offset, m.isInterface, m.targets.map { UiInheritorTarget(it.fqn, it.kind) }) }
+
+    override suspend fun implementationLocationOf(contextPath: String, fqn: String): UiDefinition? =
+        userRequest("implementation", contextPath) { ctx.services.implementationLocation(Paths.get(contextPath), fqn) }
+            ?.let { (p, o) -> UiDefinition(p.toString(), o) }
+
+    override suspend fun quickDocAt(path: String, text: String, offset: Int): UiQuickDoc? = try {
+        ctx.background {
+            ctx.services.quickDocAt(Paths.get(path), text, offset)?.let {
+                UiQuickDoc(
+                    it.signature,
+                    it.name,
+                    it.kind.name.lowercase(),
+                    it.container,
+                    it.doc,
+                    it.docFormat.name.lowercase()
+                )
+            }
+        }
+    } catch (_: EngineCanceledException) {
+        null
+    }
+
+    override suspend fun resourceSwatches(path: String, text: String): List<UiResourceSwatch> = try {
+        ctx.background(op = op("resourceSwatches", path)) {
+            ctx.services.resourceSwatches(Paths.get(path), text).map { s ->
+                UiResourceSwatch(
+                    offset = s.offset,
+                    color = s.argb,
+                    image = s.drawable?.let { UiProjectIcon.Drawable(DrawableMapping.toUi(it)) }
+                        ?: s.bitmap?.let { UiProjectIcon.Raster(it) },
+                    targetPath = s.target?.first?.toString(),
+                    targetOffset = s.target?.second ?: 0,
+                )
+            }
+        }
+    } catch (_: EngineCanceledException) {
+        emptyList()
+    }
+
+    override suspend fun expandSelection(path: String, text: String, selStart: Int, selEnd: Int): UiTextRange? =
+        userRequest("expandSelection", path) {
+            ctx.services.expandSelection(Paths.get(path), text, selStart, selEnd)
+        }?.let { UiTextRange(it.start, it.end) }
+
+    override suspend fun prepareRename(path: String, text: String, offset: Int): UiRenameTarget? =
+        userRequest("prepareRename", path) {
+            ctx.services.prepareRename(
+                Paths.get(path), text, offset
+            )?.let { UiRenameTarget(it.oldName, it.kind) }
+        }
+
+    override suspend fun rename(
+        path: String, text: String, offset: Int, newName: String
+    ): UiRenameResult = withContext(ctx.engineDispatcher) {
+        val r = ctx.services.rename(Paths.get(path), text, offset, newName)
+        if (r.success) {
+            ctx.bumpFileSystemEpoch() // the multi-file edit / file rename changed the tree + other buffers
+        }
+        UiRenameResult(r.success, r.message, r.occurrences, r.filesChanged, r.newPath)
+    }
+
+    override fun retainDocument(path: String): () -> Unit = ctx.services.retainEditorDocument()
+
+    override fun updateDocument(path: String, text: String) =
+        ctx.services.updateDocument(Paths.get(path), text)
+
+    override fun documentLoaded(path: String, text: String) =
+        ctx.services.documentLoaded(Paths.get(path), text)
+
+    /**
+     * Persist a buffer. A write can fail for reasons the app does not control — the project sits on a tree
+     * this process may not write (an SD card, another app's directory, a path the user granted and revoked),
+     * or the volume filled up — and that arrives here as an [java.io.IOException].
+     *
+     * It is logged at ERROR with the throwable, which is what puts the reason in front of the user (the
+     * backend turns such a record into the non-fatal error dialog), and then rethrown: the caller has to know
+     * the buffer is still unsaved, so the tab stays dirty rather than pretending the file reached disk. What
+     * must NOT happen is the throw escaping a UI coroutine and taking the process down, which is how this
+     * surfaced in the field — one install, an unwritable project, and a crash on every save attempt.
+     */
+    override fun saveFile(path: String, text: String) {
+        try {
+            ctx.services.save(Paths.get(path), text)
+        } catch (e: IOException) {
+            log.error("Couldn't save ${path.substringAfterLast('/')}: ${e.javaClass.simpleName}", e)
+            throw e
+        }
+    }
+
+    // --- Editor-session lifecycle notifications (fire-and-forget from the UI) --------------------------------
+    // The UI reports these; we republish them on the app bus for plugin subscribers (see EditorTopics.EDITOR).
+    // Guarded so a throwing subscriber can never disturb the editor; a null bus (no project/manager) is a no-op.
+
+    private fun publishEditor(event: EditorEvent) =
+        runCatching { ctx.messageBus?.syncPublisher(EditorTopics.EDITOR)?.onEditorEvent(event) }
+
+    override fun onFileOpened(path: String) { publishEditor(EditorEvent.FileOpened(path)) }
+
+    /** Dropping the overlay is the point, not a side effect: an overlay that outlives its tab keeps winning
+     *  over disk for the rest of the session, hiding every later write to that file (see
+     *  [dev.ide.core.IdeServices.documentClosed]). */
+    override fun onFileClosed(path: String) {
+        runCatching { ctx.services.documentClosed(Paths.get(path)) }
+        publishEditor(EditorEvent.FileClosed(path))
+    }
+
+    override fun onActiveEditorChanged(path: String?) { publishEditor(EditorEvent.ActiveEditorChanged(path)) }
+    override fun onSelectionChanged(path: String, start: Int, end: Int) {
+        publishEditor(EditorEvent.SelectionChanged(path, start, end))
+    }
+
+    override suspend fun complete(path: String, text: String, offset: Int): UiCompletionResult {
+        val t0 = System.nanoTime()
+        var started = 0L
+        val result = try {
+            ctx.interactive(op = op("completion", path)) {
+                started = System.nanoTime()
+                ctx.services.complete(Paths.get(path), text, offset)
+            }
+        } catch (_: EngineCanceledException) {
+            throw AnalysisPreempted()
+        }
+        recordLatency(Events.COMPLETION_PERF, null, path, t0, started)
+        return UiCompletionResult(
+            items = result.items.map { item ->
+                UiCompletionItem(
+                    label = item.label,
+                    insertText = item.insertText,
+                    detail = item.detail,
+                    container = item.container,
+                    documentation = item.documentation,
+                    kind = mapKind(item.kind),
+                    sortPriority = item.sortPriority,
+                    additionalEdits = item.additionalEdits.map {
+                        UiTextEdit(
+                            it.range.start, it.range.end, it.newText
+                        )
+                    },
+                    caret = mapCaret(item.caret),
+                    snippet = mapSnippet(item.caret),
+                )
+            },
+            replaceStart = result.replacementRange.start,
+            replaceEnd = result.replacementRange.end,
+            isIncomplete = result.isIncomplete,
+        )
+    }
+
+    override suspend fun completionAccepted(path: String, label: String) {
+        // A tiny per-project properties write; off the UI dispatcher, never surfaced as an error.
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { ctx.services.noteCompletionAccepted(label) }
+        }
+    }
+
+    override suspend fun analyze(path: String, text: String): List<UiDiagnostic> {
+        // Routes through the full analysis engine for EVERY language: per-language diagnostic providers
+        // (the JDT compiler, the hand-rolled Kotlin checks, the XML lint) plus the analyzers, merged,
+        // suppression-filtered, and profile-adjusted into one set. Runs in the preemptible lane so a
+        // completion request can cut ahead; a preempted pass surfaces as AnalysisPreempted for the host to retry.
+        val diagnostics = try {
+            timedPass("diagnostics", path, { it.size }) {
+                measuredBackground(Events.ANALYSIS_PERF, null, path, "analysis") {
+                    ctx.services.analyzeDiagnostics(Paths.get(path), text)
+                }
+            }
+        } catch (_: EngineCanceledException) {
+            throw AnalysisPreempted() // preempted: don't record a (misleadingly short) latency sample
+        }
+        scheduleProjectAnalysis(path)
+        return diagnostics.map { d ->
+            val (line, col) = lineColOf(text, d.range.start)
+            UiDiagnostic(
+                severity = when (d.severity) {
+                    Severity.ERROR -> UiSeverity.Error
+                    Severity.WARNING -> UiSeverity.Warning
+                    Severity.INFO -> UiSeverity.Info
+                    Severity.HINT -> UiSeverity.Hint
+                },
+                line = line,
+                col = col,
+                message = d.message,
+                startOffset = d.range.start,
+                endOffset = d.range.end,
+                unused = DiagnosticTag.UNUSED in d.tags,
+            )
+        }
+    }
+
+    /** Coalesced project-wide sweeps: each settled [analyze] restarts the debounce, so only the last runs. */
+    private val projectAnalysisScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    @Volatile private var projectAnalysisJob: Job? = null
+
+    /** Engine path (normalized) to the path the editor analyzed it under, for [diagnosticsInvalidated]. */
+    private val analyzedPaths = ConcurrentHashMap<String, String>()
+
+    private val invalidated = MutableSharedFlow<Set<String>>(extraBufferCapacity = 8)
+    override val diagnosticsInvalidated: Flow<Set<String>> get() = invalidated
+
+    /**
+     * Queue the project-tier analyzers to run once the editor has been quiet for [PROJECT_ANALYSIS_DELAY_MS].
+     * The sweep runs in the background lane, on the engine thread, since it reaches the same per-module
+     * analyzers as the per-file pass; completion preempts it like any other background pass. Files whose
+     * findings changed are announced on [diagnosticsInvalidated] so the editor re-pulls them.
+     */
+    private fun scheduleProjectAnalysis(path: String) {
+        val services = ctx.servicesOrNull ?: return
+        analyzedPaths[engineKey(path)] = path
+        if (!services.hasProjectAnalysis) return
+        projectAnalysisJob?.cancel()
+        projectAnalysisJob = projectAnalysisScope.launch {
+            delay(PROJECT_ANALYSIS_DELAY_MS)
+            var attempt = 0
+            while (ctx.servicesOrNull === services) {
+                try {
+                    val changed = ctx.background(op = "analysis:project") { services.analyzeProject() }
+                    val open = changed.mapNotNullTo(HashSet()) { analyzedPaths[engineKey(it)] }
+                    if (open.isNotEmpty()) invalidated.emit(open)
+                    return@launch
+                } catch (_: EngineCanceledException) {
+                    // A completion took the engine; retry a few times, then leave it to the next settled edit.
+                    if (++attempt >= PROJECT_ANALYSIS_MAX_RETRIES) return@launch
+                    delay(PROJECT_ANALYSIS_RETRY_MS)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: VirtualMachineError) {
+                    throw e
+                } catch (_: Throwable) {
+                    return@launch // already logged by the background lane; the next settled edit retries
+                }
+            }
+        }
+    }
+
+    private fun engineKey(path: String): String =
+        dev.ide.platform.normalizePath(Paths.get(path).toAbsolutePath().toString())
+
+    override suspend fun hintsAt(
+        path: String, text: String, startOffset: Int, endOffset: Int
+    ): List<UiInlayHint> {
+        val hints = try {
+            timedPass("inlay", path, { it.size }) {
+                measuredBackground(Events.PASS_PERF, "inlay", path, "inlay") {
+                    ctx.services.inlayHints(
+                        Paths.get(path), text, startOffset, endOffset
+                    )
+                }
+            }
+        } catch (_: EngineCanceledException) {
+            // Preempted by a higher-priority call (e.g. completion) on the shared engine thread. Surface it so
+            // the host retries once the buffer settles — returning empty here would CLEAR the hints, and they'd
+            // only reappear on the next edit (the "type a space to get them back" bug).
+            throw AnalysisPreempted()
+        }
+        return hints.map { h ->
+            UiInlayHint(
+                offset = h.offset,
+                parts = h.parts.map { UiInlayPart(it.text) },
+                kind = when (h.kind) {
+                    InlayHintKind.TYPE -> UiInlayKind.Type
+                    InlayHintKind.PARAMETER -> UiInlayKind.Parameter
+                    InlayHintKind.CHAINING -> UiInlayKind.Chaining
+                    InlayHintKind.OTHER -> UiInlayKind.Other
+                },
+                tooltip = h.tooltip,
+                paddingLeft = h.paddingLeft,
+                paddingRight = h.paddingRight,
+            )
+        }
+    }
+
+    override suspend fun signatureHelp(path: String, text: String, offset: Int): UiSignatureHelp? {
+        // Background lane: completion (interactive) preempts it. A preemption just means "no panel this round";
+        // the editor re-queries on the next caret move / edit, so swallowing it to null is correct (no retry needed).
+        val help = try {
+            measuredBackground(Events.PASS_PERF, "signature", path, "signature") {
+                ctx.services.signatureHelp(Paths.get(path), text, offset)
+            }
+        } catch (_: EngineCanceledException) {
+            return null
+        } ?: return null
+        return UiSignatureHelp(
+            signatures = help.signatures.map { s ->
+                UiSignature(
+                    label = s.label,
+                    parameters = s.parameters.map { p ->
+                        UiSignatureParam(
+                            p.label, p.labelStart, p.labelEnd, alreadyNamed = p.alreadyNamed
+                        )
+                    },
+                    documentation = s.documentation,
+                    activeParameter = s.activeParameter,
+                )
+            },
+            activeSignature = help.activeSignature,
+            activeParameter = help.activeParameter,
+        )
+    }
+
+    override suspend fun semanticTokens(path: String, text: String): List<UiSemanticToken> {
+        val tokens = try {
+            timedPass("semantic", path, { it.size }) {
+                measuredBackground(Events.PASS_PERF, "semantic", path, "semantic") {
+                    ctx.services.semanticTokens(Paths.get(path), text)
+                }
+            }
+        } catch (_: EngineCanceledException) {
+            // Preempted by completion on the shared engine thread — surface it so the host retries and keeps
+            // the current coloring meanwhile (returning empty would clear it until the next edit).
+            throw AnalysisPreempted()
+        }
+        return tokens.map { t ->
+            UiSemanticToken(
+                startOffset = t.range.start,
+                endOffset = t.range.end,
+                kind = t.kind.id,
+                modifiers = uiModifiers(t.modifiers),
+            )
+        }
+    }
+
+    // One shared set per single modifier: most tokens carry none or one, and a large file has tens of
+    // thousands of tokens per pass.
+    private val singleModifiers = HighlightModifier.entries.map { setOf(mapHighlightModifier(it)) }
+
+    private fun uiModifiers(m: Set<HighlightModifier>): Set<UiHighlightModifier> = when (m.size) {
+        0 -> emptySet()
+        1 -> singleModifiers[m.first().ordinal]
+        else -> m.mapTo(LinkedHashSet()) { mapHighlightModifier(it) }
+    }
+
+    override suspend fun codeFolds(path: String, text: String): List<UiFoldRegion> {
+        val folds = try {
+            timedPass("folds", path, { it.size }) {
+                measuredBackground(Events.PASS_PERF, "folds", path, "folding") {
+                    ctx.services.codeFolds(Paths.get(path), text)
+                }
+            }
+        } catch (_: EngineCanceledException) {
+            throw AnalysisPreempted() // preempted by completion — host retries, keeps current folds meanwhile
+        }
+        return folds.map { f ->
+            UiFoldRegion(
+                startOffset = f.range.start,
+                endOffset = f.range.end,
+                placeholder = f.placeholder,
+                kind = f.kind.id,
+                collapsedByDefault = f.collapsedByDefault,
+            )
+        }
+    }
+
+    // ---- code actions (quick-fixes + intentions) ----
+
+    override suspend fun decorations(path: String, text: String): UiEditorDecorations {
+        // Not wrapped in `ctx.background`, unlike the analyzer-backed passes: a provider is plugin code that
+        // suspends on its own terms, so pinning it to the serialized engine worker would let one slow plugin
+        // block analysis for every open file. It is timed like a pass so it shows up in the perf timeline.
+        val collected = try {
+            timedPass("decorations", path, { it.ranges.size + it.gutter.size + it.inlays.size }) {
+                ctx.services.editorDecorations(Paths.get(path), text)
+            }
+        } catch (_: EngineCanceledException) {
+            // A provider reached the engine and was preempted. Contribute nothing rather than asking the
+            // daemon to retry: the marks reappear on the next pass run, and a plugin's decoration is not
+            // worth a second trip through the worker while the user is typing.
+            return UiEditorDecorations.EMPTY
+        }
+        if (collected.isEmpty) return UiEditorDecorations.EMPTY
+        return UiEditorDecorations(
+            ranges = collected.ranges.map { d ->
+                UiTextDecoration(
+                    startOffset = d.startOffset,
+                    endOffset = d.endOffset,
+                    style = mapDecorationStyle(d.style),
+                    tint = mapDecorationTint(d.tint),
+                    tooltip = d.tooltip,
+                    order = d.order,
+                )
+            },
+            gutter = collected.gutter.map { m ->
+                UiGutterMark(
+                    line = m.line,
+                    iconId = m.iconId,
+                    tint = mapDecorationTint(m.tint),
+                    tooltip = m.tooltip,
+                    actionId = m.actionId,
+                    order = m.order,
+                )
+            },
+            // A plugin inlay renders through the same path as a language backend's, so it becomes the same
+            // DTO. Plugin hints are single-run and never navigable-by-parts, so one part carries it.
+            inlays = collected.inlays.map { i ->
+                UiInlayHint(
+                    offset = i.offset,
+                    parts = listOf(UiInlayPart(i.text, i.navOffset)),
+                    kind = mapPluginInlayKind(i.kind),
+                    paddingLeft = true,
+                    paddingRight = true,
+                )
+            },
+        )
+    }
+
+    override suspend fun actionsAt(
+        path: String, text: String, selStart: Int, selEnd: Int
+    ): List<UiAction> {
+        // Background lane, not the raw engine dispatcher: resolving the fixes runs full-file diagnostics, and a
+        // completion must be able to cut in rather than wait for it. A preempted resolution answers "none this
+        // round"; the lightbulb resolves again once the caret next rests.
+        val fixes = try {
+            timedPass("actions", path, { it.size }) {
+                // Timed like a daemon pass because a CPU trace showed THIS (lightbulb / import quick-fixes →
+                // full diagnostics → deep inference) as a heavy entry point, invisible in the perf timeline.
+                measuredBackground(Events.PASS_PERF, "actions", path, "actions") {
+                    ctx.services.editorActions(Paths.get(path), text, selStart, selEnd)
+                }
+            }
+        } catch (_: EngineCanceledException) {
+            return emptyList()
+        }.mapIndexed { i, fix -> UiAction(i, fix.title, mapActionKind(fix.kind)) }
+
+        // The plugin tier: actions placed on EDITOR, resolved against the same caret. Listed after the
+        // analysis fixes and intentions, so a popup opened on a squiggle leads with the fix for it.
+        // Their ids continue the same index space so a UI can key a row on `id` regardless of tier.
+        val plugin = runCatching { ctx.background(op = op("actions", path)) {
+            val caret = ctx.services.caretSnapshot(Paths.get(path), text, selStart)
+            val actionCtx = toPluginActionContext(
+                UiActionContext(
+                    place = UiActionPlaces.EDITOR,
+                    activeFilePath = path,
+                    selectionStart = selStart,
+                    selectionEnd = selEnd,
+                    caret = caret?.toUiCaretContext(),
+                    documentText = text,
+                ),
+                ctx.services.workspaceRoot.toString(),
+                ctx.services.store.workspaceContainer,
+            )
+            runCatching { ctx.services.actions.actionsFor(actionCtx) }.getOrDefault(emptyList())
+                .mapIndexed { i, action ->
+                    UiAction(
+                        id = fixes.size + i,
+                        title = action.text,
+                        kind = UiActionKind.INTENTION,
+                        actionId = action.id,
+                        iconId = action.iconId,
+                    )
+                }
+        } }.getOrElse { e -> if (e is EngineCanceledException) emptyList() else throw e }
+        return fixes + plugin
+    }
+
+    override suspend fun caretContext(path: String, text: String, offset: Int): UiCaretContext? =
+        withContext(ctx.engineDispatcher) {
+            ctx.services.caretSnapshot(Paths.get(path), text, offset)?.toUiCaretContext()
+        }
+
+    override suspend fun applyAction(
+        path: String, text: String, selStart: Int, selEnd: Int, actionId: Int
+    ): UiActionEdits {
+        val focalPath = Paths.get(path).toAbsolutePath().normalize()
+        val byFile = withContext(ctx.engineDispatcher) {
+            ctx.services.applyEditorAction(focalPath, text, selStart, selEnd, actionId)
+        }
+        return UiActionEdits(
+            focal = byFile[focalPath].orEmpty().map { it.toUiTextEdit() },
+            others = byFile.filterKeys { it != focalPath }
+                .map { (file, edits) -> file.toString() to edits.map { it.toUiTextEdit() } }
+                .toMap(),
+        )
+    }
+
+    private fun DocumentEdit.toUiTextEdit() =
+        UiTextEdit(offset, offset + oldLength, newText.toString())
+
+    override suspend fun formatDocument(path: String, text: String): List<UiTextEdit> {
+        val style = currentFormatStyle(path)
+        return userRequest("format", path) {
+            ctx.services.formatDocument(Paths.get(path), text, style)
+        }.map { UiTextEdit(it.offset, it.offset + it.oldLength, it.newText.toString()) }
+    }
+
+    override suspend fun formatRange(
+        path: String, text: String, selStart: Int, selEnd: Int
+    ): List<UiTextEdit> {
+        val style = currentFormatStyle(path)
+        return userRequest("format", path) {
+            ctx.services.formatRange(Paths.get(path), text, selStart, selEnd, style)
+        }.map { UiTextEdit(it.offset, it.offset + it.oldLength, it.newText.toString()) }
+    }
+
+    override suspend fun optimizeImports(path: String, text: String): List<UiTextEdit> =
+        userRequest("optimizeImports", path) {
+            ctx.services.organizeImports(Paths.get(path), text)
+        }.map { UiTextEdit(it.offset, it.offset + it.oldLength, it.newText.toString()) }
+
+    // The active code style, resolved fresh per reformat from the file's language profile (so a settings
+    // change applies without restart).
+    private val settingsStore =
+        SettingsStore(get = { ctx.manager?.preference(it) }, set = { _, _ -> })
+
+    private fun currentFormatStyle(path: String): FormatStyle =
+        settingsStore.loadCodeStyle(languageIdForPath(path)).toFormatStyle()
+
+    private fun languageIdForPath(path: String): String =
+        if (path.endsWith(".kt") || path.endsWith(".kts")) CodeStyleSettings.LANG_KOTLIN else CodeStyleSettings.LANG_JAVA
+
+    // ---- mappers (editor-local) ----
+
+    private fun mapDecorationStyle(s: DecorationStyle): UiDecorationStyle = when (s) {
+        DecorationStyle.Background -> UiDecorationStyle.Background
+        DecorationStyle.Underline -> UiDecorationStyle.Underline
+        DecorationStyle.WavyUnderline -> UiDecorationStyle.WavyUnderline
+        DecorationStyle.DottedUnderline -> UiDecorationStyle.DottedUnderline
+        DecorationStyle.Strikethrough -> UiDecorationStyle.Strikethrough
+        DecorationStyle.Foreground -> UiDecorationStyle.Foreground
+        DecorationStyle.Box -> UiDecorationStyle.Box
+    }
+
+    private fun mapDecorationTint(t: DecorationTint): UiDecorationTint = when (t) {
+        DecorationTint.Accent -> UiDecorationTint.Accent
+        DecorationTint.Info -> UiDecorationTint.Info
+        DecorationTint.Success -> UiDecorationTint.Success
+        DecorationTint.Warning -> UiDecorationTint.Warning
+        DecorationTint.Error -> UiDecorationTint.Error
+        DecorationTint.Muted -> UiDecorationTint.Muted
+        DecorationTint.Added -> UiDecorationTint.Added
+        DecorationTint.Removed -> UiDecorationTint.Removed
+        DecorationTint.Modified -> UiDecorationTint.Modified
+    }
+
+    private fun mapPluginInlayKind(k: PluginInlayKind): UiInlayKind = when (k) {
+        PluginInlayKind.Type -> UiInlayKind.Type
+        PluginInlayKind.Parameter -> UiInlayKind.Parameter
+        PluginInlayKind.Chaining -> UiInlayKind.Chaining
+        PluginInlayKind.Other -> UiInlayKind.Other
+    }
+
+    private fun mapHighlightModifier(m: HighlightModifier): UiHighlightModifier = when (m) {
+        HighlightModifier.DECLARATION -> UiHighlightModifier.Declaration
+        HighlightModifier.STATIC -> UiHighlightModifier.Static
+        HighlightModifier.ABSTRACT -> UiHighlightModifier.Abstract
+        HighlightModifier.DEPRECATED -> UiHighlightModifier.Deprecated
+        HighlightModifier.READONLY -> UiHighlightModifier.Readonly
+        HighlightModifier.MUTABLE -> UiHighlightModifier.Mutable
+        HighlightModifier.EXTENSION -> UiHighlightModifier.Extension
+        HighlightModifier.COMPOSABLE -> UiHighlightModifier.Composable
+        HighlightModifier.SUSPEND -> UiHighlightModifier.Suspend
+    }
+
+    private fun mapActionKind(k: CodeActionKind): UiActionKind = when (k) {
+        CodeActionKind.QUICK_FIX -> UiActionKind.QUICK_FIX
+        CodeActionKind.INTENTION -> UiActionKind.INTENTION
+        CodeActionKind.REFACTOR -> UiActionKind.REFACTOR
+    }
+
+    private fun lineColOf(text: String, offset: Int): Pair<Int, Int> {
+        var line = 1
+        var lineStart = 0
+        val end = offset.coerceIn(0, text.length)
+        for (i in 0 until end) {
+            if (text[i] == '\n') {
+                line++; lineStart = i + 1
+            }
+        }
+        return line to (end - lineStart + 1)
+    }
+
+    /** Flatten the framework's [CaretAction] to the UI's neutral [UiCaret] (null = caret at end of insert). */
+    private fun mapCaret(action: CaretAction): UiCaret? = when (action) {
+        CaretAction.AtEnd -> null
+        is CaretAction.At -> UiCaret(action.offset)
+        is CaretAction.Select -> UiCaret(action.offset, action.length)
+        // Full snippet stepping (linked cursors, choice popups) is a follow-up in the editor; until then
+        // degrade to selecting the first tab stop (or the final caret) so a snippet item is still usable.
+        is CaretAction.ExpandSnippet -> {
+            val first = action.expansion.stops.filter { it.index != 0 }
+                .minByOrNull { it.index }?.ranges?.firstOrNull()
+            if (first != null) UiCaret(first.start, first.end - first.start)
+            else UiCaret(action.expansion.finalCaretOffset)
+        }
+    }
+
+    /** The full snippet payload (tab stops) for an [CaretAction.ExpandSnippet] item; null otherwise. */
+    private fun mapSnippet(action: CaretAction): UiSnippet? {
+        val exp = (action as? CaretAction.ExpandSnippet)?.expansion ?: return null
+        return UiSnippet(
+            stops = exp.stops.map { s ->
+                UiSnippetStop(
+                    s.index, s.ranges.map { UiTextRange(it.start, it.end) }, s.choices
+                )
+            },
+            finalCaretOffset = exp.finalCaretOffset,
+        )
+    }
+
+    private fun mapKind(k: CompletionItemKind): UiCompletionKind = when (k) {
+        CompletionItemKind.CLASS -> UiCompletionKind.Class
+        CompletionItemKind.INTERFACE -> UiCompletionKind.Interface
+        CompletionItemKind.ENUM -> UiCompletionKind.Enum
+        CompletionItemKind.ANNOTATION_TYPE -> UiCompletionKind.AnnotationType
+        CompletionItemKind.RECORD -> UiCompletionKind.Record
+        CompletionItemKind.METHOD -> UiCompletionKind.Method
+        CompletionItemKind.CONSTRUCTOR -> UiCompletionKind.Constructor
+        CompletionItemKind.FIELD -> UiCompletionKind.Field
+        CompletionItemKind.ENUM_CONSTANT -> UiCompletionKind.EnumConstant
+        CompletionItemKind.VARIABLE -> UiCompletionKind.Variable
+        CompletionItemKind.PARAMETER -> UiCompletionKind.Parameter
+        CompletionItemKind.TYPE_PARAMETER -> UiCompletionKind.TypeParameter
+        CompletionItemKind.PACKAGE -> UiCompletionKind.Package
+        CompletionItemKind.KEYWORD -> UiCompletionKind.Keyword
+        CompletionItemKind.SNIPPET -> UiCompletionKind.Snippet
+        CompletionItemKind.WORD -> UiCompletionKind.Word
+    }
+}
+
+/** The engine's caret snapshot as the UI DTO. One mapping, used by both `actionsAt` and `caretContext`. */
+internal fun CaretSnapshot.toUiCaretContext(): UiCaretContext = UiCaretContext(
+    offset = offset,
+    languageId = languageId?.id,
+    nodeKind = nodeKind,
+    nodeStart = nodeRange.start,
+    nodeEnd = nodeRange.end,
+    nodeText = nodeText,
+    nodeTextTruncated = nodeTextTruncated,
+    ancestors = ancestors.map { UiCaretAncestor(it.kind, it.start, it.end) },
+)

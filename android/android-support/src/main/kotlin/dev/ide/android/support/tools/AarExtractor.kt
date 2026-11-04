@@ -1,0 +1,126 @@
+package dev.ide.android.support.tools
+
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.FileAlreadyExistsException
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+import java.util.zip.ZipFile
+import kotlin.io.path.writeText
+
+/**
+ * Explodes an Android `.aar` (a zip) into its parts. An AAR
+ * bundles compiled code (`classes.jar` plus optional jars under `libs/`), Android resources (`res/`),
+ * `assets/`, a library `AndroidManifest.xml`, native libs under `jni/`, and any `.aidl` the library wants
+ * consumers to be able to import. The build feeds the code to compile + dex, the resources to aapt2, the
+ * assets/jni to packaging, and the `aidl/` folder to the consumer's AIDL import path. Extraction is idempotent:
+ * an AAR's content is immutable per coordinate, so an already-exploded dir is reused.
+ */
+object AarExtractor {
+
+    data class Exploded(
+        val classesJars: List<Path>,   // classes.jar + any libs/*.jar
+        val resDir: Path?,
+        val assetsDir: Path?,
+        val manifest: Path?,
+        val jniDir: Path?,
+        val aidlDir: Path?,            // the AAR's `aidl/`: parcelable/interface declarations consumers may import
+        val proguardTxt: Path?,        // the AAR's consumer keep rules (root `proguard.txt`), applied by the app's R8
+        val aarMetadata: Path?,        // META-INF/.../aar-metadata.properties (AGP's minCompileSdk etc.); null if absent
+        val rTxt: Path?,               // the AAR's `R.txt` symbol table — the ONLY record of its own R fields
+        val artProfile: Path? = null,  // the AAR's `baseline-prof.txt` Baseline Profile rules
+    )
+
+    /**
+     * The directory name to explode [aar] into under a shared root: its file stem plus a short hash of its
+     * absolute path. Two different local libraries that happen to share a file name (`x/libs/core.aar` and
+     * `y/libs/core.aar`) must not share one directory, because an exploded directory is reused as-is.
+     */
+    fun explodeDirName(aar: Path): String {
+        val stem = aar.fileName.toString().substringBeforeLast('.')
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(aar.toAbsolutePath().normalize().toString().toByteArray(Charsets.UTF_8))
+        return "$stem-" + digest.take(4).joinToString("") { "%02x".format(it) }
+    }
+
+    fun explode(aar: Path, into: Path): Exploded {
+        if (!isAlreadyExploded(into)) unzip(aar, into)
+        val classes = buildList {
+            into.resolve("classes.jar").takeIf { Files.isRegularFile(it) }?.let { add(it) }
+            val libs = into.resolve("libs")
+            if (Files.isDirectory(libs)) {
+                Files.list(libs).use { s -> s.filter { it.toString().endsWith(".jar") }.sorted().forEach { add(it) } }
+            }
+        }
+        return Exploded(
+            classesJars = classes,
+            resDir = into.resolve("res").takeIf { Files.isDirectory(it) },
+            assetsDir = into.resolve("assets").takeIf { Files.isDirectory(it) },
+            manifest = into.resolve("AndroidManifest.xml").takeIf { Files.isRegularFile(it) },
+            jniDir = into.resolve("jni").takeIf { Files.isDirectory(it) },
+            aidlDir = into.resolve("aidl").takeIf { Files.isDirectory(it) },
+            proguardTxt = into.resolve("proguard.txt").takeIf { Files.isRegularFile(it) },
+            aarMetadata = into.resolve(AarMetadata.ENTRY_PATH).takeIf { Files.isRegularFile(it) },
+            rTxt = into.resolve("R.txt").takeIf { Files.isRegularFile(it) },
+            artProfile = into.resolve(ArtProfiles.RULES_FILE).takeIf { Files.isRegularFile(it) },
+        )
+    }
+
+    // The `.exploded` marker (written last, inside a fully-extracted dir) is the ONLY completion signal.
+    // Keying on `classes.jar` — which is written mid-stream, being just another zip entry — would treat a
+    // crash/cancel that stopped after `classes.jar` but before `res/`+`assets/` as "already done", reusing a
+    // dir with missing/truncated resources and native assets.
+    private fun isAlreadyExploded(into: Path): Boolean = Files.isRegularFile(into.resolve(".exploded"))
+
+    /**
+     * Extract into a temp sibling dir and atomically swap it into place, so an interrupted extraction never
+     * leaves a partial dir that reads as complete. The marker is written into the temp dir *before* the swap,
+     * and [into] receives it only as part of the fully-populated directory.
+     */
+    private fun unzip(aar: Path, into: Path) {
+        val parent = checkNotNull(into.parent) { "AAR explode target must have a parent dir: $into" }
+        Files.createDirectories(parent)
+        val tmp = Files.createTempDirectory(parent, "aar-explode-")
+        try {
+            ZipFile(aar.toFile()).use { zf ->
+                val entries = zf.entries()
+                while (entries.hasMoreElements()) {
+                    val e = entries.nextElement()
+                    val target = tmp.resolve(e.name).normalize()
+                    require(target.startsWith(tmp)) { "unsafe zip entry (zip slip): ${e.name}" }
+                    if (e.isDirectory) {
+                        Files.createDirectories(target)
+                    } else {
+                        target.parent?.let { Files.createDirectories(it) }
+                        zf.getInputStream(e).use { Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING) }
+                    }
+                }
+            }
+            (tmp.resolve(".exploded")).writeText(aar.fileName.toString())
+            // Swap into place. A previous dir (no marker → not trusted) is RENAMED aside rather than deleted
+            // in place, then dropped after the swap: the indexer and the build both keep library jars open
+            // while they read them, and on this AAR's `classes.jar` that means an open file whose central
+            // directory the platform has mapped. Renaming leaves those readers on the old inode, where a
+            // delete-then-extract can pull the pages out from under them (SIGBUS, unkillable from Kotlin).
+            // It also removes the window where `into` exists in neither place.
+            val stale: Path? = if (!Files.exists(into)) null else {
+                val aside = parent.resolve("${into.fileName}.stale-${System.nanoTime()}")
+                if (runCatching { Files.move(into, aside) }.isSuccess) aside
+                else { into.toFile().deleteRecursively(); null }
+            }
+            try {
+                Files.move(tmp, into, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(tmp, into)
+            } catch (e: FileAlreadyExistsException) {
+                // A concurrent explode of the same AAR won the swap; its result is complete — reuse it.
+                if (!isAlreadyExploded(into)) throw e
+            } finally {
+                stale?.let { if (Files.exists(it)) it.toFile().deleteRecursively() }
+            }
+        } finally {
+            if (Files.exists(tmp)) tmp.toFile().deleteRecursively()
+        }
+    }
+}

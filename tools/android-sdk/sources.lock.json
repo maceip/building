@@ -1,0 +1,134 @@
+{
+  "upstream": {
+    "url": "https://github.com/lzhiyong/android-sdk-tools.git",
+    "commit": "50713285d4de73dd36735928217523817ad16988"
+  },
+  "sources": [
+    {
+      "path": "src/core",
+      "url": "https://android.googlesource.com/platform/system/core",
+      "commit": "90e4908e776d2be9b26b87af649e63e4208cf085"
+    },
+    {
+      "path": "src/selinux",
+      "url": "https://android.googlesource.com/platform/external/selinux",
+      "commit": "0496d8248e0cb20d6512387f109f41f37f68f6e1"
+    },
+    {
+      "path": "src/boringssl",
+      "url": "https://android.googlesource.com/platform/external/boringssl",
+      "commit": "2a7146e5d8c55fb53d31f66f8e1351baa3fb0d4e"
+    },
+    {
+      "path": "src/libbase",
+      "url": "https://android.googlesource.com/platform/system/libbase",
+      "commit": "328768fabb054387ad7f64c984d4afcea70d25c9"
+    },
+    {
+      "path": "src/base",
+      "url": "https://android.googlesource.com/platform/frameworks/base",
+      "commit": "723419df1a0769b63587722a8a0a0980f454ffd2",
+      "sparse": [
+        "libs/androidfw",
+        "tools/aapt",
+        "tools/split-select"
+      ]
+    },
+    {
+      "path": "src/native",
+      "url": "https://android.googlesource.com/platform/frameworks/native",
+      "commit": "55c639d4b83235438ae431c76ffcb6e49be34f75",
+      "sparse": [
+        "include",
+        "libs/binder/include"
+      ]
+    },
+    {
+      "path": "src/logging",
+      "url": "https://android.googlesource.com/platform/system/logging",
+      "commit": "153a153f1fccc0cc6b96766d1557518303aebd5e"
+    },
+    {
+      "path": "src/incremental_delivery",
+      "url": "https://android.googlesource.com/platform/system/incremental_delivery",
+      "commit": "d5b8d81edc4a1e5a1995e1e4858cb1b340080137"
+    },
+    {
+      "path": "src/fmtlib",
+      "url": "https://android.googlesource.com/platform/external/fmtlib",
+      "commit": "c230d4f0a5a7058a6f0468cd384200ba2ed2d8c6"
+    },
+    {
+      "path": "src/pcre",
+      "url": "https://android.googlesource.com/platform/external/pcre",
+      "commit": "06781197cc1b93713b9c07aebc75d9790d2d4d76"
+    },
+    {
+      "path": "src/libpng",
+      "url": "https://android.googlesource.com/platform/external/libpng",
+      "commit": "3f98a222b00621de0815c70bcbee9f3d19434359"
+    },
+    {
+      "path": "src/expat",
+      "url": "https://android.googlesource.com/platform/external/expat",
+      "commit": "20fd404393d65d2aff6dbc79dcbf4da6e68cabb2"
+    },
+    {
+      "path": "src/zopfli",
+      "url": "https://android.googlesource.com/platform/external/zopfli",
+      "commit": "502a8f40590050c27a0a6259a0c08ed858f27f8e"
+    },
+    {
+      "path": "src/jsoncpp",
+      "url": "https://android.googlesource.com/platform/external/jsoncpp",
+      "commit": "4d823700a3d9c5727a039d65587ca99519f32de2"
+    },
+    {
+      "path": "src/art",
+      "url": "https://android.googlesource.com/platform/art",
+      "commit": "114291d98c93cc0e030dbb2b870dca47777a9fba",
+      "sparse": [
+        "libartbase",
+        "libartpalette",
+        "libdexfile",
+        "dexdump"
+      ]
+    },
+    {
+      "path": "src/tinyxml2",
+      "url": "https://android.googlesource.com/platform/external/tinyxml2",
+      "commit": "c1a174ab5c7f50e6877d3f1c8355759890e61300"
+    },
+    {
+      "path": "src/libziparchive",
+      "url": "https://android.googlesource.com/platform/system/libziparchive",
+      "commit": "b1d0c47e59e1a59b79f38ed0cbb94191cbf37416"
+    },
+    {
+      "path": "src/build",
+      "url": "https://android.googlesource.com/platform/build",
+      "commit": "46581c7be3390d0ecd0a037e6e6ebc2893d5768a",
+      "sparse": [
+        "tools/zipalign"
+      ]
+    },
+    {
+      "path": "src/soong",
+      "url": "https://android.googlesource.com/platform/build/soong",
+      "commit": "050e044df577a106757e9df904535bde9e6f83ce",
+      "sparse": [
+        "cc/libbuildversion"
+      ]
+    },
+    {
+      "path": "src/unwinding",
+      "url": "https://android.googlesource.com/platform/system/unwinding",
+      "commit": "540353061e864599723d4a838d503b80ecdf61ed"
+    },
+    {
+      "path": "src/googletest",
+      "url": "https://android.googlesource.com/platform/external/googletest",
+      "commit": "b9640af0b0a5b0e94bbef3f584763be6926b1ce3"
+    }
+  ]
+}

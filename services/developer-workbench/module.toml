@@ -1,0 +1,19 @@
+version = 2
+
+[module]
+type = "java-lib"
+name = "developer-workbench"
+languageLevel = "JAVA_17"
+output = "build/codeassist/classes"
+
+[sourceSets.main]
+scope = "IMPLEMENTATION"
+java = ["src/main/kotlin"]
+
+[sourceSets.test]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/test/kotlin"]
+
+[dependencies]
+implementation = [{ module = "agent-api" }, "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0", "org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1", "com.squareup.okhttp3:okhttp:4.12.0", "org.apache.commons:commons-compress:1.27.1", "org.tukaani:xz:1.10", "kotlin-stdlib"]
+testImplementation = [{ platform = "org.junit:junit-bom:5.11.4" }, "org.jetbrains.kotlin:kotlin-test:2.5.0-Beta2", { module = "test-support" }, "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0", "com.squareup.okhttp3:mockwebserver:4.12.0"]

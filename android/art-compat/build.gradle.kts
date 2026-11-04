@@ -1,0 +1,270 @@
+import dev.ide.build.RelocateTypesInJar
+// Imported (not fully-qualified) because the Java plugin's `java` project extension shadows the `java.*`
+// package inside a build script — `java.io.File` would parse as `(java extension).io`.
+import java.io.File
+import java.net.URI
+import java.nio.file.FileSystems
+import java.nio.file.Files
+import java.util.Properties
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+
+plugins {
+    `java-library`
+}
+
+// art-compat: the JDK/ART compatibility jars the app dexes but does not compile against.
+//
+// Four kinds of thing live here, all of them jars produced by this build rather than resolved from a
+// repository: third-party jars ASM-relocated off APIs ART lacks (ecj's `java.lang.Runtime$Version`, the
+// Eclipse runtime's `java.lang.StackWalker`), JDK API surface Android omits entirely but that app classes
+// may legally define (`javax.xml.stream`, `javax.swing.Icon`, `javax.management.Notification*`,
+// `javax.lang.model` via the checked-in java-compiler.jar), and headless shims for the rest
+// (`javax.swing.SwingUtilities`, `jdk.jfr.*`).
+//
+// WHY THIS IS ITS OWN MODULE. These jars used to be declared in :ide-android as `implementation(files(...))`.
+// A `files(...)` entry reaches AGP in `ArtifactScope.FILE`, which routes it to
+// `desugar<Variant>FileDependencies` (`DexFileDependenciesTask`) instead of the ordinary per-artifact dexing
+// transform. That task is non-incremental by design (AGP carries a `TODO: make incremental`), and it gives
+// each file dependency its own worker that builds a `ClassFileProviderFactory` over the ENTIRE runtime
+// classpath before dexing. On this app's ~250 MB classpath that fixed overhead measured ~20s per build for
+// under 2 MB of actual input. Published as one module's artifacts instead, each jar goes through
+// `DexingNoClasspathTransform`: content-keyed, cached under ~/.gradle/caches/*/transforms, and dexed once
+// rather than on every build whose classpath ABI moved. With no file dependencies left,
+// `desugar<Variant>FileDependencies` has no inputs at all and drops out of the graph.
+//
+// This module has no sources of its own (the artShims are compiled by a hand-rolled JavaCompile below,
+// against android.jar rather than the JDK), so the java-library plugin's default `jar` artifact and its
+// `classes`/`resources` secondary variants are replaced wholesale at the bottom of this file.
+
+// --- ecj-on-ART patch (java.lang.Runtime$Version) -------------------------------------------------
+// ecj's compiler reads `Runtime.Version` for its --release handling; the type is absent from ART, so
+// relocate the references onto the shim :lang-jdt ships (dev.ide.lang.jdt.compat.RuntimeVersion) and dex the
+// patched jar. :ide-android strips the stock module from every runtime classpath so only this copy is dexed.
+val ecjUnpatched: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+dependencies { ecjUnpatched(libs.jdt.ecj) { isTransitive = false } }
+
+val relocateEcjForArt = tasks.register<RelocateTypesInJar>("relocateEcjForArt") {
+    // Lazy: `elements` resolves the configuration at execution time, not during configuration.
+    inputJar.fileProvider(ecjUnpatched.elements.map { it.single().asFile })
+    outputJar.set(layout.buildDirectory.file("ecj-art/ecj-art.jar"))
+    renames.put("java/lang/Runtime\$Version", "dev/ide/lang/jdt/compat/RuntimeVersion")
+}
+
+// --- Eclipse-runtime-on-ART patch (java.lang.StackWalker) -----------------------------------------
+// Eclipse's org.eclipse.core.runtime.Status and org.eclipse.core.internal.runtime.InternalPlatform each
+// hold a `static StackWalker` field (StackWalker.getInstance(Option.RETAIN_CLASS_REFERENCE)) used by the
+// caller-class-aware Status.error/info/warning + ILog.get factories. java.lang.StackWalker is a Java-9 API
+// absent from ART at our minSdk and (being in java.*) un-stubbable, so on-device that <clinit> throws an
+// uncatchable NoClassDefFoundError (java.lang.StackWalker$Option) — and because Status is ubiquitous, it
+// disables editor analysis entirely. As with ecj's Runtime$Version, relocate the references onto a shim we
+// ship (dev.ide.lang.jdt.compat.StackWalker in :lang-jdt) and dex the patched jars. These two modules
+// reach the app only transitively via :ide-core → lang-jdt → jdt.core, so resolve jdt.core's graph here and
+// pick the two jars out by name (tracks the `jdt` catalog version automatically). Desktop runs on a real
+// JVM and is left untouched. The single `java/lang/StackWalker` rename also covers the nested
+// `java/lang/StackWalker$Option` (it shares that prefix).
+val eclipseRuntimeUnpatched: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+dependencies { eclipseRuntimeUnpatched(libs.jdt.core) } // transitive: brings core.runtime + equinox.common
+
+fun eclipseRuntimeJar(prefix: String) =
+    eclipseRuntimeUnpatched.elements.map { set -> set.map { it.asFile }.single { it.name.startsWith(prefix) } }
+
+val relocateCoreRuntimeForArt = tasks.register<RelocateTypesInJar>("relocateCoreRuntimeForArt") {
+    inputJar.fileProvider(eclipseRuntimeJar("org.eclipse.core.runtime-"))
+    outputJar.set(layout.buildDirectory.file("eclipse-art/org.eclipse.core.runtime-art.jar"))
+    renames.put("java/lang/StackWalker", "dev/ide/lang/jdt/compat/StackWalker")
+}
+val relocateEquinoxCommonForArt = tasks.register<RelocateTypesInJar>("relocateEquinoxCommonForArt") {
+    inputJar.fileProvider(eclipseRuntimeJar("org.eclipse.equinox.common-"))
+    outputJar.set(layout.buildDirectory.file("eclipse-art/org.eclipse.equinox.common-art.jar"))
+    renames.put("java/lang/StackWalker", "dev/ide/lang/jdt/compat/StackWalker")
+}
+
+// --- javax.xml.stream (StAX API) -----------------------------------------------------------------
+// IntelliJ-core parses its plugin/extension descriptors with StAX, and R8's resource shrinker parses `res/raw`
+// keep files with it. The implementation (aalto + stax2) reaches the app through :kotlin-compiler-deps, but the
+// StAX *API* (javax.xml.stream) is a JDK module Android omits entirely (Android ships SAX/DOM/XmlPullParser,
+// not StAX). App classes may live in javax.* (unlike java.*), so we dex the API ourselves, exactly as
+// libs/java-compiler.jar supplies the also-absent javax.lang.model.
+//
+// It is the standalone JSR-173 jar, NOT a copy of the build JDK's java.xml classes. The JDK's FactoryFinder
+// calls `jdk.xml.internal.SecuritySupport` and falls back to `com.sun.xml.internal.stream.*`, neither of which
+// exists on ART, so `XMLInputFactory.newInstance()` died with ClassNotFoundException (R8's resource shrinker on
+// a project with a `res/raw/*.xml`). The standalone FactoryFinder is self-contained and finds aalto through its
+// `META-INF/services` registration. The only API it lacks is the Java 9 `newFactory`/`newDefaultFactory`
+// statics, which could not run on ART through the JDK copy either. (javax.xml.namespace, which it references,
+// exists on the device platform, so only the stream packages are shipped.)
+val staxApi: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+dependencies { staxApi(libs.stax.api) { isTransitive = false } }
+
+val generateStaxApiJar = tasks.register<Jar>("generateStaxApiJar") {
+    description = "Package the standalone javax.xml.stream (StAX) API as a dexable jar."
+    from(staxApi.elements.map { set -> set.map { zipTree(it.asFile) } }) { include("javax/xml/stream/**") }
+    archiveFileName.set("stax-api.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("stax-api"))
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
+
+// --- javax.* JDK types (java.desktop, java.management) for on-device K2 --------------------------
+// IntelliJ-core's PSI carries a Swing-based icon API: dozens of classes (ElementBase, PsiPackageBase,
+// the asJava light classes, …) declare methods returning javax.swing.Icon, and four marker interfaces
+// (ui.icons.ReplaceableIcon/CompositeIcon, openapi.util.ScalableIcon/DummyIcon) `extends javax.swing.Icon`.
+// javax.swing is a JDK (java.desktop) package Android omits entirely. On a strict ART verifier this is
+// fatal at *class load*: KotlinCoreEnvironment.createForProduction → KotlinJavaPsiFacade.<clinit> builds a
+// PsiPackageImpl, whose ElementBase/PsiPackageBase supertypes fail to verify ("can't resolve returned type
+// javax.swing.Icon"), which kills the Kotlin parse host AND the bundled K2 compiler.
+// App classes may live in javax.* (unlike java.*), so we dex the real javax.swing.Icon interface from the
+// build JBR's java.desktop module, as libs/java-compiler.jar supplies javax.lang.model. It is a pure
+// interface (3 abstract methods); the java.awt.Component/Graphics it names live only in those abstract
+// descriptors (never resolved at load, never invoked headless), so Icon alone suffices and pulls in no AWT.
+// With the type present, RowIcon stays a subtype of Icon and every icon method/ctor/<clinit> + the four
+// markers verify normally — no bytecode surgery (this replaces the old ASM SwingIconArtPass interface strip,
+// which only made the markers load and then broke verification of RowIcon-returning methods).
+//
+// javax.management (java.management module) gets the same treatment for the platform's low-memory watcher:
+// AppScheduledExecutorService.<init> (reached by KaFirSessionProvider — the K2 Analysis API session, device
+// logcat confirmed) constructs LowMemoryWatcherManager, whose <init> stores a NotificationListener-typed
+// field implemented by the anonymous LowMemoryWatcherManager$3 — so the $3 CLASS LINK and the field write
+// need the interface present, or every K2 analyze/complete dies with NoClassDefFoundError. Every method
+// that actually CALLS JMX there ($2.run subscribing via ManagementFactory, shutdown, getMajorGcTime) also
+// touches java.lang.management and is already gutted by the kotlinc-art ManagementStubPass, so the shipped
+// types are load-time surface only: NotificationListener + NotificationFilter (pure interfaces over
+// java.util.EventListener/Serializable) and Notification (a plain EventObject subclass). NotificationEmitter
+// is deliberately NOT shipped — it appears only inside gutted bodies, and it would drag in the
+// NotificationBroadcaster → MBeanNotificationInfo chain.
+// module → class-file path, extracted from the build JBR's jrt image below.
+val javaxApiEntries = listOf(
+    "java.desktop" to "javax/swing/Icon.class",
+    "java.management" to "javax/management/NotificationListener.class",
+    "java.management" to "javax/management/NotificationFilter.class",
+    "java.management" to "javax/management/Notification.class",
+)
+val generateSwingApiJar = tasks.register("generateSwingApiJar") {
+    description = "Extract the javax.swing/javax.management types the unshaded platform links against into a dexable jar."
+    val outJar = layout.buildDirectory.file("swing-api/swing-api.jar")
+    // The entry list is the task's real input; without it Gradle treats an existing jar as up-to-date
+    // forever and a newly added type never ships.
+    inputs.property("entries", javaxApiEntries.map { "${it.first}:${it.second}" })
+    outputs.file(outJar)
+    doLast {
+        val out = outJar.get().asFile
+        out.parentFile.mkdirs()
+        val jrt = FileSystems.getFileSystem(URI.create("jrt:/"))
+        ZipOutputStream(out.outputStream().buffered()).use { zos ->
+            for ((module, path) in javaxApiEntries) {
+                zos.putNextEntry(ZipEntry(path).apply { time = 315532800000L })
+                Files.copy(jrt.getPath("/modules/$module/$path"), zos)
+                zos.closeEntry()
+            }
+        }
+        logger.lifecycle("generateSwingApiJar: wrote ${javaxApiEntries.size} javax classes → ${out.name}")
+    }
+}
+
+// --- ART shims for the unshaded IntelliJ platform (javax.swing.SwingUtilities, jdk.jfr.*) ---------
+// The unshaded platform (:kotlin-compiler-deps) touches two more JDK packages Android omits but that app
+// classes MAY define (unlike java.*): javax.swing.SwingUtilities (MockApplication.invokeLater / EDT checks,
+// hit the moment JavaCoreApplicationEnvironment registers the ClassFileDecompilers EP listener - device
+// logcat confirmed) and jdk.jfr (the platform's diagnostic JFR event classes). Compile the headless shim
+// sources (src/artShims, inherited from the retired aa-runtime module) against android.jar (so javax.swing
+// doesn't exist at compile time) and dex them. The old aaShims' com.intellij.* replacements are gone: those
+// FQNs live in the merged compiler jar and are handled by the kotlinc-art ASM passes instead.
+val artShimAndroidJar = provider {
+    val sdkDir = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+        ?: rootProject.file("local.properties").takeIf { it.exists() }
+            ?.let { Properties().apply { it.inputStream().use { s -> load(s) } }.getProperty("sdk.dir") }
+        ?: throw GradleException("Android SDK not found (set ANDROID_HOME or sdk.dir in local.properties)")
+    File(sdkDir, "platforms/android-36/android.jar")
+}
+val compileArtShims = tasks.register<JavaCompile>("compileArtShims") {
+    source = fileTree(layout.projectDirectory.dir("src/artShims/java"))
+    classpath = files()
+    options.bootstrapClasspath = files(artShimAndroidJar)
+    sourceCompatibility = "8"
+    targetCompatibility = "8"
+    destinationDirectory.set(layout.buildDirectory.dir("art-shims/classes"))
+}
+val artShimsJar = tasks.register<Jar>("artShimsJar") {
+    from(compileArtShims.flatMap { it.destinationDirectory })
+    archiveFileName.set("art-shims.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("art-shims"))
+}
+
+// --- what this module publishes -------------------------------------------------------------------
+// ONE jar, merged from every compatibility jar above — not one artifact per jar, which is what this
+// variant used to carry.
+//
+// A variant may hold several artifacts and AGP will dex each of them separately, but its
+// `mergeJavaResource` task cannot tell them apart. That task names every merge input after the COMPONENT
+// that produced it, and for a project dependency the name is `project(":art-compat") - Build: :` with no
+// file name appended (AGP's MergeJavaResourceTask.kt, `toSourcedInputs`; a module dependency does get a
+// `/<file name>` suffix, which is why only project artifacts are affected). Seven artifacts out of one
+// project are therefore seven inputs sharing one name, and `IncrementalFileMerger.getInputsForFile`
+// picks the inputs for a path BY NAME against the previous run's state. So all seven get asked to open
+// ecj's `org/eclipse/jdt/internal/compiler/parser/**.rsc`, and the six that do not hold it fail the
+// build with `IllegalStateException: Unknown file: …`. A clean build has no prior state to match against
+// and passes, so this only ever broke incremental builds — including every `assembleDebug` after a
+// touched file.
+//
+// Merging costs nothing that mattered: these jars are ~3.6 MB in total and only move when a dependency
+// version does, so the merged jar still dexes through one content-keyed, cached `DexingNoClasspathTransform`
+// rather than the whole-classpath `desugar<Variant>FileDependencies` task that motivated this module (see
+// the module comment above).
+//
+// The java-library plugin's own (empty) `jar` artifact and its `classes`/`resources` secondary variants are
+// removed: this module has no `src/main`, and a consumer's compile classpath asks for
+// LibraryElements=classes, so leaving them would resolve to empty directories instead of this jar.
+//
+// NB the unpatched inputs (`ecjUnpatched`, `eclipseRuntimeUnpatched`) are resolve-only and are deliberately
+// NOT declared as dependencies of this variant: shipping both a stock Eclipse jar and its ART-relocated copy
+// is a duplicate-class failure at dex time. :ide-android additionally strips those three stock modules from
+// its runtime classpaths, where they also arrive transitively via :lang-jdt.
+val mergeCompatJars = tasks.register<Jar>("mergeCompatJars") {
+    description = "Merge every ART compatibility jar into the single artifact this module publishes."
+    archiveFileName.set("art-compat.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("art-compat"))
+    // FAIL, not EXCLUDE. The only paths these jars share are the four Eclipse/OSGi bundle-metadata files
+    // dropped just below (all of them already in :ide-android's `packaging.resources.excludes`) plus the
+    // manifests. Anything else colliding — a class above all — is a real conflict, and should stop the
+    // build rather than resolve silently to whichever jar happened to be listed first.
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+    exclude(".api_description", ".options", "about.html", "plugin.properties")
+    // Each source jar's own manifest goes; the Jar task writes one of its own. Signature files go with
+    // them: a signature over one of these jars means nothing once its entries live in another.
+    exclude("META-INF/MANIFEST.MF", "META-INF/*.SF", "META-INF/*.RSA", "META-INF/*.DSA")
+    // Fixed entry order and timestamps, so the jar's content hash — and with it the cached dex — moves
+    // only when the inputs actually do.
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+
+    from(relocateEcjForArt.map { zipTree(it.outputJar) })
+    from(relocateCoreRuntimeForArt.map { zipTree(it.outputJar) })
+    from(relocateEquinoxCommonForArt.map { zipTree(it.outputJar) })
+    from(artShimsJar.map { zipTree(it.archiveFile) })
+    from(generateStaxApiJar.map { zipTree(it.archiveFile) })
+    // A plain `register` task (no typed output property), so reach the jar through the task's declared
+    // outputs, which carries the task dependency with it.
+    from(generateSwingApiJar.map { zipTree(it.outputs.files.singleFile) })
+    // javax.lang.model + the javac API surface, checked in rather than generated: the app's Java
+    // annotation-processing path (:lang-ksp, the JDT/ecj processor host) links against types Android
+    // omits and that no JDK module here can supply verbatim.
+    from(zipTree(layout.projectDirectory.file("libs/java-compiler.jar")))
+}
+
+listOf("apiElements", "runtimeElements").forEach { elements ->
+    configurations.named(elements) {
+        outgoing.artifacts.clear()
+        outgoing.artifact(mergeCompatJars.flatMap { it.archiveFile })
+        outgoing.variants.removeIf { it.name == "classes" || it.name == "resources" }
+    }
+}

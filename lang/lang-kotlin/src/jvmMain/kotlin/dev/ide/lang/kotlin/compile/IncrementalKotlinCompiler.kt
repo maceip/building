@@ -1,0 +1,380 @@
+package dev.ide.lang.kotlin.compile
+
+import java.nio.file.Files
+import java.nio.file.Path
+import java.security.MessageDigest
+import java.nio.file.Paths
+import java.util.stream.Collectors
+
+/**
+ * Incremental Kotlin compilation below the task level. The build engine already skips `compileKotlin` whole
+ * when nothing changed; this layer makes the case where it does run cheap, by recompiling only the `.kt`
+ * files whose content changed instead of the whole module: the Kotlin counterpart to the per-class
+ * incremental dex archive (`.classmanifest`).
+ *
+ * It is ABI-aware and conservative. State for a module lives in a sidecar next to its output dir: each
+ * source's content hash, the source→`.class` mapping, and a per-class ABI snapshot ([KotlinAbi]).
+ *
+ *  - Fast path: only method bodies of the changed files changed (every recompiled class's ABI is unchanged,
+ *    no class was removed): recompile just those files against the unchanged classes as a binary classpath,
+ *    drop the new `.class` into the output dir, keep everything else. The common edit.
+ *  - Full recompile: anything that could affect a dependent: a public signature/declaration change (ABI
+ *    snapshot differs), a class removed, a source deleted, or the compile context (Java interop sources,
+ *    classpath, jvmTarget) changed. Conservative because no file→file dependency graph is kept; when in
+ *    doubt, rebuild the module (always correct).
+ *
+ * Pure JVM + ASM + `kotlin-metadata-jvm`; no compiler IC caches (which mmap on ART). The state is plain
+ * text keyed off the output dir, so it survives an IDE restart and needs no in-memory continuity.
+ */
+class IncrementalKotlinCompiler(private val compiler: KotlinCompilerBackend = KotlinJvmCompiler()) {
+
+    /** Which path the last compile took — surfaced for tests/diagnostics (the build engine ignores it). */
+    enum class Mode { FULL, INCREMENTAL, NOOP }
+
+    data class Result(
+        val success: Boolean,
+        val messages: List<String>,
+        val mode: Mode,
+        /** The `.kt` files actually recompiled (all of them on [Mode.FULL]). */
+        val recompiledSources: List<Path> = emptyList(),
+        /** The underlying compile's problems, carried through unchanged; see [KotlinDiagnostic]. */
+        val diagnostics: List<KotlinDiagnostic> = emptyList(),
+    )
+
+    fun compile(
+        kotlinSources: List<Path>,
+        javaSources: List<Path>,
+        classpath: List<Path>,
+        outputDir: Path,
+        jvmTarget: String = "17",
+        bootClasspath: List<Path> = emptyList(),
+        compilerPlugins: List<Path> = emptyList(),
+        pluginOptions: List<String> = emptyList(),
+        runtimePluginClasspaths: List<List<Path>> = emptyList(),
+        /** The module's COMMON-fragment sources; see [KotlinCompileRequest.commonSources]. */
+        commonSources: List<Path> = emptyList(),
+        /** Output directories whose `internal` declarations these sources may use (`-Xfriend-paths`): a test
+         *  compilation's main output, which is the same module as far as Kotlin is concerned. */
+        friendPaths: List<Path> = emptyList(),
+    ): Result {
+        val kt = kotlinSources.map { it.toAbsolutePath().normalize() }.filter { Files.isRegularFile(it) }
+        if (kt.isEmpty()) {                              // no Kotlin left → nothing to emit; clear stale state
+            clearDir(outputDir); state(outputDir).delete()
+            return Result(true, emptyList(), Mode.NOOP)
+        }
+
+        val prev = state(outputDir).read()
+        val javaSig = javaSignatures(javaSources, prev?.javaSig.orEmpty())
+        // Which sources are common changes what the compiler accepts, so it belongs in the context hash: a
+        // module that gains or loses multiplatform mode must fully rebuild, not reuse the other mode's output.
+        val context = contextHash(javaSig, classpath, bootClasspath, jvmTarget, compilerPlugins, pluginOptions, runtimePluginClasspaths, commonSources)
+        val srcHash = kt.associateWith { fileHash(it) }
+
+        // No usable baseline, the interop/classpath context moved, or a source was deleted → full rebuild.
+        val removed = prev != null && (prev.srcHash.keys - srcHash.keys).isNotEmpty()
+        if (prev == null || prev.context != context || removed) {
+            return full(kt, javaSources, classpath, outputDir, jvmTarget, bootClasspath, context, srcHash, javaSig, compilerPlugins, pluginOptions, runtimePluginClasspaths, commonSources, friendPaths)
+        }
+
+        // The manifest must describe exactly what is in the output dir. If a prior run left them out of sync —
+        // a full compile that CLEARED the output then failed (leaving it wiped/partial), or an external
+        // delete/tamper — the incremental fast path would derive its "clean" binary classpath ([cleanDir]) from
+        // the wrong output set and a recompiled file would fail to resolve a cross-file symbol it actually
+        // depends on (a spurious "unresolved reference"). A full rebuild is the only safe move. (Generalizes the
+        // old dirty-empty-only tamper check to every path.)
+        if (currentClasses(outputDir).toSet() != prev.abi.keys) {
+            return full(kt, javaSources, classpath, outputDir, jvmTarget, bootClasspath, context, srcHash, javaSig, compilerPlugins, pluginOptions, runtimePluginClasspaths, commonSources, friendPaths)
+        }
+
+        val dirty = kt.filter { prev.srcHash[it] != srcHash[it] }
+        if (dirty.isEmpty()) {
+            // Nothing changed; output matches the manifest. Record Java files that were rewritten with the same
+            // content, so the next build does not hash them again.
+            if (javaSig != prev.javaSig) state(outputDir).write(prev.copy(javaSig = javaSig))
+            return Result(true, emptyList(), Mode.NOOP)
+        }
+
+        return incremental(kt, dirty, javaSources, classpath, outputDir, jvmTarget, bootClasspath, context, srcHash, javaSig, prev, compilerPlugins, pluginOptions, runtimePluginClasspaths, commonSources, friendPaths)
+            ?: full(kt, javaSources, classpath, outputDir, jvmTarget, bootClasspath, context, srcHash, javaSig, compilerPlugins, pluginOptions, runtimePluginClasspaths, commonSources, friendPaths)
+    }
+
+    /** Whole-module compile into a clean output dir; records a fresh manifest. */
+    private fun full(
+        kt: List<Path>, javaSources: List<Path>, classpath: List<Path>, outputDir: Path,
+        jvmTarget: String, bootClasspath: List<Path>, context: String, srcHash: Map<Path, String>,
+        javaSig: Map<Path, JavaSig>,
+        compilerPlugins: List<Path>, pluginOptions: List<String>, runtimePluginClasspaths: List<List<Path>>,
+        commonSources: List<Path>, friendPaths: List<Path>,
+    ): Result {
+        clearDir(outputDir)
+        Files.createDirectories(outputDir)
+        val r = compiler.compile(
+            KotlinCompileRequest(
+                kotlinSources = kt, javaSources = javaSources, classpath = classpath, outputDir = outputDir,
+                jvmTarget = jvmTarget, bootClasspath = bootClasspath, compilerPlugins = compilerPlugins,
+                pluginOptions = pluginOptions, runtimePluginClasspaths = runtimePluginClasspaths,
+                commonSources = commonSources, friendPaths = friendPaths,
+            ),
+        )
+        if (!r.success) {
+            // The output dir was just cleared and the compile failed, so it now holds a wiped/partial class set.
+            // Drop the (now-stale) manifest: leaving it would let the NEXT build take the incremental fast path
+            // against this broken output and mis-resolve cross-file references (the reported spurious
+            // "unresolved reference"). With no manifest the next build is a clean full rebuild — correct recovery.
+            state(outputDir).delete()
+            return Result(false, r.messages, Mode.FULL, kt, r.diagnostics)
+        }
+        val srcToOut = relativizeMapping(r.outputs, outputDir, srcHash.keys)
+        val abi = snapshotAll(outputDir)
+        state(outputDir).write(State(context, srcHash, srcToOut, abi, javaSig))
+        return Result(true, r.messages, Mode.FULL, kt, r.diagnostics)
+    }
+
+    /**
+     * The fast path. Compile [dirty] alone, with the unchanged classes copied out as a read-only binary
+     * classpath (so no FQN is seen as both source and binary), into a staging dir, then decide:
+     *  - any recompiled class's ABI changed, or a class the dirty set used to own disappeared → return null
+     *    (the caller falls back to [full], which is always correct);
+     *  - otherwise commit the staged `.class` into the output dir and update the manifest in place.
+     * Multi-file facade parts (a class co-owned by a dirty and a clean source) also fall back, since
+     * excluding it from the clean classpath would drop the clean part.
+     */
+    private fun incremental(
+        kt: List<Path>, dirty: List<Path>, javaSources: List<Path>, classpath: List<Path>, outputDir: Path,
+        jvmTarget: String, bootClasspath: List<Path>, context: String, srcHash: Map<Path, String>,
+        javaSig: Map<Path, JavaSig>, prev: State,
+        compilerPlugins: List<Path>, pluginOptions: List<String>, runtimePluginClasspaths: List<List<Path>>,
+        commonSources: List<Path>, friendPaths: List<Path>,
+    ): Result? {
+        val dirtyOwned = dirty.flatMap { prev.srcToOut[it].orEmpty() }.toSet()           // their prior outputs
+        val cleanOwned = (kt - dirty.toSet()).flatMap { prev.srcToOut[it].orEmpty() }.toSet()
+        if (dirtyOwned.any { it in cleanOwned }) return null                              // shared facade → full
+
+        val stateDir = state(outputDir).dir
+        val cleanDir = stateDir.resolve("clean")
+        val stagingDir = stateDir.resolve("staging")
+        clearDir(cleanDir); clearDir(stagingDir)
+        // Materialize cleanDir even when no clean classes get copied below (a single-source module, or every
+        // class owned by a dirty source): it goes on the compile classpath and into -Xfriend-paths, and kotlinc
+        // emits "Classpath entry points to a non-existent location" for a missing dir. An empty dir is silent.
+        Files.createDirectories(cleanDir)
+        // Materialize the binary view of the unchanged module half: every output class NOT owned by a dirty
+        // source. Hardlink rather than copy — the compiler only READS these, and clearDir later drops the link
+        // (the original under outputDir, a second link to the same inode, is untouched), so on a large module a
+        // one-file edit no longer copies the bytes of every other class. Falls back to a real copy on a
+        // filesystem that can't hardlink (cross-device, or one without link support); cleanDir is a sibling of
+        // outputDir, so they are normally on the same FS and the link succeeds.
+        for (rel in currentClasses(outputDir)) {
+            if (rel in dirtyOwned) continue
+            val dest = cleanDir.resolve(rel); Files.createDirectories(dest.parent)
+            val from = outputDir.resolve(rel)
+            runCatching { Files.createLink(dest, from) }.getOrElse { Files.copy(from, dest) }
+        }
+        Files.createDirectories(stagingDir)
+
+        // friendPaths=[cleanDir] keeps same-module `internal` access working across the source/binary split.
+        val r = compiler.compile(
+            KotlinCompileRequest(
+                kotlinSources = dirty, javaSources = javaSources, classpath = listOf(cleanDir) + classpath,
+                outputDir = stagingDir, jvmTarget = jvmTarget, bootClasspath = bootClasspath,
+                friendPaths = listOf(cleanDir) + friendPaths, compilerPlugins = compilerPlugins,
+                pluginOptions = pluginOptions, runtimePluginClasspaths = runtimePluginClasspaths,
+                commonSources = commonSources,
+            ),
+        )
+        // A staging (dirty-only) compile failure is NOT reported as the build's failure — fall back to [full]
+        // (the caller's `?: full(...)`), which is always correct. Recompiling one file against the rest as a
+        // binary classpath is more fragile than a whole-module compile (a warm/shared Kotlin environment that
+        // saw a now-clean file as SOURCE in a prior compile can fail to resolve it as a BINARY here — see
+        // `kotlin-compile-speed-art`); a real user error still surfaces from the full recompile. Never hard-fail
+        // here, or such a false negative becomes a spurious "unresolved reference" with no recovery.
+        if (!r.success) { clearDir(cleanDir); clearDir(stagingDir); return null }
+
+        val newMapping = relativizeMapping(r.outputs, stagingDir, dirty.toSet())
+        val produced = currentClasses(stagingDir)
+
+        // A class a dirty source used to own but no longer produces is a structural (removal) change.
+        val stillOwned = newMapping.values.flatten().toSet()
+        if (dirtyOwned.any { it !in stillOwned }) { clearDir(cleanDir); clearDir(stagingDir); return null }
+
+        // An ABI change on any pre-existing class can affect dependents → full. A brand-new class cannot
+        // (nothing referenced it yet), so it does not trip the fast path.
+        val newAbi = HashMap<String, String>()
+        for (rel in produced) {
+            val abi = KotlinAbi.snapshot(Files.readAllBytes(stagingDir.resolve(rel)))
+            newAbi[rel] = abi
+            val before = prev.abi[rel]
+            if (before != null && before != abi) { clearDir(cleanDir); clearDir(stagingDir); return null }
+        }
+
+        // Commit: stage → output, then refresh the manifest entries for the dirty sources only.
+        for (rel in produced) {
+            val dest = outputDir.resolve(rel); Files.createDirectories(dest.parent)
+            Files.copy(stagingDir.resolve(rel), dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+        val srcToOut = HashMap(prev.srcToOut).apply { dirty.forEach { put(it, newMapping[it].orEmpty()) } }
+        val abi = HashMap(prev.abi).apply { putAll(newAbi) }
+        state(outputDir).write(State(context, HashMap(prev.srcHash).apply { putAll(srcHash) }, srcToOut, abi, javaSig))
+        clearDir(cleanDir); clearDir(stagingDir)
+        return Result(true, r.messages, Mode.INCREMENTAL, dirty, r.diagnostics)
+    }
+
+    // ---- helpers -----------------------------------------------------------------------------------------
+
+    /** Snapshot every `.class` under [dir], keyed by output-relative path. */
+    private fun snapshotAll(dir: Path): Map<String, String> =
+        currentClasses(dir).associateWith { KotlinAbi.snapshot(Files.readAllBytes(dir.resolve(it))) }
+
+    /** The output-relative paths of every `.class` under [dir] (empty when [dir] is absent). */
+    private fun currentClasses(dir: Path): List<String> {
+        if (!Files.isDirectory(dir)) return emptyList()
+        return Files.walk(dir).use { s ->
+            s.filter { Files.isRegularFile(it) && it.toString().endsWith(".class") }
+                .map { dir.relativize(it).toString().replace('\\', '/') }.collect(Collectors.toList())
+        }
+    }
+
+    /** Reduce the compiler's `source → absolute .class` mapping to `source → output-relative paths`, kept to
+     *  the [keep] sources (the ones whose state is being recorded this pass). */
+    private fun relativizeMapping(outputs: Map<Path, List<Path>>, baseDir: Path, keep: Set<Path>): Map<Path, List<String>> {
+        val base = baseDir.toAbsolutePath().normalize()
+        val out = HashMap<Path, List<String>>()
+        for ((src, classes) in outputs) {
+            val key = src.toAbsolutePath().normalize()
+            if (key !in keep) continue
+            out[key] = classes.mapNotNull { c ->
+                val abs = c.toAbsolutePath().normalize()
+                if (abs.startsWith(base)) base.relativize(abs).toString().replace('\\', '/') else null
+            }
+        }
+        return out
+    }
+
+    /** A digest of everything-but-the-Kotlin-sources that changes what the Kotlin sources compile to. */
+    private fun contextHash(
+        javaSig: Map<Path, JavaSig>, classpath: List<Path>, boot: List<Path>, jvmTarget: String,
+        compilerPlugins: List<Path>, pluginOptions: List<String>, runtimePluginClasspaths: List<List<Path>>,
+        commonSources: List<Path>,
+    ): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        md.update(jvmTarget.toByteArray(Charsets.UTF_8))
+        commonSources.map { it.toAbsolutePath().normalize().toString() }.sorted()
+            .forEach { md.update(it.toByteArray(Charsets.UTF_8)) }
+        // Compiler plugins change the emitted bytecode (e.g. Compose's synthetic params), so applying/
+        // changing one must invalidate a baseline produced without it. Runtime (programmatically-registered)
+        // plugins count too.
+        compilerPlugins.map { it.toAbsolutePath().normalize().toString() }.sorted().forEach { md.update(it.toByteArray(Charsets.UTF_8)) }
+        runtimePluginClasspaths.flatten().map { it.toAbsolutePath().normalize().toString() }.sorted().forEach { md.update(it.toByteArray(Charsets.UTF_8)) }
+        pluginOptions.sorted().forEach { md.update(it.toByteArray(Charsets.UTF_8)) }
+        boot.map { it.toAbsolutePath().normalize().toString() }.sorted().forEach { md.update(it.toByteArray(Charsets.UTF_8)) }
+        // Java interop sources count by CONTENT. Generated Java is rewritten on every run that regenerates it
+        // (KSP clears its output first; aapt2 rewrites R.java), so an mtime would change on every edit and
+        // force a full recompile of the module even when the generated code came out identical.
+        javaSig.entries.sortedBy { it.key.toString() }.forEach { (p, sig) ->
+            md.update(p.toString().toByteArray(Charsets.UTF_8))
+            md.update(sig.hash.toByteArray(Charsets.UTF_8))
+        }
+        // Classpath entries (dep outputs, libs) get a cheap path+size+mtime signature: the build engine already
+        // re-runs this task only when an input truly changed, and a jar is not rewritten without a change.
+        classpath.map { it.toAbsolutePath().normalize() }.sortedBy { it.toString() }.forEach { statSignature(md, it) }
+        return hex(md)
+    }
+
+    /**
+     * The content hash of every Java source, keyed by normalized path. A file whose size and mtime match
+     * [previous] reuses its recorded hash, so only the files that were actually rewritten are read.
+     */
+    private fun javaSignatures(javaSources: List<Path>, previous: Map<Path, JavaSig>): Map<Path, JavaSig> {
+        val out = HashMap<Path, JavaSig>()
+        for (p in javaSources.map { it.toAbsolutePath().normalize() }) {
+            val attrs = runCatching {
+                Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes::class.java)
+            }.getOrNull()?.takeIf { it.isRegularFile } ?: continue
+            val size = attrs.size()
+            val mtime = attrs.lastModifiedTime().toMillis()
+            val known = previous[p]
+            out[p] = if (known != null && known.size == size && known.mtime == mtime) known else JavaSig(size, mtime, fileHash(p))
+        }
+        return out
+    }
+
+    /** Feed a path + size + last-modified signature for [p] into [md] using a single stat (readAttributes). */
+    private fun statSignature(md: MessageDigest, p: Path) {
+        md.update(p.toString().toByteArray(Charsets.UTF_8))
+        val attrs = runCatching {
+            Files.readAttributes(p, java.nio.file.attribute.BasicFileAttributes::class.java)
+        }.getOrNull() ?: return
+        md.update(attrs.size().toString().toByteArray(Charsets.UTF_8))
+        md.update(attrs.lastModifiedTime().toMillis().toString().toByteArray(Charsets.UTF_8))
+    }
+
+    private fun fileHash(p: Path): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        md.update(runCatching { Files.readAllBytes(p) }.getOrDefault(ByteArray(0)))
+        return hex(md)
+    }
+
+    private fun hex(md: MessageDigest): String =
+        md.digest().joinToString("") { "%02x".format(it.toInt() and 0xFF) }.substring(0, 32)
+
+    private fun clearDir(dir: Path) {
+        if (!Files.exists(dir)) return
+        Files.walk(dir).use { s -> s.sorted(Comparator.reverseOrder()).forEach { runCatching { Files.delete(it) } } }
+    }
+
+    private fun state(outputDir: Path) = ManifestStore(outputDir.resolveSibling("${outputDir.fileName}.ic"))
+
+    /** A Java source's stat at the time [hash] (its content hash) was taken. */
+    private data class JavaSig(val size: Long, val mtime: Long, val hash: String)
+
+    /** Persisted per-module incremental state (content hashes + source→class mapping + per-class ABI). */
+    private data class State(
+        val context: String,
+        val srcHash: Map<Path, String>,
+        val srcToOut: Map<Path, List<String>>,
+        val abi: Map<String, String>,
+        val javaSig: Map<Path, JavaSig> = emptyMap(),
+    )
+
+    /** A plain-text manifest under [dir]; keyed off the output dir so it survives restarts. */
+    private class ManifestStore(val dir: Path) {
+        private val file get() = dir.resolve("manifest.txt")
+
+        fun delete() { runCatching { Files.deleteIfExists(file) } }
+
+        fun read(): State? {
+            if (!Files.isRegularFile(file)) return null
+            return runCatching {
+                var context = ""
+                val srcHash = HashMap<Path, String>()
+                val srcToOut = HashMap<Path, List<String>>()
+                val abi = HashMap<String, String>()
+                val javaSig = HashMap<Path, JavaSig>()
+                for (line in Files.readAllLines(file)) {
+                    val p = line.split('\t')
+                    when (p.getOrNull(0)) {
+                        "ctx" -> context = p.getOrElse(1) { "" }
+                        "s" -> srcHash[Paths.get(p[1])] = p[2]
+                        "o" -> srcToOut[Paths.get(p[1])] = if (p.size > 2 && p[2].isNotEmpty()) p[2].split(',') else emptyList()
+                        "a" -> abi[p[1]] = p[2]
+                        "j" -> javaSig[Paths.get(p[1])] = JavaSig(p[2].toLong(), p[3].toLong(), p[4])
+                    }
+                }
+                if (context.isEmpty()) null else State(context, srcHash, srcToOut, abi, javaSig)
+            }.getOrNull()
+        }
+
+        fun write(s: State) {
+            runCatching {
+                Files.createDirectories(dir)
+                val lines = ArrayList<String>()
+                lines += "ctx\t${s.context}"
+                s.srcHash.forEach { (k, v) -> lines += "s\t$k\t$v" }
+                s.srcToOut.forEach { (k, v) -> lines += "o\t$k\t${v.joinToString(",")}" }
+                s.abi.toSortedMap().forEach { (k, v) -> lines += "a\t$k\t$v" }
+                s.javaSig.forEach { (k, v) -> lines += "j\t$k\t${v.size}\t${v.mtime}\t${v.hash}" }
+                Files.write(file, lines)
+            }
+        }
+    }
+}

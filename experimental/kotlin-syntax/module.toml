@@ -1,0 +1,27 @@
+version = 2
+
+[module]
+type = "java-lib"
+name = "kotlin-syntax"
+languageLevel = "JAVA_17"
+output = "build/codeassist/classes"
+
+[sourceSets.commonMain]
+scope = "IMPLEMENTATION"
+java = ["src/commonMain/kotlin"]
+
+[sourceSets.commonTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/commonTest/kotlin"]
+
+[sourceSets.jvmTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/jvmTest/kotlin"]
+
+[dependencies]
+api = ["org.jetbrains:syntax-api:0.3.376"]
+implementation = ["org.jetbrains:annotations:26.0.2", "kotlin-stdlib"]
+testImplementation = [{ module = "kotlin-compiler-deps" }, { module = "intellij-psi-host" }, { platform = "org.junit:junit-bom:5.11.4" }]
+
+[kotlin]
+commonSourceRoots = ["src/commonMain/kotlin"]

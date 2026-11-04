@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:dist="http://schemas.android.com/apk/distribution">
+    <!-- Gradle project MUST be :runtime_engine_ide_feature; AGP rejects hyphens rather than normalizing them. -->
+    <dist:module dist:instant="false" dist:title="@string/runtime_engine_feature_title">
+        <dist:delivery><dist:on-demand /></dist:delivery>
+        <dist:fusing dist:include="false" />
+    </dist:module>
+    <application android:extractNativeLibs="true" />
+</manifest>

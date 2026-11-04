@@ -1,0 +1,27 @@
+version = 2
+
+[module]
+type = "java-lib"
+name = "lang-kotlin-index"
+languageLevel = "JAVA_17"
+output = "build/codeassist/classes"
+
+[sourceSets.commonMain]
+scope = "IMPLEMENTATION"
+java = ["src/commonMain/kotlin"]
+
+[sourceSets.jvmMain]
+scope = "IMPLEMENTATION"
+java = ["src/jvmMain/kotlin"]
+
+[sourceSets.jvmTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/jvmTest/kotlin"]
+
+[dependencies]
+api = [{ module = "model-api" }, { module = "language-api" }]
+implementation = [{ module = "kotlin-classfile" }, "org.jetbrains.kotlin:kotlin-metadata-jvm:2.5.0-Beta2", "org.ow2.asm:asm:9.7", "kotlin-stdlib"]
+testImplementation = [{ platform = "org.junit:junit-bom:5.11.4" }]
+
+[kotlin]
+commonSourceRoots = ["src/commonMain/kotlin"]

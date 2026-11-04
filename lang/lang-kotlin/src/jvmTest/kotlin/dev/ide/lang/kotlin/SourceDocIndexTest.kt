@@ -1,0 +1,182 @@
+package dev.ide.lang.kotlin
+
+import dev.ide.index.IndexInput
+import dev.ide.index.IndexOrigin
+import dev.ide.lang.kotlin.index.KotlinSourceDocIndex
+import dev.ide.platform.ContentHash
+import java.nio.file.Path
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+/**
+ * The Kotlin source-doc index extracts per-class real parameter NAMES + KDoc from an attached Kotlin source
+ * archive ([IndexOrigin.LIBRARY_SOURCE]), keyed by the declaring class FQN.
+ */
+class SourceDocIndexTest {
+
+    @Test
+    fun extractsNamesAndKdoc() {
+        val src = """
+            package com.example
+            class Greeter {
+                /** Greets [who]. */
+                fun greet(who: String, loud: Boolean) {}
+            }
+        """.trimIndent()
+        val byFqn = KotlinSourceDocIndex.index(Input("com/example/Greeter.kt", src))
+        val greeter = byFqn["com.example.Greeter"] ?: error("no com.example.Greeter; got ${byFqn.keys}")
+        val greet = greeter.first { it.name == "greet" }
+        assertEquals(listOf("who", "loud"), greet.names)
+        assertEquals(2, greet.arity)
+        assertTrue(greet.doc?.contains("Greets") == true, "method KDoc; got ${greet.doc}")
+    }
+
+    @Test
+    fun importsDoNotLeakIntoThePackage() {
+        // `import` is a soft keyword (an IDENTIFIER to the lexer). The package scan used to run straight on through
+        // the import lines, keying this class `androidx.activityimportandroid.app.Activity...ComponentActivity`.
+        val src = """
+            package androidx.activity
+
+            import android.app.Activity
+            import androidx.lifecycle.LifecycleOwner
+
+            /**
+             * Base class for activities that enables composition of higher level components.
+             */
+            open class ComponentActivity() : Activity(), LifecycleOwner
+        """.trimIndent()
+        val byFqn = KotlinSourceDocIndex.index(Input("androidx/activity/ComponentActivity.kt", src))
+        val entries = byFqn["androidx.activity.ComponentActivity"] ?: error("not keyed by its FQN; got ${byFqn.keys}")
+        val classDoc = entries.first { it.name.isEmpty() }.doc
+        assertTrue(classDoc?.contains("Base class for activities") == true, "class KDoc; got $classDoc")
+    }
+
+    @Test
+    fun topLevelFunctionsAreKeyedByTheFileFacade() {
+        // What a top-level or extension function's compiled symbol reports as its owner: the file's facade
+        // class. Unindexed, `setContent` and every Compose function hovered with no documentation.
+        val src = """
+            package androidx.activity.compose
+
+            import androidx.activity.ComponentActivity
+
+            /**
+             * Composes the given composable into the given activity.
+             */
+            public fun ComponentActivity.setContent(parent: Any? = null, content: () -> Unit) {
+                fun local() {}
+            }
+
+            /** Not an extension. */
+            fun <T> helper(value: T): T = value
+        """.trimIndent()
+        val byFqn = KotlinSourceDocIndex.index(Input("androidx/activity/compose/ComponentActivity.kt", src))
+        val facade = byFqn["androidx.activity.compose.ComponentActivityKt"] ?: error("no facade entry; got ${byFqn.keys}")
+        val setContent = facade.single { it.name == "setContent" }
+        assertEquals(listOf("parent", "content"), setContent.names, "the receiver is not a parameter")
+        assertTrue(setContent.doc?.contains("Composes the given composable") == true, "KDoc; got ${setContent.doc}")
+        assertTrue(facade.any { it.name == "helper" && it.arity == 1 })
+        assertTrue(facade.none { it.name == "local" }, "a local function belongs to no facade")
+    }
+
+    @Test
+    fun jvmNameRenamesTheFacade() {
+        val src = """
+            @file:JvmName("Flows")
+            package com.example
+
+            /** Collects. */
+            fun collectAll() {}
+        """.trimIndent()
+        val byFqn = KotlinSourceDocIndex.index(Input("com/example/FlowExtensions.kt", src))
+        assertTrue(byFqn["com.example.Flows"]?.any { it.name == "collectAll" } == true, "got ${byFqn.keys}")
+    }
+
+    @Test
+    fun onlyAcceptsKotlinSourceUnits() {
+        assertTrue(KotlinSourceDocIndex.inputFilter.accepts(Input("a/B.kt", "")))
+        assertTrue(!KotlinSourceDocIndex.inputFilter.accepts(Input("a/B.java", "")))
+    }
+
+    /** No KDoc anywhere → nothing to add over `@Metadata` → the file is skipped entirely (empty result). */
+    @Test
+    fun skipsFilesWithNoKdoc() {
+        val src = """
+            package com.example
+            class Plain {
+                fun a(x: Int) {}
+                fun b() = 42
+            }
+        """.trimIndent()
+        assertTrue(KotlinSourceDocIndex.index(Input("com/example/Plain.kt", src)).isEmpty())
+    }
+
+    /** Generic argument commas (`Map<String, Int>`) must NOT be counted as parameter separators. */
+    @Test
+    fun aritySkipsCommasInsideGenerics() {
+        val src = """
+            package p
+            class C {
+                /** doc */
+                fun f(m: Map<String, Int>, x: Int, cb: (Int, Int) -> Unit) {}
+            }
+        """.trimIndent()
+        val f = KotlinSourceDocIndex.index(Input("p/C.kt", src))["p.C"]!!.first { it.name == "f" }
+        assertEquals(3, f.arity)
+        assertEquals(listOf("m", "x", "cb"), f.names)
+    }
+
+    /** Nested types get their own FQN bucket; the enclosing class body closing must pop the nesting. */
+    @Test
+    fun nestedTypesAndClassDoc() {
+        val src = """
+            package p
+            /** Outer doc. */
+            class Outer {
+                /** Inner doc. */
+                class Inner {
+                    /** m doc */
+                    fun m(a: Int) {}
+                }
+                /** sibling doc */
+                fun sibling() {}
+            }
+        """.trimIndent()
+        val byFqn = KotlinSourceDocIndex.index(Input("p/Outer.kt", src))
+        assertTrue(byFqn["p.Outer"]!!.any { it.name.isEmpty() && it.doc?.contains("Outer doc") == true }, "Outer class doc")
+        assertTrue(byFqn["p.Outer.Inner"]!!.any { it.name.isEmpty() && it.doc?.contains("Inner doc") == true }, "Inner class doc")
+        assertTrue(byFqn["p.Outer.Inner"]!!.any { it.name == "m" }, "Inner.m member")
+        val sib = byFqn["p.Outer"]!!.first { it.name == "sibling" }
+        assertEquals(0, sib.arity)
+        // `sibling` must be attributed to Outer, NOT Outer.Inner (nesting popped after Inner's body).
+        assertTrue(byFqn["p.Outer.Inner"]!!.none { it.name == "sibling" }, "sibling leaked into Inner")
+    }
+
+    /** A companion object's members key under `Outer.Companion` (matching the binary `Outer$Companion` FQN). */
+    @Test
+    fun companionObjectMembers() {
+        val src = """
+            package p
+            class Host {
+                companion object {
+                    /** create doc */
+                    fun create(id: String): Host = Host()
+                }
+            }
+        """.trimIndent()
+        val create = KotlinSourceDocIndex.index(Input("p/Host.kt", src))["p.Host.Companion"]!!.first { it.name == "create" }
+        assertEquals(listOf("id"), create.names)
+        assertTrue(create.doc?.contains("create doc") == true)
+    }
+
+    private class Input(override val unitName: String, private val src: String) : IndexInput {
+        override val origin = IndexOrigin.LIBRARY_SOURCE
+        override val contentHash = ContentHash("")
+        override val sourcePath: String? = null
+        override fun bytes() = src.toByteArray()
+        override fun text() = src
+        override fun dom() = null
+    }
+}

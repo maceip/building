@@ -1,0 +1,30 @@
+version = 2
+
+[module]
+type = "java-lib"
+name = "deps-impl"
+languageLevel = "JAVA_17"
+output = "build/codeassist/classes"
+
+[sourceSets.commonMain]
+scope = "IMPLEMENTATION"
+java = ["src/commonMain/kotlin"]
+
+[sourceSets.commonTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/commonTest/kotlin"]
+
+[sourceSets.jvmMain]
+scope = "IMPLEMENTATION"
+java = ["src/jvmMain/kotlin"]
+
+[sourceSets.jvmTest]
+scope = "TEST_IMPLEMENTATION"
+java = ["src/jvmTest/kotlin"]
+
+[dependencies]
+implementation = [{ module = "deps-api" }, { module = "kotlin-classfile" }, "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0", "kotlin-stdlib"]
+testImplementation = ["org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0", { module = "test-support" }, { module = "project-model-impl" }, "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0", { platform = "org.junit:junit-bom:5.11.4" }]
+
+[kotlin]
+commonSourceRoots = ["src/commonMain/kotlin"]

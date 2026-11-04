@@ -1,0 +1,1615 @@
+package dev.ide.core.agent
+
+import dev.ide.agent.AgentEvent
+import dev.ide.agent.AgentEventSink
+import dev.ide.agent.AgentPermissionGate
+import dev.ide.agent.AgentTool
+import dev.ide.agent.AllowAllGate
+import dev.ide.agent.ContentPart
+import dev.ide.agent.FileChange
+import dev.ide.agent.LlmClient
+import dev.ide.agent.LlmMessage
+import dev.ide.agent.LlmModelInfo
+import dev.ide.agent.PermissionMode
+import dev.ide.agent.ProviderConfig
+import dev.ide.agent.SimpleToolRegistry
+import dev.ide.agent.ToolArgs
+import dev.ide.agent.ToolExecutionResult
+import dev.ide.agent.ToolSpec
+import dev.ide.agent.WriteRequest
+import dev.ide.agent.impl.AgentLoop
+import dev.ide.agent.impl.AgentProviders
+import dev.ide.agent.impl.CcSwitchApiFormat
+import dev.ide.agent.impl.CcSwitchOperatingMode
+import dev.ide.agent.impl.CheckpointWorkspace
+import dev.ide.agent.impl.LiteRtGuestSdkSnippets
+import dev.ide.agent.impl.LiteRtLmCatalog
+import dev.ide.agent.impl.LiteRtLmProvider
+import dev.ide.agent.impl.LiteRtLmServingManager
+import dev.ide.agent.impl.LiteRtLmServingRegistry
+import dev.ide.agent.impl.LlmErrorKind
+import dev.ide.agent.impl.RequestPacer
+import dev.ide.agent.impl.HistoryCompactor
+import dev.ide.agent.impl.OkHttpLlmTransport
+import dev.ide.agent.impl.SystemPrompt
+import dev.ide.agent.impl.builtinTools
+import dev.ide.agent.mcp.CodeAssistMcpServer
+import dev.ide.agent.mcp.FtpServer
+import dev.ide.agent.mcp.HttpMcpServer
+import dev.ide.agent.toolSchema
+import dev.ide.core.BackendContext
+import dev.ide.core.IdeServices
+import dev.ide.platform.log.Log
+import dev.ide.ui.backend.AgentService
+import dev.ide.ui.backend.UiAgentAttachment
+import dev.ide.ui.backend.UiAgentAttachmentKind
+import dev.ide.ui.backend.UiAgentSegment
+import dev.ide.ui.backend.UiAgentChatState
+import dev.ide.ui.backend.UiAgentCommand
+import dev.ide.ui.backend.UiAgentFileChange
+import dev.ide.ui.backend.UiAgentMention
+import dev.ide.ui.backend.UiAgentSessionSummary
+import dev.ide.ui.backend.UiAgentTodo
+import dev.ide.ui.backend.UiAgentTodoStatus
+import dev.ide.ui.backend.UiAgentConfig
+import dev.ide.ui.backend.UiAgentMessage
+import dev.ide.ui.backend.UiAgentUsage
+import dev.ide.ui.backend.UiAgentModel
+import dev.ide.ui.backend.UiAgentPermissionDecision
+import dev.ide.ui.backend.UiAgentPermissionMode
+import dev.ide.ui.backend.UiAgentPermissionRequest
+import dev.ide.ui.backend.UiAgentProvider
+import dev.ide.ui.backend.UiAgentRole
+import dev.ide.ui.backend.UiAgentToolCall
+import dev.ide.ui.backend.UiAgentToolStatus
+import dev.ide.ui.backend.UiLiteRtCornerState
+import dev.ide.ui.backend.UiLiteRtDelegate
+import dev.ide.ui.backend.UiLiteRtGuestLanguage
+import dev.ide.ui.backend.UiLlmSwitchMode
+import dev.ide.ui.backend.UiLlmSwitchProviderInput
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import java.lang.ref.WeakReference
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.io.path.readText
+
+/**
+ * [AgentService] over the agent engine (agent-impl). Owns the chat transcript state, the per-session agent
+ * loop, and the write-permission gate; bring-your-own-key provider configuration is read from the "AI"
+ * settings page's preferences (persisted plaintext, matching the keystore-password posture). See
+ * docs/agentic-coding.md.
+ */
+internal class AgentBackend(private val ctx: BackendContext) : AgentService {
+
+    private val transport = OkHttpLlmTransport()
+    private val workspace = IdeAgentWorkspace(ctx)
+
+    internal val liteRtManager: LiteRtLmServingManager by lazy {
+        LiteRtLmServingRegistry.getOrCreate(
+            storageRoot = resolveLiteRtStorageRoot(),
+            preferenceReader = { key -> pref(key) },
+            preferenceWriter = { key, value -> ctx.manager?.setPreference("settings.$AI_PAGE.$key", value) },
+        )
+    }
+
+    private val registry = AgentProviders.registry(
+        transport = transport,
+        liteRtManagerProvider = { liteRtManager },
+    )
+
+    private fun resolveLiteRtStorageRoot(): Path {
+        ctx.manager?.storageRoot?.let { return it.resolve("litert-lm") }
+        ctx.servicesOrNull?.workspaceRoot?.let { return it.resolve(".codeassist").resolve("litert-lm") }
+        return Paths.get(System.getProperty("java.io.tmpdir"), "codeassist-litert-lm")
+    }
+
+    /** The agent's own writes go through this, so each turn's changes can be shown as diffs and reverted. */
+    private val checkpoints = CheckpointWorkspace(workspace)
+
+    private val sessionStore = AgentSessionStore { ctx.servicesOrNull?.workspaceRoot }
+
+    /** The `ftp_server` tool: start, stop, or query the local FTP asset server. Advertised on the MCP
+     *  server and to the in-app chat agent (which both share [tools]), so the feature is controllable from
+     *  a client as well as the More-menu toggle. Non-mutating: no project file changes. */
+    private val ftpControlTool = object : AgentTool {
+        override val spec = ToolSpec(
+            name = "ftp_server",
+            description = "Start, stop, or query the local FTP asset server (anonymous, bound to " +
+                "127.0.0.1:${CodeAssistMcpServer.DEFAULT_FTP_PORT}). When running, files uploaded over FTP " +
+                "land in the open project's assets/ folder. To reach it from a PC, forward the control port " +
+                "and the passive port above it: \"adb forward tcp:" + CodeAssistMcpServer.DEFAULT_FTP_PORT +
+                " tcp:" + CodeAssistMcpServer.DEFAULT_FTP_PORT + "\" and \"adb forward tcp:" +
+                (CodeAssistMcpServer.DEFAULT_FTP_PORT + 1) + " tcp:" + (CodeAssistMcpServer.DEFAULT_FTP_PORT + 1) +
+                "\". Anyone else on the device can read and write those files too. " +
+                "action=status only reports the current state.",
+            parameters = toolSchema {
+                string("action", "start, stop, or status", enum = listOf("start", "stop", "status"))
+            },
+        )
+        override suspend fun execute(args: ToolArgs): ToolExecutionResult {
+            when (args.string("action")) {
+                "start" -> setFtpServerEnabled(true)
+                "stop" -> setFtpServerEnabled(false)
+            }
+            return if (ftpServer != null) {
+                ToolExecutionResult.ok(
+                    "FTP asset server is RUNNING on 127.0.0.1:${CodeAssistMcpServer.DEFAULT_FTP_PORT} " +
+                        "(uploads land in <project>/assets/).",
+                )
+            } else {
+                ToolExecutionResult.ok("FTP asset server is stopped.")
+            }
+        }
+    }
+
+    /** The `clone_repository` tool: clones a Git repository URL into the IDE projects directory and opens it. */
+    private val cloneRepositoryTool = object : AgentTool {
+        override val spec = ToolSpec(
+            name = "clone_repository",
+            description = "Clone a Git repository (e.g. https://github.com/owner/repo) into the IDE workspace and open it as the active project.",
+            parameters = toolSchema {
+                string("url", "The HTTPS Git repository URL to clone (e.g. https://github.com/owner/repo).")
+                string("directory_name", "Optional target folder name. Defaults to the repository name.", required = false)
+            },
+        )
+        override suspend fun execute(args: ToolArgs): ToolExecutionResult {
+            val ideBackend = ctx as? dev.ide.ui.backend.IdeBackend
+                ?: return ToolExecutionResult.error("VCS service is unavailable in this context.")
+            val url = args.string("url").trim()
+            val dirName = args.optString("directory_name")?.trim().orEmpty().ifBlank {
+                url.removeSuffix(".git").trimEnd('/').substringAfterLast('/')
+            }
+            val res = ideBackend.vcs.cloneRepository(url, dirName)
+            if (!res.ok) return ToolExecutionResult.error(res.message)
+            val clonedPath = res.path
+            if (!clonedPath.isNullOrBlank()) {
+                ideBackend.projects.openProject(clonedPath)
+            }
+            return ToolExecutionResult.ok(
+                "Cloned $url into ${clonedPath ?: dirName} (${res.projectKind ?: "project"}) and opened it as the active project.",
+            )
+        }
+    }
+
+    /** The `run_project` tool: builds and runs the currently open project in the IDE's Run screen. */
+    private val runProjectTool = object : AgentTool {
+        override val spec = ToolSpec(
+            name = "run_project",
+            description = "Build and run the currently open project in the IDE's Run screen (opens its window, preview, or console output).",
+            parameters = toolSchema { },
+        )
+        override suspend fun execute(args: ToolArgs): ToolExecutionResult {
+            val ideBackend = ctx as? dev.ide.ui.backend.IdeBackend
+                ?: return ToolExecutionResult.error("Build service is unavailable in this context.")
+            ideBackend.build.runBuild()
+            return ToolExecutionResult.ok("Started build & run for project '${ideBackend.project.name}'.")
+        }
+    }
+
+    private val liteRtCornerTool = createLiteRtCornerTool(
+        managerProvider = { liteRtManager },
+        scaffoldClientIntoWorkspace = { lang -> scaffoldGuestClientInternal(lang) },
+        onSwitchProviderInHost = { providerId -> applyUniversalProviderToHostPrefs(providerId) },
+    )
+
+    private val spillStore = dev.ide.agent.impl.ToolResultSpillStore(checkpoints)
+    private val usageLedger = dev.ide.agent.impl.UsageLedger()
+
+    private val tools = dev.ide.agent.impl.createSelfExtendingToolRegistry(
+        workspace = checkpoints,
+        extraTools = listOf(ftpControlTool, cloneRepositoryTool, runProjectTool, liteRtCornerTool),
+        gateProvider = { gate },
+        spillStore = spillStore,
+        usageLedger = usageLedger,
+    )
+
+    /** The MCP server's tools write straight to the workspace: an external client's edits are not a chat turn,
+     *  and recording them into one would let that turn's Undo revert someone else's work. */
+    private val mcpTools = dev.ide.agent.impl.createSelfExtendingToolRegistry(
+        workspace = workspace,
+        extraTools = listOf(ftpControlTool, cloneRepositoryTool, runProjectTool, liteRtCornerTool),
+        gateProvider = { AllowAllGate },
+    )
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val log = Log.logger("ide.agent")
+
+    private val _liteRtCornerState: MutableStateFlow<UiLiteRtCornerState> by lazy {
+        val flow = MutableStateFlow(liteRtManager.currentSnapshot().toUi())
+        scope.launch {
+            liteRtManager.state.collect { snap ->
+                flow.value = snap.toUi()
+            }
+        }
+        flow
+    }
+    override val liteRtCornerState: StateFlow<UiLiteRtCornerState> by lazy { _liteRtCornerState.asStateFlow() }
+
+    /** The in-app MCP-over-HTTP server, started when the "MCP server" AI setting is on. The server is
+     *  opt-in: enabling it is itself the permission to edit the open project, so its tools run under
+     *  [AllowAllGate] (a remote client cannot answer the interactive UI prompts). */
+    @Volatile
+    private var mcpServer: HttpMcpServer? = null
+
+    /** The local FTP asset server, started when the AI settings "FTP server" toggle (or the `ftp_server`
+     *  tool) is on. Anonymous and bound to 127.0.0.1 only; uploads land in `<project>/assets`. */
+    @Volatile
+    private var ftpServer: FtpServer? = null
+
+    // Closing the listener does not join established client threads; only a fresh process clears this boundary.
+    internal fun hasExternalWorkspaceWriters(): Boolean = externalWorkspaceWasExposed || mcpServer != null || ftpServer != null
+
+    init {
+        live += WeakReference(this)
+        if (prefBool("mcpServer", default = false)) {
+            mcpServer = startMcpServer()
+        }
+        if (prefBool(FTP_PREF, default = false)) {
+            ftpServer = startFtpServer()
+        }
+    }
+
+    private val _chatState = MutableStateFlow(UiAgentChatState())
+    override val chatState: StateFlow<UiAgentChatState> = _chatState.asStateFlow()
+
+    private val _permissionRequest = MutableStateFlow<UiAgentPermissionRequest?>(null)
+    override val permissionRequest: StateFlow<UiAgentPermissionRequest?> = _permissionRequest.asStateFlow()
+
+    private val _models = MutableStateFlow<List<UiAgentModel>>(emptyList())
+    override val models: StateFlow<List<UiAgentModel>> = _models.asStateFlow()
+
+    private val permIds = AtomicInteger(0)
+    private val msgIds = AtomicLong(0)
+
+    @Volatile
+    private var pendingPermission: CompletableDeferred<Boolean>? = null
+
+    @Volatile
+    private var sessionAllowAll = false
+
+    private var job: Job? = null
+    private var loop: AgentLoop? = null
+    private var loopSignature: String? = null
+
+    /** The provider/model half of [loopSignature]; a change to it means replayed reasoning must be dropped. */
+    private var loopClientSignature: String? = null
+
+    // --- configuration (read from the AI settings page's prefs) ---
+
+    private fun pref(key: String): String? =
+        ctx.manager?.preference("settings.$AI_PAGE.$key")?.takeIf { it.isNotBlank() }
+
+    private fun prefInt(key: String): Int? = pref(key)?.toIntOrNull()
+
+    private fun prefBool(key: String, default: Boolean): Boolean = pref(key)?.toBooleanStrictOrNull() ?: default
+
+    /**
+     * Starts the workspace MCP server for an external agent host (the ZCode agent reaches
+     * the Kotlin-native tools — clone, build, semantic navigation — over MCP). Returns the
+     * bound port, or null when the server could not start.
+     */
+    internal fun ensureMcpServerForHost(): Int? {
+        if (mcpServer == null) mcpServer = startMcpServer()
+        return mcpServer?.port
+    }
+
+    /** Binds the MCP-over-HTTP server to the engine workspace; null when startup fails (e.g. port taken). */
+    private fun startMcpServer(): HttpMcpServer? = try {
+        externalWorkspaceWasExposed = true
+        CodeAssistMcpServer.startHttpServer(
+            workspace = workspace,
+            port = CodeAssistMcpServer.DEFAULT_HTTP_PORT,
+            tools = mcpTools,
+            gate = AllowAllGate,
+        )
+    } catch (e: Exception) {
+        // WARN, not ERROR: an ERROR carrying a throwable is what raises the app's critical-error dialog, and
+        // this failure is both expected and harmless — the usual cause is the port already being held (the
+        // app's own previous process, or another app), and the caller simply leaves the server off. Telling
+        // the user about it with a modal on startup, which is where this runs, is the wrong trade.
+        log.warn("MCP server not started on port ${CodeAssistMcpServer.DEFAULT_HTTP_PORT}: ${e.message}")
+        null
+    }
+
+    /** Binds the FTP asset server to `<project>/assets` (created on start); null when no project is open or
+     *  startup fails (e.g. port taken). */
+    private fun startFtpServer(): FtpServer? = try {
+        val assets = ctx.servicesOrNull?.workspaceRoot?.resolve("assets")
+            ?: return null
+        externalWorkspaceWasExposed = true
+        Files.createDirectories(assets)
+        CodeAssistMcpServer.startFtpServer(assets, CodeAssistMcpServer.DEFAULT_FTP_PORT)
+    } catch (e: Exception) {
+        // WARN for the same reason as the MCP server above: an optional server that cannot take its port is
+        // a disabled feature, not an error the user has to dismiss.
+        log.warn("FTP server not started on port ${CodeAssistMcpServer.DEFAULT_FTP_PORT}: ${e.message}")
+        null
+    }
+
+    override fun ftpServerSupported(): Boolean = true
+
+    override fun ftpServerEnabled(): Boolean = ftpServer != null
+
+    override fun setFtpServerEnabled(enabled: Boolean) {
+        val current = ctx.servicesOrNull
+        if (current == null) setFtpServerEnabledLocked(enabled)
+        else current.mutateSources { setFtpServerEnabledLocked(enabled) }
+    }
+
+    private fun setFtpServerEnabledLocked(enabled: Boolean) {
+        ctx.manager?.setPreference("settings.$AI_PAGE.$FTP_PREF", enabled.toString())
+        if (enabled) {
+            if (ftpServer == null) ftpServer = startFtpServer()
+        } else {
+            ftpServer?.close()
+            ftpServer = null
+        }
+    }
+
+    private fun modePref(): PermissionMode =
+        runCatching { PermissionMode.valueOf(ctx.manager?.preference(MODE_PREF).orEmpty()) }
+            .getOrDefault(PermissionMode.ASK_EACH)
+
+    private data class ResolvedConfig(
+        /** What the user picked, possibly the [GATEWAY] pseudo-provider. */
+        val selectedId: String,
+        /** The registry provider used to build the client (gateway maps to the OpenAI client). */
+        val clientProviderId: String,
+        val apiKey: String?,
+        val model: String,
+        val baseUrl: String?,
+        /** An optional additional CA certificate (PEM) to trust for a custom endpoint behind a private/regional
+         *  CA (e.g. GigaChat's Russian Trusted Root CA). Only the custom [GATEWAY] endpoint uses it. */
+        val caCertificatePem: String? = null,
+        val onDeviceModelInstalled: Boolean = false,
+        val requiresApiKey: Boolean = true,
+    ) {
+        /** A custom gateway is often a local server (Ollama, LM Studio) that takes no key; its URL is what it needs.
+         *  For on-device LiteRT-LM, readiness requires a verified `.litertlm` model installed on disk. */
+        val ready: Boolean
+            get() = when {
+                selectedId == GATEWAY -> !baseUrl.isNullOrBlank()
+                selectedId == LiteRtLmProvider.ID -> onDeviceModelInstalled
+                !requiresApiKey -> !baseUrl.isNullOrBlank()
+                else -> !apiKey.isNullOrBlank()
+            }
+    }
+
+    private fun resolveConfig(): ResolvedConfig {
+        val selected = pref("provider") ?: registry.providers.firstOrNull()?.id ?: "anthropic"
+        if (selected == GATEWAY) {
+            return ResolvedConfig(
+                selectedId = GATEWAY,
+                clientProviderId = "openai",
+                apiKey = pref("gatewayKey"),
+                model = pref("gatewayModel").orEmpty(),
+                baseUrl = pref("gatewayBaseUrl"),
+                caCertificatePem = pref("gatewayCaCert"),
+            )
+        }
+        if (selected == LiteRtLmProvider.ID) {
+            val activeArtifact = liteRtManager.activeInstalledModel()
+            val chosen = chosenModel(selected)?.takeIf { liteRtManager.verifiedArtifact(it) != null }
+                ?: activeArtifact?.modelId
+                ?: LiteRtLmCatalog.DEFAULT_MODEL_ID
+            val snap = liteRtManager.currentSnapshot()
+            return ResolvedConfig(
+                selectedId = LiteRtLmProvider.ID,
+                clientProviderId = LiteRtLmProvider.ID,
+                apiKey = if (activeArtifact != null) "on-device:${activeArtifact.modelId}" else "",
+                model = chosen,
+                baseUrl = snap.openAiEndpoint,
+                onDeviceModelInstalled = activeArtifact != null,
+            )
+        }
+        val provider = registry.provider(selected)
+        val universalProfile = liteRtManager.providerProfile(selected)
+        if (provider == null && universalProfile != null) {
+            val mappedClientId = when (universalProfile.apiFormat) {
+                CcSwitchApiFormat.ANTHROPIC_MESSAGES -> "anthropic"
+                CcSwitchApiFormat.GEMINI_NATIVE -> "gemini"
+                CcSwitchApiFormat.LITERT_ON_DEVICE -> LiteRtLmProvider.ID
+                CcSwitchApiFormat.OPENAI_CHAT, CcSwitchApiFormat.OPENAI_RESPONSES -> "openai"
+            }
+            val effectiveKey = pref(keyField(selected))?.takeIf { it.isNotBlank() } ?: universalProfile.apiKey
+            val effectiveBase = pref(baseUrlField(selected))?.takeIf { it.isNotBlank() } ?: universalProfile.baseUrl
+            val effectiveModel = chosenModel(selected)?.takeIf { it.isNotBlank() } ?: universalProfile.defaultModel
+            return ResolvedConfig(
+                selectedId = selected,
+                clientProviderId = mappedClientId,
+                apiKey = effectiveKey,
+                model = effectiveModel,
+                baseUrl = effectiveBase,
+                caCertificatePem = universalProfile.caCertificatePem.ifBlank { null },
+                onDeviceModelInstalled = liteRtManager.activeInstalledModel() != null,
+                requiresApiKey = universalProfile.requiresApiKey,
+            )
+        }
+        val effectiveKey = pref(keyField(selected))?.takeIf { it.isNotBlank() }
+            ?: universalProfile?.apiKey?.takeIf { it.isNotBlank() }
+        val effectiveBase = pref(baseUrlField(selected))?.takeIf { it.isNotBlank() }
+            ?: universalProfile?.baseUrl?.takeIf { it.isNotBlank() && it != provider?.let { "" } }
+        return ResolvedConfig(
+            selectedId = selected,
+            clientProviderId = selected,
+            apiKey = effectiveKey,
+            model = chosenModel(selected) ?: preferredModels[selected] ?: universalProfile?.defaultModel?.takeIf { it.isNotBlank() } ?: provider?.defaultModel.orEmpty(),
+            baseUrl = effectiveBase,
+        )
+    }
+
+    /**
+     * The model the user picked for [providerId], or null to let the provider choose. Picks are stored per
+     * provider: one shared `model` preference meant switching provider kept the old provider's model id, and
+     * the first request then failed against a model the new provider does not have. The legacy shared value is
+     * still honoured when it plausibly belongs to this provider.
+     */
+    private fun chosenModel(providerId: String): String? {
+        pref("model.$providerId")?.let { return it }
+        val legacy = pref("model") ?: return null
+        return legacy.takeIf { modelBelongsTo(it, providerId) }
+    }
+
+    private fun modelBelongsTo(model: String, providerId: String): Boolean = when (providerId) {
+        "antigravity" -> model.startsWith("gemini") || model.startsWith("claude") || model.startsWith("gpt-oss")
+        "anthropic" -> model.startsWith("claude")
+        "gemini" -> model.startsWith("gemini") || model.startsWith("gemma") || model.startsWith("models/")
+        "muse" -> model.startsWith("muse-")
+        "mimo" -> model.startsWith("mimo-")
+        "openai" -> !model.startsWith("claude") && !model.startsWith("gemini") && !model.startsWith("muse-") && !model.startsWith("mimo-") && '/' !in model
+        "openrouter" -> '/' in model
+        LiteRtLmProvider.ID -> LiteRtLmCatalog.find(model) != null
+        else -> true
+    }
+
+    /** Per provider, the model [LlmProvider.preferredModel] chose from the account's live list. */
+    private val preferredModels = ConcurrentHashMap<String, String>()
+
+    /** Models that failed this session for want of quota, so a suggestion never points back at one. */
+    private val exhaustedModels = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Models the provider answered "not found" for this session. Gemini keeps listing models it has closed to
+     * new projects (2.5 Pro), so the live list alone would keep offering a model that can never answer.
+     */
+    private val missingModels = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Whether [models] came from the custom gateway itself. When its `/v1/models` cannot be read the list falls
+     * back to the OpenAI defaults, which a local server does not serve, so those are never offered as a fix.
+     */
+    @Volatile private var gatewayModelsLive = false
+
+    /** One pacer per key + model, which is the scope a provider counts its per-minute limits against. */
+    private val pacers = ConcurrentHashMap<String, RequestPacer>()
+
+    private fun pacerFor(cfg: ResolvedConfig, model: String): RequestPacer {
+        val rpm = prefInt("rpm")?.takeIf { it > 0 }
+        val tpm = prefInt("tpmK")?.takeIf { it > 0 }?.let { it * 1_000L }
+        val key = "${cfg.selectedId}|${cfg.apiKey.hashCode()}|$model|$rpm|$tpm"
+        return pacers.getOrPut(key) { RequestPacer(rpm, tpm) }
+    }
+
+    private fun keyField(providerId: String): String = when (providerId) {
+        "antigravity" -> "antigravityKey"
+        "openai" -> "openaiKey"
+        "muse" -> "museKey"
+        "mimo" -> "mimoKey"
+        "gemini" -> "geminiKey"
+        "openrouter" -> "openrouterKey"
+        "anthropic" -> "anthropicKey"
+        LiteRtLmProvider.ID -> "litertKey"
+        GATEWAY -> "gatewayKey"
+        else -> "${providerId}Key"
+    }
+
+    private fun baseUrlField(providerId: String): String = when (providerId) {
+        GATEWAY -> "gatewayBaseUrl"
+        else -> "${providerId}BaseUrl"
+    }
+
+    /**
+     * Forces the loop to be rebuilt on the next send. The loop itself is kept so the rebuild carries its history
+     * over: nulling it here is what used to make picking a model in the chat silently drop the conversation.
+     */
+    private fun resetLoop() {
+        loopSignature = null
+    }
+
+    override fun config(): UiAgentConfig {
+        val cfg = resolveConfig()
+        val builtins = registry.providers.map { p ->
+            val isLiteRt = p.id == LiteRtLmProvider.ID
+            val activeLiteRt = if (isLiteRt) liteRtManager.activeInstalledModel() else null
+            val uProf = liteRtManager.providerProfile(p.id)
+            UiAgentProvider(
+                p.id, p.displayName,
+                p.models.map { UiAgentModel(it.id, it.displayName) },
+                activeLiteRt?.modelId ?: uProf?.defaultModel?.takeIf { it.isNotBlank() } ?: p.defaultModel,
+                apiKey = if (isLiteRt) {
+                    if (activeLiteRt != null) "on-device:${activeLiteRt.modelId}" else ""
+                } else {
+                    pref(keyField(p.id))?.takeIf { it.isNotBlank() } ?: uProf?.apiKey.orEmpty()
+                },
+                baseUrl = if (isLiteRt) {
+                    liteRtManager.currentSnapshot().openAiEndpoint
+                } else {
+                    pref(baseUrlField(p.id))?.takeIf { it.isNotBlank() } ?: uProf?.baseUrl.orEmpty()
+                },
+            )
+        }
+        val builtinIds = builtins.map { it.id }.toSet() + GATEWAY
+        val extraUniversal = liteRtManager.currentSnapshot().providerProfiles
+            .filter { it.id !in builtinIds && (it.apiKey.isNotBlank() || !it.requiresApiKey || it.id == cfg.selectedId) }
+            .map { prof ->
+                UiAgentProvider(
+                    id = prof.id,
+                    displayName = prof.name,
+                    models = prof.models.map { UiAgentModel(it.id, it.displayName) },
+                    defaultModel = prof.defaultModel,
+                    apiKey = prof.apiKey,
+                    baseUrl = prof.baseUrl,
+                )
+            }
+        // A synthetic "Custom gateway" entry (OpenAI-compatible endpoint); its client is the OpenAI provider.
+        val gateway = UiAgentProvider(
+            GATEWAY,
+            "Custom gateway",
+            emptyList(),
+            "",
+            apiKey = pref("gatewayKey").orEmpty(),
+            baseUrl = pref("gatewayBaseUrl").orEmpty(),
+        )
+        val configured = cfg.ready
+        return UiAgentConfig(
+            providers = builtins + extraUniversal + gateway,
+            selectedProvider = cfg.selectedId,
+            model = cfg.model,
+            configured = configured,
+            mode = modePref().toUi(),
+            effort = pref("reasoningEffort") ?: REASONING_EFFORT_DEFAULT,
+            gatewayBaseUrl = pref("gatewayBaseUrl").orEmpty(),
+            gatewayModel = pref("gatewayModel").orEmpty(),
+            gatewayCaCert = pref("gatewayCaCert").orEmpty(),
+        )
+    }
+
+    override fun setPermissionMode(mode: UiAgentPermissionMode) {
+        ctx.manager?.setPreference(MODE_PREF, mode.toDomain().name)
+    }
+
+    override fun setEffort(effort: String) {
+        val normalized = effort.ifBlank { REASONING_EFFORT_DEFAULT }
+        ctx.manager?.setPreference("settings.$AI_PAGE.reasoningEffort", normalized)
+        resetLoop()
+    }
+
+    override fun setModel(model: String) {
+        val selected = pref("provider") ?: registry.providers.firstOrNull()?.id ?: "anthropic"
+        val field = if (selected == GATEWAY) "gatewayModel" else "model.$selected"
+        ctx.manager?.setPreference("settings.$AI_PAGE.$field", model)
+        if (selected == LiteRtLmProvider.ID && liteRtManager.verifiedArtifact(model) != null) {
+            liteRtManager.activateModel(model)
+            syncLiteRtCornerState()
+        }
+        resetLoop()
+    }
+
+    override fun selectProvider(id: String) {
+        ctx.manager?.setPreference("settings.$AI_PAGE.provider", id)
+        liteRtManager.switchUniversalProvider(id)
+        syncLiteRtCornerState()
+        resetLoop()
+    }
+
+    override fun setProviderKey(providerId: String, key: String) {
+        ctx.manager?.setPreference("settings.$AI_PAGE.${keyField(providerId)}", key)
+        liteRtManager.providerProfile(providerId)?.let { prof ->
+            liteRtManager.upsertProviderProfile(prof.copy(apiKey = key))
+            syncLiteRtCornerState()
+        }
+        resetLoop()
+    }
+
+    override fun setProviderBaseUrl(providerId: String, baseUrl: String) {
+        ctx.manager?.setPreference("settings.$AI_PAGE.${baseUrlField(providerId)}", baseUrl.trim())
+        liteRtManager.providerProfile(providerId)?.let { prof ->
+            liteRtManager.upsertProviderProfile(prof.copy(baseUrl = baseUrl.trim()))
+            syncLiteRtCornerState()
+        }
+        resetLoop()
+    }
+
+    override fun setGateway(baseUrl: String, model: String, caCert: String) {
+        ctx.manager?.setPreference("settings.$AI_PAGE.gatewayBaseUrl", baseUrl)
+        ctx.manager?.setPreference("settings.$AI_PAGE.gatewayModel", model)
+        ctx.manager?.setPreference("settings.$AI_PAGE.gatewayCaCert", caCert)
+        liteRtManager.providerProfile(GATEWAY)?.let { prof ->
+            liteRtManager.upsertProviderProfile(
+                prof.copy(
+                    baseUrl = baseUrl.trim(),
+                    defaultModel = model.trim().ifBlank { prof.defaultModel },
+                    caCertificatePem = caCert,
+                ),
+            )
+            syncLiteRtCornerState()
+        }
+        resetLoop()
+    }
+
+    private fun applyUniversalProviderToHostPrefs(providerId: String) {
+        val prof = liteRtManager.providerProfile(providerId) ?: return
+        ctx.manager?.setPreference("settings.$AI_PAGE.provider", prof.id)
+        if (prof.id == GATEWAY) {
+            ctx.manager?.setPreference("settings.$AI_PAGE.gatewayBaseUrl", prof.baseUrl)
+            ctx.manager?.setPreference("settings.$AI_PAGE.gatewayModel", prof.defaultModel)
+            ctx.manager?.setPreference("settings.$AI_PAGE.gatewayKey", prof.apiKey)
+            ctx.manager?.setPreference("settings.$AI_PAGE.gatewayCaCert", prof.caCertificatePem)
+        } else {
+            if (prof.apiKey.isNotBlank()) {
+                ctx.manager?.setPreference("settings.$AI_PAGE.${keyField(prof.id)}", prof.apiKey)
+            }
+            if (prof.baseUrl.isNotBlank()) {
+                ctx.manager?.setPreference("settings.$AI_PAGE.${baseUrlField(prof.id)}", prof.baseUrl)
+            }
+            if (prof.defaultModel.isNotBlank()) {
+                ctx.manager?.setPreference("settings.$AI_PAGE.model.${prof.id}", prof.defaultModel)
+            }
+        }
+        syncLiteRtCornerState()
+        resetLoop()
+    }
+
+    override fun selectLlmSwitchMode(mode: UiLlmSwitchMode) {
+        liteRtManager.selectSwitchMode(mode.toDomain())
+        syncLiteRtCornerState()
+        resetLoop()
+    }
+
+    override fun switchUniversalProvider(providerId: String) {
+        val prof = liteRtManager.switchUniversalProvider(providerId) ?: return
+        applyUniversalProviderToHostPrefs(prof.id)
+    }
+
+    override fun saveUniversalProvider(input: UiLlmSwitchProviderInput) {
+        val existing = liteRtManager.providerProfile(input.id)
+        val saved = liteRtManager.upsertProviderProfile(input.toDomain(existing))
+        if (saved.id == pref("provider") || saved.id == liteRtManager.currentSnapshot().activeProviderId) {
+            applyUniversalProviderToHostPrefs(saved.id)
+        } else {
+            if (saved.apiKey.isNotBlank()) {
+                ctx.manager?.setPreference("settings.$AI_PAGE.${keyField(saved.id)}", saved.apiKey)
+            }
+            if (saved.baseUrl.isNotBlank()) {
+                ctx.manager?.setPreference("settings.$AI_PAGE.${baseUrlField(saved.id)}", saved.baseUrl)
+            }
+            if (saved.defaultModel.isNotBlank()) {
+                ctx.manager?.setPreference("settings.$AI_PAGE.model.${saved.id}", saved.defaultModel)
+            }
+            syncLiteRtCornerState()
+            resetLoop()
+        }
+    }
+
+    override fun deleteUniversalProvider(providerId: String) {
+        liteRtManager.deleteProviderProfile(providerId)
+        syncLiteRtCornerState()
+        resetLoop()
+    }
+
+    override fun addPresetProvider(presetId: String, apiKey: String) {
+        val added = liteRtManager.addPresetProvider(presetId, apiKey)
+        if (added != null && apiKey.isNotBlank()) {
+            ctx.manager?.setPreference("settings.$AI_PAGE.${keyField(added.id)}", apiKey)
+            ctx.manager?.setPreference("settings.$AI_PAGE.${baseUrlField(added.id)}", added.baseUrl)
+            ctx.manager?.setPreference("settings.$AI_PAGE.model.${added.id}", added.defaultModel)
+        }
+        syncLiteRtCornerState()
+        resetLoop()
+    }
+
+    override fun setAutoFailoverEnabled(enabled: Boolean) {
+        liteRtManager.setAutoFailoverEnabled(enabled)
+        syncLiteRtCornerState()
+        resetLoop()
+    }
+
+    override fun setCircuitBreakerEnabled(enabled: Boolean) {
+        liteRtManager.setCircuitBreakerEnabled(enabled)
+        syncLiteRtCornerState()
+        resetLoop()
+    }
+
+    override fun toggleProviderFailover(providerId: String, enabled: Boolean) {
+        liteRtManager.toggleProviderFailover(providerId, enabled)
+        syncLiteRtCornerState()
+    }
+
+    override fun moveProviderInFailoverQueue(providerId: String, delta: Int) {
+        liteRtManager.moveProviderInFailoverQueue(providerId, delta)
+        syncLiteRtCornerState()
+    }
+
+    override fun toggleProviderAggregation(providerId: String, enabled: Boolean) {
+        liteRtManager.toggleProviderAggregation(providerId, enabled)
+        syncLiteRtCornerState()
+    }
+
+    override fun resetProviderCircuitBreaker(providerId: String) {
+        liteRtManager.resetCircuitBreaker(providerId)
+        syncLiteRtCornerState()
+    }
+
+    override fun probeProviderHealth(providerId: String) {
+        liteRtManager.probeProviderHealthNow(providerId)
+        syncLiteRtCornerState()
+    }
+
+    override fun syncLiveToolConfigs() {
+        liteRtManager.syncLiveToolConfigs()
+        syncLiteRtCornerState()
+    }
+
+    private fun syncLiteRtCornerState(): UiLiteRtCornerState {
+        val ui = liteRtManager.currentSnapshot().toUi()
+        _liteRtCornerState.value = ui
+        return ui
+    }
+
+    override fun liteRtCorner(): UiLiteRtCornerState = syncLiteRtCornerState()
+
+    override fun selectLiteRtDelegate(delegate: UiLiteRtDelegate) {
+        liteRtManager.selectDelegate(delegate.toDomain())
+        syncLiteRtCornerState()
+    }
+
+    override fun downloadLiteRtModel(modelId: String) {
+        liteRtManager.downloadModel(modelId)
+        syncLiteRtCornerState()
+    }
+
+    override fun cancelLiteRtDownload(modelId: String) {
+        liteRtManager.cancelDownload(modelId)
+        syncLiteRtCornerState()
+    }
+
+    override fun deleteLiteRtModel(modelId: String) {
+        liteRtManager.deleteModel(modelId)
+        syncLiteRtCornerState()
+        resetLoop()
+    }
+
+    override fun activateLiteRtModel(modelId: String) {
+        if (liteRtManager.activateModel(modelId)) {
+            ctx.manager?.setPreference("settings.$AI_PAGE.model.${LiteRtLmProvider.ID}", modelId)
+            resetLoop()
+        }
+        syncLiteRtCornerState()
+    }
+
+    override fun useLiteRtInIdeAgent(modelId: String) {
+        if (liteRtManager.activateModel(modelId)) {
+            ctx.manager?.setPreference("settings.$AI_PAGE.provider", LiteRtLmProvider.ID)
+            ctx.manager?.setPreference("settings.$AI_PAGE.model.${LiteRtLmProvider.ID}", modelId)
+            liteRtManager.setStatusBanner("Active IDE Agent switched to LiteRT-LM ($modelId).")
+            resetLoop()
+        }
+        syncLiteRtCornerState()
+    }
+
+    override fun setLiteRtServerEnabled(enabled: Boolean) {
+        liteRtManager.setServerEnabled(enabled)
+        syncLiteRtCornerState()
+    }
+
+    override fun setLiteRtServerPort(port: Int) {
+        liteRtManager.setServerPort(port)
+        syncLiteRtCornerState()
+    }
+
+    override fun selectLiteRtGuestLanguage(language: UiLiteRtGuestLanguage) {
+        liteRtManager.selectGuestLanguage(language.toDomain())
+        syncLiteRtCornerState()
+    }
+
+    override fun runLiteRtSmokeTest(prompt: String) {
+        liteRtManager.runSmokeTestNow(prompt)
+        syncLiteRtCornerState()
+    }
+
+    override fun scaffoldLiteRtGuestClient(language: UiLiteRtGuestLanguage): String {
+        val written = scaffoldGuestClientNow(language.toDomain())
+        syncLiteRtCornerState()
+        return written
+    }
+
+    private fun scaffoldGuestClientNow(language: dev.ide.agent.impl.LiteRtGuestLanguage): String {
+        val snap = liteRtManager.currentSnapshot()
+        val code = LiteRtGuestSdkSnippets.generateSnippet(
+            language = language,
+            port = snap.serverPort,
+            modelId = snap.activeModelId.ifBlank { LiteRtLmCatalog.DEFAULT_MODEL_ID },
+            delegate = snap.selectedDelegate,
+            ipcAuthority = snap.ipcAuthority,
+        )
+        val rootDir = ctx.servicesOrNull?.workspaceRoot
+            ?: resolveLiteRtStorageRoot().resolve("guest-sdk")
+        val targetFile = rootDir.resolve(language.relativeFilePath).normalize()
+        runCatching {
+            Files.createDirectories(targetFile.parent)
+            Files.write(targetFile, code.toByteArray(Charsets.UTF_8))
+        }
+        val displayPath = if (ctx.servicesOrNull?.workspaceRoot != null) {
+            language.relativeFilePath
+        } else {
+            targetFile.toAbsolutePath().toString()
+        }
+        liteRtManager.setStatusBanner("Added ${language.displayName} local inference client at $displayPath")
+        return targetFile.toAbsolutePath().toString()
+    }
+
+    private suspend fun scaffoldGuestClientInternal(language: dev.ide.agent.impl.LiteRtGuestLanguage): String {
+        val path = scaffoldGuestClientNow(language)
+        syncLiteRtCornerState()
+        return path
+    }
+
+    override fun refreshModels() {
+        val cfg = resolveConfig()
+        val provider = registry.provider(cfg.clientProviderId) ?: return
+        val key = cfg.apiKey.orEmpty()
+        if (!cfg.ready) {
+            _models.value = provider.models.map { UiAgentModel(it.id, it.displayName) }
+            return
+        }
+        scope.launch {
+            val fetched = runCatching { provider.listModels(ProviderConfig(key, cfg.baseUrl, cfg.caCertificatePem)) }
+                .getOrDefault(provider.models)
+            gatewayModelsLive = cfg.selectedId == GATEWAY && fetched !== provider.models
+            val usable = fetched.filter { it.id !in missingModels }.ifEmpty { fetched }
+            rememberPreferred(cfg.selectedId, provider, usable)
+            _models.value = usable.map { UiAgentModel(it.id, it.displayName) }
+        }
+    }
+
+    private fun rememberPreferred(providerId: String, provider: dev.ide.agent.LlmProvider, models: List<LlmModelInfo>) {
+        provider.preferredModel(models)?.let { preferredModels[providerId] = it }
+    }
+
+    // --- the write-permission gate ---
+
+    private val gate = object : AgentPermissionGate {
+        override val mode: PermissionMode get() = modePref()
+
+        override suspend fun authorize(request: WriteRequest): Boolean = when (modePref()) {
+            PermissionMode.AUTO_ACCEPT -> true
+            PermissionMode.PLAN_ONLY -> false
+            PermissionMode.ASK_EACH -> {
+                if (sessionAllowAll) {
+                    true
+                } else {
+                    val deferred = CompletableDeferred<Boolean>()
+                    pendingPermission = deferred
+                    _permissionRequest.value = UiAgentPermissionRequest(
+                        permIds.incrementAndGet(), request.tool, request.summary, request.path,
+                        changes = request.changes.map { it.toUi() },
+                    )
+                    try {
+                        deferred.await()
+                    } finally {
+                        _permissionRequest.value = null
+                        pendingPermission = null
+                    }
+                }
+            }
+        }
+    }
+
+    override fun answerPermission(id: Int, decision: UiAgentPermissionDecision) {
+        when (decision) {
+            UiAgentPermissionDecision.DENY -> pendingPermission?.complete(false)
+            UiAgentPermissionDecision.ALLOW_ONCE -> pendingPermission?.complete(true)
+            UiAgentPermissionDecision.ALLOW_SESSION -> {
+                sessionAllowAll = true
+                pendingPermission?.complete(true)
+            }
+        }
+    }
+
+    // --- session lifecycle ---
+
+    /** Notes for the model about things the user did outside the chat (a revert), sent with the next message. */
+    private val pendingNotes = CopyOnWriteArrayList<String>()
+
+    /** A saved conversation's model-side history, adopted by the next loop that gets built. */
+    @Volatile
+    private var pendingHistory: List<LlmMessage>? = null
+
+    override fun newSession() {
+        job?.cancel()
+        loop?.reset()
+        loop = null
+        loopSignature = null
+        pendingHistory = null
+        pendingNotes.clear()
+        sessionAllowAll = false
+        _permissionRequest.value = null
+        _chatState.value = UiAgentChatState()
+    }
+
+    override fun stop() {
+        job?.cancel()
+        pendingPermission?.complete(false)
+        finishStreaming()
+    }
+
+    /**
+     * The loop for the current configuration, (re)built when the provider, model or tuning changed. A rebuild
+     * carries the conversation across; only a change of model drops replayed reasoning, whose signatures are
+     * bound to the model that produced it. Null (with an error shown) when the agent is not configured.
+     */
+    private fun ensureLoop(): AgentLoop? {
+        val cfg = resolveConfig()
+        val provider = registry.provider(cfg.clientProviderId)
+        if (provider == null) {
+            appendError("Unknown AI provider '${cfg.selectedId}'.")
+            return null
+        }
+        if (!cfg.ready) {
+            appendError(
+                if (cfg.selectedId == GATEWAY) "Add the gateway's base URL to use the agent. Tap the key icon to manage providers."
+                else "Add an API key to use the agent. Tap the key icon to manage providers.",
+            )
+            return null
+        }
+        val model = cfg.model.ifBlank { provider.defaultModel }
+        val maxIterations = prefInt("maxIterations") ?: DEFAULT_MAX_ITERATIONS
+        val maxTokens = prefInt("maxTokens") ?: DEFAULT_MAX_TOKENS
+        val thinkingBudget = prefInt("thinkingBudget")
+        val webSearch = prefBool("webSearch", default = true)
+        // "default" (or unset) leaves the field off the request, so each provider keeps its own default.
+        val effort = pref("reasoningEffort")?.takeIf { it != REASONING_EFFORT_DEFAULT }
+        val pacer = pacerFor(cfg, model)
+        val snap = liteRtManager.currentSnapshot()
+        val clientSignature =
+            "${cfg.selectedId}|$model|${cfg.baseUrl}|${cfg.apiKey.hashCode()}|${cfg.caCertificatePem.hashCode()}|${snap.switchMode.id}"
+        val signature = "$clientSignature|$maxIterations|$maxTokens|$thinkingBudget|$webSearch|$effort|${System.identityHashCode(pacer)}"
+        val existing = loop
+        if (existing != null && loopSignature == signature) return existing
+
+        val restored = pendingHistory
+        val carried = restored ?: existing?.snapshot()
+        val modelChanged = restored != null || (loopClientSignature != null && loopClientSignature != clientSignature)
+        val client = if (snap.switchMode != CcSwitchOperatingMode.DIRECT) {
+            LlmClient { req -> liteRtManager.streamUniversalChat(req) }
+        } else {
+            provider.client(ProviderConfig(cfg.apiKey.orEmpty(), cfg.baseUrl, cfg.caCertificatePem))
+        }
+        val built = AgentLoop(
+            client, model, tools, gate, ::systemPrompt,
+            sessionContext = ::sessionContext,
+            maxTokens = maxTokens,
+            maxIterations = maxIterations,
+            thinkingBudget = thinkingBudget,
+            webSearch = webSearch,
+            effort = effort,
+            compactor = if (provider.managesContext) HistoryCompactor.serverManaged() else HistoryCompactor(),
+            pacer = pacer,
+            checkpoints = checkpoints,
+            spillStore = spillStore,
+            usageLedger = usageLedger,
+        )
+        if (!carried.isNullOrEmpty()) built.restore(carried, dropThinking = modelChanged)
+        pendingHistory = null
+        loop = built
+        loopSignature = signature
+        loopClientSignature = clientSignature
+        return built
+    }
+
+    override fun send(text: String) {
+        if (text.isBlank() || _chatState.value.busy) return
+        val activeLoop = ensureLoop() ?: return
+        val attachments = _chatState.value.pendingAttachments
+        val sessionId = _chatState.value.sessionId ?: UUID.randomUUID().toString()
+
+        val userId = msgIds.incrementAndGet()
+        val assistantId = msgIds.incrementAndGet()
+        _chatState.update {
+            it.copy(
+                messages = it.messages +
+                    UiAgentMessage(userId, UiAgentRole.USER, text, attachments = attachments) +
+                    UiAgentMessage(assistantId, UiAgentRole.ASSISTANT, streaming = true),
+                busy = true,
+                pendingAttachments = emptyList(),
+                sessionId = sessionId,
+            )
+        }
+        checkpoints.startTurn(userId)
+        val notes = pendingNotes.toList().also { pendingNotes.clear() }
+        runLoop(assistantId, userId) { sink ->
+            val (prompt, images) = buildPrompt(text, attachments, notes)
+            activeLoop.send(prompt, sink, images)
+        }
+    }
+
+    override fun retry() {
+        if (_chatState.value.busy) return
+        val activeLoop = ensureLoop() ?: return
+        if (!activeLoop.canResume()) return
+        val assistantId = msgIds.incrementAndGet()
+        _chatState.update {
+            it.copy(
+                messages = it.messages + UiAgentMessage(assistantId, UiAgentRole.ASSISTANT, streaming = true),
+                busy = true,
+            )
+        }
+        val userId = _chatState.value.messages.lastOrNull { it.role == UiAgentRole.USER }?.id
+        runLoop(assistantId, userId) { sink -> activeLoop.retry(sink) }
+    }
+
+    /**
+     * The model-side form of a user message: [text] with its attachments folded in. A file or selection goes
+     * in as a tagged block ahead of the question (path and lines included, so the model can act on them with
+     * its tools); an image goes in as an image part; each `@path` mention of a project file attaches that file.
+     * Bounded, so a mention of a huge file cannot blow the context.
+     */
+    private suspend fun buildPrompt(
+        text: String,
+        attachments: List<UiAgentAttachment>,
+        notes: List<String>,
+    ): Pair<String, List<ContentPart.Image>> {
+        val images = ArrayList<ContentPart.Image>()
+        val blocks = StringBuilder()
+        val attachedPaths = HashSet<String>()
+        for (a in attachments) when (a.kind) {
+            UiAgentAttachmentKind.IMAGE -> {
+                val data = a.base64 ?: continue
+                images += ContentPart.Image(a.mediaType ?: "image/png", data)
+            }
+            UiAgentAttachmentKind.FILE -> {
+                val path = a.path ?: continue
+                if (attachedPaths.add(path)) appendFile(blocks, path)
+            }
+            UiAgentAttachmentKind.SELECTION -> {
+                blocks.append("<selection path=\"").append(a.path.orEmpty()).append("\" lines=\"")
+                    .append(a.startLine ?: 0).append('-').append(a.endLine ?: 0).append("\">\n")
+                    .append(a.text.orEmpty().take(MAX_ATTACHED_CHARS)).append("\n</selection>\n\n")
+            }
+        }
+        for (mention in MENTION.findAll(text)) {
+            val path = mention.groupValues[1].trimEnd('.', ',', ':', ';', ')')
+            val resolved = resolveProjectFile(path) ?: continue
+            if (attachedPaths.add(resolved.toString())) appendFile(blocks, resolved.toString(), label = path)
+        }
+        if (notes.isNotEmpty()) {
+            blocks.append("<system-reminder>\n").append(notes.joinToString("\n")).append("\n</system-reminder>\n\n")
+        }
+        return (if (blocks.isEmpty()) text else blocks.append(text).toString()) to images
+    }
+
+    private suspend fun appendFile(out: StringBuilder, path: String, label: String = path) {
+        val body = runCatching { workspace.readFile(path) }.getOrNull() ?: return
+        val bounded = if (body.length > MAX_ATTACHED_CHARS) {
+            body.take(MAX_ATTACHED_CHARS) + "\n… (truncated; read_file has the rest)"
+        } else {
+            body
+        }
+        out.append("<file path=\"").append(label).append("\">\n").append(bounded).append("\n</file>\n\n")
+    }
+
+    /** [path] as an existing regular file inside the project, or null. */
+    private fun resolveProjectFile(path: String): Path? {
+        val root = ctx.servicesOrNull?.workspaceRoot ?: return null
+        val resolved = runCatching { root.resolve(path).normalize() }.getOrNull() ?: return null
+        return resolved.takeIf { it.startsWith(root) && Files.isRegularFile(it) }
+    }
+
+    /** Run a loop turn on the scope, folding its events into [assistantId] and mapping any failure to a
+     *  retryable error bubble; afterwards mark [userId]'s turn undoable if it changed files, and save the
+     *  session. Shared by [send], [retry] and the commands. */
+    private fun runLoop(assistantId: Long, userId: Long? = null, block: suspend (AgentEventSink) -> Unit) {
+        val captured = ctx.servicesOrNull
+        job = scope.launch {
+            var release: (() -> Unit)? = null
+            val sink = AgentEventSink { event ->
+                check(ctx.servicesOrNull === captured) { "The project changed during the agent request." }
+                applyEvent(assistantId, event)
+            }
+            try {
+                release = captured?.retainSourceOperation()
+                check(ctx.servicesOrNull === captured) { "The project changed during the agent request." }
+                block(sink)
+            } catch (e: CancellationException) {
+                finishStreaming()
+                afterTurn(userId)
+                throw e
+            } catch (e: Exception) {
+                appendError(e.message ?: "The agent request failed.", canRetry = true)
+                finishStreaming()
+            } finally {
+                release?.invoke()
+            }
+            afterTurn(userId)
+        }
+    }
+
+    private fun afterTurn(userId: Long?) {
+        if (userId != null && checkpoints.hasChanges(userId)) {
+            _chatState.update { s ->
+                s.copy(messages = s.messages.map { if (it.id == userId) it.copy(canUndo = true) else it })
+            }
+        }
+        saveSession()
+    }
+
+    private fun saveSession() {
+        val state = _chatState.value
+        val id = state.sessionId ?: return
+        val history = loop?.snapshot() ?: return
+        runCatching { sessionStore.save(id, state.messages, history) }
+    }
+
+    private fun applyEvent(assistantId: Long, event: AgentEvent) {
+        // Any event after a wait means the wait is over.
+        if (event !is AgentEvent.Waiting) {
+            mutateAssistant(assistantId) { if (it.waitUntilMs != null) it.copy(waitUntilMs = null, waitReason = "") else it }
+        }
+        when (event) {
+            is AgentEvent.UserMessage -> Unit // already seeded
+            is AgentEvent.AssistantTextDelta -> mutateAssistant(assistantId) { it.withText(event.text) }
+            is AgentEvent.AssistantThinkingDelta -> mutateAssistant(assistantId) { it.withThinking(event.text) }
+            is AgentEvent.ToolCallStarted -> mutateAssistant(assistantId) {
+                it.copy(
+                    toolCalls = it.toolCalls + UiAgentToolCall(event.id, event.displaySummary, UiAgentToolStatus.RUNNING),
+                    segments = it.segments.appendTool(event.id),
+                )
+            }
+            is AgentEvent.ToolCallFinished -> mutateAssistant(assistantId) { m ->
+                m.copy(toolCalls = m.toolCalls.map {
+                    if (it.id == event.id) {
+                        it.copy(
+                            status = if (event.ok) UiAgentToolStatus.OK else UiAgentToolStatus.ERROR,
+                            detail = event.resultSummary,
+                        )
+                    } else {
+                        it
+                    }
+                })
+            }
+            is AgentEvent.ToolCallDenied -> mutateAssistant(assistantId) { m ->
+                m.copy(toolCalls = m.toolCalls.map {
+                    if (it.id == event.id) it.copy(status = UiAgentToolStatus.DENIED, detail = event.reason) else it
+                })
+            }
+            is AgentEvent.FilesChanged -> mutateAssistant(assistantId) { m ->
+                m.copy(toolCalls = m.toolCalls.map {
+                    if (it.id == event.id) it.copy(changes = event.changes.map { c -> c.toUi() }) else it
+                })
+            }
+            is AgentEvent.TodosUpdated -> _chatState.update { s ->
+                s.copy(todos = event.todos.map { UiAgentTodo(it.content, todoStatus(it.status)) })
+            }
+            is AgentEvent.Waiting -> mutateAssistant(assistantId) {
+                it.copy(waitUntilMs = event.untilEpochMs, waitReason = event.reason)
+            }
+            is AgentEvent.TurnCompleted -> {
+                event.usage?.let { u ->
+                    mutateAssistant(assistantId) { m ->
+                        m.copy(usage = UiAgentUsage(u.inputTokens, u.outputTokens, u.cacheReadTokens, u.cacheWriteTokens))
+                    }
+                }
+                finishStreaming()
+            }
+            is AgentEvent.Error -> {
+                appendError(event.message, canRetry = true, suggestedModel = suggestionFor(event.kind))
+                finishStreaming()
+            }
+        }
+    }
+
+    /**
+     * For an error a different model fixes (no quota for this model, its daily allowance spent, or the model
+     * retired or closed to the account), the model to offer instead: the provider's pick from the account's live
+     * list, then its default, then anything else it lists, skipping every model that has already failed this way.
+     * A model picked once stays picked across launches, so without this offer a retired pick failed every send.
+     */
+    private fun suggestionFor(kind: String?): String? {
+        val missing = kind == LlmErrorKind.NOT_FOUND.name
+        if (!missing && kind != LlmErrorKind.MODEL_NOT_ON_PLAN.name && kind != LlmErrorKind.DAILY_LIMIT.name) return null
+        val cfg = resolveConfig()
+        if (cfg.selectedId == GATEWAY) return gatewaySuggestion(missing, cfg.model)
+        val provider = registry.provider(cfg.clientProviderId) ?: return null
+        exhaustedModels += cfg.model
+        if (missing) {
+            missingModels += cfg.model
+            _models.update { list -> list.filterNot { it.id == cfg.model } }
+        }
+        val listed = _models.value.map { it.id }.ifEmpty { provider.models.map { it.id } }
+        val candidates = listOfNotNull(preferredModels[cfg.selectedId], provider.defaultModel) + listed
+        return candidates.firstOrNull { it !in exhaustedModels }
+    }
+
+    /**
+     * A gateway has no default to fall back on, but when it lists its models a "not found" for the typed name
+     * (often a file name such as `Qwen3.5-2B-Q4_0.gguf` where the server's id differs) can offer one it serves:
+     * the closest by name, else the first.
+     */
+    private fun gatewaySuggestion(missing: Boolean, model: String): String? {
+        if (!missing || !gatewayModelsLive) return null
+        missingModels += model
+        val listed = _models.value.map { it.id }.filter { it != model && it !in missingModels }
+        if (listed.isEmpty()) return null
+        val stem = model.substringAfterLast('/').substringBeforeLast(".gguf").lowercase()
+        return listed.firstOrNull { it.lowercase().contains(stem) || stem.contains(it.substringAfterLast('/').lowercase()) }
+            ?: listed.first()
+    }
+
+    private fun todoStatus(status: String): UiAgentTodoStatus = when (status) {
+        "in_progress" -> UiAgentTodoStatus.IN_PROGRESS
+        "completed" -> UiAgentTodoStatus.DONE
+        else -> UiAgentTodoStatus.PENDING
+    }
+
+    private fun FileChange.toUi(): UiAgentFileChange = UiAgentFileChange(displayPath(path), before, after)
+
+    /** A path shown relative to the project root when it is inside it. */
+    private fun displayPath(path: String): String {
+        val root = ctx.servicesOrNull?.workspaceRoot?.toString() ?: return path
+        return if (path.startsWith("$root/")) path.removePrefix("$root/") else path
+    }
+
+    /**
+     * Appends streamed answer text. A delta that follows a tool call or reasoning starts a new step, and the
+     * whole-turn [UiAgentMessage.text] gets a paragraph break there so two steps' sentences do not run together.
+     */
+    private fun UiAgentMessage.withText(delta: String): UiAgentMessage {
+        val last = segments.lastOrNull()
+        if (last is UiAgentSegment.Text) {
+            return copy(text = text + delta, segments = segments.dropLast(1) + UiAgentSegment.Text(last.text + delta))
+        }
+        val joined = if (text.isBlank()) delta.trimStart() else text.trimEnd() + "\n\n" + delta.trimStart()
+        return copy(text = joined, segments = segments + UiAgentSegment.Text(delta.trimStart()))
+    }
+
+    private fun UiAgentMessage.withThinking(delta: String): UiAgentMessage {
+        val last = segments.lastOrNull()
+        if (last is UiAgentSegment.Thinking) {
+            return copy(thinking = thinking + delta, segments = segments.dropLast(1) + UiAgentSegment.Thinking(last.text + delta))
+        }
+        val joined = if (thinking.isBlank()) delta.trimStart() else thinking.trimEnd() + "\n\n" + delta.trimStart()
+        return copy(thinking = joined, segments = segments + UiAgentSegment.Thinking(delta.trimStart()))
+    }
+
+    private fun List<UiAgentSegment>.appendTool(id: String): List<UiAgentSegment> {
+        val last = lastOrNull()
+        return if (last is UiAgentSegment.Tools) dropLast(1) + UiAgentSegment.Tools(last.ids + id) else this + UiAgentSegment.Tools(listOf(id))
+    }
+
+    private fun mutateAssistant(id: Long, block: (UiAgentMessage) -> UiAgentMessage) {
+        _chatState.update { s -> s.copy(messages = s.messages.map { if (it.id == id) block(it) else it }) }
+    }
+
+    private fun finishStreaming() {
+        _chatState.update { s ->
+            s.copy(
+                messages = s.messages.map {
+                    if (it.streaming || it.waitUntilMs != null) it.copy(streaming = false, waitUntilMs = null, waitReason = "") else it
+                },
+                busy = false,
+            )
+        }
+    }
+
+    private fun appendError(message: String, canRetry: Boolean = false, suggestedModel: String? = null) {
+        _chatState.update {
+            it.copy(
+                messages = it.messages + UiAgentMessage(
+                    msgIds.incrementAndGet(), UiAgentRole.ASSISTANT,
+                    text = message, isError = true, canRetry = canRetry, suggestedModel = suggestedModel,
+                ),
+                busy = false,
+            )
+        }
+    }
+
+    private fun appendInfo(message: String) {
+        _chatState.update {
+            it.copy(messages = it.messages + UiAgentMessage(msgIds.incrementAndGet(), UiAgentRole.ASSISTANT, text = message))
+        }
+    }
+
+    // --- attachments and mentions ---
+
+    override fun attach(attachment: UiAgentAttachment) {
+        _chatState.update { s ->
+            if (attachment in s.pendingAttachments) s else s.copy(pendingAttachments = s.pendingAttachments + attachment)
+        }
+    }
+
+    override fun detach(index: Int) {
+        _chatState.update { s ->
+            s.copy(pendingAttachments = s.pendingAttachments.filterIndexed { i, _ -> i != index })
+        }
+    }
+
+    /** The project's files (relative paths), cached briefly so typing after `@` does not walk the tree per key. */
+    @Volatile
+    private var fileCache: Pair<Long, List<String>>? = null
+
+    override suspend fun mentionCandidates(query: String): List<UiAgentMention> {
+        val root = ctx.servicesOrNull?.workspaceRoot ?: return emptyList()
+        val files = projectFiles(root)
+        val q = query.lowercase()
+        // Name matches before path matches, then shorter paths first: the file you mean is usually the one whose
+        // name you are typing.
+        return files.asSequence()
+            .map { it to it.substringAfterLast('/').lowercase() }
+            .filter { (path, name) -> q.isEmpty() || name.contains(q) || path.lowercase().contains(q) }
+            .sortedWith(compareBy({ !it.second.startsWith(q) }, { !it.second.contains(q) }, { it.first.length }))
+            .take(MAX_MENTIONS)
+            .map { (path, _) -> UiAgentMention(path.substringAfterLast('/'), path, path.substringBeforeLast('/', "")) }
+            .toList()
+    }
+
+    private fun projectFiles(root: Path): List<String> {
+        val now = System.currentTimeMillis()
+        fileCache?.let { (at, files) -> if (now - at < FILE_CACHE_MS) return files }
+        val files = ArrayList<String>()
+        runCatching {
+            Files.walk(root).use { stream ->
+                val it = stream.iterator()
+                while (it.hasNext() && files.size < MAX_INDEXED_FILES) {
+                    val p = it.next()
+                    val rel = root.relativize(p).toString()
+                    if (rel.isEmpty() || rel.split('/').any { seg -> seg in SKIPPED_DIRS || seg.startsWith(".") }) continue
+                    if (Files.isRegularFile(p)) files += rel
+                }
+            }
+        }
+        fileCache = now to files
+        return files
+    }
+
+    // --- commands ---
+
+    override fun commands(): List<UiAgentCommand> = COMMANDS
+
+    override fun runCommand(name: String, args: String): Boolean {
+        when (name) {
+            "clear", "new" -> newSession()
+            "compact" -> compact()
+            "init" -> send(INIT_PROMPT + if (args.isNotBlank()) "\n\nAlso: $args" else "")
+            "undo" -> {
+                val last = _chatState.value.messages.lastOrNull { it.role == UiAgentRole.USER && it.canUndo }
+                if (last != null) undoTurn(last.id) else appendInfo("Nothing to undo: the agent has not changed any files.")
+            }
+            "clone" -> {
+                val url = args.trim().substringBefore(' ')
+                if (url.isBlank()) {
+                    appendInfo("Usage: `/clone https://github.com/owner/repo`")
+                    return true
+                }
+                val ideBackend = ctx as? dev.ide.ui.backend.IdeBackend ?: return false
+                val dirName = url.removeSuffix(".git").trimEnd('/').substringAfterLast('/')
+                scope.launch {
+                    val res = ideBackend.vcs.cloneRepository(url, dirName)
+                    if (res.ok && !res.path.isNullOrBlank()) {
+                        ideBackend.projects.openProject(res.path!!)
+                        appendInfo("✓ Cloned **$dirName** from `$url` into `${res.path}` and opened it.")
+                    } else {
+                        appendError("Clone failed for `$url`: ${res.message}")
+                    }
+                }
+            }
+            else -> return false
+        }
+        return true
+    }
+
+    private fun compact() {
+        if (_chatState.value.busy) return
+        val activeLoop = ensureLoop() ?: return
+        if (!activeLoop.canResume()) {
+            appendInfo("Nothing to compact yet.")
+            return
+        }
+        val assistantId = msgIds.incrementAndGet()
+        _chatState.update {
+            it.copy(
+                messages = it.messages + UiAgentMessage(
+                    assistantId, UiAgentRole.ASSISTANT, text = COMPACTED, streaming = true,
+                    segments = listOf(UiAgentSegment.Text(COMPACTED)),
+                ),
+                busy = true,
+            )
+        }
+        runLoop(assistantId) { sink -> activeLoop.compactConversation(sink) }
+    }
+
+    // --- saved sessions ---
+
+    override fun sessions(): List<UiAgentSessionSummary> = sessionStore.list()
+
+    override fun resumeSession(id: String) {
+        val saved = sessionStore.load(id) ?: return
+        newSession()
+        val maxId = saved.messages.maxOfOrNull { it.id } ?: 0L
+        while (msgIds.get() < maxId) msgIds.set(maxId)
+        pendingHistory = saved.history
+        _chatState.value = UiAgentChatState(messages = saved.messages, sessionId = id)
+    }
+
+    override fun deleteSession(id: String) {
+        sessionStore.delete(id)
+        if (_chatState.value.sessionId == id) newSession()
+    }
+
+    // --- undo ---
+
+    override fun undoTurn(messageId: Long) {
+        if (_chatState.value.busy) return
+        val message = _chatState.value.messages.firstOrNull { it.id == messageId } ?: return
+        val captured = ctx.servicesOrNull
+        scope.launch {
+            var release: (() -> Unit)? = null
+            try {
+                release = captured?.retainSourceOperation()
+                check(ctx.servicesOrNull === captured) { "The project changed before undo." }
+                val report = checkpoints.revert(messageId)
+                finishUndo(messageId, message.text, report)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                appendError("The project changed before undo could complete.", canRetry = false)
+            } finally {
+                release?.invoke()
+            }
+        }
+    }
+
+    private fun finishUndo(messageId: Long, message: String, report: String) {
+        _chatState.update { s ->
+            s.copy(messages = s.messages.map {
+                if (it.role == UiAgentRole.USER && it.id >= messageId && it.canUndo) it.copy(canUndo = false, undone = true) else it
+            })
+        }
+        appendInfo(report)
+        // The model still remembers making those edits; without this it would edit files that are no longer
+        // in the state it thinks they are.
+        pendingNotes += "The user reverted every file change the agent made since their message \"" +
+            message.take(80) + "\". Those files are back to how they were before it; read them again before editing."
+        saveSession()
+    }
+
+    /** The stable half of the prompt: the top-level system prefix, identical for the life of a conversation. */
+    private fun systemPrompt(): String =
+        SystemPrompt.grounding(tools.tools.map { it.spec.name }, ctx.servicesOrNull?.let { projectInstructions(it) })
+
+    /** The last instruction-file read, keyed by path + modification time so the prefix is not re-read from disk
+     *  on every request yet still follows an edit to the file. */
+    @Volatile
+    private var instructionsCache: Pair<String, String?>? = null
+
+    /** The volatile half: rides after the history each turn, so refreshing it costs no cached tokens. */
+    private fun sessionContext(): String = SystemPrompt.sessionContext(modePref(), projectContext())
+
+    private fun projectContext(): String? {
+        val engine = ctx.servicesOrNull ?: return null
+        val root = engine.workspaceRoot.toString()
+        val modules = runCatching { engine.modules().joinToString(", ") { it.name } }.getOrNull().orEmpty()
+        return buildString {
+            append("Project root: ").append(root).append('.')
+            if (modules.isNotBlank()) append("\nOpen project modules: ").append(modules).append('.')
+            append("\nFile paths are absolute or relative to the project root; a relative path always stays inside the project.")
+        }
+    }
+
+    /** The first present project instruction file, trimmed to a bounded excerpt (kept stable so it stays
+     *  cache-friendly). Null when the project has none. */
+    private fun projectInstructions(engine: IdeServices): String? {
+        for (name in listOf("AGENTS.md", "CLAUDE.md")) {
+            val file = engine.workspaceRoot.resolve(name)
+            if (!java.nio.file.Files.isRegularFile(file)) continue
+            val stamp = "$file@" + runCatching { Files.getLastModifiedTime(file).toMillis() }.getOrDefault(0L)
+            instructionsCache?.let { (key, body) -> if (key == stamp) return body }
+            val body = runCatching { file.readText() }.getOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: continue
+            val bounded = if (body.length > MAX_INSTRUCTIONS_CHARS) {
+                body.take(MAX_INSTRUCTIONS_CHARS) + "\n… (truncated; use read_memory for the rest)"
+            } else {
+                body
+            }
+            instructionsCache = stamp to bounded
+            return bounded
+        }
+        return null
+    }
+
+    private fun PermissionMode.toUi(): UiAgentPermissionMode = when (this) {
+        PermissionMode.ASK_EACH -> UiAgentPermissionMode.ASK_EACH
+        PermissionMode.AUTO_ACCEPT -> UiAgentPermissionMode.AUTO_ACCEPT
+        PermissionMode.PLAN_ONLY -> UiAgentPermissionMode.PLAN_ONLY
+    }
+
+    private fun UiAgentPermissionMode.toDomain(): PermissionMode = when (this) {
+        UiAgentPermissionMode.ASK_EACH -> PermissionMode.ASK_EACH
+        UiAgentPermissionMode.AUTO_ACCEPT -> PermissionMode.AUTO_ACCEPT
+        UiAgentPermissionMode.PLAN_ONLY -> PermissionMode.PLAN_ONLY
+    }
+
+    companion object {
+        private const val COMPACTED = "**Conversation compacted.** "
+
+        private val live = CopyOnWriteArrayList<WeakReference<AgentBackend>>()
+        @Volatile private var externalWorkspaceWasExposed = false
+
+        /** The agent of the project at [root] (the most recently opened one when [root] matches none), for an
+         *  editor action that runs outside any one project's backend. */
+        fun forProject(root: String?): AgentBackend? {
+            live.removeAll { it.get() == null }
+            val all = live.mapNotNull { it.get() }
+            return all.lastOrNull { root != null && it.ctx.servicesOrNull?.workspaceRoot?.toString() == root } ?: all.lastOrNull()
+        }
+
+        /** `@path` in a message: a project-relative file to attach. */
+        private val MENTION = Regex("""(?<![\w@])@([\w./-]+)""")
+
+        private const val MAX_ATTACHED_CHARS = 40_000
+        private const val MAX_MENTIONS = 20
+        private const val MAX_INDEXED_FILES = 20_000
+        private const val FILE_CACHE_MS = 10_000L
+        private val SKIPPED_DIRS = setOf("build", "node_modules", "out", "bin")
+
+        private val COMMANDS = listOf(
+            UiAgentCommand("clear", "Start a new conversation"),
+            UiAgentCommand("compact", "Summarize the conversation to free up context"),
+            UiAgentCommand("clone", "Clone a GitHub repository URL and open it in the IDE"),
+            UiAgentCommand("init", "Explore the project and write an AGENTS.md for future sessions"),
+            UiAgentCommand("undo", "Revert the files the agent changed in the last turn"),
+            UiAgentCommand("resume", "Open a saved conversation"),
+            UiAgentCommand("model", "Choose the model"),
+        )
+
+        private const val INIT_PROMPT = "Explore this project and write an AGENTS.md file at the project root " +
+            "for future AI sessions. Cover: what the project is, its modules and layout, how to build and run " +
+            "it in building, the coding conventions you observe (language, style, architecture), and anything " +
+            "non-obvious a newcomer would trip over. Keep it concise and factual; if an AGENTS.md already " +
+            "exists, improve it rather than replacing what is still accurate."
+
+        const val AI_PAGE = "ai"
+        const val MODE_PREF = "agent.permissionMode"
+        const val GATEWAY = "gateway"
+
+        /** The `settings.ai.*` pref backing the FTP asset server toggle (`ftpServer`). */
+        const val FTP_PREF = "ftpServer"
+
+        /** The port the in-app MCP server listens on (see the "MCP server" AI setting). */
+        const val MCP_PORT = CodeAssistMcpServer.DEFAULT_HTTP_PORT
+
+        /** The "leave it to the provider" reasoning-effort choice: nothing is sent on the request. */
+        const val REASONING_EFFORT_DEFAULT = "default"
+
+        /** Cap on the project-instruction excerpt folded into the system prompt (keeps requests bounded). */
+        const val MAX_INSTRUCTIONS_CHARS = 6_000
+
+        /** Ceiling on tool-call rounds per user turn; the "settings.ai.maxIterations" pref overrides it. */
+        const val DEFAULT_MAX_ITERATIONS = 24
+        /** Per-response output-token cap; the "settings.ai.maxTokens" pref overrides it. */
+        const val DEFAULT_MAX_TOKENS = 8192
+    }
+}

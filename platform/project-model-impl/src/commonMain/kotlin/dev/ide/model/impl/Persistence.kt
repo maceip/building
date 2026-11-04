@@ -1,0 +1,537 @@
+package dev.ide.model.impl
+
+import dev.ide.model.ContentRole
+import dev.ide.model.Coordinate
+import dev.ide.model.DependencyScope
+import dev.ide.model.Exclusion
+import dev.ide.model.FacetData
+import dev.ide.model.LanguageLevel
+import dev.ide.model.LibraryDependency
+import dev.ide.model.LibraryKind
+import dev.ide.model.LibraryRef
+import dev.ide.model.ModuleDependency
+import dev.ide.model.ModuleId
+import dev.ide.model.OrderEntry
+import dev.ide.model.PlatformDependency
+import dev.ide.model.PlatformKind
+import dev.ide.model.RESERVED_FACET_TABLES
+import dev.ide.model.SdkDependency
+import dev.ide.model.SdkRef
+import dev.ide.model.impl.format.Json
+import dev.ide.model.impl.format.Toml
+import dev.ide.model.sanitizeCoordinate
+import dev.ide.model.sanitizeLibraryName
+import dev.ide.platform.fileInfo
+import dev.ide.platform.log.Log
+import dev.ide.platform.readFile
+import dev.ide.platform.resolvePath
+import dev.ide.platform.writeFileAtomically
+
+/**
+ * Crash-safe single-file writer: write to a sibling temp file, then atomically rename it over the target. A
+ * process death mid-write leaves either the old file intact or the complete new file — never a half-written
+ * model file.
+ *
+ * The write itself is [writeFileAtomically], which is that dance per platform (and creates missing parents,
+ * which the model relies on: a module's directory may not exist until its manifest is written).
+ */
+object CrashSafeWriter {
+    private val log = Log.logger("ide.model")
+
+    /**
+     * A failed write is logged at ERROR rather than thrown. Dropping the result silently left a module's
+     * directory created with no manifest in it, which the next open reported as a damaged module with no
+     * trace of why; throwing instead would reach the many save() callers that run on background threads
+     * without a catch.
+     */
+    fun write(target: String, content: String) {
+        if (!writeFileAtomically(target, content.encodeToByteArray())) {
+            log.error("could not write $target; the project model on disk is out of date", ModelFileUnwritableException(target))
+        }
+    }
+}
+
+/** A model file that is not on disk at all. */
+class ModelFileMissingException(path: String) : IllegalStateException("$path does not exist")
+
+/** A model file that could not be written (permissions, storage full or gone, an I/O error). */
+class ModelFileUnwritableException(path: String) : IllegalStateException("$path could not be written")
+
+/** A model file that is on disk but could not be read (permissions, storage gone, an I/O error). */
+class ModelFileUnreadableException(path: String) : IllegalStateException("$path could not be read")
+
+/**
+ * The file's text. A file that is missing or unreadable throws rather than reading as empty: an empty
+ * `module.toml` failed later as a bare NullPointerException, and a field report carries the exception type
+ * but not its message, so the cause could not be told apart from a manifest that is genuinely blank.
+ */
+private fun readTextAt(path: String): String =
+    readFile(path)?.decodeToString()
+        ?: throw if (fileInfo(path) == null) ModelFileMissingException(path) else ModelFileUnreadableException(path)
+
+/**
+ * Loads and saves a [WorkspaceData] snapshot as the on-disk format:
+ *   `<root>/.platform/{workspace.json, libraries.json, sdks.json}` (model state, version-controlled)
+ *   `<root>/<projectRoot>/<moduleDir>/module.toml` (one declarative manifest per module)
+ * Every file is written via [CrashSafeWriter]; both top-level files carry a schema `version` gating
+ * future migrations.
+ */
+object ModelPersistence {
+    private const val PLATFORM_DIR = ".platform"
+    private const val WORKSPACE_FILE = "workspace.json"
+    private const val LIBRARIES_FILE = "libraries.json"
+    private const val SDKS_FILE = "sdks.json"
+    private const val MODULE_FILE = "module.toml"
+
+    private val log = Log.logger("ide.model")
+
+    fun exists(root: String): Boolean =
+        fileInfo(resolvePath(resolvePath(root, PLATFORM_DIR), WORKSPACE_FILE)) != null
+
+    // --- save ---
+
+    fun save(store: ProjectModelStore) {
+        val root = store.root
+        val ws = store.data
+        val platformDir = resolvePath(root, PLATFORM_DIR)
+
+        CrashSafeWriter.write(resolvePath(platformDir, WORKSPACE_FILE), Json.write(workspaceJson(ws)))
+        CrashSafeWriter.write(resolvePath(platformDir, LIBRARIES_FILE), Json.write(librariesJson(ws.libraries)))
+        CrashSafeWriter.write(resolvePath(platformDir, SDKS_FILE), Json.write(sdksJson(ws.sdks)))
+
+        for (p in ws.projects) {
+            val projectRoot = resolveRel(root, p.rootRelPath)
+            for (m in p.modules) {
+                val moduleDir = resolveRel(projectRoot, m.dirRelPath)
+                CrashSafeWriter.write(resolvePath(moduleDir, MODULE_FILE), Toml.write(moduleToToml(m)))
+            }
+        }
+    }
+
+    private fun workspaceJson(ws: WorkspaceData): Map<String, Any?> = linkedMapOf(
+        "version" to ws.schemaVersion,
+        "projects" to ws.projects.map { p ->
+            linkedMapOf(
+                "id" to p.id,
+                "name" to p.name,
+                "root" to p.rootRelPath,
+                "buildSystem" to p.buildSystemId,
+                "settings" to LinkedHashMap(p.settings),
+                "modules" to p.modules.map { m -> linkedMapOf("id" to m.id, "name" to m.name, "dir" to m.dirRelPath) },
+                "libraries" to p.libraries.map { libraryJson(it) },
+            )
+        },
+    )
+
+    private fun librariesJson(libs: List<LibraryData>): Map<String, Any?> =
+        linkedMapOf("version" to WORKSPACE_SCHEMA_VERSION, "libraries" to libs.map { libraryJson(it) })
+
+    private fun libraryJson(l: LibraryData): Map<String, Any?> =
+        linkedMapOf("name" to l.name, "kind" to l.kind.name, "classes" to l.classes, "sources" to l.sources)
+
+    private fun sdksJson(sdks: List<SdkData>): Map<String, Any?> = linkedMapOf(
+        "version" to WORKSPACE_SCHEMA_VERSION,
+        "sdks" to sdks.map {
+            linkedMapOf(
+                "name" to it.name,
+                "bootClasspath" to it.bootClasspath,
+                "buildTools" to it.buildToolsPath,
+                "kind" to it.kind.name,
+            )
+        },
+    )
+
+    private fun moduleToToml(m: ModuleData): Map<String, Any?> {
+        val doc = LinkedHashMap<String, Any?>()
+        doc["version"] = MODULE_SCHEMA_VERSION
+        doc["module"] = linkedMapOf<String, Any?>(
+            "type" to m.typeId,
+            "name" to m.name,
+            "languageLevel" to m.languageLevel.name,
+            "output" to m.outputRelPath,
+        ).apply {
+            // Emitted only when set, so a module on the type default stays byte-identical to the v1 format.
+            m.sdk?.let { this["sdk"] = it }
+        }
+        if (m.sourceSets.isNotEmpty()) {
+            val ssMap = LinkedHashMap<String, Any?>()
+            for (ss in m.sourceSets) {
+                val table = LinkedHashMap<String, Any?>()
+                table["scope"] = ss.scope.name
+                val byKey = LinkedHashMap<String, MutableList<String>>()
+                for (cr in ss.contentRoots) {
+                    for (role in cr.roles.sortedWith(ROLE_ORDER)) {
+                        byKey.getOrPut(roleKey(role)) { ArrayList() }.add(cr.dirRelPath)
+                    }
+                }
+                for ((k, dirs) in byKey) table[k] = dirs.toList()
+                ssMap[ss.name] = table
+            }
+            doc["sourceSets"] = ssMap
+        }
+        if (m.dependencies.isNotEmpty()) {
+            // Shared (unqualified) deps stay as scope-keyed lists directly under [dependencies] — byte-identical
+            // to the pre-variant format. Variant-qualified deps go under nested [dependencies.<config>] tables,
+            // config names emitted in sorted order for a deterministic round-trip.
+            val depTable = LinkedHashMap<String, Any?>()
+            val (shared, qualified) = m.dependencies.partition { it.variant == null }
+            for ((k, items) in scopeGrouped(shared)) depTable[k] = items
+            for (config in qualified.mapNotNull { it.variant }.distinct().sorted()) {
+                depTable[config] = scopeGrouped(qualified.filter { it.variant == config })
+            }
+            doc["dependencies"] = depTable
+        }
+        for (f in m.facets) doc[f.tomlTable] = LinkedHashMap(f.values)
+        return doc
+    }
+
+    /** Group [entries] by scope key (declaration order preserved), each value the list of serialized entries. */
+    private fun scopeGrouped(entries: List<OrderEntry>): Map<String, Any?> {
+        val byScope = LinkedHashMap<String, MutableList<Any?>>()
+        for (e in entries) byScope.getOrPut(scopeKey(e.scope)) { ArrayList() }.add(orderEntryToToml(e))
+        return byScope.mapValues { it.value.toList() }
+    }
+
+    private fun orderEntryToToml(e: OrderEntry): Any = when (e) {
+        // A plain library stays a bare string (unchanged on disk); one carrying exclusions becomes an inline
+        // table `{ library = "g:n:v", exclude = ["g:n", "g:*"] }` so the excludes round-trip.
+        is LibraryDependency ->
+            if (e.exclusions.isEmpty()) e.library.name
+            else linkedMapOf("library" to e.library.name, "exclude" to e.exclusions.map { it.toString() })
+        is ModuleDependency -> linkedMapOf("module" to e.target.value)
+        is PlatformDependency -> linkedMapOf("platform" to e.bom.toString())
+        is SdkDependency -> linkedMapOf("sdk" to e.sdk.name)
+    }
+
+    // --- load ---
+
+    /**
+     * Read the workspace snapshot under [root].
+     *
+     * Loading is deliberately fault-isolating rather than all-or-nothing. It used to be the latter, and the
+     * field data showed the cost: one missing or malformed file anywhere under the workspace threw out of here
+     * and left the project permanently unopenable, with no way to repair it from inside the IDE. The most
+     * common case by far is a `module.toml` that is simply gone, because the module directory was deleted or
+     * moved outside the IDE while `workspace.json` still lists it (on-device projects live in browsable
+     * external app storage). Now the workspace opens with whatever is readable and every skipped piece is
+     * logged; only a missing or unparsable `workspace.json` itself, or a schema from a newer build, still
+     * fails the open.
+     *
+     * Nothing damaged is rewritten: a skipped module is left out of the model, so [save] does not touch its
+     * manifest and a file that merely failed to parse stays on disk exactly as it is.
+     *
+     * [opening] is what decides whether the skipped pieces reach the USER. Only [ProjectModelStore] passes it:
+     * every other caller loads a workspace to answer a question about a project it is not opening (the
+     * picker's name and module count, the launcher icon, a module-name list), and several of those run on
+     * every render of the project list. An ERROR raises the critical-error dialog, so reporting damage from
+     * those made one unreadable `module.toml` pop a dialog on a loop: the two clusters together were 469
+     * `error_logged` rows across 76 installs in the Aug/Sep window, all of them below `ProjectManager.list`.
+     * A background probe logs the same detail at WARN; the report the user acts on comes when they open it.
+     */
+    fun load(root: String, opening: Boolean = false): WorkspaceData {
+        val platformDir = resolvePath(root, PLATFORM_DIR)
+        val wsObj = Json.parse(readTextAt(resolvePath(platformDir, WORKSPACE_FILE))).asObject()
+        // The schema field is advisory: a workspace.json that lost it, or holds it as a string, still describes
+        // a readable workspace, so assume the current schema rather than failing the open on a header value.
+        val version = (wsObj["version"] as? Number)?.toInt() ?: WORKSPACE_SCHEMA_VERSION
+        require(version <= WORKSPACE_SCHEMA_VERSION) {
+            "workspace.json schema version $version is newer than supported $WORKSPACE_SCHEMA_VERSION"
+        }
+
+        return WorkspaceData(
+            schemaVersion = version,
+            projects = (wsObj["projects"] as? List<*>).orEmpty().mapNotNull { loadProject(root, it, opening) },
+            // Both of these hold derived state (resolved artifacts, detected platforms) that the IDE can
+            // rebuild, so an unreadable one costs a re-resolve rather than the whole project.
+            libraries = runCatching { loadLibraries(resolvePath(platformDir, LIBRARIES_FILE), opening) }
+                .onFailure { report(opening, "$LIBRARIES_FILE could not be read; resolved libraries will be rebuilt", it) }
+                .getOrDefault(emptyList()),
+            sdks = runCatching { loadSdks(resolvePath(platformDir, SDKS_FILE), opening) }
+                .onFailure { report(opening, "$SDKS_FILE could not be read; platforms will need re-detecting", it) }
+                .getOrDefault(emptyList()),
+        )
+    }
+
+    /**
+     * Log something the load could not read, at the level its audience deserves: ERROR (which raises the
+     * critical-error dialog and ships an analytics row) when the user is opening this workspace and can act
+     * on it, WARN when a background probe is merely reading it. See [load]'s `opening`.
+     */
+    private fun report(opening: Boolean, message: String, cause: Throwable) {
+        if (opening) log.error(message, cause) else log.warn(message, cause)
+    }
+
+    /** One `projects[]` entry, or null when it cannot be read, so one damaged project in a multi-project
+     *  workspace does not stop the others from opening. */
+    private fun loadProject(root: String, entry: Any?, opening: Boolean): ProjectData? {
+        val name = (entry as? Map<*, *>)?.get("name")?.toString() ?: "?"
+        return runCatching {
+            val p = entry.asObject()
+            val rootRel = p["root"] as String
+            val projectRoot = resolveRel(root, rootRel)
+            val damaged = ArrayList<MissingModule>()
+            val modules = (p["modules"] as? List<*>).orEmpty().mapNotNull { loadModule(projectRoot, it, damaged) }
+            reportSkippedModules(name, damaged, opening)
+            ProjectData(
+                id = p["id"] as String,
+                name = p["name"] as String,
+                rootRelPath = rootRel,
+                buildSystemId = p["buildSystem"] as String,
+                settings = (p["settings"] as? Map<*, *>)?.entries?.associate { it.key.toString() to it.value.toString() } ?: emptyMap(),
+                modules = modules,
+                libraries = (p["libraries"] as? List<*>)?.mapNotNull { loadLibrary(it, opening) } ?: emptyList(),
+            )
+        }.onFailure {
+            report(opening, "Skipped project '$name': its entry in $WORKSPACE_FILE could not be read.", it)
+        }.getOrNull()
+    }
+
+    /**
+     * One module of a project, or null when its manifest is missing or unreadable. A failure is recorded in
+     * [damaged] for [reportSkippedModules] rather than reported here, since an ERROR surfaces to the user as a
+     * dialog and a stale workspace can list several missing modules at once.
+     *
+     * A module whose whole DIRECTORY has gone is recorded as [MissingModule.vanished]: that is the ordinary
+     * consequence of deleting or moving a module outside the IDE (on-device projects live in browsable
+     * external app storage), not a fault, and it is the most common shape of this failure in the field.
+     */
+    private fun loadModule(
+        projectRoot: String,
+        entry: Any?,
+        damaged: MutableList<MissingModule>,
+    ): ModuleData? {
+        val name = (entry as? Map<*, *>)?.get("name")?.toString() ?: "?"
+        var moduleDir: String? = null
+        return runCatching {
+            val m = entry.asObject()
+            val dir = m["dir"] as String
+            moduleDir = resolveRel(projectRoot, dir)
+            val toml = Toml.parse(readTextAt(resolvePath(moduleDir, MODULE_FILE)))
+            tomlToModule(m["id"] as String, m["name"] as String, dir, toml)
+        }.onFailure {
+            val vanished = moduleDir?.let { dir -> fileInfo(dir) == null } ?: false
+            log.warn("module '$name': $MODULE_FILE is missing or could not be read", it)
+            damaged += MissingModule(name, it, vanished)
+        }.getOrNull()
+    }
+
+    /** A module listed in `workspace.json` that did not load, and whether its directory is gone entirely. */
+    private class MissingModule(val name: String, val cause: Throwable, val vanished: Boolean)
+
+    /**
+     * Tell the user that a project opened short of some of its modules. Losing a module changes the shape of
+     * the project, so it is reported rather than passed over, and one report covers all of them.
+     *
+     * The level is what separates the two causes. A module whose directory has gone was deleted or moved by
+     * the user outside the IDE; the open succeeded, the workspace drops the entry on its next save, and there
+     * is nothing to act on, so it is a WARN. A module whose directory is still there but whose manifest is
+     * missing or unparsable is either a corrupt file or a manifest the IDE failed to write, which the user can
+     * act on (re-sync) and which we want to see in the analytics, so that stays an ERROR (and a dialog).
+     *
+     * Reported as the top `error_logged` cluster in the Aug/Sep window: 391 rows across 121 installs, nearly
+     * all of them the vanished-directory case raising a dialog on every open.
+     */
+    private fun reportSkippedModules(project: String, damaged: List<MissingModule>, opening: Boolean) {
+        if (damaged.isEmpty()) return
+        val (vanished, unreadable) = damaged.partition { it.vanished }
+        if (vanished.isNotEmpty()) {
+            log.warn(
+                "Project '$project' opened without ${vanished.size} module(s) whose directory no longer " +
+                    "exists: ${vanished.joinToString(", ") { it.name }}. The workspace drops them on its " +
+                    "next save."
+            )
+        }
+        if (unreadable.isNotEmpty()) {
+            report(
+                opening,
+                "Project '$project' opened without ${unreadable.size} module(s) whose $MODULE_FILE is " +
+                    "missing or unreadable: ${unreadable.joinToString(", ") { it.name }}. Those manifests " +
+                    "were left on disk untouched.",
+                unreadable.first().cause,
+            )
+        }
+    }
+
+    private fun loadLibrary(entry: Any?, opening: Boolean): LibraryData? = runCatching { libraryFromJson(entry) }
+        .onFailure { report(opening, "skipping a library entry that could not be read", it) }
+        .getOrNull()
+
+    private fun loadLibraries(path: String, opening: Boolean): List<LibraryData> {
+        if (fileInfo(path) == null) return emptyList()
+        val obj = Json.parse(readTextAt(path)).asObject()
+        return (obj["libraries"] as? List<*>)?.mapNotNull { loadLibrary(it, opening) } ?: emptyList()
+    }
+
+    private fun loadSdks(path: String, opening: Boolean): List<SdkData> {
+        if (fileInfo(path) == null) return emptyList()
+        val obj = Json.parse(readTextAt(path)).asObject()
+        return (obj["sdks"] as? List<*>)?.mapNotNull { sAny ->
+            runCatching { sdkFromJson(sAny) }
+                .onFailure { report(opening, "skipping an SDK entry that could not be read", it) }
+                .getOrNull()
+        } ?: emptyList()
+    }
+
+    private fun sdkFromJson(any: Any?): SdkData {
+        val s = any.asObject()
+        val name = s["name"] as String
+        val buildTools = s["buildTools"] as String?
+        // Back-compat: a v1 sdks.json has no `kind`. Infer it — an SDK named `android*` or carrying
+        // build-tools is the Android platform; everything else is the JVM/core-Java platform.
+        val kind = (s["kind"] as? String)?.let { PlatformKind.valueOf(it) }
+            ?: if (name.startsWith("android") || buildTools != null) PlatformKind.ANDROID else PlatformKind.JVM
+        return SdkData(
+            name = name,
+            bootClasspath = (s["bootClasspath"] as? List<*>)?.map { it as String } ?: emptyList(),
+            buildToolsPath = buildTools,
+            kind = kind,
+        )
+    }
+
+    private fun libraryFromJson(any: Any?): LibraryData {
+        val o = any.asObject()
+        return LibraryData(
+            name = o["name"] as String,
+            kind = LibraryKind.valueOf(o["kind"] as String),
+            classes = (o["classes"] as? List<*>)?.map { it as String } ?: emptyList(),
+            sources = (o["sources"] as? List<*>)?.map { it as String } ?: emptyList(),
+        )
+    }
+
+    private fun tomlToModule(id: String, name: String, dirRelPath: String, doc: Map<String, Any?>): ModuleData {
+        (doc["version"] as? Number)?.let { v ->
+            require(v.toInt() <= MODULE_SCHEMA_VERSION) {
+                "module.toml schema version ${v.toInt()} is newer than supported $MODULE_SCHEMA_VERSION ($name)"
+            }
+        }
+        @Suppress("UNCHECKED_CAST")
+        val moduleTable = doc["module"] as? Map<String, Any?>
+            ?: throw IllegalArgumentException("$MODULE_FILE of module '$name' has no [module] table")
+        val typeId = moduleTable["type"] as String
+        // A module.toml written by an older/newer build can carry a languageLevel this build's enum doesn't
+        // have (Java levels come and go over time). Fall back to the default rather than failing the whole
+        // project open — a legacy project must still open (observed as an IllegalArgumentException in the field).
+        val languageLevel = runCatching { LanguageLevel.valueOf(moduleTable["languageLevel"] as String) }
+            .getOrDefault(LanguageLevel.JAVA_17)
+        val output = moduleTable["output"] as String
+        val sdk = moduleTable["sdk"] as String?
+
+        val sourceSets = (doc["sourceSets"] as? Map<*, *>)?.map { (ssName, ssTableAny) ->
+            val ssTable = ssTableAny.asObject()
+            val scope = DependencyScope.valueOf(ssTable["scope"] as String)
+            val byDir = LinkedHashMap<String, MutableSet<ContentRole>>()
+            for ((key, value) in ssTable) {
+                if (key == "scope") continue
+                // Any other key is a role, built-in or a plugin's own, and its value is the list of dirs
+                // holding it. A key carrying anything else is a hand-edit, skipped rather than thrown on.
+                val dirs = value as? List<*> ?: continue
+                val role = roleForKey(key)
+                for (dirAny in dirs) {
+                    byDir.getOrPut(dirAny as String) { linkedSetOf() }.add(role)
+                }
+            }
+            SourceSetData(ssName.toString(), scope, byDir.map { ContentRootData(it.key, it.value.toSet()) })
+        } ?: emptyList()
+
+        val deps = ArrayList<OrderEntry>()
+        (doc["dependencies"] as? Map<*, *>)?.forEach { (keyAny, valueAny) ->
+            val key = keyAny.toString()
+            val scope = scopeForKey(key)
+            when {
+                // A scope-keyed list directly under [dependencies] is a shared (unqualified) dependency.
+                scope != null -> for (item in (valueAny as List<*>)) deps.add(tomlToOrderEntry(item, scope, variant = null))
+                // A [dependencies.<config>] sub-table holds that variant's scope-keyed lists.
+                valueAny is Map<*, *> -> valueAny.forEach { (sKeyAny, itemsAny) ->
+                    val s = scopeForKey(sKeyAny.toString()) ?: return@forEach
+                    for (item in (itemsAny as List<*>)) deps.add(tomlToOrderEntry(item, s, variant = key))
+                }
+            }
+        }
+
+        val facets = doc.entries
+            .filter { it.key !in RESERVED_FACET_TABLES && it.value is Map<*, *> }
+            .map { e -> FacetData(e.key, (e.value as Map<*, *>).entries.associate { it.key.toString() to it.value }) }
+
+        return ModuleData(id, name, dirRelPath, typeId, languageLevel, output, sourceSets, deps, facets, sdk)
+    }
+
+    private fun tomlToOrderEntry(item: Any?, scope: DependencyScope, variant: String?): OrderEntry {
+        val exported = scope == DependencyScope.API
+        return when (item) {
+            is String -> LibraryDependency(LibraryRef(sanitizeLibraryName(item)), scope, exported, variant = variant)
+            is Map<*, *> -> when {
+                item.containsKey("library") -> LibraryDependency(
+                    LibraryRef(sanitizeLibraryName(item["library"] as String)), scope, exported,
+                    exclusions = (item["exclude"] as? List<*>).orEmpty().mapNotNull { Exclusion.parse(it as String) },
+                    variant = variant,
+                )
+                item.containsKey("module") -> ModuleDependency(ModuleId(item["module"] as String), scope, exported, variant = variant)
+                item.containsKey("platform") -> PlatformDependency(parseCoordinate(item["platform"] as String), scope, exported, variant = variant)
+                item.containsKey("sdk") -> SdkDependency(SdkRef(item["sdk"] as String), scope)
+                else -> error("unrecognized dependency entry: $item")
+            }
+            else -> error("unrecognized dependency entry: $item")
+        }
+    }
+
+    // --- helpers ---
+
+    /** Parse a persisted `group:name:version[:classifier]` coordinate (a missing version tolerated as blank). */
+    private fun parseCoordinate(s: String): Coordinate {
+        val parts = sanitizeCoordinate(s).split(":")
+        return Coordinate(
+            parts.getOrElse(0) { "" }, parts.getOrElse(1) { "" }, parts.getOrElse(2) { "" },
+            parts.getOrNull(3)?.ifBlank { null },
+        )
+    }
+
+    private fun resolveRel(base: String, rel: String): String = resolvePath(base, rel)
+
+    /**
+     * The built-in roles keep the Gradle source-directory spellings they have always been written under, so
+     * an existing `module.toml` is unaffected by [ContentRole] becoming open. A role the core does not own is
+     * written under its own [ContentRole.id], which is what lets a plugin's source layout persist at all.
+     */
+    private val BUILT_IN_ROLE_KEYS: Map<ContentRole, String> = linkedMapOf(
+        ContentRole.SOURCE to "java",
+        ContentRole.RESOURCE to "resources",
+        ContentRole.ANDROID_RES to "res",
+        ContentRole.AIDL to "aidl",
+        ContentRole.ASSETS to "assets",
+        ContentRole.JNI_LIBS to "jniLibs",
+        ContentRole.GENERATED to "generated",
+        ContentRole.EXCLUDED to "excluded",
+    )
+
+    private val ROLES_BY_KEY: Map<String, ContentRole> =
+        BUILT_IN_ROLE_KEYS.entries.associate { (role, key) -> key to role }
+
+    /** Built-in roles first, in declaration order, then a plugin's own by id: the on-disk order is canonical. */
+    private val ROLE_ORDER: Comparator<ContentRole> = compareBy(
+        { ContentRole.entries.indexOf(it).takeIf { i -> i >= 0 } ?: ContentRole.entries.size },
+        { it.id },
+    )
+
+    private fun roleKey(role: ContentRole): String = BUILT_IN_ROLE_KEYS[role] ?: role.id
+
+    /**
+     * Total, unlike the closed version it replaces: a key that is not one of the built-in spellings is a
+     * plugin's role, not a stray. The caller filters `scope` out first, and the writer emits nothing else
+     * into a source-set table, so every remaining key is a role.
+     */
+    private fun roleForKey(key: String): ContentRole = ROLES_BY_KEY[key] ?: ContentRole(key)
+
+    private fun scopeKey(scope: DependencyScope): String = scope.id
+
+    /**
+     * Stays PARTIAL on purpose, even though [DependencyScope] is now open. A `[dependencies]` table mixes
+     * scope-keyed lists with per-variant sub-tables (`[dependencies.debug]`), and the loader tells them apart
+     * by whether the key names a scope. A total lookup would read `debug` as a scope and then fail casting
+     * its sub-table to a list, so an unregistered scope id is skipped rather than guessed at, which is what
+     * [DependencyScope.register] exists to prevent.
+     */
+    private fun scopeForKey(key: String): DependencyScope? = DependencyScope.byId(key)
+
+    @Suppress("UNCHECKED_CAST")
+    private fun Any?.asObject(): Map<String, Any?> = this as Map<String, Any?>
+}

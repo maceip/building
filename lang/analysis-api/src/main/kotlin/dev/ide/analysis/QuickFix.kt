@@ -1,0 +1,279 @@
+package dev.ide.analysis
+
+import dev.ide.lang.LanguageId
+import dev.ide.lang.dom.DomNode
+import dev.ide.lang.dom.NodeKind
+import dev.ide.lang.dom.ParsedFile
+import dev.ide.lang.dom.TextRange
+import dev.ide.lang.incremental.DocumentEdit
+import dev.ide.vfs.VirtualFile
+
+/**
+ * Quick-fixes / code actions. A fix produces a [WorkspaceEdit] — text edits across one or more
+ * files — applied atomically under the model write lock via the modifiable model. Fixes are computed
+ * lazily (only when the fix menu is opened or the diagnostic is hovered) and against a fresh
+ * document snapshot at apply time, so an edit computed against a now-stale version is never applied
+ * blindly.
+ */
+
+/** Distinguishes a fix for a problem from a context action with no diagnostic ([INTENTION]) and a refactor. */
+enum class CodeActionKind { QUICK_FIX, INTENTION, REFACTOR }
+
+/**
+ * A set of text edits spanning one or more files, applied as a single atomic write action. Reuses the
+ * existing edit-delta type [DocumentEdit] (replace `oldLength` chars at `offset` with `newText`) so
+ * fixes flow through the same edit machinery as incremental reparsing and the project-model transaction.
+ */
+data class WorkspaceEdit(val edits: Map<VirtualFile, List<DocumentEdit>>) {
+    val isEmpty: Boolean get() = edits.values.all { it.isEmpty() }
+    val files: Set<VirtualFile> get() = edits.keys
+
+    companion object {
+        val EMPTY = WorkspaceEdit(emptyMap())
+        /** A single-file edit — the common case (insert an import, add a `;`, delete a declaration). */
+        fun of(file: VirtualFile, vararg edits: DocumentEdit): WorkspaceEdit =
+            WorkspaceEdit(mapOf(file to edits.toList()))
+
+        /**
+         * Create the file at [path] (absolute) holding [text], for a fix whose answer is a file that does not
+         * exist yet: the C++ function a `native` method is missing, in a module with no C++ source so far.
+         *
+         * The host creates the file, and its directories, only if nothing is there when the edit is applied;
+         * an existing file is left alone, so a fix that may race the user should check [VirtualFile.exists]
+         * and edit the file instead. Merge it with other edits through [plus].
+         *
+         * Since SPI 3.1.0. A plugin that runs on an older host calls this inside `catch (LinkageError)`: a
+         * host without it would drop an edit to a missing file without a word.
+         */
+        fun createFile(path: String, text: String): WorkspaceEdit =
+            WorkspaceEdit(mapOf(MissingFile(path) to listOf(DocumentEdit(0, 0, text))))
+    }
+
+    /** This edit and [other] as one, for a fix that both creates a file and edits another. */
+    operator fun plus(other: WorkspaceEdit): WorkspaceEdit {
+        val merged = LinkedHashMap<VirtualFile, List<DocumentEdit>>(edits)
+        for ((file, more) in other.edits) merged[file] = merged[file].orEmpty() + more
+        return WorkspaceEdit(merged)
+    }
+}
+
+/** The not-yet-existing file a [WorkspaceEdit.createFile] names. Only its [path] is ever read. */
+private class MissingFile(override val path: String) : VirtualFile {
+    override val name: String get() = path.substringAfterLast('/')
+    override val isDirectory: Boolean get() = false
+    override val exists: Boolean get() = false
+    override val length: Long get() = 0
+    override fun parent(): VirtualFile? = null
+    override fun children(): List<VirtualFile> = emptyList()
+    override fun contentHash(): dev.ide.platform.ContentHash = dev.ide.platform.ContentHash.of(ByteArray(0))
+    override fun readBytes(): ByteArray = ByteArray(0)
+    override fun readText(): CharSequence = ""
+    override fun equals(other: Any?): Boolean = other is MissingFile && other.path == path
+    override fun hashCode(): Int = path.hashCode()
+    override fun toString(): String = path
+}
+
+interface QuickFix {
+    val title: String                       // user-facing, e.g. "Import java.util.List"
+    val kind: CodeActionKind
+
+    /** Compute the edits against the live state in [ctx]. Suspending: may resolve, query the index, etc. */
+    suspend fun computeEdits(ctx: FixContext): WorkspaceEdit
+}
+
+/**
+ * The context handed to a [QuickFix] when the user invokes it: the live [AnalysisTarget] for the
+ * diagnostic's file (DOM, resolver, index, module) plus cooperative cancellation. The edits returned
+ * are then applied atomically by [AnalysisService.apply].
+ */
+interface FixContext {
+    val target: AnalysisTarget
+    fun checkCanceled()
+}
+
+/**
+ * Attaches fixes to diagnostics by [Diagnostic.code], including ones the provider did not author,
+ * especially the compiler's. The compiler stays fix-agnostic while
+ * a provider keyed on `UNRESOLVED_REFERENCE` offers "Import …" actions by querying the class-name index.
+ * Registered on [QUICK_FIX_PROVIDER_EP].
+ */
+interface QuickFixProvider {
+    /** Diagnostic codes this provider offers fixes for, e.g. `{ Codes.UNRESOLVED_REFERENCE }`. */
+    val forCodes: Set<String>
+
+    /** Languages this provider applies to; **empty = all languages**. Lets a code-keyed fix stay
+     *  language-scoped even when several languages emit a diagnostic sharing the code (e.g. Java's
+     *  "Add import" on `UNRESOLVED_REFERENCE` must not attach to a Kotlin/XML diagnostic of the same code). */
+    val languages: Set<LanguageId> get() = emptySet()
+
+    fun fixes(diagnostic: Diagnostic, target: AnalysisTarget): List<QuickFix>
+}
+
+/**
+ * Contributes code actions at a caret/selection [TextRange], independent of any diagnostic — the home
+ * for intentions and refactorings ("Introduce Local Variable", "Surround with try/catch"). Where a
+ * [QuickFixProvider] is keyed by [Diagnostic.code], an action provider is keyed by *position*: the engine
+ * calls it with the live [AnalysisTarget] and the editor selection and unions the result with the
+ * diagnostic quick-fixes ([AnalysisService.editorActionsAt]). The [QuickFix]es it returns are the same
+ * currency a fix uses, so they apply through the same path; they should capture whatever they need from
+ * `target`/`range`, since they are computed against the same buffer the action list was built from.
+ *
+ * The union is by title: an action whose title a quick-fix at the same position already offers is dropped
+ * from the menu. So a provider is free to offer an action across a whole declaration that a code-keyed
+ * [QuickFixProvider] also offers on the error inside it, without the user seeing the row twice.
+ *
+ * Registered on [ACTION_PROVIDER_EP].
+ */
+interface ActionProvider {
+    /** Languages this provider applies to; the engine skips it for files in any other language. */
+    val languages: Set<LanguageId>
+
+    /**
+     * Actions offered at [range] in [target] — an empty range is the bare caret, a non-empty one a
+     * selection. Return empty when nothing applies (the common case for most positions). Must be pure /
+     * side-effect-free: it may be called both to *list* actions and again to *compute* the chosen one.
+     *
+     * Prefer overriding [actions] with an [EditorActionContext] instead: it hands over the caret node and
+     * its ancestor chain already walked, which is what most providers do first anyway. This overload stays
+     * for providers that only need the range, and is what the context overload delegates to by default.
+     */
+    fun actions(target: AnalysisTarget, range: TextRange): List<QuickFix> = emptyList()
+
+    /**
+     * Actions offered for [ctx]: the same contract as the two-argument [actions], plus the resolved caret
+     * position (the innermost node, its ancestors, and a flat snapshot). Defaults to the two-argument form,
+     * so a provider written before this existed is unaffected.
+     *
+     * Override exactly one of the two. Both default to nothing, so a provider that overrides neither
+     * contributes nothing rather than failing to compile.
+     */
+    fun actions(ctx: EditorActionContext): List<QuickFix> = actions(ctx.target, ctx.range)
+}
+
+/**
+ * The position an [ActionProvider] is being asked about: the live [target] and [range] as before, plus the
+ * caret's place in the tree, resolved once by the engine instead of by every provider.
+ *
+ * This is the rich half of the two-tier editor-action model. Everything here is live ([node] holds parent
+ * and child pointers, [AnalysisTarget.resolver] resolves symbols and types, [AnalysisTarget.index] answers
+ * project-wide questions), so a provider can walk and query freely. It cannot cross a process or DTO
+ * boundary: the flat, portable half is [CaretSnapshot], and an action that needs only that belongs on the
+ * plugin-api `EDITOR` place instead.
+ *
+ * Being handed to `actions()`, this is on the listing path, which runs on caret moves. Keep the work here
+ * structural (kinds, ranges, ancestors) and leave resolution to the chosen fix's `computeEdits`: the
+ * engine builds [target] without bindings for listing, so a resolver call here pays a re-parse.
+ */
+interface EditorActionContext {
+    /** The file's live analysis target: DOM, resolver, index, module. */
+    val target: AnalysisTarget
+
+    /** The editor selection. `start == end` is a bare caret. */
+    val range: TextRange
+
+    /** The innermost node containing [TextRange.start] of [range], as returned by [ParsedFile.nodeAt]. */
+    val node: DomNode
+
+    /** [node]'s ancestors, innermost first, ending at the [ParsedFile] root. Excludes [node] itself. */
+    val ancestors: List<DomNode>
+
+    /** The flat, portable view of the same position, as handed to the plugin-api tier. */
+    val caret: CaretSnapshot
+
+    fun checkCanceled()
+
+    /** The nearest ancestor (or [node] itself) of kind [kind], or null. */
+    fun nearest(kind: NodeKind): DomNode? =
+        if (node.kind == kind) node else ancestors.firstOrNull { it.kind == kind }
+
+    /**
+     * The nearest enclosing statement: the node that is a direct child of a [NodeKind.BLOCK].
+     *
+     * A caret at the end of a line sits *after* the last token of the statement, where the innermost node
+     * is the enclosing block rather than the statement. That is the most common place to invoke a
+     * statement intention from, so a caret resolving to a block is attributed to the statement it touches.
+     */
+    fun enclosingStatement(): DomNode? {
+        if (node.parent?.kind == NodeKind.BLOCK) return node
+        ancestors.firstOrNull { it.parent?.kind == NodeKind.BLOCK }?.let { return it }
+        val block = if (node.kind == NodeKind.BLOCK) node else ancestors.firstOrNull { it.kind == NodeKind.BLOCK }
+        return block?.children?.lastOrNull { range.start >= it.range.start && range.start <= it.range.end }
+    }
+
+    companion object {
+        /**
+         * Resolve [range]'s position in [target] once: the innermost node, its ancestor chain, and the flat
+         * snapshot. The single construction site, used by the engine per listing pass and by tests, so a
+         * provider is never handed a context assembled two different ways.
+         */
+        fun of(target: AnalysisTarget, range: TextRange, language: LanguageId? = null): EditorActionContext {
+            val parsed = target.parsed
+            val at = parsed.nodeAt(range.start.coerceIn(0, parsed.range.end))
+            val chain = ArrayList<DomNode>()
+            var p = at.parent
+            while (p != null) {
+                chain.add(p)
+                p = p.parent
+            }
+            val snapshot = CaretSnapshot.of(parsed, range.start, language)
+            return object : EditorActionContext {
+                override val target = target
+                override val range = range
+                override val node = at
+                override val ancestors: List<DomNode> = chain
+                override val caret = snapshot
+                override fun checkCanceled() = target.checkCanceled()
+            }
+        }
+    }
+}
+
+/**
+ * A flat, serializable snapshot of what the caret is on, built once per listing pass from the syntax-only
+ * tree. The portable currency shared by both editor-action tiers: the engine hands it to plugin-api's
+ * `CaretContext` across the `IdeBackend` port, and to [EditorActionContext.caret] beside the live tree.
+ *
+ * [nodeText] is capped at [MAX_NODE_TEXT]; a caret inside a large declaration would otherwise copy the
+ * whole thing on every caret move. [nodeTextTruncated] records when that happened, so an action needing
+ * exact text reads it off [AnalysisTarget.parsed] rather than trusting a prefix.
+ */
+data class CaretSnapshot(
+    val offset: Int,
+    val languageId: LanguageId? = null,
+    val nodeKind: String = "",
+    val nodeRange: TextRange = TextRange(offset, offset),
+    val nodeText: String = "",
+    val nodeTextTruncated: Boolean = false,
+    val ancestors: List<AncestorSpan> = emptyList(),
+) {
+    companion object {
+        /** The cap on [nodeText]. Matches plugin-api's `CaretContext.MAX_NODE_TEXT`. */
+        const val MAX_NODE_TEXT = 4096
+
+        /** Build a snapshot for [offset] in [parsed]. The one place either tier's caret view is derived. */
+        fun of(parsed: ParsedFile, offset: Int, language: LanguageId? = null): CaretSnapshot {
+            val clamped = offset.coerceIn(0, parsed.range.end)
+            val node = parsed.nodeAt(clamped)
+            val text = node.text()
+            val truncated = text.length > MAX_NODE_TEXT
+            val ancestors = ArrayList<AncestorSpan>()
+            var p = node.parent
+            while (p != null) {
+                ancestors.add(AncestorSpan(p.kind.id, p.range.start, p.range.end))
+                p = p.parent
+            }
+            return CaretSnapshot(
+                offset = clamped,
+                languageId = language,
+                nodeKind = node.kind.id,
+                nodeRange = node.range,
+                nodeText = if (truncated) text.subSequence(0, MAX_NODE_TEXT).toString() else text.toString(),
+                nodeTextTruncated = truncated,
+                ancestors = ancestors,
+            )
+        }
+    }
+}
+
+/** One ancestor of the caret's node in a [CaretSnapshot]: its kind id and its span `[start, end)`. */
+data class AncestorSpan(val kind: String, val start: Int, val end: Int)

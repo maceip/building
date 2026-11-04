@@ -1,0 +1,178 @@
+package dev.ide.build.jvm
+
+import dev.ide.build.BuildConfiguration
+import dev.ide.build.BuildGoal
+import dev.ide.build.KotlinCompilerPlugin
+import dev.ide.build.Lifecycle
+import dev.ide.build.Plugin
+import dev.ide.build.SourceGenerator
+import dev.ide.build.TaskContainer
+import dev.ide.build.TaskName
+import dev.ide.build.engine.GenerateSourcesTask
+import dev.ide.build.engine.JarTask
+import dev.ide.build.engine.LifecycleTask
+import dev.ide.build.engine.ProcessResourcesTask
+import dev.ide.build.engine.classOutputs
+import dev.ide.build.engine.depOutputDirs
+import dev.ide.build.engine.generatedRoot
+import dev.ide.build.engine.directModuleDeps
+import dev.ide.build.engine.hasKotlinSources
+import dev.ide.build.engine.jarPath
+import dev.ide.build.engine.kotlinSiblings
+import dev.ide.build.engine.libJars
+import dev.ide.build.engine.moduleClosure
+import dev.ide.build.engine.resourceRoots
+import dev.ide.build.engine.resourcesDir
+import dev.ide.build.engine.testKotlinOutputDir
+import dev.ide.build.engine.testModuleDeps
+import dev.ide.build.engine.testOutputDir
+import dev.ide.build.engine.testResourceRoots
+import dev.ide.build.engine.testResourcesDir
+import dev.ide.build.jvm.test.TestJavaCompileTask
+import dev.ide.build.jvm.test.TestKotlinCompileTask
+import dev.ide.lang.jdt.build.JdtCompileTask
+import dev.ide.lang.kotlin.build.KotlinCompileTask
+import dev.ide.lang.kotlin.compile.BUILTIN_KOTLIN_COMPILER_PLUGINS
+import dev.ide.lang.kotlin.compile.IncrementalKotlinCompiler
+import dev.ide.model.ContentRole
+import dev.ide.model.Module
+import dev.ide.model.ModuleId
+import java.nio.file.Path
+import java.nio.file.Paths
+
+/**
+ * The Java plugin (Gradle's `java`/`java-library`): for each module it registers the standard chain
+ * `compileJava → processResources → classes (lifecycle) → jar`, plus a `compileKotlin` step ahead of
+ * `compileJava` for any module that carries `.kt` sources (when a [kotlin] compiler is available). The
+ * compile tasks are the language modules' own: lang-jdt's [JdtCompileTask] and lang-kotlin's
+ * [KotlinCompileTask], constructed here with the host [bootClasspath]. Other plugins (e.g. Android) reuse
+ * [registerModule] for plain library modules and depend on the resulting tasks by name (`:lib:jar`,
+ * `:lib:classes`).
+ */
+class JavaPlugin(
+    /** The compile boot (platform) classpath for a given module — its platform SDK, resolved per module so
+     *  a `java-*` console module compiles against the core-Java platform and never `android.jar`. Empty →
+     *  the host JRE (the desktop default). */
+    private val bootClasspathFor: (Module) -> List<Path> = { emptyList() },
+    private val kotlin: IncrementalKotlinCompiler? = null,
+    /** Kotlin compiler plugins applied by the `compileKotlin` tasks (the `platform.kotlinCompilerPlugin`
+     *  EP contents; defaults to the built-ins for direct/test wiring). */
+    private val plugins: List<KotlinCompilerPlugin> = BUILTIN_KOTLIN_COMPILER_PLUGINS,
+    /** Build-time source generators (the `platform.sourceGenerator` EP contents). When a module declares a
+     *  `ContentRole.GENERATED` root, a `generateSources` task runs them into it ahead of compilation. */
+    private val generators: List<SourceGenerator> = emptyList(),
+    /** The module's runnable entry point → the packaged jar's manifest `Main-Class`, so the jar runs
+     *  standalone (`java -jar`). Null / blank for a library module → a manifest with no `Main-Class`. */
+    private val mainClassFor: (Module) -> String? = { null },
+) : Plugin {
+
+    /**
+     * Where a [GenerateSourcesTask] emits for [module]: its first declared `ContentRole.GENERATED` root, or
+     * the conventional `build/generated` when it declares none. The compile tasks read both as source (see
+     * `sourceRootDirs`), so a generator contributed for a module that never declared a generated root still
+     * has its output compiled.
+     */
+    private fun generatedOutputRoot(module: Module): Path = module.sourceSets
+        .flatMap { it.contentRoots }
+        .filter { ContentRole.GENERATED in it.roles }
+        .map { Paths.get(it.dir.path) }
+        .firstOrNull() ?: generatedRoot(module)
+
+    override fun apply(config: BuildConfiguration) {
+        val byId = config.project.modules.associateBy { it.id }
+        val packaging = config.request.goal in setOf(BuildGoal.ASSEMBLE, BuildGoal.PACKAGE, BuildGoal.INSTALL)
+        for (m in moduleClosure(config.request.targets, byId)) registerModule(config.tasks, m, byId, withJar = packaging)
+    }
+
+    /**
+     * Register [module]'s task chain into [tasks]. Call once per module (the caller iterates a deduped
+     * closure). [withJar] adds the packaging `jar` task (the library's artifact); compile/classes/resources
+     * are always registered. A `compileKotlin` step is added (and `compileJava` made to depend on it + see
+     * its output) when [module] has Kotlin sources and a [kotlin] compiler is available.
+     */
+    fun registerModule(tasks: TaskContainer, module: Module, byId: Map<ModuleId, Module>, withJar: Boolean) {
+        // Every module with a Kotlin compiler available gets a `compileKotlin`, whether or not it has `.kt`
+        // *right now*: source generators run later in this same graph, and a module whose Kotlin is entirely
+        // generated (the Compose `Res` class, a KSP processor's output) has none at graph-build time. The
+        // task compiles nothing and succeeds when the module really has no Kotlin, which is what Gradle's
+        // NO-SOURCE `compileKotlin` does for a Java-only module.
+        val hasKt = kotlin != null
+        // generateSources: run the source generators into the module's generated root ahead of compilation.
+        // The compile tasks read that root as source, so they need only an explicit edge to it: the generated
+        // dir is empty at graph-build time, so output/input inference alone wouldn't catch it (the same reason
+        // Android wires aapt2Link -> compileJava explicitly).
+        val generateSources: TaskName? = if (generators.isNotEmpty()) {
+            val gen = TaskName(":${module.name}:generateSources")
+            val out = generatedOutputRoot(module)
+            val cp = { depOutputDirs(module) + kotlinSiblings(depOutputDirs(module)) + libJars(module) }
+            tasks.register(gen) { GenerateSourcesTask(module, gen, generators, out, cp) }
+            gen
+        } else null
+
+        val bootClasspath = bootClasspathFor(module)
+        if (hasKt) {
+            val kc = TaskName(":${module.name}:compileKotlin")
+            tasks.register(kc) { KotlinCompileTask(module, kc, bootClasspath, kotlin, plugins) }.configure {
+                generateSources?.let { dependsOn(it) }
+                directModuleDeps(module, byId).forEach {
+                    dependsOn(TaskName(":${it.name}:compileJava"))
+                    // Unconditional for the same reason `hasKt` is: an upstream module's Kotlin may not
+                    // exist yet. An edge to a task no pipeline registered is ignored.
+                    dependsOn(TaskName(":${it.name}:compileKotlin"))
+                }
+            }
+        }
+        val compile = TaskName(":${module.name}:compileJava")
+        tasks.register(compile) { JdtCompileTask(module, compile, bootClasspath, ownKotlinOut = hasKt) }.configure {
+            generateSources?.let { dependsOn(it) }
+            directModuleDeps(module, byId).forEach { dependsOn(TaskName(":${it.name}:compileJava")) }
+            if (hasKt) dependsOn(TaskName(":${module.name}:compileKotlin"))
+        }
+        val procRes = TaskName(":${module.name}:processResources")
+        tasks.register(procRes) { ProcessResourcesTask(procRes, resourceRoots(module), resourcesDir(module)) }
+
+        val classes = TaskName(":${module.name}:classes")
+        tasks.register(classes) { LifecycleTask(classes, trackedDirs = classOutputs(module) + resourcesDir(module)) }
+            .configure { dependsOn(compile, procRes) }
+
+        val jar = if (withJar) {
+            TaskName(":${module.name}:jar").also { jar ->
+                tasks.register(jar) { JarTask(jar, classOutputs(module), jarPath(module), { mainClassFor(module) }) }
+                    .configure { dependsOn(classes) }
+            }
+        } else null
+
+        // The module's terminal aggregate (Gradle's `assemble`): the documented anchor a contributed
+        // BuildPlugin hangs its own final task off, so it runs as part of building the module.
+        val assemble = Lifecycle.assemble(module.name)
+        tasks.register(assemble) { LifecycleTask(assemble, trackedFiles = listOfNotNull(jar?.let { jarPath(module) })) }
+            .configure { dependsOn(jar ?: classes) }
+    }
+
+    /**
+     * Register [module]'s TEST compilation after its main chain (which must already be registered, as must the
+     * modules [testModuleDeps] names): `compileTestKotlin` → `compileTestJava`, `processTestResources`, and the
+     * `testClasses` aggregate a test run depends on. The test output is separate from the main output, so a test
+     * build never touches what `classes` produced.
+     */
+    fun registerTests(tasks: TaskContainer, module: Module, byId: Map<ModuleId, Module>) {
+        val bootClasspath = bootClasspathFor(module)
+        val upstream = listOf(Lifecycle.classes(module.name)) + testModuleDeps(module, byId).map { Lifecycle.classes(it.name) }
+        val compileKotlin = Lifecycle.compileTestKotlin(module.name)
+        if (kotlin != null) {
+            tasks.register(compileKotlin) { TestKotlinCompileTask(module, compileKotlin, bootClasspath, kotlin, plugins) }
+                .configure { upstream.forEach { dependsOn(it) } }
+        }
+        val compileJava = Lifecycle.compileTestJava(module.name)
+        tasks.register(compileJava) { TestJavaCompileTask(module, compileJava, bootClasspath) }.configure {
+            upstream.forEach { dependsOn(it) }
+            if (kotlin != null) dependsOn(compileKotlin)
+        }
+        val resources = Lifecycle.processTestResources(module.name)
+        tasks.register(resources) { ProcessResourcesTask(resources, testResourceRoots(module), testResourcesDir(module)) }
+        val testClasses = Lifecycle.testClasses(module.name)
+        tasks.register(testClasses) {
+            LifecycleTask(testClasses, trackedDirs = listOf(testKotlinOutputDir(module), testOutputDir(module), testResourcesDir(module)))
+        }.configure { dependsOn(compileJava, resources) }
+    }
+}

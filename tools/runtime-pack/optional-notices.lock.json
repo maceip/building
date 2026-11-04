@@ -1,0 +1,32 @@
+{
+  "format": 1,
+  "sourceRevision": "3885d8e1577097760b3bc4ee8d247ef367545d8e",
+  "purpose": "Supplement license files missing from the pinned Ninja and libuv binary packages. Source archive hashes are those in the official recipes at sourceRevision. Original .deb bytes and package hashes are unchanged. Full libuv source members preserve embedded BSD/ISC copyright and disclaimers without editing excerpts.",
+  "packages": [
+    {
+      "name": "ninja",
+      "version": "1.13.2",
+      "license": "Apache-2.0",
+      "recipeSha256": "6a3c1ec0da0494531079bed1604965eb2163e602781ba12be04d3e60ef5cddbe",
+      "source": {"path":"ninja-1.13.2.tar.gz","role":"archive","url":"https://github.com/ninja-build/ninja/archive/refs/tags/v1.13.2.tar.gz","size":292385,"sha256":"974d6b2f4eeefa25625d34da3cb36bdcebe7fbce40f4c16ac0835fd1c0cbae17"},
+      "members": [
+        {"path":"ninja-1.13.2/COPYING","output":"ninja/COPYING","size":11358,"sha256":"eb7e9ab9690124c5c9f42bdc81383d886a3dede26345b6ed15bbad7caf81f7ea"}
+      ]
+    },
+    {
+      "name": "libuv",
+      "version": "1.53.0",
+      "license": "MIT AND BSD-2-Clause AND ISC; documentation CC-BY-4.0",
+      "recipeSha256": "5306178facd555b28439aae348d0e561c541cdaace4d04ab1eeec540997b2dfc",
+      "source": {"path":"libuv-v1.53.0.tar.gz","role":"archive","url":"https://dist.libuv.org/dist/v1.53.0/libuv-v1.53.0.tar.gz","size":1391596,"sha256":"cb0d6dd2128d5a95bd242c6cc982a24fe608fa93da57b6b4ec763b0018c53e64"},
+      "members": [
+        {"path":"libuv-v1.53.0/LICENSE","output":"libuv/LICENSE","size":1079,"sha256":"16de0c32b265cb7d46a6d3bd614f259dd4d693a5e26b3407b04aae8d73041f0c"},
+        {"path":"libuv-v1.53.0/LICENSE-extra","output":"libuv/LICENSE-extra","size":1603,"sha256":"262c44bd2cdba037e6d2a82fba15f5800d292bc993a6f5d6b6ea487744d02836"},
+        {"path":"libuv-v1.53.0/LICENSE-docs","output":"libuv/LICENSE-docs","size":18652,"sha256":"cce5d01fa4a83b794271bd2c28cffdf99afd43c803e6ddefddae39b591ea7448"},
+        {"path":"libuv-v1.53.0/include/uv/tree.h","output":"libuv/include/uv/tree.h","size":36117,"sha256":"34393c74082c71ddd5bd9ec4afe30ef03df7fa7bb64be5a50ae070cdfebb5c43"},
+        {"path":"libuv-v1.53.0/src/inet.c","output":"libuv/src/inet.c","size":8093,"sha256":"71b08670424d9e7d062a75f5554da606c2340f2dd55c3df5f4cd7f132a6b727d"},
+        {"path":"libuv-v1.53.0/src/queue.h","output":"libuv/src/queue.h","size":2671,"sha256":"abdeddeefb025fcdeff7737d4d465d89081ab2c3cc08a423c042ee2093b8695a"}
+      ]
+    }
+  ]
+}

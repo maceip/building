@@ -1,0 +1,164 @@
+package dev.ide.lang.kotlin.interp
+
+import dev.ide.lang.kotlin.interp.PreviewLoweringStore.CachedFn
+import dev.ide.lang.kotlin.interp.PreviewLoweringStore.Entry
+
+import dev.ide.platform.log.Log
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
+
+/**
+ * Disk persistence for [KotlinPreviewLowering]'s per-file cache, so a project reopen (or IDE restart) serves
+ * previously-lowered declarations by DECODE instead of re-running overload resolution — the dominant cold cost
+ * of the first preview on a big project (Jetsnack: seconds of `lowerFn` per entry, milliseconds to decode).
+ *
+ * One cache file per source path (`<sha1(path)>.plc` under [dir]), holding whatever was materialized for that
+ * file when last stored: the lowered top-level callables (each with the declaration text hash + start offset
+ * that gate its reuse) plus the file's lowered classes when they were materialized. Validity mirrors the
+ * in-memory rules exactly:
+ *  - an entry is only CONSIDERED when its stored file signature hash (`fileSignatureHash` — the text with
+ *    top-level function bodies elided) matches the current parse, and
+ *  - each function is only REUSED when its declaration's text hash + offset still match (checked by the
+ *    caller at materialization), so spans stay exact;
+ *  - classes reuse under the signature match alone (only function bodies can change without moving it, and
+ *    those never affect a class's lowering) — same as the in-memory generation carry-over.
+ *
+ * [salt] must capture everything else lowering depends on — the classpath fingerprint at minimum (a dependency
+ * change alters resolution) — and is combined here with [ResolvedTreeCodec.FORMAT], which also stands in for
+ * lowering-behavior versioning (bump it on resolver changes; see its docs). A mismatched header is treated as
+ * a miss and the entry overwritten. Cross-file source-signature staleness is accepted best-effort, exactly as
+ * the in-memory cache already does (documented on [KotlinPreviewLowering]).
+ *
+ * Writes are asynchronous and coalesced per path (latest snapshot wins) on a shared daemon thread, so storing
+ * never blocks the engine thread; a torn/failed write is self-healing (the next load discards it). They are
+ * also DELAYED until the path has been quiet for [WRITE_QUIET_MS]: the cache only serves the next cold start,
+ * and while the user types every settled pause re-lowers and stores the file again, so writing each snapshot
+ * encoded and wrote the whole file's program once per pause (measured on a 1.3k-line Compose file on an
+ * emulator: ~2s of CPU in 27s of typing, plus the garbage).
+ */
+class PreviewLoweringDiskCache(private val dir: Path, private val salt: String) : PreviewLoweringStore {
+
+    private val log = Log.logger("preview-lowering-cache")
+
+    // Per-instance: two modules' analyzers can see the SAME absolute source path with different classpaths
+    // (a shared dependency-module file); a shared pending map would let one instance drain — and mis-file —
+    // the other's snapshot.
+    private val pending = ConcurrentHashMap<String, Pending>()
+
+    private class Pending(val entry: Entry, val at: Long)
+
+    /** Load the stored entry for source [path], or null when absent/stale/corrupt (all self-healing misses). */
+    override fun load(path: String): Entry? = runCatching {
+        val f = dir.resolve(fileName(path))
+        if (!Files.isRegularFile(f)) return null
+        val d = DataInputStream(ByteArrayInputStream(Files.readAllBytes(f)))
+        if (d.readInt() != MAGIC || d.readInt() != ResolvedTreeCodec.FORMAT) return null
+        val r = ResolvedTreeCodec.Reader(JavaDataReader(d))
+        if (r.str() != salt || r.str() != path) return null
+        val sigHash = r.int()
+        val fns = LinkedHashMap<String, CachedFn>()
+        repeat(r.int()) {
+            val key = r.str()
+            fns[key] = CachedFn(r.int(), r.int(), r.function(), r.list { r.klass() })
+        }
+        val classes = r.nullable { r.list { r.klass() } }
+        Entry(sigHash, fns, classes)
+    }.getOrElse { t ->
+        log.warn("discarding unreadable preview-lowering cache entry for $path: ${t.javaClass.simpleName}: ${t.message}")
+        runCatching { Files.deleteIfExists(dir.resolve(fileName(path))) }
+        null
+    }
+
+    /** Persist [entry] as the snapshot for [path] — asynchronous, coalesced (the latest store wins), and written
+     *  once [path] has had no store for [WRITE_QUIET_MS]. */
+    override fun store(path: String, entry: Entry) {
+        // Only the store that finds nothing pending starts a drain; later ones just replace the snapshot, and the
+        // running drain waits out the quiet spell from the latest of them.
+        if (pending.put(path, Pending(entry, System.nanoTime())) == null) {
+            writer.schedule({ drain(path) }, WRITE_QUIET_MS, TimeUnit.MILLISECONDS)
+        }
+    }
+
+    private fun drain(path: String) {
+        val p = pending[path] ?: return
+        val wait = TimeUnit.MILLISECONDS.toNanos(WRITE_QUIET_MS) - (System.nanoTime() - p.at)
+        if (wait > 0) {
+            writer.schedule({ drain(path) }, wait, TimeUnit.NANOSECONDS)
+            return
+        }
+        // A store landed between the read and here: go round again for the newer snapshot.
+        if (!pending.remove(path, p)) {
+            writer.execute { drain(path) }
+            return
+        }
+        writeLogged(path, p.entry)
+    }
+
+    private fun writeLogged(path: String, entry: Entry) {
+        runCatching { write(path, entry) }
+            .onFailure { log.warn("preview-lowering cache write failed for $path: ${it.message}") }
+    }
+
+    /** Write every pending snapshot now, without waiting out the quiet spell, and block until they are on disk.
+     *  For tests and orderly shutdown; production writes stay fire-and-forget. */
+    fun flush() {
+        runCatching {
+            writer.submit {
+                for (path in pending.keys.toList()) pending.remove(path)?.let { writeLogged(path, it.entry) }
+            }.get()
+        }
+    }
+
+    private fun write(path: String, entry: Entry) {
+        val bos = ByteArrayOutputStream()
+        val d = DataOutputStream(bos)
+        d.writeInt(MAGIC)
+        d.writeInt(ResolvedTreeCodec.FORMAT)
+        ResolvedTreeCodec.Writer(JavaDataWriter(d)).run {
+            str(salt); str(path)
+            int(entry.sigHash)
+            int(entry.fns.size)
+            entry.fns.forEach { (key, f) ->
+                str(key); int(f.textHash); int(f.startOffset); function(f.fn); list(f.anons) { klass(it) }
+            }
+            nullable(entry.classes) { cs -> list(cs) { klass(it) } }
+        }
+        d.flush()
+        Files.createDirectories(dir)
+        val target = dir.resolve(fileName(path))
+        val tmp = dir.resolve("${fileName(path)}.tmp")
+        Files.write(tmp, bos.toByteArray())
+        try {
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: Exception) {
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    private fun fileName(path: String): String {
+        val digest = MessageDigest.getInstance("SHA-1").digest(path.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) } + ".plc"
+    }
+
+    private companion object {
+        const val MAGIC = 0x504C4331 // "PLC1"
+
+        /** How long a path must go without a store before its snapshot is written. */
+        const val WRITE_QUIET_MS = 3_000L
+
+        /** Shared across instances/process: one write per settled file, and a daemon thread needs no disposal. */
+        val writer: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "preview-lowering-cache").apply { isDaemon = true }
+        }
+    }
+}
