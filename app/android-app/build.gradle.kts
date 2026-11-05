@@ -61,6 +61,8 @@ dependencies {
     implementation(project(":analytics-api"))
     implementation(project(":analytics-impl"))
     implementation(project(":developer-workbench"))
+    implementation(project(":agent-ui-foundation"))
+    implementation(project(":agent-ui-compose"))
     implementation(libs.androidx.core)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.runtime)

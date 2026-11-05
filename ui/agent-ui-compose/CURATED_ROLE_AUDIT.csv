@@ -1,0 +1,47 @@
+curated_role,evidence_level,evidence_file,evidence_case
+AgentApprovalBatch,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#approval batch resolves each request once after an individual decision
+AgentApprovalCard,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#approval callback is single shot after the card resolves
+AgentChatPanel,product,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/product/AgentUiProductAcceptanceTest.kt,fragments.product.AgentUiProductAcceptanceTest#product app renders curated AgentChatPanel
+AgentCodeBlock,semantics,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#code block preserves line text without generated line numbers
+AgentComposerTrigger,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#composer trigger chooses a category and returns the kit item
+AgentCopyButton,behavior,agent-ui-compose/consumer-smoke/src/test/kotlin/PublishedKitCatalogTest.kt,PublishedKitCatalogTest#published copy button uses the host clipboard and reports success
+AgentDiffReview,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#diff review keeps decision when switching layouts
+AgentDirectiveText,semantics,agent-ui-compose/consumer-smoke/src/test/kotlin/PublishedKitCatalogTest.kt,PublishedKitCatalogTest#published catalog renders its content workflow and browser roles
+AgentDisclosure,behavior,agent-ui-compose/consumer-smoke/src/test/kotlin/PublishedKitCatalogTest.kt,PublishedKitCatalogTest#published catalog renders its content workflow and browser roles
+AgentErrorMessage,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#error retry invokes the supplied action
+AgentIdentityCard,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#identity card connects once and reflects the updated state
+AgentImageLightbox,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#image lightbox close invokes its callback once
+AgentInlineImage,semantics,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#inline image renders bitmap in a message without lightbox controls
+AgentJsonView,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#json output folds long content and restores it without losing the copy action
+AgentKeyboardHint,semantics,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#keyboard hint and loading indicator expose readable semantics
+AgentKillSwitch,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#kill switch requires a hold and can resume
+AgentLiveRegion,semantics,agent-ui-compose/consumer-smoke/src/test/kotlin/PublishedKitCatalogTest.kt,PublishedKitCatalogTest#published catalog renders its content workflow and browser roles
+AgentLoadingIndicator,semantics,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#keyboard hint and loading indicator expose readable semantics
+AgentMarkdown,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#markdown renders structured chat content and copies fenced code
+AgentMarkdownRenderer,behavior,agent-ui-compose/consumer-smoke/src/test/kotlin/PublishedKitCatalogTest.kt,PublishedKitCatalogTest#published markdown renderer and nested labels preserve their scopes
+AgentMessageTurn,product,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/shell/macos26/AgentChatPanelUiTest.kt,fragments.shell.macos26.AgentChatPanelUiTest#mixed turn keeps browser review and question callbacks attached to their parts
+AgentNeedsYouInbox,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#inbox selection returns the kit model with the intended id
+AgentQuestionCard,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#question answer is submitted through the curated card
+AgentReasoning,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#reasoning disclosure opens and closes without losing its content
+AgentRunMeter,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#run meter keeps live status when the model name is absent
+AgentSources,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#source and suggestion callbacks identify the selected item
+AgentSpeakerIdentity,semantics,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#identity and subagent roles reflect updated speakers and progress
+AgentSubagentList,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#identity and subagent roles reflect updated speakers and progress
+AgentSuggestions,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#source and suggestion callbacks identify the selected item
+AgentSwapLabel,behavior,agent-ui-compose/consumer-smoke/src/test/kotlin/PublishedKitCatalogTest.kt,PublishedKitCatalogTest#published catalog renders its content workflow and browser roles
+AgentTaskCard,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#task transcript remains attached to its card
+AgentToolCard,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#curated tool cards reveal their typed content
+AgentToolGroup,product,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/shell/macos26/AgentChatPanelUiTest.kt,fragments.shell.macos26.AgentChatPanelUiTest#panel renders grouped tool calls and routes a child approval
+AgentToolTimeline,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#tool timeline opens a call and moves keyboard focus between calls
+AgentUiButton,behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#curated button exposes button semantics and keyboard activation
+AgentUiLabels,behavior,agent-ui-compose/consumer-smoke/src/test/kotlin/PublishedKitCatalogTest.kt,PublishedKitCatalogTest#published markdown renderer and nested labels preserve their scopes
+AgentVisuallyHidden,semantics,agent-ui-compose/consumer-smoke/src/test/kotlin/PublishedKitCatalogTest.kt,PublishedKitCatalogTest#published catalog renders its content workflow and browser roles
+ChatInput,product,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/product/AgentUiProductAcceptanceTest.kt,fragments.product.AgentUiProductAcceptanceTest#product composer exposes typed slash commands and agent mentions
+ChatTool.Bash,tool_behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#curated tool cards reveal their typed content
+ChatTool.Edit,tool_behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#curated tool cards reveal their typed content
+ChatTool.Generic,tool_behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#curated plan todo and generic cards render their data
+ChatTool.Mcp,tool_behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#curated tool cards reveal their typed content
+ChatTool.Plan,tool_behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#curated plan todo and generic cards render their data
+ChatTool.Search,tool_behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#curated tool cards reveal their typed content
+ChatTool.Thinking,tool_behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#curated tool cards reveal their typed content
+ChatTool.Todo,tool_behavior,nucleus/nucleus-macos26/src/jvmTest/kotlin/fragments/qa/CuratedComponentsUiTest.kt,fragments.qa.CuratedComponentsUiTest#curated plan todo and generic cards render their data

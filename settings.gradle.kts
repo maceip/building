@@ -108,6 +108,9 @@ include(
     ":model-bridge",
     ":ide-core",
     ":build-cli",
+    ":agent-ui-foundation",
+    ":agent-ui-source-ports",
+    ":agent-ui-compose",
     ":android-app",
 )
 
@@ -136,6 +139,7 @@ val layers = mapOf(
     ),
     "plugins" to listOf("plugin-api", "plugin-ui-api", "plugin-impl"),
     "engine" to listOf("ide-ui-api", "model-bridge", "ide-core", "build-cli"),
+    "ui" to listOf("agent-ui-foundation", "agent-ui-source-ports", "agent-ui-compose"),
     "app" to listOf("android-app"),
     "tools" to listOf("test-support", "bench-support"),
     "experimental" to listOf("kotlin-syntax", "kotlin-symbols"),
