@@ -312,11 +312,11 @@ class MobileAgentUiVariantsTest {
             CodeAssistTheme(dark = true) {
                 val palette = rememberIdeAgentUiPalette()
                 Box(Modifier.size(390.dp, 844.dp)) {
-                    AgentMobileBrowserSheet(
+                    fragments.agentui.AgentMobileBrowserSheet(
                         part = browserPart,
                         palette = palette,
                         modifier = Modifier.fillMaxSize(),
-                        page = { mod ->
+                        page = { mod: Modifier ->
                             fragments.agentui.AgentEmbeddedWebView(
                                 controller = controller,
                                 modifier = mod,
@@ -329,8 +329,8 @@ class MobileAgentUiVariantsTest {
 
         waitForIdle()
         onNodeWithTag("agent-browser-top-bar", useUnmergedTree = true).assertIsDisplayed()
-        onNodeWithTag("agent-browser-take-control", useUnmergedTree = true).assertIsDisplayed()
-        onNodeWithTag("agent-browser-take-control", useUnmergedTree = true).performClick()
+        onNodeWithTag("agent-mini-browser-takeover", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("agent-mini-browser-takeover", useUnmergedTree = true).performClick()
         waitForIdle()
         onNodeWithText("You're in control", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithTag("agent-browser-top-done", useUnmergedTree = true).performClick()
