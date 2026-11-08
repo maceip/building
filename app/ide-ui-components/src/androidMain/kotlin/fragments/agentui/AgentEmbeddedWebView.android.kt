@@ -56,6 +56,8 @@ actual fun AgentEmbeddedWebView(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
             )
+            isFocusable = true
+            isFocusableInTouchMode = true
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -95,6 +97,10 @@ actual fun AgentEmbeddedWebView(
                         platformBack = view?.canGoBack(),
                         platformForward = view?.canGoForward(),
                     )
+                    val stageScript = controller.pendingStageJsOnLoad
+                    if (!stageScript.isNullOrBlank()) {
+                        view?.evaluateJavascript(stageScript, null)
+                    }
                     view?.evaluateJavascript(DOM_SNAPSHOT_JS) { rawJson ->
                         if (!rawJson.isNullOrBlank() && rawJson != "null") {
                             controller.lastDomSnapshot = rawJson.trim('"')

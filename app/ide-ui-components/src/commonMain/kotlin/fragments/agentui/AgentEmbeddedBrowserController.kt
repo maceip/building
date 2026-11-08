@@ -45,6 +45,7 @@ class AgentEmbeddedBrowserController(
     var isUserInControl: Boolean by mutableStateOf(false)
     var lastDomSnapshot: String by mutableStateOf("")
     var lastExtractedText: String by mutableStateOf("")
+    var pendingStageJsOnLoad: String? = null
 
     internal val historyBack = mutableListOf<String>()
     internal val historyForward = mutableListOf<String>()

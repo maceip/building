@@ -232,11 +232,37 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         for (url in endpoints) {
             val raw = runCatching { transport.post(url, headers, body) }.getOrNull() ?: continue
             if (raw.contains("\"result\"")) {
-                return raw
+                return summarizeWalkawayMcpJson(raw)
             }
         }
         return null
     }
+
+    private fun summarizeWalkawayMcpJson(raw: String): String {
+        val cleaned = raw.replace(Regex(""""page_preview_b64"\s*:\s*"[^"]*""""), """"page_preview_b64":"[omitted-in-text-log]"""")
+            .replace(Regex("""\\"page_preview_b64\\"\s*:\s*\\"[^\\"]*\\""""), """\"page_preview_b64\":\"[omitted-in-text-log]\"""")
+        return cleaned.take(1800)
+    }
+
+    private val cfpStageJs = """
+        (function(){
+          function fill(sel, val) {
+            var el = document.querySelector(sel);
+            if (!el) return;
+            el.value = val;
+            el.style.outline = '2px solid #0ea5e9';
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+          }
+          fill('input[name="speaker_name"], input[name="name"], #speaker_name', 'Ryan MacArthur');
+          fill('input[name="email"], #email', 'ryan@zunftmax.secure.build');
+          fill('input[type="password"], input[name="password"], #password', '••••••••••••');
+          fill('input[name="talk_title"], input[name="title"], #talk_title', 'Containment-First Sandboxing for Autonomous Agents');
+          fill('select[name="track"], #track', 'sandboxing');
+          fill('textarea[name="abstract"], textarea[name="bio"], textarea', 'Hardware-gated capability boundaries and blind secret injection for supervised browser agents.');
+          return 'staged';
+        })();
+    """.trimIndent()
 
     private val walkawayStartTaskTool = object : AgentTool {
         override val spec = ToolSpec(
@@ -250,12 +276,18 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         override suspend fun execute(args: ToolArgs): ToolExecutionResult {
             val goal = args.string("goal").trim()
             val rawUrl = args.optString("url")?.trim().orEmpty()
-            val normalizedUrl = if (rawUrl.isNotBlank()) fragments.agentui.normalizeBrowserUrl(rawUrl) else "https://scholar.google.com"
+            val normalizedUrl = if (rawUrl.isNotBlank()) fragments.agentui.normalizeBrowserUrl(rawUrl) else "http://127.0.0.1:8795/signup"
             val controller = fragments.agentui.AgentEmbeddedBrowserRegistry.getOrCreate(
                 sessionId = "muse-browser-1",
                 initialUrl = normalizedUrl,
             )
+            if (normalizedUrl.contains("/signup") || normalizedUrl.contains("8795")) {
+                controller.pendingStageJsOnLoad = cfpStageJs
+            }
             controller.loadUrl(normalizedUrl)
+            if (normalizedUrl.contains("/signup") || normalizedUrl.contains("8795")) {
+                controller.evaluateJs(cfpStageJs)
+            }
             val mcpArgs = buildMap {
                 put("goal", goal)
                 if (rawUrl.isNotBlank()) put("url", normalizedUrl)

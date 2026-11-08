@@ -550,6 +550,7 @@ fun AgentMobileBrowserSheet(
                 CircleIconButton(
                     onClick = {
                         userInControl = false
+                        browserController.isUserInControl = false
                         onTakeoverChanged?.invoke(false)
                     },
                     palette = palette,
@@ -826,8 +827,15 @@ fun AgentMobileBrowserSheet(
             AgentPillButton(
                 label = if (userInControl) "Done" else "Take control",
                 onClick = {
-                    userInControl = !userInControl
-                    onTakeoverChanged?.invoke(userInControl)
+                    val nextControl = !userInControl
+                    userInControl = nextControl
+                    browserController.isUserInControl = nextControl
+                    if (nextControl) {
+                        browserController.evaluateJs(
+                            "(function(){ var el = document.querySelector('input:not([type=hidden]),textarea,select'); if(el){ el.focus(); return el.name||el.id||'focused'; } return 'none'; })()",
+                        )
+                    }
+                    onTakeoverChanged?.invoke(nextControl)
                 },
                 modifier = Modifier.weight(1f).height(46.dp).testTag("agent-mini-browser-takeover"),
                 variant = UiButtonVariant.Primary,

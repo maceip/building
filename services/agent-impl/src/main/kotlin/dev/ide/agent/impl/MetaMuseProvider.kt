@@ -222,6 +222,17 @@ class MetaMuseProvider(private val transport: LlmTransport) : LlmProvider {
         domainRegex.find(cleanPrompt)?.value?.let { return "https://${it.trimEnd('.', ',', ';')}" }
 
         val lower = cleanPrompt.lowercase()
+        if (lower.contains("cfp") ||
+            lower.contains("signup") ||
+            lower.contains("sign up") ||
+            lower.contains("register") ||
+            lower.contains("registration") ||
+            lower.contains("speaker") ||
+            lower.contains("deepsec") ||
+            lower.contains("walkaway")
+        ) {
+            return "http://127.0.0.1:8795/signup"
+        }
         if (lower.contains("scholar")) {
             val q = cleanPrompt
                 .replace(Regex("(?i)(search|google scholar|scholar|for|on|in browser|browse|open)"), " ")

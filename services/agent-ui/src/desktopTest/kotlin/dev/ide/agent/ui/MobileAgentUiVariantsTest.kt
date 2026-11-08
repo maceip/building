@@ -332,9 +332,11 @@ class MobileAgentUiVariantsTest {
         onNodeWithTag("agent-mini-browser-takeover", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithTag("agent-mini-browser-takeover", useUnmergedTree = true).performClick()
         waitForIdle()
+        assertTrue(controller.isUserInControl)
         onNodeWithText("You're in control", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithTag("agent-browser-top-done", useUnmergedTree = true).performClick()
         waitForIdle()
+        assertTrue(!controller.isUserInControl)
 
         controller.loadUrl("https://news.ycombinator.com")
         waitForIdle()
