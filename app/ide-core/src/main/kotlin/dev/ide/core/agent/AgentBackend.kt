@@ -209,6 +209,86 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
     )
 
     // RYAN EXPLICIT MOCK/FALLBACK AUTHORIZATION: "Create a mock Muse CLI or whatever the fuck it is. All needs to do is actually no, that's not true. Create the mock Muse inside the Muse code macOS app and inside the BUILDING android app. Add the packaged browser that exists in the previous hackathon folder. You need to mock the android app being Muse, OK, and it's one thing that I can do that's all I care about, and that app already has wiring for LOLs. You don't have to worry about it, is it does spin up a little browser the desktop app, you'll have to check to see if it has that, but you just need to do the chrome because it can just use the WK WebView"
+    private fun callWalkawayMcpEndpoint(toolName: String, argsMap: Map<String, String>): String? {
+        val customBase = pref("museBaseUrl")?.takeIf { it.contains("/mcp") }
+            ?: System.getenv("WALKAWAY_MCP_URL")?.takeIf { it.isNotBlank() }
+        val endpoints = listOfNotNull(
+            customBase,
+            "http://127.0.0.1:8890/mcp",
+            "http://10.0.2.2:8890/mcp",
+            "https://muse.secure.build/mcp",
+        )
+        val token = pref("museKey")?.takeIf { it.isNotBlank() }
+            ?: System.getenv("WALKAWAY_CONNECTOR_TOKEN").orEmpty()
+        val argsJson = argsMap.entries.joinToString(",", prefix = "{", postfix = "}") { (k, v) ->
+            val escV = v.replace("\\", "\\\\").replace("\"", "\\\"")
+            "\"$k\":\"$escV\""
+        }
+        val body = """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"$toolName","arguments":$argsJson}}"""
+        val headers = buildList {
+            add("Content-Type" to "application/json")
+            if (token.isNotBlank()) add("Authorization" to "Bearer $token")
+        }
+        for (url in endpoints) {
+            val raw = runCatching { transport.post(url, headers, body) }.getOrNull() ?: continue
+            if (raw.contains("\"result\"")) {
+                return raw
+            }
+        }
+        return null
+    }
+
+    private val walkawayStartTaskTool = object : AgentTool {
+        override val spec = ToolSpec(
+            name = "walkaway_start_task",
+            description = "Start a Walkaway browser task via the Meta Muse MCP Connector (http://127.0.0.1:8890/mcp or https://muse.secure.build/mcp) and open the page in the embedded browser.",
+            parameters = toolSchema {
+                string("goal", "The user's goal, verbatim.")
+                string("url", "Optional https:// or http:// target URL.", required = false)
+            },
+        )
+        override suspend fun execute(args: ToolArgs): ToolExecutionResult {
+            val goal = args.string("goal").trim()
+            val rawUrl = args.optString("url")?.trim().orEmpty()
+            val normalizedUrl = if (rawUrl.isNotBlank()) fragments.agentui.normalizeBrowserUrl(rawUrl) else "https://scholar.google.com"
+            val controller = fragments.agentui.AgentEmbeddedBrowserRegistry.getOrCreate(
+                sessionId = "muse-browser-1",
+                initialUrl = normalizedUrl,
+            )
+            controller.loadUrl(normalizedUrl)
+            val mcpArgs = buildMap {
+                put("goal", goal)
+                if (rawUrl.isNotBlank()) put("url", normalizedUrl)
+            }
+            val mcpRaw = callWalkawayMcpEndpoint("walkaway_start_task", mcpArgs)
+            val approvalRaw = if (mcpRaw != null) callWalkawayMcpEndpoint("walkaway_request_approval", emptyMap()) ?: mcpRaw else null
+            val hostTitle = controller.title.ifBlank {
+                normalizedUrl.removePrefix("https://").removePrefix("http://").substringBefore('/')
+            }
+            return ToolExecutionResult.ok(
+                "URL: ${controller.url.ifBlank { normalizedUrl }} | Title: $hostTitle\n" +
+                    (if (approvalRaw != null) "MCP Connector (`walkaway_start_task` -> `walkaway_request_approval`): $approvalRaw"
+                    else controller.lastDomSnapshot.ifBlank { "Loaded $normalizedUrl in Muse Embedded Browser." }),
+            )
+        }
+    }
+
+    private val walkawayStatusTool = object : AgentTool {
+        override val spec = ToolSpec(
+            name = "walkaway_status",
+            description = "Query current Walkaway task status, proposed step, and glasses/Android approval state from the Meta Muse MCP Connector.",
+            parameters = toolSchema { },
+        )
+        override suspend fun execute(args: ToolArgs): ToolExecutionResult {
+            val mcpRaw = callWalkawayMcpEndpoint("walkaway_status", emptyMap())
+            val controller = fragments.agentui.AgentEmbeddedBrowserRegistry.current()
+            return ToolExecutionResult.ok(
+                "URL: ${controller.url} | Title: ${controller.title.ifBlank { "Muse Browser" }}\n" +
+                    (mcpRaw ?: "Active embedded browser at ${controller.url}"),
+            )
+        }
+    }
+
     private val browserNavigateTool = object : AgentTool {
         override val spec = ToolSpec(
             name = "browser_navigate",
@@ -302,6 +382,8 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         cloneRepositoryTool,
         runProjectTool,
         liteRtCornerTool,
+        walkawayStartTaskTool,
+        walkawayStatusTool,
         browserNavigateTool,
         browserSnapshotTool,
         browserClickTool,

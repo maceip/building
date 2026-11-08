@@ -135,7 +135,22 @@ class MetaMuseProvider(private val transport: LlmTransport) : LlmProvider {
 
         if (lastNonSystem?.role != LlmRole.TOOL) {
             val targetUrl = extractBrowserTargetUrl(userText)
+            val hasWalkawayMcpTool = request.tools.any { it.name == "walkaway_start_task" }
             val hasBrowserTool = request.tools.any { it.name == "browser_navigate" }
+            if (hasWalkawayMcpTool && targetUrl != null) {
+                val thinkText = "Delegating task to Walkaway MCP Connector (`walkaway_start_task`) and opening $targetUrl in Muse Browser…"
+                emit(LlmStreamEvent.ThinkingDelta(thinkText))
+                emit(LlmStreamEvent.ThinkingCompleted(thinkText, null))
+                val callId = "muse-mcp-" + UUID.randomUUID().toString().take(8)
+                val escapedGoal = userText.take(300).replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ")
+                val escapedUrl = targetUrl.replace("\\", "\\\\").replace("\"", "\\\"")
+                val argsJson = """{"goal":"$escapedGoal","url":"$escapedUrl"}"""
+                emit(LlmStreamEvent.ToolCallStarted(callId, "walkaway_start_task"))
+                emit(LlmStreamEvent.ToolCallCompleted(callId, "walkaway_start_task", argsJson))
+                emit(LlmStreamEvent.Usage(TokenUsage(inputTokens = 64, outputTokens = 36)))
+                emit(LlmStreamEvent.Completed(StopReason.TOOL_USE))
+                return@flow
+            }
             if (hasBrowserTool && targetUrl != null) {
                 val thinkText = "Opening Muse embedded browser and navigating to $targetUrl…"
                 emit(LlmStreamEvent.ThinkingDelta(thinkText))

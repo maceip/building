@@ -829,6 +829,8 @@ private class IdeAgentConversationHandle(
                                 val browserCall = step.calls.lastOrNull { call ->
                                     call.title.startsWith("browser_") ||
                                         call.title.contains("browser_") ||
+                                        call.title.startsWith("walkaway_") ||
+                                        call.title.contains("walkaway_") ||
                                         call.detail.startsWith("URL: ")
                                 }
                                 if (browserCall != null) {
