@@ -208,12 +208,109 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
         onSwitchProviderInHost = { providerId -> applyUniversalProviderToHostPrefs(providerId) },
     )
 
+    // RYAN EXPLICIT MOCK/FALLBACK AUTHORIZATION: "Create a mock Muse CLI or whatever the fuck it is. All needs to do is actually no, that's not true. Create the mock Muse inside the Muse code macOS app and inside the BUILDING android app. Add the packaged browser that exists in the previous hackathon folder. You need to mock the android app being Muse, OK, and it's one thing that I can do that's all I care about, and that app already has wiring for LOLs. You don't have to worry about it, is it does spin up a little browser the desktop app, you'll have to check to see if it has that, but you just need to do the chrome because it can just use the WK WebView"
+    private val browserNavigateTool = object : AgentTool {
+        override val spec = ToolSpec(
+            name = "browser_navigate",
+            description = "Navigate the embedded Muse browser to a URL or search query and return the live page summary.",
+            parameters = toolSchema {
+                string("url", "Target URL (e.g. https://scholar.google.com or https://aol.com)")
+            },
+        )
+        override suspend fun execute(args: ToolArgs): ToolExecutionResult {
+            val rawUrl = args.string("url").trim()
+            val normalized = fragments.agentui.normalizeBrowserUrl(rawUrl)
+            val controller = fragments.agentui.AgentEmbeddedBrowserRegistry.getOrCreate(
+                sessionId = "muse-browser-1",
+                initialUrl = normalized,
+            )
+            controller.loadUrl(normalized)
+            val hostTitle = controller.title.ifBlank {
+                normalized.removePrefix("https://").removePrefix("http://").substringBefore('/')
+            }
+            return ToolExecutionResult.ok(
+                "URL: ${controller.url.ifBlank { normalized }} | Title: $hostTitle\n" +
+                    (controller.lastDomSnapshot.ifBlank { "Loaded $normalized in Muse Embedded Browser." }),
+            )
+        }
+    }
+
+    private val browserSnapshotTool = object : AgentTool {
+        override val spec = ToolSpec(
+            name = "browser_snapshot",
+            description = "Inspect the current DOM state, interactive inputs, buttons, and text excerpt of the embedded Muse browser.",
+            parameters = toolSchema { },
+        )
+        override suspend fun execute(args: ToolArgs): ToolExecutionResult {
+            val controller = fragments.agentui.AgentEmbeddedBrowserRegistry.current()
+            val hostTitle = controller.title.ifBlank {
+                controller.url.removePrefix("https://").removePrefix("http://").substringBefore('/')
+            }
+            return ToolExecutionResult.ok(
+                "URL: ${controller.url} | Title: $hostTitle\n" +
+                    (controller.lastDomSnapshot.ifBlank { "Active browser session at ${controller.url}" }),
+            )
+        }
+    }
+
+    private val browserClickTool = object : AgentTool {
+        override val spec = ToolSpec(
+            name = "browser_click",
+            description = "Click an element in the embedded Muse browser by CSS selector or visible label.",
+            parameters = toolSchema {
+                string("selector", "CSS selector or visible button/link text to click.")
+            },
+        )
+        override suspend fun execute(args: ToolArgs): ToolExecutionResult {
+            val selector = args.string("selector").trim()
+            val controller = fragments.agentui.AgentEmbeddedBrowserRegistry.current()
+            val escaped = selector.replace("\\", "\\\\").replace("'", "\\'")
+            controller.evaluateJs(
+                "(function(){ var el = document.querySelector('$escaped') || Array.from(document.querySelectorAll('button,a,[role=button],input[type=submit]')).find(function(e){ return (e.innerText||e.value||'').includes('$escaped'); }); if(el){ el.click(); return 'clicked'; } return 'not_found'; })()",
+            )
+            return ToolExecutionResult.ok("URL: ${controller.url} | Title: ${controller.title.ifBlank { "Muse Browser" }}\nClicked '$selector'.")
+        }
+    }
+
+    private val browserInputTool = object : AgentTool {
+        override val spec = ToolSpec(
+            name = "browser_input",
+            description = "Fill an input or textarea in the embedded Muse browser.",
+            parameters = toolSchema {
+                string("selector", "CSS selector or input name/placeholder.")
+                string("value", "Text value to type into the field.")
+            },
+        )
+        override suspend fun execute(args: ToolArgs): ToolExecutionResult {
+            val selector = args.string("selector").trim()
+            val value = args.string("value")
+            val controller = fragments.agentui.AgentEmbeddedBrowserRegistry.current()
+            val escSel = selector.replace("\\", "\\\\").replace("'", "\\'")
+            val escVal = value.replace("\\", "\\\\").replace("'", "\\'")
+            controller.evaluateJs(
+                "(function(){ var el = document.querySelector('$escSel') || document.querySelector('input[name=\"$escSel\"],input[placeholder*=\"$escSel\"],textarea'); if(el){ el.focus(); el.value='$escVal'; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return 'filled'; } return 'not_found'; })()",
+            )
+            return ToolExecutionResult.ok("URL: ${controller.url} | Title: ${controller.title.ifBlank { "Muse Browser" }}\nFilled '$selector' with '$value'.")
+        }
+    }
+
     private val spillStore = dev.ide.agent.impl.ToolResultSpillStore(checkpoints)
     private val usageLedger = dev.ide.agent.impl.UsageLedger()
 
+    private val extraAgentTools = listOf(
+        ftpControlTool,
+        cloneRepositoryTool,
+        runProjectTool,
+        liteRtCornerTool,
+        browserNavigateTool,
+        browserSnapshotTool,
+        browserClickTool,
+        browserInputTool,
+    )
+
     private val tools = dev.ide.agent.impl.createSelfExtendingToolRegistry(
         workspace = checkpoints,
-        extraTools = listOf(ftpControlTool, cloneRepositoryTool, runProjectTool, liteRtCornerTool),
+        extraTools = extraAgentTools,
         gateProvider = { gate },
         spillStore = spillStore,
         usageLedger = usageLedger,
@@ -223,7 +320,7 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
      *  and recording them into one would let that turn's Undo revert someone else's work. */
     private val mcpTools = dev.ide.agent.impl.createSelfExtendingToolRegistry(
         workspace = workspace,
-        extraTools = listOf(ftpControlTool, cloneRepositoryTool, runProjectTool, liteRtCornerTool),
+        extraTools = extraAgentTools,
         gateProvider = { AllowAllGate },
     )
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -385,13 +482,14 @@ internal class AgentBackend(private val ctx: BackendContext) : AgentService {
             get() = when {
                 selectedId == GATEWAY -> !baseUrl.isNullOrBlank()
                 selectedId == LiteRtLmProvider.ID -> onDeviceModelInstalled
+                selectedId == "muse" -> true
                 !requiresApiKey -> !baseUrl.isNullOrBlank()
                 else -> !apiKey.isNullOrBlank()
             }
     }
 
     private fun resolveConfig(): ResolvedConfig {
-        val selected = pref("provider") ?: registry.providers.firstOrNull()?.id ?: "anthropic"
+        val selected = pref("provider") ?: "muse"
         if (selected == GATEWAY) {
             return ResolvedConfig(
                 selectedId = GATEWAY,

@@ -10,10 +10,10 @@ object AgentProviders {
         transport: LlmTransport = OkHttpLlmTransport(),
         liteRtManagerProvider: (() -> LiteRtLmServingManager?)? = null,
     ): List<LlmProvider> = buildList {
+        add(MetaMuseProvider(transport))
         add(AntigravityProvider(transport))
         add(AnthropicProvider(transport))
         add(OpenAiProvider(transport))
-        add(MetaMuseProvider(transport))
         add(XiaomiMimoProvider(transport))
         add(GeminiProvider(transport))
         add(OpenRouterProvider(transport))

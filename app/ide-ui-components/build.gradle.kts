@@ -48,5 +48,9 @@ kotlin {
                 implementation(project(":plugin-api"))
             }
         }
+
+        val iosMain = create("iosMain") { dependsOn(getByName("commonMain")) }
+        getByName("iosSimulatorArm64Main").dependsOn(iosMain)
+        getByName("iosArm64Main").dependsOn(iosMain)
     }
 }

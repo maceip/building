@@ -292,4 +292,57 @@ class MobileAgentUiVariantsTest {
         waitForIdle()
         assertEquals(1, diffSubmitted?.acceptedCount)
     }
+
+    @Test
+    fun mockMuseEmbeddedBrowserControllerSyncsWithMobileBrowserSheet() = runComposeUiTest {
+        val controller = fragments.agentui.AgentEmbeddedBrowserRegistry.getOrCreate(
+            sessionId = "muse-browser-test",
+            initialUrl = "https://scholar.google.com",
+        )
+        assertEquals("https://scholar.google.com", controller.url)
+
+        val browserPart = ConversationPart.Browser(
+            id = "muse-browser-card",
+            sessionId = "muse-browser-test",
+            title = "Google Scholar",
+            url = "https://scholar.google.com",
+        )
+
+        setContent {
+            CodeAssistTheme(dark = true) {
+                val palette = rememberIdeAgentUiPalette()
+                Box(Modifier.size(390.dp, 844.dp)) {
+                    AgentMobileBrowserSheet(
+                        part = browserPart,
+                        palette = palette,
+                        modifier = Modifier.fillMaxSize(),
+                        page = { mod ->
+                            fragments.agentui.AgentEmbeddedWebView(
+                                controller = controller,
+                                modifier = mod,
+                            )
+                        },
+                    )
+                }
+            }
+        }
+
+        waitForIdle()
+        onNodeWithTag("agent-browser-top-bar", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("agent-browser-take-control", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("agent-browser-take-control", useUnmergedTree = true).performClick()
+        waitForIdle()
+        onNodeWithText("You're in control", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("agent-browser-top-done", useUnmergedTree = true).performClick()
+        waitForIdle()
+
+        controller.loadUrl("https://news.ycombinator.com")
+        waitForIdle()
+        assertEquals("https://news.ycombinator.com", controller.url)
+        assertTrue(controller.canGoBack)
+        controller.goBack()
+        waitForIdle()
+        assertEquals("https://scholar.google.com", controller.url)
+        assertTrue(controller.canGoForward)
+    }
 }

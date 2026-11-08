@@ -826,6 +826,36 @@ private class IdeAgentConversationHandle(
                                         active = live || step.calls.any { it.status == UiAgentToolStatus.RUNNING },
                                     ),
                                 )
+                                val browserCall = step.calls.lastOrNull { call ->
+                                    call.title.startsWith("browser_") ||
+                                        call.title.contains("browser_") ||
+                                        call.detail.startsWith("URL: ")
+                                }
+                                if (browserCall != null) {
+                                    val detailHeader = browserCall.detail.lineSequence().firstOrNull().orEmpty()
+                                    val parsedUrl = detailHeader
+                                        .substringAfter("URL: ", "")
+                                        .substringBefore(" |")
+                                        .trim()
+                                        .ifBlank {
+                                            Regex("""https?://[^\s"'<>|]+""").find(browserCall.title)?.value
+                                                ?: fragments.agentui.AgentEmbeddedBrowserRegistry.current().url
+                                        }
+                                    val parsedTitle = detailHeader
+                                        .substringAfter("| Title: ", "")
+                                        .trim()
+                                        .ifBlank {
+                                            parsedUrl.removePrefix("https://").removePrefix("http://").substringBefore('/').ifBlank { "Muse Browser" }
+                                        }
+                                    add(
+                                        ConversationPart.Browser(
+                                            id = "browser-${msg.id}-$stepIdx",
+                                            sessionId = "muse-browser-1",
+                                            title = parsedTitle,
+                                            url = parsedUrl.ifBlank { "https://scholar.google.com" },
+                                        ),
+                                    )
+                                }
                                 if (step.calls.any { it.changes.isNotEmpty() }) {
                                     add(
                                         ConversationPart.Custom(

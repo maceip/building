@@ -647,14 +647,19 @@ fun AgentChatPanel(
 
                 val currentBrowser = internalExpandedBrowser
                 if (currentBrowser != null) {
+                    val expandedController = rememberAgentEmbeddedBrowserController(
+                        sessionId = currentBrowser.sessionId,
+                        initialUrl = currentBrowser.url ?: "https://scholar.google.com",
+                    )
                     val renderExpandedBrowserPage: @Composable (Modifier) -> Unit = { pageModifier ->
                         Box(pageModifier) {
                             if (browserPreview != null) {
                                 browserPreview(currentBrowser)
                             } else {
-                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    UiText("Browser session ${currentBrowser.sessionId}", palette, muted = true, size = 12)
-                                }
+                                AgentEmbeddedWebView(
+                                    controller = expandedController,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                             }
                         }
                     }
@@ -666,6 +671,7 @@ fun AgentChatPanel(
                             state = currentPresentation?.state ?: AgentBrowserState.Completed,
                             modifier = Modifier.fillMaxSize().graphicsLayer { alpha = sidePaneAlpha },
                             onNavigate = { nextUrl ->
+                                expandedController.loadUrl(nextUrl)
                                 internalExpandedBrowser = currentBrowser.copy(url = nextUrl)
                             },
                             onStopTask = {
@@ -685,6 +691,7 @@ fun AgentChatPanel(
                             palette = palette,
                             modifier = Modifier.weight(0.48f).fillMaxSize().graphicsLayer { alpha = sidePaneAlpha },
                             onNavigate = { nextUrl ->
+                                expandedController.loadUrl(nextUrl)
                                 internalExpandedBrowser = currentBrowser.copy(url = nextUrl)
                             },
                             onClose = { internalExpandedBrowser = null },
@@ -1148,8 +1155,15 @@ private fun BrowserEmbedCard(
                     if (preview != null) {
                         preview(part)
                     } else {
-                        Box(Modifier.fillMaxWidth().aspectRatio(1.6f), contentAlignment = Alignment.Center) {
-                            UiText("Browser session ${part.sessionId}", palette, muted = true, size = 12)
+                        val inlineController = rememberAgentEmbeddedBrowserController(
+                            sessionId = part.sessionId,
+                            initialUrl = part.url ?: "https://scholar.google.com",
+                        )
+                        Box(Modifier.fillMaxWidth().aspectRatio(1.6f)) {
+                            AgentEmbeddedWebView(
+                                controller = inlineController,
+                                modifier = Modifier.fillMaxSize(),
+                            )
                         }
                     }
                     presentation?.description?.let { description ->

@@ -446,6 +446,10 @@ fun AgentMobileBrowserSheet(
     page: @Composable (Modifier) -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
+    val browserController = rememberAgentEmbeddedBrowserController(
+        sessionId = part.sessionId,
+        initialUrl = part.url?.ifBlank { "https://example.org" } ?: "https://example.org",
+    )
     var userInControl by remember(part.sessionId) { mutableStateOf(initialUserInControl) }
     var activeTool by remember(part.sessionId) { mutableStateOf(AgentBrowserControlTool.Pointer) }
     val initialUrl = part.url?.ifBlank { "https://example.org" } ?: "https://example.org"
@@ -494,6 +498,7 @@ fun AgentMobileBrowserSheet(
             history.add(normalized)
             historyIndex = history.lastIndex
         }
+        browserController.loadUrl(normalized)
         onNavigate?.invoke(normalized)
     }
 
@@ -665,8 +670,8 @@ fun AgentMobileBrowserSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    val canGoBack = historyIndex > 0
-                    val canGoForward = historyIndex < history.lastIndex
+                    val canGoBack = historyIndex > 0 || browserController.canGoBack
+                    val canGoForward = historyIndex < history.lastIndex || browserController.canGoForward
                     Box(
                         Modifier
                             .size(32.dp)
@@ -675,7 +680,10 @@ fun AgentMobileBrowserSheet(
                                 if (historyIndex > 0) {
                                     historyIndex--
                                     address = history[historyIndex]
+                                    browserController.loadUrl(address)
                                     onNavigate?.invoke(address)
+                                } else {
+                                    browserController.goBack()
                                 }
                             }
                             .testTag("agent-browser-nav-back"),
@@ -695,7 +703,10 @@ fun AgentMobileBrowserSheet(
                                 if (historyIndex < history.lastIndex) {
                                     historyIndex++
                                     address = history[historyIndex]
+                                    browserController.loadUrl(address)
                                     onNavigate?.invoke(address)
+                                } else {
+                                    browserController.goForward()
                                 }
                             }
                             .testTag("agent-browser-nav-forward"),
@@ -711,7 +722,10 @@ fun AgentMobileBrowserSheet(
                         Modifier
                             .size(32.dp)
                             .clip(CircleShape)
-                            .clickable { onNavigate?.invoke(address) }
+                            .clickable {
+                                browserController.reload()
+                                onNavigate?.invoke(address)
+                            }
                             .testTag("agent-browser-nav-reload"),
                         contentAlignment = Alignment.Center,
                     ) {
