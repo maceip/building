@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GitHub Crawler</string>
+    <string name="subtitle">Slow background indexer for GitHub trending and the developer graph</string>
+
+    <string name="start_crawling">Start crawling</string>
+    <string name="stop_crawling">Stop crawling</string>
+    <string name="run_one_cycle">Run one cycle</string>
+
+    <string name="token_label">GitHub personal access token</string>
+    <string name="token_hint">ghp_… (repo scope is enough)</string>
+    <string name="save_token">Save token</string>
+    <string name="clear_token">Clear token</string>
+
+    <string name="log_header">Log</string>
+
+    <string name="notification_channel_name">Crawler status</string>
+    <string name="notification_channel_description">Shows that the background crawler is running.</string>
+    <string name="notification_title">GitHub crawler is running</string>
+</resources>

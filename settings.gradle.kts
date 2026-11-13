@@ -212,6 +212,9 @@ if (System.getenv("CI_CORE_ONLY") != "true") {
         // script for why that is worth a module.
         ":art-compat",
         ":ide-android",
+        // The phone-side background crawler: a standalone app that slowly indexes GitHub trending
+        // and the developer graph on a phone, sharing the index schema with tools/github-crawler.
+        ":github-crawler-android",
         ":runtime-engine",
         // A plugin packaged as its own app, built here so it cannot drift from the SPI it compiles against.
         ":samples:hello-plugin",
@@ -270,7 +273,7 @@ val layers = mapOf(
     "app" to listOf(
         "ide-ui-api", "ide-ui-resources", "ide-ui-core", "ide-ui-components", "ide-ui-editor",
         "ide-ui-screens", "ide-ui-testing", "ide-ui", "model-bridge", "ide-core", "ide-desktop",
-        "ide-android", "ide-ios",
+        "ide-android", "ide-ios", "github-crawler-android",
         "build-cli",
     ),
     // Test-only harnesses, consumed via testImplementation.
