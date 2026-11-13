@@ -110,7 +110,11 @@ class LiveCrawlerDeviceTest {
                 reopened.close()
             }
         } finally {
-            runCatching { store.close() }.getOrNull()
+            try {
+                store.close()
+            } catch (_: Exception) {
+                // already closed
+            }
         }
     }
 

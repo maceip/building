@@ -33,7 +33,12 @@ class TokenStore(context: Context) {
     }
 
     fun clear() {
-        runCatching { if (file.isFile) file.delete() }.getOrNull()
+        try {
+            if (file.isFile) file.delete()
+        } catch (_: Exception) {
+            // A token we cannot delete is a problem the user must fix in
+            // Settings; it must not crash the app.
+        }
     }
 
     /** A non-secret description for the status screen. */

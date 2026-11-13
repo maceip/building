@@ -77,9 +77,24 @@ class MainActivity : Activity() {
                 tokenInput.requestFocus()
                 return
             }
+            requestNotificationPermissionIfNeeded()
             CrawlerService.start(this)
         }
         render()
+    }
+
+    /**
+     * On Android 13+ the foreground-service notification is only shown in the
+     * shade when POST_NOTIFICATIONS is granted. The service runs either way,
+     * but a hidden notification makes it look like the crawler stopped.
+     */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) return
+        val permission = android.Manifest.permission.POST_NOTIFICATIONS
+        val granted = checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            requestPermissions(arrayOf(permission), REQUEST_POST_NOTIFICATIONS)
+        }
     }
 
     private fun onRunCycle() {
@@ -147,5 +162,6 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REFRESH_INTERVAL_MS = 1_000L
+        private const val REQUEST_POST_NOTIFICATIONS = 1001
     }
 }
