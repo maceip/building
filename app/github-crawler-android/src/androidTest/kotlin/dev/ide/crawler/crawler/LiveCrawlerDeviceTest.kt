@@ -1,10 +1,15 @@
 package dev.ide.crawler.crawler
 
 import android.content.Context
+import android.content.Intent
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.ide.crawler.MainActivity
+import dev.ide.crawler.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -119,6 +124,53 @@ class LiveCrawlerDeviceTest {
     }
 
     /**
+     * Regression: upserting a repository that is ALREADY indexed must not
+     * throw.
+     *
+     * The first version read the existing row out of a cursor that the
+     * `use { }` block had already closed. That only bites on the SECOND
+     * sighting of a repository, so a fresh-database test passes and every
+     * later run fails with "Attempting to access a closed CursorWindow".
+     * This test upserts the same repository twice, which is what a crawler
+     * does on its second cycle.
+     */
+    @Test
+    fun upsertingTheSameRepositoryTwiceWorks() {
+        val store = CrawlerStore(context)
+        try {
+            val repo = CrawlerRepo(
+                slug = "dev/ide/crawler-repeat-probe",
+                owner = "dev",
+                name = "ide",
+                description = "repeat upsert probe",
+                stars = 42,
+                forks = 3,
+                language = "Kotlin",
+            )
+
+            store.upsertRepo(repo, "trending")
+            val firstSeen = store.repo("dev/ide/crawler-repeat-probe")
+            assertNotNull("the first upsert must insert the row", firstSeen)
+
+            // The second upsert takes the "already exists" path.
+            store.upsertRepo(repo.copy(stars = 99), "trending")
+            val secondSeen = store.repo("dev/ide/crawler-repeat-probe")
+            assertNotNull("the second upsert must still find the row", secondSeen)
+            assertEquals("the star count must be updated", 99, secondSeen!!.stars)
+            // And the row's identity must not be reset.
+            assertEquals("first_seen_at must survive an update", firstSeen!!.firstSeenAt, secondSeen.firstSeenAt)
+
+            store.deleteRepo("dev/ide/crawler-repeat-probe")
+        } finally {
+            try {
+                store.close()
+            } catch (_: Exception) {
+                // already closed
+            }
+        }
+    }
+
+    /**
      * The token from the app's own token file, or from the instrumentation
      * argument `GITHUB_TOKEN`.
      */
@@ -133,5 +185,56 @@ class LiveCrawlerDeviceTest {
             if (!value.isNullOrBlank()) return value
         }
         return null
+    }
+    /**
+     * Regression: a boot broadcast must never crash the app.
+     *
+     * Android re-delivers BOOT_COMPLETED when the app is (re)installed, and
+     * recent versions refuse a foreground-service start straight out of a
+     * boot broadcast. The first version let that exception escape, so every
+     * install produced a "keeps stopping" crash dialog.
+     */
+    @Test
+    fun aBootBroadcastDoesNotCrashTheApp() {
+        val receiver = dev.ide.crawler.service.BootReceiver()
+        val intent = Intent(Intent.ACTION_BOOT_COMPLETED)
+        // The receiver must return without throwing, whatever the system
+        // decides about the deferred service start.
+        receiver.onReceive(context, intent)
+    }
+
+    /**
+     * Regression: the content must not be laid out under the system bars.
+     *
+     * Android 15+ enforces edge-to-edge for apps targeting SDK 35+, so the
+     * content window spans the whole screen. Without handling the insets,
+     * the title and the first line of the status ended up behind the system
+     * bar and were invisible.
+     */
+    @Test
+    fun theContentStartsBelowTheSystemBars() {
+        val scenario = ActivityScenario.launch(MainActivity::class.java)
+        scenario.onActivity { activity ->
+            val title = activity.findViewById<android.view.View>(R.id.title)
+            val status = activity.findViewById<android.view.View>(R.id.status)
+
+            val statusBarBottom = activity.window.decorView.rootWindowInsets
+                ?.getInsets(android.view.WindowInsets.Type.statusBars())?.bottom ?: 0
+
+            assertTrue(
+                "the title must start below the status bar " +
+                    "(statusBarBottom=$statusBarBottom, titleTop=${title.top})",
+                title.top >= statusBarBottom,
+            )
+            assertTrue(
+                "the status block must be visible (statusTop=${status.top})",
+                status.top >= statusBarBottom,
+            )
+            assertTrue(
+                "the title must be laid out inside the window",
+                title.bottom < activity.window.decorView.height,
+            )
+        }
+        scenario.close()
     }
 }

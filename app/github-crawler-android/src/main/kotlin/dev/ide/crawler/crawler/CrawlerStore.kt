@@ -119,12 +119,19 @@ class CrawlerStore(context: Context) :
     /** Insert or update a repository. Returns true when the stars changed. */
     fun upsertRepo(repo: CrawlerRepo, source: String): Boolean {
         val db = writableDatabase
+        // Read the values INSIDE the cursor's scope: a cursor returned out of
+        // a `use { }` block is already closed, and touching it afterwards
+        // throws "Attempting to access a closed CursorWindow". That only
+        // happens on the second sighting of a repository, so it looks fine on
+        // a fresh database and then breaks every later run.
         val existing = db.rawQuery(
             "SELECT stars, first_seen_at FROM repos WHERE slug=?",
             arrayOf(repo.slug.lowercase()),
-        ).use { if (it.moveToFirst()) it else null }
-        val previousStars = existing?.let { it.getInt(0) }
-        val firstSeen = existing?.getString(1) ?: nowIso()
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else cursor.getInt(0) to cursor.getString(1)
+        }
+        val previousStars = existing?.first
+        val firstSeen = existing?.second ?: nowIso()
         val changed = previousStars != null && repo.stars != null && previousStars != repo.stars
 
         val values = ContentValues().apply {
@@ -182,6 +189,32 @@ class CrawlerStore(context: Context) :
             put("source", source)
         }
         writableDatabase.insert("repo_snapshots", null, values)
+    }
+
+    /** The stored row for a repository, or null when it is not indexed. */
+    fun repo(slug: String): CrawlerRepoRow? {
+        return readableDatabase.rawQuery(
+            "SELECT slug, stars, forks, language, first_seen_at, last_seen_at FROM repos WHERE slug=?",
+            arrayOf(slug.lowercase()),
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) {
+                null
+            } else {
+                CrawlerRepoRow(
+                    slug = cursor.getString(0),
+                    stars = cursor.getInt(1),
+                    forks = cursor.getInt(2),
+                    language = cursor.getString(3),
+                    firstSeenAt = cursor.getString(4),
+                    lastSeenAt = cursor.getString(5),
+                )
+            }
+        }
+    }
+
+    /** Remove a repository from the index. */
+    fun deleteRepo(slug: String) {
+        writableDatabase.delete("repos", "slug=?", arrayOf(slug.lowercase()))
     }
 
     // ------------------------------------------------------------------
@@ -495,4 +528,14 @@ data class CrawlerStats(
     val edges: Int,
     val snapshots: Int,
     val apiCallsLastHour: Int,
+)
+
+/** One indexed repository, read back out of the store. */
+data class CrawlerRepoRow(
+    val slug: String,
+    val stars: Int,
+    val forks: Int,
+    val language: String?,
+    val firstSeenAt: String,
+    val lastSeenAt: String,
 )

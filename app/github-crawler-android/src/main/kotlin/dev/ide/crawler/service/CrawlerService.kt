@@ -187,17 +187,44 @@ class CrawlerService : Service() {
 
         /** Start the background crawler. */
         fun start(context: Context) {
-            val intent = Intent(context, CrawlerService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                val intent = Intent(context, CrawlerService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                // The system refuses a foreground-service start from the
+                // background (a boot broadcast, for example). That must
+                // degrade to "not running" - never to a crash.
+                Log.w(TAG, "the system refused to start the crawler service: ${e.message}")
+                CrawlerRuntime.log("the system refused to start the crawler: ${e.message}")
+            }
+        }
+
+        /** Run a single crawl cycle and stop afterwards. */
+        fun startOneCycle(context: Context) {
+            try {
+                val intent = Intent(context, CrawlerService::class.java).setAction(ACTION_ONE_CYCLE)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "the system refused the one-shot cycle: ${e.message}")
+                CrawlerRuntime.log("the system refused to run the cycle: ${e.message}")
             }
         }
 
         /** Stop the background crawler. */
         fun stop(context: Context) {
-            context.startService(Intent(context, CrawlerService::class.java).setAction(ACTION_STOP))
+            try {
+                context.startService(Intent(context, CrawlerService::class.java).setAction(ACTION_STOP))
+            } catch (e: Exception) {
+                Log.w(TAG, "could not deliver the stop request: ${e.message}")
+            }
         }
     }
 }

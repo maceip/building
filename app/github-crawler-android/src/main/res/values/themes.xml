@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- A framework theme, so the app needs no AppCompat / Material dependency. -->
-    <style name="CrawlerTheme" parent="@android:style/Theme.Material.Light.DarkActionBar" />
+    <!-- A framework theme with NO action bar, so the app draws its own title.
+         Android 15+ (targetSdk 35+) enforces edge-to-edge, which means the
+         content window spans the whole screen. With a framework action bar
+         that would put the action bar ON TOP of the content (the status text
+         was hidden behind it). Owning the title and applying the window
+         insets ourselves is the predictable way to lay this out. -->
+    <style name="CrawlerTheme" parent="@android:style/Theme.Material.Light.NoActionBar" />
 </resources>

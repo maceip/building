@@ -25,6 +25,7 @@ class MainActivity : Activity() {
     private lateinit var logView: TextView
     private lateinit var toggleButton: Button
     private lateinit var tokenInput: EditText
+    private lateinit var scrollView: android.widget.ScrollView
 
     private val handler = Handler(Looper.getMainLooper())
     private val tokens by lazy { TokenStore(this) }
@@ -44,6 +45,9 @@ class MainActivity : Activity() {
         logView = findViewById(R.id.log)
         toggleButton = findViewById(R.id.toggleButton)
         tokenInput = findViewById(R.id.tokenInput)
+        scrollView = findViewById(R.id.statusScroll)
+
+        applyWindowInsets(scrollView)
 
         findViewById<Button>(R.id.toggleButton).setOnClickListener { onToggle() }
         findViewById<Button>(R.id.cycleButton).setOnClickListener { onRunCycle() }
@@ -55,8 +59,54 @@ class MainActivity : Activity() {
         CrawlerRuntime.onTokenChanged(this)
     }
 
+    /**
+     * Keep the content clear of the system bars.
+     *
+     * Android 15+ enforces edge-to-edge for apps targeting SDK 35+, so the
+     * content window spans the whole screen and would otherwise start behind
+     * the status bar and the navigation gesture area.
+     */
+    private fun applyWindowInsets(target: android.view.View) {
+        val initialPadding = intArrayOf(
+            target.paddingLeft, target.paddingTop, target.paddingRight, target.paddingBottom,
+        )
+        target.setOnApplyWindowInsetsListener { view, insets ->
+            val left: Int
+            val top: Int
+            val right: Int
+            val bottom: Int
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
+                left = bars.left
+                top = bars.top
+                right = bars.right
+                bottom = bars.bottom
+            } else {
+                @Suppress("DEPRECATION")
+                left = insets.systemWindowInsetLeft
+                @Suppress("DEPRECATION")
+                top = insets.systemWindowInsetTop
+                @Suppress("DEPRECATION")
+                right = insets.systemWindowInsetRight
+                @Suppress("DEPRECATION")
+                bottom = insets.systemWindowInsetBottom
+            }
+            view.setPadding(
+                initialPadding[0] + left,
+                initialPadding[1] + top,
+                initialPadding[2] + right,
+                initialPadding[3] + bottom,
+            )
+            insets
+        }
+        target.requestApplyInsets()
+    }
+
     override fun onResume() {
         super.onResume()
+        // Pin the content to the top: a focusable child (the token field)
+        // can otherwise scroll the first line of the status out of view.
+        scrollView.post { scrollView.scrollTo(0, 0) }
         handler.post(refresh)
     }
 
@@ -104,13 +154,7 @@ class MainActivity : Activity() {
             return
         }
         CrawlerRuntime.log("one-shot cycle requested")
-        val serviceIntent = android.content.Intent(this, CrawlerService::class.java)
-        serviceIntent.action = CrawlerService.ACTION_ONE_CYCLE
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
+        CrawlerService.startOneCycle(this)
     }
 
     private fun onSaveToken() {
