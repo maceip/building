@@ -18,16 +18,52 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from .config import Config
 from .daemon import CrawlerDaemon, build_logger
+from .heartbeat import Heartbeat, HeartbeatStore, utc_now
 from .github import GitHubClient
 from .graph import GraphCrawler
 from .ratelimit import RateLimiter
 from .store import CrawlerStore
 from .tokens import TokenError, describe_token, resolve_token
+from .watchdog import (  # noqa: E402
+    DEFAULT_LOG_DIR,
+    Alert,
+    Notifier,
+    read_job_state,
+    run_watchdog,
+)
+
+
+def _record_fatal(config: Config, message: str) -> None:
+    """Report a fatal startup failure immediately.
+
+    The watchdog would notice the crash loop a few minutes later. This says
+    so at once: the heartbeat records the error and a notification goes out
+    with the reason, so the user does not have to go looking for it.
+    """
+    try:
+        store = HeartbeatStore(config.data_dir)
+        store.write(
+            Heartbeat(
+                status="error",
+                pid=os.getpid(),
+                started_at=utc_now(),
+                last_error=message,
+            )
+        )
+    except Exception:
+        pass
+    try:
+        Notifier(log_dir=DEFAULT_LOG_DIR).send(
+            Alert(kind="FATAL", message=f"The GitHub crawler failed to start: {message}")
+        )
+    except Exception:
+        pass
 
 
 def _build_stack(config: Config, logger=None):
@@ -97,6 +133,7 @@ def cmd_status(args, config: Config) -> int:
                 }
                 for r in store.recent_runs(limit=5)
             ],
+            "daemon": daemon_health(config),
             "recent_trending": [
                 {
                     "slug": r["slug"],
@@ -232,6 +269,53 @@ def cmd_doctor(args, config: Config) -> int:
     return 0
 
 
+def cmd_watchdog(args, config: Config) -> int:
+    """Run one watchdog pass: detect a crash loop, a dead job or a stall."""
+    alert = run_watchdog(
+        data_dir=config.data_dir,
+        log_dir=Path(args.log_dir) if args.log_dir else DEFAULT_LOG_DIR,
+        webhook=args.webhook,
+        notify=not args.no_notify,
+        dry_run=args.dry_run,
+        label=args.label,
+    )
+    if alert is None:
+        print("watchdog: healthy")
+        return 0
+    suffix = " (already alerted, still active)" if alert.suppressed else ""
+    print(f"watchdog: {alert.kind}{suffix} - {alert.message}")
+    if alert.detail:
+        print(f"  {alert.detail}")
+    return 2
+
+
+def cmd_health(args, config: Config) -> int:
+    """Show whether the daemon is alive AND working."""
+    _print(daemon_health(config))
+    return 0
+
+
+def daemon_health(config: Config) -> dict:
+    """The daemon's own view of its health, for `status` and `health`."""
+    store = HeartbeatStore(config.data_dir)
+    heartbeat = store.read()
+    age = store.age_seconds()
+    job = read_job_state()
+    return {
+        "job_loaded": job.loaded,
+        "job_running": job.running,
+        "job_runs": job.runs,
+        "last_exit_code": job.last_exit_code,
+        "pid": job.pid,
+        "heartbeat_status": heartbeat.status if heartbeat else None,
+        "heartbeat_age_seconds": round(age, 1) if age is not None else None,
+        "cycles": heartbeat.cycles if heartbeat else None,
+        "last_cycle_finished_at": heartbeat.last_cycle_finished_at if heartbeat else None,
+        "consecutive_errors": heartbeat.consecutive_errors if heartbeat else None,
+        "last_error": heartbeat.last_error if heartbeat else None,
+    }
+
+
 # ----------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -278,6 +362,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor = sub.add_parser("doctor", help="verify token, API and trending access")
     p_doctor.set_defaults(func=cmd_doctor)
 
+    p_health = sub.add_parser("health", help="show whether the daemon is alive and working")
+    p_health.set_defaults(func=cmd_health)
+
+    p_watch = sub.add_parser("watchdog", help="run one watchdog pass (detect a crash loop)")
+    p_watch.add_argument("--webhook", help="POST the alert to this URL as well")
+    p_watch.add_argument("--log-dir", help="where to write alerts.log")
+    p_watch.add_argument("--no-notify", action="store_true", help="skip the macOS notification")
+    p_watch.add_argument("--dry-run", action="store_true", help="evaluate but do not alert")
+    p_watch.add_argument(
+        "--label",
+        default=os.environ.get("CRAWLER_LABEL", "com.building.crawler"),
+        help="the launchd job to watch (default: %(default)s)",
+    )
+    p_watch.set_defaults(func=cmd_watchdog)
+
     return parser
 
 
@@ -302,10 +401,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args, config)
     except TokenError as exc:
+        _record_fatal(config, str(exc))
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         return 130
+    except Exception as exc:
+        _record_fatal(config, f"{type(exc).__name__}: {exc}")
+        raise
 
 
 if __name__ == "__main__":

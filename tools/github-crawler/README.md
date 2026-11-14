@@ -163,13 +163,94 @@ To crawl noticeably slower, raise `CRAWLER_API_MIN_INTERVAL` and lower
 `CRAWLER_MAX_CALLS_PER_CYCLE`. To crawl faster (still safely), raise the
 budgets - but keep `core`/`graphql` under ~1000/hour.
 
+## When something goes wrong
+
+`launchd` will happily restart a crashing daemon forever, every 30 seconds,
+and say nothing. That is the worst failure mode for a background service: it
+looks installed, it looks enabled, and it is quietly doing nothing. So the
+daemon does not go alone - a second agent, the **watchdog**, watches it.
+
+```sh
+./install/install.sh install     # installs both agents
+```
+
+| Agent | Job | What it does |
+| --- | --- | --- |
+| the crawler | `com.building.crawler` | runs the daemon, restarts it if it dies |
+| the watchdog | `com.building.crawler.watchdog` | checks every 5 minutes whether the crawler is actually working |
+
+### What the watchdog notices
+
+| Condition | Meaning |
+| --- | --- |
+| `CRASH_LOOP` | the job restarted 3+ times inside one interval - launchd is papering over a crash |
+| `EXITED` | the job is loaded but stopped with a failure exit code |
+| `NOT_RUNNING` | the job is not loaded at all |
+| `STALLED` | the process is alive but has not finished a cycle in 90 minutes - alive but wedged |
+| `NO_HEARTBEAT` | the process is running but never reported a heartbeat |
+
+The crawler writes a heartbeat (`state.json`) on every cycle, which is what
+separates *alive* from *alive and working*. A process-liveness check cannot
+tell those apart.
+
+### Where you get told
+
+1. **A macOS notification** - a banner with the reason.
+2. **`~/Library/Logs/building-crawler/alerts.log`** - every alert, forever.
+3. **A webhook**, if you set one - `CRAWLER_ALERT_WEBHOOK=https://...`. The
+   body carries both `message` (ntfy) and `text` (Slack, Discord), so any of
+   them work unchanged. ntfy.sh needs no account:
+   `CRAWLER_ALERT_WEBHOOK=https://ntfy.sh/my-crawler`.
+4. **Immediately on a fatal startup error** - a crash before the daemon
+   starts is reported at once, with the reason, instead of waiting for the
+   watchdog to notice.
+
+The same alert is not repeated inside an hour, so a long crash loop
+announces itself once rather than every five minutes.
+
+### The off switch
+
+```sh
+./install/install.sh --mute      # silence alerts
+./install/install.sh --unmute
+touch "$HOME/Library/Application Support/building-crawler/alerts-disabled"
+```
+
+Stopping the service on purpose is not an incident: `./install/install.sh
+--stop` marks it as deliberate, so the watchdog stays quiet.
+
+### Checking by hand
+
+```sh
+python3 main.py health      # is it alive AND working?
+python3 main.py watchdog    # run one watchdog pass now
+python3 main.py status      # the index plus the daemon health block
+```
+
+`health` shows the launchd job state, the heartbeat age, the cycle count and
+the last error:
+
+```json
+{
+  "job_loaded": true,
+  "job_running": true,
+  "job_runs": 1,
+  "heartbeat_status": "running",
+  "heartbeat_age_seconds": 243.9,
+  "cycles": 1,
+  "last_error": null
+}
+```
+
+
 ## Tests
 
 ```sh
 python3 tools/github-crawler/test_crawler.py
 ```
 
-20 offline tests: the trending parser against captured GitHub markup, the
+44 offline tests: the trending parser against captured GitHub markup, the
 relevance scoring against the Kotlin weights, the rate limiter with a fake
-clock, and the store against a temporary database. No network access needed.
-Verified on Python 3.9 and 3.14.
+clock, the store against a temporary database, and the watchdog's detection
+logic - baseline handling, crash-loop detection, the alert cooldown and the
+off switches. No network access needed. Verified on Python 3.9 and 3.14.

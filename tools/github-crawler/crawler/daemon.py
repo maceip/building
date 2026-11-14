@@ -21,12 +21,14 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import os
 import random
 import signal
 import sys
 import time
 
 from .graph import GraphCrawler
+from .heartbeat import Heartbeat, HeartbeatStore, utc_now
 from .trending import normalise_language_key, parse_trending_html, trending_url
 
 
@@ -64,6 +66,25 @@ class CrawlerDaemon:
         self._rotation_index = 0
         self._last_sweep = 0.0
         self._last_link = 0.0
+        # The heartbeat is how the watchdog tells "alive and working" apart
+        # from "alive and wedged".
+        self.heartbeat_store = HeartbeatStore(config.data_dir)
+        self.heartbeat = Heartbeat(
+            status="starting",
+            pid=os.getpid(),
+            started_at=utc_now(),
+        )
+        self._publish_heartbeat()
+
+    def _publish_heartbeat(self) -> None:
+        try:
+            stats = self.store.graph_stats()
+            self.heartbeat.repos = stats["repos"]
+            self.heartbeat.edges = stats["edges"]
+            self.heartbeat.api_calls = self.client.limiter.total_api_calls
+            self.heartbeat_store.write(self.heartbeat)
+        except Exception as exc:  # a heartbeat failure must never stop a crawl
+            self.log.warning("could not write the heartbeat: %s", exc)
 
     # ------------------------------------------------------------------
     def _build_rotation(self) -> list[tuple[str, str]]:
@@ -147,6 +168,9 @@ class CrawlerDaemon:
     def run_cycle(self) -> dict:
         run_id = self.store.start_run("cycle")
         started = time.time()
+        self.heartbeat.status = "running"
+        self.heartbeat.last_cycle_started_at = utc_now()
+        self._publish_heartbeat()
         stats = {"trending": 0, "expanded": 0, "related": 0, "api_calls": 0, "web_calls": 0}
 
         api_before = self.client.limiter.total_api_calls
@@ -170,7 +194,17 @@ class CrawlerDaemon:
         except Exception as exc:
             self.log.exception("cycle failed")
             self.store.finish_run(run_id, "failed", detail=str(exc))
+            self.heartbeat.status = "error"
+            self.heartbeat.consecutive_errors += 1
+            self.heartbeat.last_error = str(exc)
+            self._publish_heartbeat()
             raise
+        self.heartbeat.status = "running"
+        self.heartbeat.cycles += 1
+        self.heartbeat.consecutive_errors = 0
+        self.heartbeat.last_error = None
+        self.heartbeat.last_cycle_finished_at = utc_now()
+        self._publish_heartbeat()
         return stats
 
     # ------------------------------------------------------------------
@@ -183,6 +217,8 @@ class CrawlerDaemon:
             ",".join(self.config.trending_periods),
         )
         self._install_signals()
+        self.heartbeat.status = "running"
+        self._publish_heartbeat()
         while not self._stop:
             try:
                 stats = self.run_cycle()
@@ -191,8 +227,12 @@ class CrawlerDaemon:
                     stats["trending"], stats["expanded"], stats["related"],
                     stats["api_calls"], stats["web_calls"],
                 )
-            except Exception:
+            except Exception as exc:
                 # Never let one bad cycle kill the daemon.
+                self.heartbeat.status = "error"
+                self.heartbeat.consecutive_errors += 1
+                self.heartbeat.last_error = str(exc)
+                self._publish_heartbeat()
                 time.sleep(60)
                 continue
 
@@ -205,6 +245,8 @@ class CrawlerDaemon:
             while not self._stop and time.time() < deadline:
                 time.sleep(min(5.0, max(0.0, deadline - time.time())))
         self.log.info("crawler daemon stopped")
+        self.heartbeat.status = "stopped"
+        self._publish_heartbeat()
 
     def stop(self, *_args) -> None:
         self._stop = True
